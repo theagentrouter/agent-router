@@ -318,7 +318,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) bedrockStopReasonToOpenAI
 	case awsbedrock.StopReasonToolUse:
 		return openai.ChatCompletionChoicesFinishReasonToolCalls
 	default:
-		return openai.ChatCompletionChoicesFinishReasonStop
+		return openai.ChatCompletionChoicesFinishReasonError
 	}
 }
 

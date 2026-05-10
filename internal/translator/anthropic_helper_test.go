@@ -546,9 +546,24 @@ func TestFinishReasonTranslation(t *testing.T) {
 			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonLength,
 		},
 		{
+			name:                 "pause turn stop reason",
+			input:                anthropic.StopReasonPauseTurn,
+			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonPauseTurn,
+		},
+		{
 			name:                 "refusal stop reason",
 			input:                anthropic.StopReasonRefusal,
-			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonContentFilter,
+			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+		},
+		{
+			name:                 "model context window exceeded stop reason",
+			input:                "model_context_window_exceeded",
+			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonContextWindowExceeded,
+		},
+		{
+			name:      "unknown stop reason",
+			input:     "unknown_reason",
+			expectErr: true,
 		},
 	}
 
