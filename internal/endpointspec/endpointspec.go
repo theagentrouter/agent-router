@@ -398,8 +398,20 @@ func (ResponsesEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, 
 		return translator.NewResponsesOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	case filterapi.APISchemaAWSOpenAI:
 		return translator.NewResponsesOpenAIToAWSOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+	case filterapi.APISchemaAWSAnthropic:
+		return translator.NewResponsesViaChatCompletionTranslator(
+			translator.NewChatCompletionOpenAIToAWSAnthropicTranslator(schema.Version, modelNameOverride),
+		), nil
 	case filterapi.APISchemaAzureOpenAI:
 		return translator.NewResponsesOpenAIToAzureOpenAITranslator(schema.Version, modelNameOverride), nil
+	case filterapi.APISchemaGCPVertexAI:
+		return translator.NewResponsesViaChatCompletionTranslator(
+			translator.NewChatCompletionOpenAIToGCPVertexAITranslator(modelNameOverride),
+		), nil
+	case filterapi.APISchemaGCPAnthropic:
+		return translator.NewResponsesViaChatCompletionTranslator(
+			translator.NewChatCompletionOpenAIToGCPAnthropicTranslator(schema.Version, modelNameOverride),
+		), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
