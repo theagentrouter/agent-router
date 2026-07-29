@@ -42,7 +42,7 @@ func NewModelsProcessor(config *filterapi.RuntimeConfig, requestHeaders map[stri
 	}
 
 	host := requestHost(requestHeaders)
-	selectedModels := selectModelsForHost(host, config)
+	selectedModels := selectModels(requestHeaders, host, config)
 
 	modelList := openai.ModelList{
 		Object: "list",
@@ -104,6 +104,88 @@ func requestHost(headers map[string]string) string {
 		host = h
 	}
 	return strings.ToLower(host)
+}
+
+// selectModels returns the models for the request, applying hostname and header scoping when configured.
+func selectModels(requestHeaders map[string]string, host string, cfg *filterapi.RuntimeConfig) []filterapi.Model {
+	if len(cfg.ModelsByHostAndScope) == 0 {
+		return selectModelsForHost(host, cfg)
+	}
+	hsm := lookupHeaderScopedModels(host, cfg)
+	return selectModelsForHeaderScope(requestHeaders, hsm)
+}
+
+// lookupHeaderScopedModels resolves the header-scoped model group for the request host.
+func lookupHeaderScopedModels(host string, cfg *filterapi.RuntimeConfig) filterapi.HeaderScopedModels {
+	if len(cfg.ModelsByHostAndScope) == 0 {
+		return filterapi.HeaderScopedModels{}
+	}
+	if len(cfg.ModelsByHost) == 0 {
+		return cfg.ModelsByHostAndScope[""]
+	}
+	if hsm, ok := cfg.ModelsByHostAndScope[host]; ok {
+		return hsm
+	}
+	if bestMatch := wildcardHostScopedModels(host, cfg.ModelsByHostAndScope); bestMatch != nil {
+		return *bestMatch
+	}
+	return cfg.ModelsByHostAndScope[""]
+}
+
+func wildcardHostScopedModels(host string, modelsByHostAndScope map[string]filterapi.HeaderScopedModels) *filterapi.HeaderScopedModels {
+	bestMatchLength := -1
+	var bestMatch *filterapi.HeaderScopedModels
+	for pattern, hsm := range modelsByHostAndScope {
+		if !strings.HasPrefix(pattern, "*.") {
+			continue
+		}
+		suffix := strings.TrimPrefix(pattern, "*.")
+		if !strings.HasSuffix(host, "."+suffix) {
+			continue
+		}
+		prefix := strings.TrimSuffix(host, "."+suffix)
+		if strings.Contains(prefix, ".") {
+			continue
+		}
+		if len(suffix) > bestMatchLength {
+			bestMatchLength = len(suffix)
+			match := hsm
+			bestMatch = &match
+		}
+	}
+	return bestMatch
+}
+
+// selectModelsForHeaderScope returns models for the request's header scope within a host bucket.
+func selectModelsForHeaderScope(requestHeaders map[string]string, hsm filterapi.HeaderScopedModels) []filterapi.Model {
+	if len(hsm.ModelsByHeaderScope) == 0 {
+		return hsm.UnscopedHeaderModels
+	}
+	scopeKey := filterapi.RequestHeaderScopeKey(hsm.ModelsByHeaderScope, requestHeaders)
+	var selected []filterapi.Model
+	if scopeKey != "" {
+		if models, ok := hsm.ModelsByHeaderScope[scopeKey]; ok {
+			selected = append(selected, models...)
+		}
+	}
+	selected = append(selected, hsm.UnscopedHeaderModels...)
+	return dedupeModelsByName(selected)
+}
+
+func dedupeModelsByName(models []filterapi.Model) []filterapi.Model {
+	if len(models) == 0 {
+		return models
+	}
+	seen := make(map[string]struct{}, len(models))
+	result := make([]filterapi.Model, 0, len(models))
+	for _, model := range models {
+		if _, ok := seen[model.Name]; ok {
+			continue
+		}
+		seen[model.Name] = struct{}{}
+		result = append(result, model)
+	}
+	return result
 }
 
 // selectModelsForHost returns the models for the given host, falling back to the global list.

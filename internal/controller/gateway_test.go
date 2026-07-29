@@ -526,6 +526,165 @@ func TestGatewayController_reconcileFilterConfigSecret_AllUnscopedRoutesLeaveUns
 	require.Nil(t, fc.UnscopedModels)
 }
 
+// TestGatewayController_reconcileFilterConfigSecret_HeaderScopedModels verifies that rules with
+// non-model exact-match headers produce separate ModelsByHeaderScope entries and that unscoped
+// header models are promoted without leaking scoped models to other scopes.
+func TestGatewayController_reconcileFilterConfigSecret_HeaderScopedModels(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	kube := fake2.NewClientset()
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zap.Options{Development: true, Level: zapcore.DebugLevel})))
+	c := NewGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	const gwNamespace = "ns"
+	routes := []aigv1b1.AIGatewayRoute{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "client-a-route", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}},
+						Matches: []aigv1b1.AIGatewayRouteRuleMatch{
+							{Headers: []gwapiv1.HTTPHeaderMatch{
+								{Name: "x-jwt-sub", Value: "client-a"},
+								{Name: internalapi.ModelNameHeaderKeyDefault, Value: "model-a"},
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "client-b-route", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "orange"}},
+						Matches: []aigv1b1.AIGatewayRouteRuleMatch{
+							{Headers: []gwapiv1.HTTPHeaderMatch{
+								{Name: "x-jwt-sub", Value: "client-b"},
+								{Name: internalapi.ModelNameHeaderKeyDefault, Value: "model-b"},
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "unscoped-header-route", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "banana"}},
+						Matches: []aigv1b1.AIGatewayRouteRuleMatch{
+							{Headers: []gwapiv1.HTTPHeaderMatch{
+								{Name: internalapi.ModelNameHeaderKeyDefault, Value: "shared-model"},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+	for _, b := range []*aigv1b1.AIServiceBackend{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+			Spec: aigv1b1.AIServiceBackendSpec{
+				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "orange", Namespace: gwNamespace},
+			Spec: aigv1b1.AIServiceBackendSpec{
+				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "banana", Namespace: gwNamespace},
+			Spec: aigv1b1.AIServiceBackendSpec{
+				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
+			},
+		},
+	} {
+		require.NoError(t, fakeClient.Create(t.Context(), b))
+	}
+
+	const someNamespace = "some-namespace"
+	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw-header-scope", gwNamespace, someNamespace, routes, nil, "foouuid", nil)
+	require.NoError(t, err)
+	require.True(t, effective)
+
+	fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw-header-scope", gwNamespace)
+
+	require.Contains(t, fc.ModelsByHostAndScope, "")
+	hsm := fc.ModelsByHostAndScope[""]
+	require.Contains(t, hsm.ModelsByHeaderScope, "x-jwt-sub=client-a")
+	require.Contains(t, hsm.ModelsByHeaderScope, "x-jwt-sub=client-b")
+	require.Len(t, hsm.UnscopedHeaderModels, 1)
+	require.Equal(t, "shared-model", hsm.UnscopedHeaderModels[0].Name)
+
+	clientAModels := modelNames(hsm.ModelsByHeaderScope["x-jwt-sub=client-a"])
+	require.ElementsMatch(t, []string{"model-a", "shared-model"}, clientAModels)
+	clientBModels := modelNames(hsm.ModelsByHeaderScope["x-jwt-sub=client-b"])
+	require.ElementsMatch(t, []string{"model-b", "shared-model"}, clientBModels)
+}
+
+// TestGatewayController_reconcileFilterConfigSecret_HostnameAndHeaderScopedModels verifies that
+// hostname and header scoping compose: models land in the correct host bucket and scope key.
+func TestGatewayController_reconcileFilterConfigSecret_HostnameAndHeaderScopedModels(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	kube := fake2.NewClientset()
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zap.Options{Development: true, Level: zapcore.DebugLevel})))
+	c := NewGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	const gwNamespace = "ns"
+	routes := []aigv1b1.AIGatewayRoute{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "scoped-route", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"api.example.com"},
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}},
+						Matches: []aigv1b1.AIGatewayRouteRuleMatch{
+							{Headers: []gwapiv1.HTTPHeaderMatch{
+								{Name: "x-jwt-sub", Value: "client-a"},
+								{Name: internalapi.ModelNameHeaderKeyDefault, Value: "host-scoped-model"},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
+		},
+	}))
+
+	const someNamespace = "some-namespace"
+	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw-host-header", gwNamespace, someNamespace, routes, nil, "foouuid", nil)
+	require.NoError(t, err)
+	require.True(t, effective)
+
+	fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw-host-header", gwNamespace)
+	require.Contains(t, fc.ModelsByHostAndScope, "api.example.com")
+	hsm := fc.ModelsByHostAndScope["api.example.com"]
+	require.Contains(t, hsm.ModelsByHeaderScope, "x-jwt-sub=client-a")
+	require.Equal(t, []string{"host-scoped-model"}, modelNames(hsm.ModelsByHeaderScope["x-jwt-sub=client-a"]))
+}
+
+func modelNames(models []filterapi.Model) []string {
+	names := make([]string, 0, len(models))
+	for _, m := range models {
+		names = append(names, m.Name)
+	}
+	return names
+}
+
 // TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostAggregation verifies that
 // routes sharing the same metadataKey each get their own filter-config row (scoped by routeName).
 func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostAggregation(t *testing.T) {

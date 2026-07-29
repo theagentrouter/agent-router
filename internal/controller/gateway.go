@@ -375,6 +375,10 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	// ec.UnscopedModels (and merge them into ec.ModelsByHost) when at least one route
 	// IS hostname-scoped; otherwise the existing ec.Models list already covers them.
 	var unscopedModels []filterapi.Model
+	// Models contributed by rules with no non-model exact-match headers. Promoted to
+	// UnscopedHeaderModels when at least one header-scoped rule is also present.
+	var unscopedHeaderModels []filterapi.Model
+	var hasHeaderScopedRules bool
 
 	for i := range aiGatewayRoutes {
 		aiGatewayRoute := &aiGatewayRoutes[i]
@@ -392,33 +396,66 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 		for ruleIndex := range spec.Rules {
 			rule := &spec.Rules[ruleIndex]
 			for _, m := range rule.Matches {
-				for _, h := range m.Headers {
+				var modelHeader *gwapiv1.HTTPHeaderMatch
+				var scopeHeaders []gwapiv1.HTTPHeaderMatch
+				for headerIndex, h := range m.Headers {
 					// If explicitly set to something that is not an exact match, skip.
 					// If not set, we assume it's an exact match.
-					//
-					// Also, we only care about the AIModel header to declare models.
-					if (h.Type != nil && *h.Type != gwapiv1.HeaderMatchExact) || string(h.Name) != internalapi.ModelNameHeaderKeyDefault {
+					if h.Type != nil && *h.Type != gwapiv1.HeaderMatchExact {
 						continue
 					}
-					model := filterapi.Model{
-						Name:      h.Value,
-						CreatedAt: ptr.Deref[metav1.Time](rule.ModelsCreatedAt, aiGatewayRoute.CreationTimestamp).UTC(),
-						OwnedBy:   ptr.Deref(rule.ModelsOwnedBy, defaultOwnedBy),
+					if string(h.Name) == internalapi.ModelNameHeaderKeyDefault {
+						modelHeader = &m.Headers[headerIndex]
+						continue
 					}
-					ec.Models = append(ec.Models, model)
-					if len(hostnames) > 0 {
-						if ec.ModelsByHost == nil {
-							ec.ModelsByHost = make(map[string][]filterapi.Model)
-						}
-						for _, hn := range hostnames {
-							ec.ModelsByHost[string(hn)] = append(ec.ModelsByHost[string(hn)], model)
-						}
-					} else {
-						// Routes without hostnames are "unscoped": they apply to every host.
-						// Tracked in unscopedModels for now; only promoted to ec.UnscopedModels
-						// after the loop if at least one scoped route is also present.
-						unscopedModels = append(unscopedModels, model)
+					scopeHeaders = append(scopeHeaders, h)
+				}
+				if modelHeader == nil {
+					continue
+				}
+				model := filterapi.Model{
+					Name:      modelHeader.Value,
+					CreatedAt: ptr.Deref[metav1.Time](rule.ModelsCreatedAt, aiGatewayRoute.CreationTimestamp).UTC(),
+					OwnedBy:   ptr.Deref(rule.ModelsOwnedBy, defaultOwnedBy),
+				}
+				ec.Models = append(ec.Models, model)
+				if len(hostnames) > 0 {
+					if ec.ModelsByHost == nil {
+						ec.ModelsByHost = make(map[string][]filterapi.Model)
 					}
+					for _, hn := range hostnames {
+						ec.ModelsByHost[string(hn)] = append(ec.ModelsByHost[string(hn)], model)
+					}
+				} else {
+					// Routes without hostnames are "unscoped": they apply to every host.
+					// Tracked in unscopedModels for now; only promoted to ec.UnscopedModels
+					// after the loop if at least one scoped route is also present.
+					unscopedModels = append(unscopedModels, model)
+				}
+				scopeKey := canonicalHeaderScopeKey(scopeHeaders)
+				if scopeKey == "" {
+					unscopedHeaderModels = append(unscopedHeaderModels, model)
+					continue
+				}
+				hasHeaderScopedRules = true
+				if ec.ModelsByHostAndScope == nil {
+					ec.ModelsByHostAndScope = make(map[string]filterapi.HeaderScopedModels)
+				}
+				hostKeys := make([]string, 0, max(1, len(hostnames)))
+				if len(hostnames) > 0 {
+					for _, hn := range hostnames {
+						hostKeys = append(hostKeys, string(hn))
+					}
+				} else {
+					hostKeys = append(hostKeys, "")
+				}
+				for _, hostKey := range hostKeys {
+					hsm := ec.ModelsByHostAndScope[hostKey]
+					if hsm.ModelsByHeaderScope == nil {
+						hsm.ModelsByHeaderScope = make(map[string][]filterapi.Model)
+					}
+					hsm.ModelsByHeaderScope[scopeKey] = append(hsm.ModelsByHeaderScope[scopeKey], model)
+					ec.ModelsByHostAndScope[hostKey] = hsm
 				}
 			}
 			for backendRefIndex := range rule.BackendRefs {
@@ -531,6 +568,18 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 		ec.UnscopedModels = unscopedModels
 		for hn := range ec.ModelsByHost {
 			ec.ModelsByHost[hn] = append(ec.ModelsByHost[hn], unscopedModels...)
+		}
+	}
+
+	// If at least one rule is header-scoped, promote unscoped-header models so every scope bucket
+	// (and the unmatched-scope fallback) still sees models from rules without scope headers.
+	if hasHeaderScopedRules && len(unscopedHeaderModels) > 0 {
+		for hostKey, hsm := range ec.ModelsByHostAndScope {
+			hsm.UnscopedHeaderModels = unscopedHeaderModels
+			for scopeKey := range hsm.ModelsByHeaderScope {
+				hsm.ModelsByHeaderScope[scopeKey] = append(hsm.ModelsByHeaderScope[scopeKey], unscopedHeaderModels...)
+			}
+			ec.ModelsByHostAndScope[hostKey] = hsm
 		}
 	}
 
@@ -1343,4 +1392,17 @@ func (c *GatewayController) fetchGatewayConfig(ctx context.Context, gw *gwapiv1.
 	c.logger.Info("found GatewayConfig for Gateway",
 		"gateway_name", gw.Name, "gateway_namespace", gw.Namespace, "gatewayconfig_name", configName)
 	return &gatewayConfig, nil
+}
+
+// canonicalHeaderScopeKey returns a stable key for exact-match scope headers, excluding x-ai-eg-model.
+// An empty string means the rule has no header scope.
+func canonicalHeaderScopeKey(headers []gwapiv1.HTTPHeaderMatch) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	pairs := make(map[string]string, len(headers))
+	for _, h := range headers {
+		pairs[strings.ToLower(string(h.Name))] = h.Value
+	}
+	return filterapi.CanonicalHeaderScopeKey(pairs)
 }

@@ -50,8 +50,22 @@ type Config struct {
 	// configured, requests to a host that doesn't match any entry fall back to this list (rather than to Models, which
 	// would leak host-scoped models to unknown hosts).
 	UnscopedModels []Model `json:"unscopedModels,omitempty"`
+	// ModelsByHostAndScope maps hostname to header-scoped model groups. When a route has no hostnames, use "" as the
+	// host key. Header scoping composes with hostname scoping: a rule with both hostnames and scope headers contributes
+	// only when both match.
+	ModelsByHostAndScope map[string]HeaderScopedModels `json:"modelsByHostAndScope,omitempty"`
 	// MCPConfig is the configuration for the MCPRoute implementations.
 	MCPConfig *MCPConfig `json:"mcpConfig,omitempty"`
+}
+
+// HeaderScopedModels groups models by header scope within a host (or globally when the host key is "").
+type HeaderScopedModels struct {
+	// ModelsByHeaderScope maps a canonical scope key to models. The scope key is a sorted, comma-separated list of
+	// lowercased "name=value" pairs for all exact-match headers in a rule except x-ai-eg-model, e.g. "x-jwt-sub=client-a".
+	ModelsByHeaderScope map[string][]Model `json:"modelsByHeaderScope,omitempty"`
+	// UnscopedHeaderModels holds models from rules with no non-model exact-match headers. Visible to all header scopes
+	// on the same host; also returned when the request does not match any scoped rule.
+	UnscopedHeaderModels []Model `json:"unscopedHeaderModels,omitempty"`
 }
 
 // Model corresponds to the OpenAI model object in the OpenAI-compatible APIs

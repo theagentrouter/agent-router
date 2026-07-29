@@ -213,3 +213,68 @@ func Test_selectModelsForHost(t *testing.T) {
 		require.Nil(t, selectModelsForHost("localhost", scopedOnly))
 	})
 }
+
+func Test_selectModelsForHeaderScope(t *testing.T) {
+	clientAModels := []filterapi.Model{{Name: "model-a"}}
+	clientBModels := []filterapi.Model{{Name: "model-b"}}
+	sharedModels := []filterapi.Model{{Name: "shared-model"}}
+
+	hsm := filterapi.HeaderScopedModels{
+		ModelsByHeaderScope: map[string][]filterapi.Model{
+			"x-jwt-sub=client-a": clientAModels,
+			"x-jwt-sub=client-b": clientBModels,
+		},
+		UnscopedHeaderModels: sharedModels,
+	}
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    []filterapi.Model
+	}{
+		{
+			name:    "matching scope returns scoped and shared models",
+			headers: map[string]string{"x-jwt-sub": "client-a"},
+			want:    append(append([]filterapi.Model{}, clientAModels...), sharedModels...),
+		},
+		{
+			name:    "unknown scope returns shared models only",
+			headers: map[string]string{"x-jwt-sub": "client-c"},
+			want:    sharedModels,
+		},
+		{
+			name:    "missing scope header returns shared models only",
+			headers: map[string]string{},
+			want:    sharedModels,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, selectModelsForHeaderScope(tt.headers, hsm))
+		})
+	}
+}
+
+func Test_selectModels(t *testing.T) {
+	cfg := &filterapi.RuntimeConfig{
+		DeclaredModels: []filterapi.Model{{Name: "legacy-model"}},
+		ModelsByHostAndScope: map[string]filterapi.HeaderScopedModels{
+			"": {
+				ModelsByHeaderScope: map[string][]filterapi.Model{
+					"x-jwt-sub=client-a": {{Name: "scoped-model"}},
+				},
+			},
+		},
+	}
+
+	require.Equal(t, []filterapi.Model{{Name: "scoped-model"}}, selectModels(map[string]string{
+		"x-jwt-sub": "client-a",
+	}, "", cfg))
+	require.Equal(t, []filterapi.Model(nil), selectModels(map[string]string{
+		"x-jwt-sub": "client-b",
+	}, "", cfg))
+	require.Equal(t, cfg.DeclaredModels, selectModels(nil, "", &filterapi.RuntimeConfig{
+		DeclaredModels: cfg.DeclaredModels,
+	}))
+}

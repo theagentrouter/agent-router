@@ -437,6 +437,12 @@ For OpenAI-compatible backends that natively support tokenization (e.g., vLLM), 
 - ✅ Returns models declared in AIGatewayRoute configurations
 - ✅ OpenAI-compatible response format
 - ✅ Model metadata (ID, owned_by, created timestamp)
+- ✅ Hostname scoping when routes declare `spec.hostnames` (see v0.7 release notes)
+- ✅ Header scoping when rules use exact-match headers other than `x-ai-eg-model` (e.g. `x-jwt-sub` for JWT tenant routing)
+
+When multiple `AIGatewayRoute` rules on a shared hostname match on different exact headers, `GET /v1/models` returns only models from rules whose scope headers match the incoming request. Rules without scope headers remain visible to all requests on that host. Header scoping composes with hostname scoping.
+
+Scope headers must be present on the request when the external processor runs (for example via JWT `claimToHeaders` with `recomputeRoute: true`, the same pattern used for chat routing).
 
 **Example:**
 

@@ -43,6 +43,8 @@ type RuntimeConfig struct {
 	// UnscopedModels is the fallback returned for hosts that don't match any ModelsByHost entry. Populated from routes
 	// that did NOT declare hostnames; kept separate from DeclaredModels so we don't leak scoped models to unknown hosts.
 	UnscopedModels []Model
+	// ModelsByHostAndScope maps hostname to header-scoped model groups for per-header filtering of /v1/models.
+	ModelsByHostAndScope map[string]HeaderScopedModels
 	// Backends is the map of backends by name.
 	Backends map[string]*RuntimeBackend
 }
@@ -124,12 +126,13 @@ func NewRuntimeConfig(ctx context.Context, config *Config, fn NewBackendAuthHand
 	}
 
 	return &RuntimeConfig{
-		UUID:               config.UUID,
-		Backends:           backends,
-		GlobalRequestCosts: globalCosts,
-		RequestCosts:       costs,
-		DeclaredModels:     config.Models,
-		ModelsByHost:       config.ModelsByHost,
-		UnscopedModels:     config.UnscopedModels,
+		UUID:                 config.UUID,
+		Backends:             backends,
+		GlobalRequestCosts:   globalCosts,
+		RequestCosts:         costs,
+		DeclaredModels:       config.Models,
+		ModelsByHost:         config.ModelsByHost,
+		UnscopedModels:       config.UnscopedModels,
+		ModelsByHostAndScope: config.ModelsByHostAndScope,
 	}, nil
 }
