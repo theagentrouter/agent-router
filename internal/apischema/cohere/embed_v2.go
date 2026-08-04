@@ -102,7 +102,7 @@ type EmbedV2Response struct {
 
 // EmbedV2Embeddings holds the resulting embedding vectors, keyed by the embedding type.
 type EmbedV2Embeddings struct {
-	Float   [][]float32 `json:"float,omitempty"`
+	Float   [][]float64 `json:"float,omitempty"`
 	Int8    [][]int8    `json:"int8,omitempty"`
 	Uint8   [][]uint8   `json:"uint8,omitempty"`
 	Binary  [][]byte    `json:"binary,omitempty"`
