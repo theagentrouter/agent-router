@@ -51,21 +51,21 @@ const (
 type EmbedV2EmbeddingType string
 
 const (
-	EmbedV2EmbeddingTypeFloat EmbedV2EmbeddingType = "float"
-	EmbedV2EmbeddingTypeInt8 EmbedV2EmbeddingType = "int8"
-	EmbedV2EmbeddingTypeUint8 EmbedV2EmbeddingType = "uint8"
-	EmbedV2EmbeddingTypeBinary EmbedV2EmbeddingType = "binary"
+	EmbedV2EmbeddingTypeFloat   EmbedV2EmbeddingType = "float"
+	EmbedV2EmbeddingTypeInt8    EmbedV2EmbeddingType = "int8"
+	EmbedV2EmbeddingTypeUint8   EmbedV2EmbeddingType = "uint8"
+	EmbedV2EmbeddingTypeBinary  EmbedV2EmbeddingType = "binary"
 	EmbedV2EmbeddingTypeUbinary EmbedV2EmbeddingType = "ubinary"
-	EmbedV2EmbeddingTypeBase64 EmbedV2EmbeddingType = "base64"
+	EmbedV2EmbeddingTypeBase64  EmbedV2EmbeddingType = "base64"
 )
 
 // EmbedV2Truncate specifies how the API will handle inputs longer than the maximum token length.
 type EmbedV2Truncate string
 
 const (
-	EmbedV2TruncateNone EmbedV2Truncate = "NONE"
+	EmbedV2TruncateNone  EmbedV2Truncate = "NONE"
 	EmbedV2TruncateStart EmbedV2Truncate = "START"
-	EmbedV2TruncateEnd EmbedV2Truncate = "END"
+	EmbedV2TruncateEnd   EmbedV2Truncate = "END"
 )
 
 // EmbedV2Inputs represents an array of mixed text/image input entries.
@@ -75,8 +75,8 @@ type EmbedV2Inputs struct {
 
 // EmbedV2InputContent represents a single content item in a mixed input entry.
 type EmbedV2InputContent struct {
-	Type string `json:"type"`
-	Text *string `json:"text,omitempty"`
+	Type     string           `json:"type"`
+	Text     *string          `json:"text,omitempty"`
 	ImageURL *EmbedV2ImageURL `json:"image_url,omitempty"`
 }
 
@@ -112,10 +112,10 @@ type EmbedV2Embeddings struct {
 
 // EmbedV2ImageMeta contains metadata about an input image.
 type EmbedV2ImageMeta struct {
-	Width *int `json:"width,omitempty"`
-	Height *int `json:"height,omitempty"`
-	Format *string `json:"format,omitempty"`
-	BitDepth *int `json:"bit_depth,omitempty"`
+	Width    *int    `json:"width,omitempty"`
+	Height   *int    `json:"height,omitempty"`
+	Format   *string `json:"format,omitempty"`
+	BitDepth *int    `json:"bit_depth,omitempty"`
 }
 
 // EmbedV2Meta contains metadata returned by the API.

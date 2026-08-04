@@ -22,12 +22,12 @@ import (
 
 func TestEmbedRecorder_StartParams(t *testing.T) {
 	req := &cohereschema.EmbedV2Request{
-		Model:       "embed-v4.0",
-		InputType:   cohereschema.EmbedV2InputTypeClassification,
-		Texts:       []string{"hello", "goodbye"},
+		Model:     "embed-v4.0",
+		InputType: cohereschema.EmbedV2InputTypeClassification,
+		Texts:     []string{"hello", "goodbye"},
 	}
 	reqBody, _ := json.Marshal(req)
-	
+
 	recorder := NewEmbedRecorderFromEnv()
 
 	spanName, opts := recorder.StartParams(req, reqBody)
@@ -39,9 +39,9 @@ func TestEmbedRecorder_StartParams(t *testing.T) {
 
 func TestEmbedRecorder_RecordRequest(t *testing.T) {
 	req := &cohereschema.EmbedV2Request{
-		Model:       "embed-v4.0",
-		InputType:   cohereschema.EmbedV2InputTypeClassification,
-		Texts:       []string{"hello", "goodbye"},
+		Model:     "embed-v4.0",
+		InputType: cohereschema.EmbedV2InputTypeClassification,
+		Texts:     []string{"hello", "goodbye"},
 	}
 	reqBody, _ := json.Marshal(req)
 
@@ -66,9 +66,9 @@ func TestEmbedRecorder_RecordRequest(t *testing.T) {
 
 func TestEmbedRecorder_RecordRequest_HideInputs(t *testing.T) {
 	req := &cohereschema.EmbedV2Request{
-		Model:       "embed-v4.0",
-		InputType:   cohereschema.EmbedV2InputTypeClassification,
-		Texts:       []string{"hello", "goodbye"},
+		Model:     "embed-v4.0",
+		InputType: cohereschema.EmbedV2InputTypeClassification,
+		Texts:     []string{"hello", "goodbye"},
 	}
 	reqBody, _ := json.Marshal(req)
 
