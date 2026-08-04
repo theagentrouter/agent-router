@@ -134,7 +134,7 @@ func TestCohereToCohereTranslatorV2Embed_ResponseBody(t *testing.T) {
 		{
 			name: "valid_response_input_only",
 			responseBody: `{
-"embeddings": [{"float": [[0.1, 0.2, 0.3, 0.4]]}],
+"embeddings": {"float": [[0.1, 0.2, 0.3, 0.4]]},
 "id": "em-123",
 "meta": {"tokens": {"input_tokens": 25}}
 }`,
@@ -145,7 +145,7 @@ func TestCohereToCohereTranslatorV2Embed_ResponseBody(t *testing.T) {
 		{
 			name: "valid_response_with_output_tokens",
 			responseBody: `{
-"embeddings": [{"float": [[0.1, 0.2, 0.3, 0.4]]}],
+"embeddings": {"float": [[0.1, 0.2, 0.3, 0.4]]},
 "id": "em-123",
 "meta": {"tokens": {"input_tokens": 25, "output_tokens": 0}}
 }`,
@@ -245,7 +245,7 @@ func TestCohereToCohereTranslatorV2Embed_ResponseBody_RecordsResponseInSpan(t *t
 	tr := NewEmbedCohereToCohereTranslator("v2", "")
 	tr.(*cohereToCohereTranslatorV2Embed).requestModel = "embed-v4.0"
 
-	body := `{"embeddings":[[0.1, 0.2, 0.3]],"id":"em-456"}`
+	body := `{"embeddings":{"float":[[0.1, 0.2, 0.3]]},"id":"em-456"}`
 	_, _, _, _, err := tr.ResponseBody(
 		map[string]string{contentTypeHeaderName: jsonContentType},
 		strings.NewReader(body),

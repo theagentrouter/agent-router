@@ -89,7 +89,7 @@ func buildEmbedRequestAttributes(req *cohereschema.EmbedV2Request, body []byte, 
 		attrs = append(attrs, attribute.String(openinference.EmbeddingModelName, req.Model))
 	}
 
-	if !config.HideInputs {
+	if config.HideInputs {
 		attrs = append(attrs, attribute.String(openinference.InputValue, openinference.RedactedValue))
 	} else {
 		attrs = append(attrs,
