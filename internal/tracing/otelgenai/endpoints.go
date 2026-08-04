@@ -289,6 +289,55 @@ func NewRerankRecorder(config *Config) tracingapi.RerankRecorder {
 	}
 }
 
+// NewEmbedRecorder creates a tracingapi.EmbedRecorder.
+//
+// Cohere's /v2/embed is an embeddings endpoint, so it reports the embeddings
+// operation.
+func NewEmbedRecorder(config *Config) tracingapi.EmbedRecorder {
+	return &recorder[cohere.EmbedV2Request, cohere.EmbedV2Response, struct{}]{
+		operation:     OperationEmbeddings,
+		config:        configOrEnv(config),
+		requestModel:  func(r *cohere.EmbedV2Request) string { return r.Model },
+		requestAttrs:  embedRequestAttrs,
+		responseAttrs: embedResponseAttrs,
+	}
+}
+
+func embedRequestAttrs(req *cohere.EmbedV2Request) []attribute.KeyValue {
+	var p params
+	if len(req.EmbeddingTypes) > 0 {
+		formats := make([]string, len(req.EmbeddingTypes))
+		for i, t := range req.EmbeddingTypes {
+			formats[i] = string(t)
+		}
+		p.stringSlice(RequestEncodingFormats, formats)
+	}
+	return p.attrs
+}
+
+func embedResponseAttrs(resp *cohere.EmbedV2Response) []attribute.KeyValue {
+	var id string
+	if resp.ID != nil {
+		id = *resp.ID
+	}
+	attrs := responseIdentityAttrs(id, "")
+	if resp.Meta != nil && resp.Meta.Tokens != nil {
+		var in, out int
+		if resp.Meta.Tokens.InputTokens != nil {
+			in = int(*resp.Meta.Tokens.InputTokens)
+		}
+		if resp.Meta.Tokens.OutputTokens != nil {
+			out = int(*resp.Meta.Tokens.OutputTokens)
+		}
+		attrs = append(attrs, usageAttrs(in, out)...)
+	}
+	// The dimension count is only knowable when float vectors are returned.
+	if resp.Embeddings != nil && len(resp.Embeddings.Float) > 0 && len(resp.Embeddings.Float[0]) > 0 {
+		attrs = append(attrs, attribute.Int(EmbeddingsDimensionCount, len(resp.Embeddings.Float[0])))
+	}
+	return attrs
+}
+
 // NewSystemOneRecorder creates a tracingapi.SystemOneRecorder.
 //
 // System One is a decision model, not a chat model, so it is a custom

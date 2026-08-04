@@ -139,6 +139,8 @@ type (
 	CohereRerankTranslator = Translator[cohereschema.RerankV2Request, tracingapi.RerankSpan]
 	// TypeSafeSystemOneTranslator translates the TypeSafe's /v1/systemone endpoint.
 	TypeSafeSystemOneTranslator = Translator[typesafeschema.SystemOneRequest, tracingapi.SystemOneSpan]
+	// CohereEmbedTranslator translates the Cohere's /v2/embed endpoint.
+	CohereEmbedTranslator = Translator[cohereschema.EmbedV2Request, tracingapi.EmbedSpan]
 	// AnthropicMessagesTranslator translates the Anthropic's /messages endpoint.
 	AnthropicMessagesTranslator = Translator[anthropicschema.MessagesRequest, tracingapi.MessageSpan]
 	// OpenAIImageGenerationTranslator translates the OpenAI's /images/generations endpoint.

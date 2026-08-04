@@ -40,6 +40,7 @@ type recorderSet struct {
 	translation     tracingapi.TranslationRecorder
 	rerank          tracingapi.RerankRecorder
 	systemOne       tracingapi.SystemOneRecorder
+	embed           tracingapi.EmbedRecorder
 	message         tracingapi.MessageRecorder
 	tokenize        tracingapi.TokenizeRecorder
 
@@ -115,6 +116,7 @@ func newOpenInferenceRecorders() recorderSet {
 		translation:     openai.NewTranslationRecorder(cfg),
 		rerank:          cohere.NewRerankRecorder(cfg),
 		systemOne:       typesafe.NewSystemOneRecorder(cfg),
+		embed:           cohere.NewEmbedRecorder(cfg),
 		message:         anthropic.NewMessageRecorder(cfg),
 		tokenize:        openai.NewTokenizeRecorder(cfg),
 
@@ -144,6 +146,7 @@ func newOTelGenAIRecorders() recorderSet {
 		translation:     otelgenai.NewTranslationRecorder(cfg),
 		rerank:          otelgenai.NewRerankRecorder(cfg),
 		systemOne:       otelgenai.NewSystemOneRecorder(cfg),
+		embed:           otelgenai.NewEmbedRecorder(cfg),
 		message:         otelgenai.NewMessageRecorder(cfg),
 		tokenize:        otelgenai.NewTokenizeRecorder(cfg),
 

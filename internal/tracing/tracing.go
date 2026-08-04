@@ -34,6 +34,7 @@ type tracingImpl struct {
 	translationTracer          tracingapi.TranslationTracer
 	rerankTracer               tracingapi.RerankTracer
 	systemOneTracer            tracingapi.SystemOneTracer
+	embedTracer                tracingapi.EmbedTracer
 	messageTracer              tracingapi.MessageTracer
 	tokenizeTracer             tracingapi.TokenizeTracer
 	responsesInputTokensTracer tracingapi.ResponsesInputTokensTracer
@@ -91,6 +92,11 @@ func (t *tracingImpl) RerankTracer() tracingapi.RerankTracer {
 // SystemOneTracer implements the same method as documented on tracingapi.Tracing.
 func (t *tracingImpl) SystemOneTracer() tracingapi.SystemOneTracer {
 	return t.systemOneTracer
+}
+
+// EmbedTracer implements the same method as documented on tracingapi.Tracing.
+func (t *tracingImpl) EmbedTracer() tracingapi.EmbedTracer {
+	return t.embedTracer
 }
 
 // MCPTracer implements the same method as documented on tracingapi.Tracing.
@@ -296,6 +302,12 @@ func NewTracingFromEnv(ctx context.Context, stdout io.Writer, headerAttributeMap
 			tracer,
 			propagator,
 			recorders.systemOne,
+			headerAttrs,
+		),
+		embedTracer: newEmbedTracer(
+			tracer,
+			propagator,
+			recorders.embed,
 			headerAttrs,
 		),
 		messageTracer: newMessageTracer(
