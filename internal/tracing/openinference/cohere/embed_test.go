@@ -58,8 +58,8 @@ func TestEmbedRecorder_RecordRequest(t *testing.T) {
 		attribute.String(openinference.EmbeddingModelName, "embed-v4.0"),
 		attribute.String(openinference.InputValue, string(reqBody)),
 		attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
-		attribute.String(openinference.EmbeddingInputText(0), "hello"),
-		attribute.String(openinference.EmbeddingInputText(1), "goodbye"),
+		attribute.String(openinference.EmbeddingTextAttribute(0), "hello"),
+		attribute.String(openinference.EmbeddingTextAttribute(1), "goodbye"),
 	}
 	openinference.RequireAttributesEqual(t, expected, actualSpan.Attributes)
 }
@@ -91,7 +91,7 @@ func TestEmbedRecorder_RecordRequest_HideInputs(t *testing.T) {
 
 func TestEmbedRecorder_RecordResponse(t *testing.T) {
 	resp := &cohereschema.EmbedV2Response{
-		Embeddings: [][]float32{{0.1, 0.2, 0.3, 0.4}},
+		Embeddings: [][]float64{{0.1, 0.2, 0.3, 0.4}},
 		Meta: &cohereschema.EmbedV2Meta{
 			Tokens: &cohereschema.EmbedV2Tokens{
 				InputTokens:  fptr(25),
@@ -120,7 +120,7 @@ func TestEmbedRecorder_RecordResponse(t *testing.T) {
 
 func TestEmbedRecorder_RecordResponse_HideOutputs(t *testing.T) {
 	resp := &cohereschema.EmbedV2Response{
-		Embeddings: [][]float32{{0.1, 0.2, 0.3, 0.4}},
+		Embeddings: [][]float64{{0.1, 0.2, 0.3, 0.4}},
 		Meta: &cohereschema.EmbedV2Meta{
 			Tokens: &cohereschema.EmbedV2Tokens{
 				InputTokens:  fptr(25),
@@ -202,9 +202,4 @@ func TestEmbedRecorder_RecordResponseOnError(t *testing.T) {
 			}
 		})
 	}
-}
-
-func fptr(v int) *float64 {
-	f := float64(v)
-	return &f
 }
