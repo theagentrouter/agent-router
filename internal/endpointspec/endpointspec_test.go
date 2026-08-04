@@ -359,6 +359,37 @@ func TestSystemOneEndpointSpec_GetTranslator(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported API schema")
 }
 
+func TestEmbedEndpointSpec_ParseBody(t *testing.T) {
+	spec := EmbedEndpointSpec{}
+	t.Run("invalid json", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseBody([]byte("{"), false)
+		require.ErrorContains(t, err, "malformed request")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		req := cohereschema.EmbedV2Request{Model: "embed-v4.0", InputType: cohereschema.EmbedV2InputTypeClassification, Texts: []string{"hello", "goodbye"}}
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.Equal(t, "embed-v4.0", model)
+		require.False(t, stream)
+		require.NotNil(t, parsed)
+		require.Nil(t, mutated)
+	})
+}
+
+func TestEmbedEndpointSpec_GetTranslator(t *testing.T) {
+	spec := EmbedEndpointSpec{}
+
+	_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaCohere}, "override")
+	require.NoError(t, err)
+
+	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
+	require.ErrorContains(t, err, "unsupported API schema")
+}
+
 func TestResponsesEndpointSpec_ParseBody(t *testing.T) {
 	spec := ResponsesEndpointSpec{}
 	t.Run("invalid json", func(t *testing.T) {
