@@ -6,7 +6,6 @@
 package translator
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
