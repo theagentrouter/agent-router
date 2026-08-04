@@ -91,7 +91,9 @@ func TestEmbedRecorder_RecordRequest_HideInputs(t *testing.T) {
 
 func TestEmbedRecorder_RecordResponse(t *testing.T) {
 	resp := &cohereschema.EmbedV2Response{
-		Embeddings: [][]float64{{0.1, 0.2, 0.3, 0.4}},
+		Embeddings: &cohereschema.EmbedV2Embeddings{
+			Float: [][]float64{{0.1, 0.2, 0.3, 0.4}},
+		},
 		Meta: &cohereschema.EmbedV2Meta{
 			Tokens: &cohereschema.EmbedV2Tokens{
 				InputTokens:  fptr(25),
@@ -110,7 +112,7 @@ func TestEmbedRecorder_RecordResponse(t *testing.T) {
 	respJSON, _ := json.Marshal(resp)
 	expected := []attribute.KeyValue{
 		attribute.String(openinference.OutputMimeType, openinference.MimeTypeJSON),
-		attribute.Float64(openinference.EmbeddingVectorAttribute(0), []float64{0.1, 0.2, 0.3, 0.4}),
+		attribute.Float64Slice(openinference.EmbeddingVectorAttribute(0), []float64{0.1, 0.2, 0.3, 0.4}),
 		attribute.Int(openinference.LLMTokenCountPrompt, 25),
 		attribute.Int(openinference.LLMTokenCountTotal, 25),
 		attribute.String(openinference.OutputValue, string(respJSON)),
@@ -120,7 +122,9 @@ func TestEmbedRecorder_RecordResponse(t *testing.T) {
 
 func TestEmbedRecorder_RecordResponse_HideOutputs(t *testing.T) {
 	resp := &cohereschema.EmbedV2Response{
-		Embeddings: [][]float64{{0.1, 0.2, 0.3, 0.4}},
+		Embeddings: &cohereschema.EmbedV2Embeddings{
+			Float: [][]float64{{0.1, 0.2, 0.3, 0.4}},
+		},
 		Meta: &cohereschema.EmbedV2Meta{
 			Tokens: &cohereschema.EmbedV2Tokens{
 				InputTokens:  fptr(25),
