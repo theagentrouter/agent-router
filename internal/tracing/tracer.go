@@ -105,6 +105,14 @@ func (t *requestTracerImpl[ReqT, RespT, ChunkT]) StartSpanAndInjectHeaders(
 		attrs := make([]attribute.KeyValue, 0, len(t.headerAttributes))
 		for headerName, attrName := range t.headerAttributes {
 			if headerValue, ok := headers[headerName]; ok {
+				// user.id is consumer-supplied end-user attribution:
+				// stamped only on authenticated consumer traffic, and
+				// bounded first — see boundedUserIDValue.
+				if attrName == otelAttrUserID {
+					if headerValue, ok = boundedUserIDValue(t.headerAttributes, headers, headerValue); !ok {
+						continue
+					}
+				}
 				attrs = append(attrs, attribute.String(attrName, headerValue))
 			}
 		}
