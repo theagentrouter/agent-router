@@ -926,7 +926,7 @@ func Test_fetchOAuthServerMetadata(t *testing.T) {
 
 			// Use a small backoff timeout that allows the test to configure a number of attempts
 			// to force failures or self-healing.
-			metadata, err := fetchOAuthAuthServerMetadata(server.URL+tt.issuerPath, 1*time.Second)
+			metadata, err := fetchOAuthAuthServerMetadata(server.URL+tt.issuerPath, "", 1*time.Second)
 
 			if tt.wantStatusCode != http.StatusOK {
 				var httpError *httpError
@@ -981,7 +981,7 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		t.Cleanup(server.Close)
 		addr := server.Listener.Addr().String()
 
-		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, 1*time.Second)
+		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, "", 1*time.Second)
 		require.NoError(t, err)
 		require.Equal(t, "http://"+addr+issuerPath, metadata.Issuer)
 		require.Equal(t, "http://"+addr+"/auth", metadata.AuthorizationEndpoint)
@@ -999,7 +999,7 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		server := httptest.NewServer(mux)
 		t.Cleanup(server.Close)
 
-		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, 1*time.Second)
+		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, "", 1*time.Second)
 		require.NoError(t, err)
 		require.Empty(t, metadata.JwksURI, "jwks_uri from a rejected variant must not survive")
 	})
@@ -1011,7 +1011,7 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		server := httptest.NewServer(mux)
 		t.Cleanup(server.Close)
 
-		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, 1*time.Second)
+		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, "", 1*time.Second)
 		require.Nil(t, metadata)
 		var invalidErr *invalidMetadataError
 		require.ErrorAs(t, err, &invalidErr)
@@ -1031,7 +1031,7 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		server := httptest.NewServer(mux)
 		t.Cleanup(server.Close)
 
-		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, 1*time.Second)
+		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, "", 1*time.Second)
 		require.NoError(t, err)
 		require.Equal(t, "https://idp.example.com/keys", metadata.JwksURI)
 	})
@@ -1050,8 +1050,123 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		t.Cleanup(server.Close)
 		addr := server.Listener.Addr().String()
 
-		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, 1*time.Second)
+		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, "", 1*time.Second)
 		require.NoError(t, err)
 		require.Equal(t, "http://"+addr+issuerPath, metadata.Issuer)
+	})
+}
+
+func Test_fetchOAuthServerMetadata_explicitURL(t *testing.T) {
+	const (
+		issuerPath = "/api/idp/authn"
+		// The document lives at a versioned path that cannot be derived from the issuer.
+		versionedPath = "/api/idp/v4/authn/.well-known/openid-configuration"
+	)
+
+	newServer := func(t *testing.T, register func(*http.ServeMux)) *httptest.Server {
+		mux := http.NewServeMux()
+		register(mux)
+		server := httptest.NewServer(mux)
+		t.Cleanup(server.Close)
+		return server
+	}
+
+	completeDocument := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"issuer":                 "http://" + r.Host + issuerPath,
+			"authorization_endpoint": "http://" + r.Host + "/authn/v1/oidc/auth",
+			"token_endpoint":         "http://" + r.Host + "/v4/authn/oidc/token",
+			"jwks_uri":               "http://" + r.Host + "/v4/authn/oidc/keys",
+		})
+	}
+
+	t.Run("fetches from the configured URL", func(t *testing.T) {
+		server := newServer(t, func(mux *http.ServeMux) {
+			mux.HandleFunc(versionedPath, completeDocument)
+		})
+		addr := server.Listener.Addr().String()
+
+		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, server.URL+versionedPath, 1*time.Second)
+		require.NoError(t, err)
+		require.Equal(t, "http://"+addr+issuerPath, metadata.Issuer)
+		require.Equal(t, "http://"+addr+"/authn/v1/oidc/auth", metadata.AuthorizationEndpoint)
+		require.Equal(t, "http://"+addr+"/v4/authn/oidc/token", metadata.TokenEndpoint)
+	})
+
+	t.Run("does not probe the URL variants derived from the issuer", func(t *testing.T) {
+		var derivedHits int
+		server := newServer(t, func(mux *http.ServeMux) {
+			mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+				derivedHits++
+				w.WriteHeader(http.StatusNotFound)
+			})
+			mux.HandleFunc(versionedPath, completeDocument)
+		})
+
+		_, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, server.URL+versionedPath, 1*time.Second)
+		require.NoError(t, err)
+		require.Zero(t, derivedHits, "the derived well-known URLs must not be probed")
+	})
+
+	t.Run("fails when the configured URL serves an unusable document", func(t *testing.T) {
+		server := newServer(t, func(mux *http.ServeMux) {
+			// The legacy issuer path serves a usable document, but it is not what was configured.
+			mux.HandleFunc(issuerPath+"/.well-known/openid-configuration", completeDocument)
+			mux.HandleFunc(versionedPath, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("{}"))
+			})
+		})
+
+		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, server.URL+versionedPath, 1*time.Second)
+		require.Nil(t, metadata)
+		var invalidErr *invalidMetadataError
+		require.ErrorAs(t, err, &invalidErr)
+	})
+}
+
+func Test_buildOAuthAuthServerMetadataJSON_explicitURL(t *testing.T) {
+	c := &MCPRouteController{logger: logr.Discard()}
+
+	t.Run("serves the document from the configured URL", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/versioned/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"issuer":                 "http://" + r.Host + "/legacy",
+				"authorization_endpoint": "http://" + r.Host + "/oidc/auth",
+				"token_endpoint":         "http://" + r.Host + "/oidc/token",
+			})
+		})
+		server := httptest.NewServer(mux)
+		t.Cleanup(server.Close)
+
+		metadataJSON, err := c.buildOAuthAuthServerMetadataJSON(&aigv1b1.MCPRouteOAuth{
+			Issuer:                         server.URL + "/legacy",
+			AuthorizationServerMetadataURL: ptr.To(server.URL + "/versioned/.well-known/openid-configuration"),
+		})
+		require.NoError(t, err)
+		require.Contains(t, metadataJSON, `"authorization_endpoint":"`+server.URL+`/oidc/auth"`)
+		// The Keycloak-shaped defaults must not appear.
+		require.NotContains(t, metadataJSON, "/protocol/openid-connect/")
+	})
+
+	t.Run("fails rather than substituting defaults", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/versioned/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		})
+		server := httptest.NewServer(mux)
+		t.Cleanup(server.Close)
+
+		_, err := c.buildOAuthAuthServerMetadataJSON(&aigv1b1.MCPRouteOAuth{
+			Issuer:                         server.URL + "/legacy",
+			AuthorizationServerMetadataURL: ptr.To(server.URL + "/versioned/.well-known/openid-configuration"),
+		})
+		require.ErrorContains(t, err, "failed to fetch OAuth authorization server metadata")
 	})
 }

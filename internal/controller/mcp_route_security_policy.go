@@ -125,7 +125,7 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 		} else {
 			// Auto-discover JWKS URI from authorization server metadata.
 			c.logger.Info("Auto-discovering JWKS URI from authorization server metadata", "issuer", oauth.Issuer)
-			jwksURI, discoveryErr := c.discoverJWKSURI(oauth.Issuer)
+			jwksURI, discoveryErr := c.discoverJWKSURI(oauth)
 			if discoveryErr != nil {
 				return fmt.Errorf("failed to auto-discover JWKS URI: %w", discoveryErr)
 			}
@@ -457,7 +457,10 @@ func (c *MCPRouteController) ensureOAuthAuthServerMetadataHRF(ctx context.Contex
 	}
 
 	// Build OAuth authorization server metadata JSON response.
-	metadataJSON := c.buildOAuthAuthServerMetadataJSON(mcpRoute.Spec.SecurityPolicy.OAuth)
+	metadataJSON, err := c.buildOAuthAuthServerMetadataJSON(mcpRoute.Spec.SecurityPolicy.OAuth)
+	if err != nil {
+		return err
+	}
 
 	// Configure direct response with OAuth authorization server metadata.
 	httpRouteFilter.Spec = egv1a1.HTTPRouteFilterSpec{
@@ -523,12 +526,13 @@ func buildOAuthProtectedResourceMetadataJSON(auth *aigv1b1.MCPRouteOAuth) string
 }
 
 // buildOAuthAuthServerMetadataJSON constructs the OAuth authorization server metadata JSON response.
-// It first attempts to fetch metadata from the authorization server's well-known endpoint,
-// and falls back to hardcoded values if the fetch fails.
+// It fetches the metadata from the URL configured in AuthorizationServerMetadataURL, or, when that is
+// unset, from the well-known endpoints derived from the issuer. A failure to fetch a configured URL is
+// returned as an error; a failure to discover from the issuer falls back to hardcoded values.
 // References:
 // * https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#authorization-server-location
 // * https://datatracker.ietf.org/doc/html/rfc8414#section-3.2
-func (c *MCPRouteController) buildOAuthAuthServerMetadataJSON(oauth *aigv1b1.MCPRouteOAuth) string {
+func (c *MCPRouteController) buildOAuthAuthServerMetadataJSON(oauth *aigv1b1.MCPRouteOAuth) (string, error) {
 	// For 2025-03-26 compatibility, we return the authorization server metadata.
 
 	// The authorization server's issuer identifier, which is a URL that uses the "https" scheme and has no query or
@@ -537,16 +541,24 @@ func (c *MCPRouteController) buildOAuthAuthServerMetadataJSON(oauth *aigv1b1.MCP
 	// https://datatracker.ietf.org/doc/html/rfc8414#section-2
 	authServer := strings.TrimSuffix(oauth.Issuer, "/")
 
-	// Try to fetch metadata from the well-known endpoint first.
-	if authServer != "" {
-		fetchedMetadata, err := fetchOAuthAuthServerMetadata(authServer, maxRetryElapsedTime)
+	metadataURL := ptr.Deref(oauth.AuthorizationServerMetadataURL, "")
+
+	// Try to fetch the metadata document before falling back to hardcoded values.
+	if authServer != "" || metadataURL != "" {
+		fetchedMetadata, err := fetchOAuthAuthServerMetadata(authServer, metadataURL, maxRetryElapsedTime)
 		if err == nil && fetchedMetadata != nil {
 			// Convert to JSON string and return.
 			jsonBytes, _ := json.Marshal(fetchedMetadata)
-			return string(jsonBytes)
+			return string(jsonBytes), nil
 		}
 		// If there was an error fetching metadata, log it.
 		if err != nil {
+			// An operator who configured an explicit URL asked for that document specifically.
+			// Substituting defaults would hide the misconfiguration behind endpoints that do not
+			// exist, so surface it instead.
+			if metadataURL != "" {
+				return "", fmt.Errorf("failed to fetch OAuth authorization server metadata from %s: %w", metadataURL, err)
+			}
 			c.logger.Error(err, "failed to fetch OAuth authorization server metadata from well-known endpoint", "authServer", authServer)
 		}
 	}
@@ -571,7 +583,7 @@ func (c *MCPRouteController) buildOAuthAuthServerMetadataJSON(oauth *aigv1b1.MCP
 
 	// Convert to JSON string.
 	jsonBytes, _ := json.Marshal(response)
-	return string(jsonBytes)
+	return string(jsonBytes), nil
 }
 
 // cleanupSecurityPolicyResources deletes existing SecurityPolicy-related resources when SecurityPolicy is nil.
@@ -704,7 +716,7 @@ func (e *invalidMetadataError) Unwrap() error { return e.err }
 
 // fetchOAuthAuthServerMetadata fetches OAuth authorization server metadata from the well-known endpoint
 // with exponential backoff retry logic. It returns the fetched metadata or an error if all attempts fail.
-func fetchOAuthAuthServerMetadata(authServer string, maxRetryElapsedTime time.Duration) (*OAuthAuthServerMetadata, error) {
+func fetchOAuthAuthServerMetadata(authServer, metadataURL string, maxRetryElapsedTime time.Duration) (*OAuthAuthServerMetadata, error) {
 	httpClient := &http.Client{Timeout: httpClientTimeout}
 
 	operation := func(wellKnownURL string, metadata *OAuthAuthServerMetadata) error {
@@ -758,6 +770,12 @@ func fetchOAuthAuthServerMetadata(authServer string, maxRetryElapsedTime time.Du
 		return nil
 	}
 
+	// An explicitly configured metadata URL is used verbatim: the whole point of the field is that
+	// the document lives somewhere the issuer does not lead to, so there is nothing to derive.
+	if metadataURL != "" {
+		return fetchFromWellKnownURLs(metadataURL, []string{metadataURL}, operation, maxRetryElapsedTime)
+	}
+
 	authServerURL, err := url.Parse(authServer)
 	if err != nil {
 		return nil, fmt.Errorf("invalid authorization server URL: %w", err)
@@ -794,12 +812,23 @@ func fetchOAuthAuthServerMetadata(authServer string, maxRetryElapsedTime time.Du
 		),
 	}
 
+	return fetchFromWellKnownURLs(authServer, wellKnownURLVariants, operation, maxRetryElapsedTime)
+}
+
+// fetchFromWellKnownURLs tries each URL in order and returns the first usable document.
+// A URL that answers with a 4xx or with a document we cannot use is a miss, and the next URL is tried.
+func fetchFromWellKnownURLs(
+	subject string,
+	wellKnownURLs []string,
+	operation func(string, *OAuthAuthServerMetadata) error,
+	maxRetryElapsedTime time.Duration,
+) (*OAuthAuthServerMetadata, error) {
 	var lastErr error
-	for _, wellKnownURL := range wellKnownURLVariants {
+	for _, wellKnownURL := range wellKnownURLs {
 		var metadata OAuthAuthServerMetadata
 		b := backoff.NewExponentialBackOff()
 		b.MaxElapsedTime = maxRetryElapsedTime
-		err = backoff.Retry(func() error {
+		err := backoff.Retry(func() error {
 			return operation(wellKnownURL, &metadata)
 		}, b)
 		if err == nil { // Success.
@@ -822,9 +851,9 @@ func fetchOAuthAuthServerMetadata(authServer string, maxRetryElapsedTime time.Du
 		}
 	}
 
-	// We can only get here if every variant was a 4xx or returned an unusable document.
+	// We can only get here if every URL was a 4xx or returned an unusable document.
 	// Return the last failure.
-	return nil, fmt.Errorf("no usable authorization server metadata found for %q: %w", authServer, lastErr)
+	return nil, fmt.Errorf("no usable authorization server metadata found for %q: %w", subject, lastErr)
 }
 
 func oauthProtectedResourceMetadataName(mcpRouteName string) string {
@@ -837,9 +866,9 @@ func oauthAuthServerMetadataFilterName(mcpRouteName string) string {
 
 // discoverJWKSURI attempts to discover the JWKS URI from the OAuth authorization server metadata.
 // It fetches the well-known metadata endpoint and extracts the jwks_uri field.
-func (c *MCPRouteController) discoverJWKSURI(issuer string) (string, error) {
+func (c *MCPRouteController) discoverJWKSURI(oauth *aigv1b1.MCPRouteOAuth) (string, error) {
 	// Fetch OAuth authorization server metadata.
-	metadata, err := fetchOAuthAuthServerMetadata(issuer, maxRetryElapsedTime)
+	metadata, err := fetchOAuthAuthServerMetadata(oauth.Issuer, ptr.Deref(oauth.AuthorizationServerMetadataURL, ""), maxRetryElapsedTime)
 	switch {
 	case err != nil:
 		return "", fmt.Errorf("failed to fetch authorization server metadata: %w", err)
