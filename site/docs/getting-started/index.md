@@ -9,6 +9,7 @@ sidebar_position: 2
 Welcome to the Envoy AI Gateway getting started guide!
 
 This guide will walk you through setting up and using Envoy AI Gateway, a tool for managing GenAI traffic using Envoy.
+The getting started flow uses Kubernetes by default. If you want to run Envoy AI Gateway as a standalone local proxy with Docker Compose or a config file, use the [CLI run guide](../cli/run.md) and the [`cmd/aigw` Docker Compose examples](https://github.com/envoyproxy/ai-gateway/tree/main/cmd/aigw).
 
 ## Guide Structure
 
@@ -33,6 +34,8 @@ This getting started guide is organized into several sections:
    - Setting up OpenAI integration
    - Configuring AWS Bedrock
    - Managing credentials securely
+
+For local Docker or non-Kubernetes deployments, start with the [Envoy AI Gateway CLI](../cli/) instead.
 
 ## Need Help?
 

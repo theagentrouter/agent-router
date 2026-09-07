@@ -13,7 +13,9 @@ This guide will walk you through installing Envoy AI Gateway and its required co
 
 ## Installing Envoy AI Gateway
 
-The easiest way to install Envoy AI Gateway is using the Helm charts. You need to install the CRDs first, followed by the AI Gateway controller.
+The easiest way to install Envoy AI Gateway on Kubernetes is using the Helm charts. You need to install the CRDs first, followed by the AI Gateway controller.
+
+If you want to run Envoy AI Gateway as a standalone proxy outside Kubernetes, use [`aigw run`](../cli/run.md). The CLI can run directly on Linux and macOS, or from the Docker Compose examples in [`cmd/aigw`](https://github.com/envoyproxy/ai-gateway/tree/main/cmd/aigw). Those examples include an Ollama-backed stack and an OpenTelemetry stack for local traces and metrics.
 
 ### Step 1: Install AI Gateway CRDs
 

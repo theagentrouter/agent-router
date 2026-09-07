@@ -284,7 +284,7 @@ func (b *extProcBuilder) nonDefaultLogFormat() string {
 }
 
 // buildExtProcBaseArgs builds the command line arguments for the extproc
-// container excluding the secret-presence-driven -configPath / -configBundlePath
+// container excluding the secret-presence-driven -configBundlePath
 // flags. The mutating webhook prepends those based on which filter-config
 // secrets exist; they are intentionally kept out of the drift hash.
 func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {

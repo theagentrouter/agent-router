@@ -370,7 +370,7 @@ spec:
                               If not set, the cookies will default to the host of the request, not including the subdomains.
                               If set, the cookies will be set on the specified domain and all subdomains.
                               This means that requests to any subdomain will not require reauthentication after users log in to the parent domain.
-                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9]))*$
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                             type: string
                           cookieNames:
                             description: |-
@@ -485,12 +485,24 @@ spec:
                               If the configured header is "Authorization", EG forwards the ID token using
                               the "Bearer " prefix. For any other header, EG forwards the raw token value.
                               If not specified, the ID token will not be forwarded.
+
+                              Note: when passThroughAuthHeader is enabled, this header must not be the same
+                              as a header a JWT provider extracts from (the "Authorization" header by
+                              default). The forwarded ID token header is owned by Envoy, and Envoy rejects
+                              an OAuth2 configuration whose pass-through matcher keys on it.
                             properties:
                               header:
-                                description: Header is the upstream request header
-                                  that will carry the ID token.
+                                description: |-
+                                  Header is the upstream request header that will carry the ID token.
+                                  It must be a valid HTTP header name. Pseudo-headers (names starting with ":")
+                                  and the "Host" header are not allowed.
+                                maxLength: 256
                                 minLength: 1
+                                pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                 type: string
+                                x-kubernetes-validations:
+                                - message: header cannot be the Host header
+                                  rule: self.lowerAscii() != 'host'
                             required:
                             - header
                             type: object
@@ -923,6 +935,80 @@ spec:
                                                   server and not to a specific service.
                                                 type: string
                                             type: object
+                                          healthCheckLog:
+                                            description: |-
+                                              HealthCheckLog defines health check event logging configuration for this cluster.
+                                              When set, HC probe outcomes are logged to the configured sinks.
+                                              Takes precedence over the gateway-level EnvoyProxy.spec.telemetry.healthCheckLog.
+                                            properties:
+                                              matches:
+                                                description: |-
+                                                  Matches defines which health check probe outcomes produce a log entry.
+                                                  When omitted or empty, all events are logged.
+
+                                                  Each value must be unique. Multiple values are ORed. If any failure type is
+                                                  specified then a success type must also be specified, and vice versa.
+                                                items:
+                                                  description: ProxyHealthCheckLogEventType
+                                                    specifies which health check probe
+                                                    outcomes produce a log entry.
+                                                  enum:
+                                                  - Failure
+                                                  - FailureSeriesStart
+                                                  - Success
+                                                  - HealthyTransition
+                                                  type: string
+                                                maxItems: 4
+                                                type: array
+                                                x-kubernetes-list-type: set
+                                                x-kubernetes-validations:
+                                                - message: a failure type and a success
+                                                    type must both be specified together
+                                                  rule: self.exists(e, e == 'Failure'
+                                                    || e == 'FailureSeriesStart')
+                                                    == self.exists(e, e == 'Success'
+                                                    || e == 'HealthyTransition')
+                                              sinks:
+                                                description: |-
+                                                  Sinks defines where health check events are written.
+                                                  When omitted, events are written to /dev/stdout.
+                                                items:
+                                                  description: ProxyHealthCheckLogSink
+                                                    defines a destination for health
+                                                    check event logs.
+                                                  properties:
+                                                    file:
+                                                      description: |-
+                                                        File defines the file sink configuration.
+                                                        Required when type is File.
+                                                      properties:
+                                                        path:
+                                                          description: |-
+                                                            Path specifies the file path for health check event output.
+                                                            Use /dev/stdout to write to standard output.
+                                                          minLength: 1
+                                                          type: string
+                                                      required:
+                                                      - path
+                                                      type: object
+                                                    type:
+                                                      description: Type defines the
+                                                        type of sink.
+                                                      enum:
+                                                      - File
+                                                      type: string
+                                                  required:
+                                                  - type
+                                                  type: object
+                                                  x-kubernetes-validations:
+                                                  - message: If ProxyHealthCheckLogSink
+                                                      type is File, file field needs
+                                                      to be set.
+                                                    rule: 'self.type == ''File'' ?
+                                                      has(self.file) : !has(self.file)'
+                                                maxItems: 1
+                                                type: array
+                                            type: object
                                           healthyThreshold:
                                             default: 1
                                             description: HealthyThreshold defines
@@ -998,6 +1084,7 @@ spec:
                                                 description: |-
                                                   Method defines the HTTP method used for health checking.
                                                   Defaults to GET
+                                                maxLength: 16
                                                 type: string
                                               path:
                                                 description: Path defines the HTTP
@@ -1006,6 +1093,43 @@ spec:
                                                 maxLength: 1024
                                                 minLength: 1
                                                 type: string
+                                              requestBody:
+                                                description: RequestBody defines the
+                                                  HTTP request body payload sent during
+                                                  health checking.
+                                                properties:
+                                                  binary:
+                                                    description: Binary payload base64
+                                                      encoded.
+                                                    format: byte
+                                                    type: string
+                                                  text:
+                                                    description: Text payload in plain
+                                                      text.
+                                                    type: string
+                                                  type:
+                                                    allOf:
+                                                    - enum:
+                                                      - Text
+                                                      - Binary
+                                                    - enum:
+                                                      - Text
+                                                      - Binary
+                                                    description: Type defines the
+                                                      type of the payload.
+                                                    type: string
+                                                required:
+                                                - type
+                                                type: object
+                                                x-kubernetes-validations:
+                                                - message: If payload type is Text,
+                                                    text field needs to be set.
+                                                  rule: 'self.type == ''Text'' ? has(self.text)
+                                                    : !has(self.text)'
+                                                - message: If payload type is Binary,
+                                                    binary field needs to be set.
+                                                  rule: 'self.type == ''Binary'' ?
+                                                    has(self.binary) : !has(self.binary)'
                                               retriableStatuses:
                                                 description: |-
                                                   RetriableStatuses defines a list of HTTP response statuses considered retriable.
@@ -1022,6 +1146,11 @@ spec:
                                             required:
                                             - path
                                             type: object
+                                            x-kubernetes-validations:
+                                            - message: The requestBody field can only
+                                                be set when method is POST or PUT.
+                                              rule: '!has(self.requestBody) || (has(self.method)
+                                                && self.method.upperAscii() in [''POST'',''PUT''])'
                                           initialJitter:
                                             description: |-
                                               InitialJitter defines the maximum time Envoy will wait before the first health check.
@@ -1372,6 +1501,44 @@ spec:
                                             items:
                                               type: string
                                             type: array
+                                          outOfBand:
+                                            description: |-
+                                              OutOfBand enables out-of-band ORCA load reporting. When set, Envoy opens a
+                                              server-streaming gRPC connection to each endpoint's
+                                              xds.service.orca.v3.OpenRcaService/StreamCoreMetrics and pulls load
+                                              reports periodically, instead of relying on in-band ORCA metrics
+                                              carried in response headers/trailers.
+
+                                              The backend must implement OpenRcaService for this to take effect.
+                                            properties:
+                                              authority:
+                                                description: |-
+                                                  Authority overrides the :authority header on the OutOfBand gRPC stream.
+                                                  If unset, Envoy uses the endpoint hostname, then the dialed address, then
+                                                  the cluster name.
+                                                maxLength: 259
+                                                minLength: 1
+                                                pattern: ^[^\x00\n\r]*$
+                                                type: string
+                                              port:
+                                                description: |-
+                                                  Port overrides the port used for the OutOfBand reporting connection, e.g. to
+                                                  reach a separate reporting sidecar. Defaults to the endpoint's port.
+                                                format: int32
+                                                maximum: 65535
+                                                minimum: 1
+                                                type: integer
+                                              reportingPeriod:
+                                                description: |-
+                                                  ReportingPeriod is how often Envoy requests load reports from the server.
+                                                  Must be greater than 0. Defaults to 10s.
+                                                pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
+                                                type: string
+                                                x-kubernetes-validations:
+                                                - message: reportingPeriod must be
+                                                    greater than 0
+                                                  rule: duration(self) > duration('0s')
+                                            type: object
                                           weightExpirationPeriod:
                                             description: If a given endpoint has not
                                               reported load metrics in this long,
@@ -2250,7 +2417,7 @@ spec:
                               If not set, the cookies will default to the host of the request, not including the subdomains.
                               If set, the cookies will be set on the specified domain and all subdomains.
                               This means that requests to any subdomain will not require reauthentication after users log in to the parent domain.
-                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9]))*$
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                             type: string
                           cookieNames:
                             description: |-
@@ -2365,12 +2532,24 @@ spec:
                               If the configured header is "Authorization", EG forwards the ID token using
                               the "Bearer " prefix. For any other header, EG forwards the raw token value.
                               If not specified, the ID token will not be forwarded.
+
+                              Note: when passThroughAuthHeader is enabled, this header must not be the same
+                              as a header a JWT provider extracts from (the "Authorization" header by
+                              default). The forwarded ID token header is owned by Envoy, and Envoy rejects
+                              an OAuth2 configuration whose pass-through matcher keys on it.
                             properties:
                               header:
-                                description: Header is the upstream request header
-                                  that will carry the ID token.
+                                description: |-
+                                  Header is the upstream request header that will carry the ID token.
+                                  It must be a valid HTTP header name. Pseudo-headers (names starting with ":")
+                                  and the "Host" header are not allowed.
+                                maxLength: 256
                                 minLength: 1
+                                pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                 type: string
+                                x-kubernetes-validations:
+                                - message: header cannot be the Host header
+                                  rule: self.lowerAscii() != 'host'
                             required:
                             - header
                             type: object
@@ -2803,6 +2982,80 @@ spec:
                                                   server and not to a specific service.
                                                 type: string
                                             type: object
+                                          healthCheckLog:
+                                            description: |-
+                                              HealthCheckLog defines health check event logging configuration for this cluster.
+                                              When set, HC probe outcomes are logged to the configured sinks.
+                                              Takes precedence over the gateway-level EnvoyProxy.spec.telemetry.healthCheckLog.
+                                            properties:
+                                              matches:
+                                                description: |-
+                                                  Matches defines which health check probe outcomes produce a log entry.
+                                                  When omitted or empty, all events are logged.
+
+                                                  Each value must be unique. Multiple values are ORed. If any failure type is
+                                                  specified then a success type must also be specified, and vice versa.
+                                                items:
+                                                  description: ProxyHealthCheckLogEventType
+                                                    specifies which health check probe
+                                                    outcomes produce a log entry.
+                                                  enum:
+                                                  - Failure
+                                                  - FailureSeriesStart
+                                                  - Success
+                                                  - HealthyTransition
+                                                  type: string
+                                                maxItems: 4
+                                                type: array
+                                                x-kubernetes-list-type: set
+                                                x-kubernetes-validations:
+                                                - message: a failure type and a success
+                                                    type must both be specified together
+                                                  rule: self.exists(e, e == 'Failure'
+                                                    || e == 'FailureSeriesStart')
+                                                    == self.exists(e, e == 'Success'
+                                                    || e == 'HealthyTransition')
+                                              sinks:
+                                                description: |-
+                                                  Sinks defines where health check events are written.
+                                                  When omitted, events are written to /dev/stdout.
+                                                items:
+                                                  description: ProxyHealthCheckLogSink
+                                                    defines a destination for health
+                                                    check event logs.
+                                                  properties:
+                                                    file:
+                                                      description: |-
+                                                        File defines the file sink configuration.
+                                                        Required when type is File.
+                                                      properties:
+                                                        path:
+                                                          description: |-
+                                                            Path specifies the file path for health check event output.
+                                                            Use /dev/stdout to write to standard output.
+                                                          minLength: 1
+                                                          type: string
+                                                      required:
+                                                      - path
+                                                      type: object
+                                                    type:
+                                                      description: Type defines the
+                                                        type of sink.
+                                                      enum:
+                                                      - File
+                                                      type: string
+                                                  required:
+                                                  - type
+                                                  type: object
+                                                  x-kubernetes-validations:
+                                                  - message: If ProxyHealthCheckLogSink
+                                                      type is File, file field needs
+                                                      to be set.
+                                                    rule: 'self.type == ''File'' ?
+                                                      has(self.file) : !has(self.file)'
+                                                maxItems: 1
+                                                type: array
+                                            type: object
                                           healthyThreshold:
                                             default: 1
                                             description: HealthyThreshold defines
@@ -2878,6 +3131,7 @@ spec:
                                                 description: |-
                                                   Method defines the HTTP method used for health checking.
                                                   Defaults to GET
+                                                maxLength: 16
                                                 type: string
                                               path:
                                                 description: Path defines the HTTP
@@ -2886,6 +3140,43 @@ spec:
                                                 maxLength: 1024
                                                 minLength: 1
                                                 type: string
+                                              requestBody:
+                                                description: RequestBody defines the
+                                                  HTTP request body payload sent during
+                                                  health checking.
+                                                properties:
+                                                  binary:
+                                                    description: Binary payload base64
+                                                      encoded.
+                                                    format: byte
+                                                    type: string
+                                                  text:
+                                                    description: Text payload in plain
+                                                      text.
+                                                    type: string
+                                                  type:
+                                                    allOf:
+                                                    - enum:
+                                                      - Text
+                                                      - Binary
+                                                    - enum:
+                                                      - Text
+                                                      - Binary
+                                                    description: Type defines the
+                                                      type of the payload.
+                                                    type: string
+                                                required:
+                                                - type
+                                                type: object
+                                                x-kubernetes-validations:
+                                                - message: If payload type is Text,
+                                                    text field needs to be set.
+                                                  rule: 'self.type == ''Text'' ? has(self.text)
+                                                    : !has(self.text)'
+                                                - message: If payload type is Binary,
+                                                    binary field needs to be set.
+                                                  rule: 'self.type == ''Binary'' ?
+                                                    has(self.binary) : !has(self.binary)'
                                               retriableStatuses:
                                                 description: |-
                                                   RetriableStatuses defines a list of HTTP response statuses considered retriable.
@@ -2902,6 +3193,11 @@ spec:
                                             required:
                                             - path
                                             type: object
+                                            x-kubernetes-validations:
+                                            - message: The requestBody field can only
+                                                be set when method is POST or PUT.
+                                              rule: '!has(self.requestBody) || (has(self.method)
+                                                && self.method.upperAscii() in [''POST'',''PUT''])'
                                           initialJitter:
                                             description: |-
                                               InitialJitter defines the maximum time Envoy will wait before the first health check.
@@ -3252,6 +3548,44 @@ spec:
                                             items:
                                               type: string
                                             type: array
+                                          outOfBand:
+                                            description: |-
+                                              OutOfBand enables out-of-band ORCA load reporting. When set, Envoy opens a
+                                              server-streaming gRPC connection to each endpoint's
+                                              xds.service.orca.v3.OpenRcaService/StreamCoreMetrics and pulls load
+                                              reports periodically, instead of relying on in-band ORCA metrics
+                                              carried in response headers/trailers.
+
+                                              The backend must implement OpenRcaService for this to take effect.
+                                            properties:
+                                              authority:
+                                                description: |-
+                                                  Authority overrides the :authority header on the OutOfBand gRPC stream.
+                                                  If unset, Envoy uses the endpoint hostname, then the dialed address, then
+                                                  the cluster name.
+                                                maxLength: 259
+                                                minLength: 1
+                                                pattern: ^[^\x00\n\r]*$
+                                                type: string
+                                              port:
+                                                description: |-
+                                                  Port overrides the port used for the OutOfBand reporting connection, e.g. to
+                                                  reach a separate reporting sidecar. Defaults to the endpoint's port.
+                                                format: int32
+                                                maximum: 65535
+                                                minimum: 1
+                                                type: integer
+                                              reportingPeriod:
+                                                description: |-
+                                                  ReportingPeriod is how often Envoy requests load reports from the server.
+                                                  Must be greater than 0. Defaults to 10s.
+                                                pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
+                                                type: string
+                                                x-kubernetes-validations:
+                                                - message: reportingPeriod must be
+                                                    greater than 0
+                                                  rule: duration(self) > duration('0s')
+                                            type: object
                                           weightExpirationPeriod:
                                             description: If a given endpoint has not
                                               reported load metrics in this long,
@@ -4100,7 +4434,7 @@ spec:
                                   If not set, the cookies will default to the host of the request, not including the subdomains.
                                   If set, the cookies will be set on the specified domain and all subdomains.
                                   This means that requests to any subdomain will not require reauthentication after users log in to the parent domain.
-                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9]))*$
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                                 type: string
                               cookieNames:
                                 description: |-
@@ -4215,12 +4549,24 @@ spec:
                                   If the configured header is "Authorization", EG forwards the ID token using
                                   the "Bearer " prefix. For any other header, EG forwards the raw token value.
                                   If not specified, the ID token will not be forwarded.
+
+                                  Note: when passThroughAuthHeader is enabled, this header must not be the same
+                                  as a header a JWT provider extracts from (the "Authorization" header by
+                                  default). The forwarded ID token header is owned by Envoy, and Envoy rejects
+                                  an OAuth2 configuration whose pass-through matcher keys on it.
                                 properties:
                                   header:
-                                    description: Header is the upstream request header
-                                      that will carry the ID token.
+                                    description: |-
+                                      Header is the upstream request header that will carry the ID token.
+                                      It must be a valid HTTP header name. Pseudo-headers (names starting with ":")
+                                      and the "Host" header are not allowed.
+                                    maxLength: 256
                                     minLength: 1
+                                    pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                     type: string
+                                    x-kubernetes-validations:
+                                    - message: header cannot be the Host header
+                                      rule: self.lowerAscii() != 'host'
                                 required:
                                 - header
                                 type: object
@@ -4656,6 +5002,82 @@ spec:
                                                       server and not to a specific service.
                                                     type: string
                                                 type: object
+                                              healthCheckLog:
+                                                description: |-
+                                                  HealthCheckLog defines health check event logging configuration for this cluster.
+                                                  When set, HC probe outcomes are logged to the configured sinks.
+                                                  Takes precedence over the gateway-level EnvoyProxy.spec.telemetry.healthCheckLog.
+                                                properties:
+                                                  matches:
+                                                    description: |-
+                                                      Matches defines which health check probe outcomes produce a log entry.
+                                                      When omitted or empty, all events are logged.
+
+                                                      Each value must be unique. Multiple values are ORed. If any failure type is
+                                                      specified then a success type must also be specified, and vice versa.
+                                                    items:
+                                                      description: ProxyHealthCheckLogEventType
+                                                        specifies which health check
+                                                        probe outcomes produce a log
+                                                        entry.
+                                                      enum:
+                                                      - Failure
+                                                      - FailureSeriesStart
+                                                      - Success
+                                                      - HealthyTransition
+                                                      type: string
+                                                    maxItems: 4
+                                                    type: array
+                                                    x-kubernetes-list-type: set
+                                                    x-kubernetes-validations:
+                                                    - message: a failure type and
+                                                        a success type must both be
+                                                        specified together
+                                                      rule: self.exists(e, e == 'Failure'
+                                                        || e == 'FailureSeriesStart')
+                                                        == self.exists(e, e == 'Success'
+                                                        || e == 'HealthyTransition')
+                                                  sinks:
+                                                    description: |-
+                                                      Sinks defines where health check events are written.
+                                                      When omitted, events are written to /dev/stdout.
+                                                    items:
+                                                      description: ProxyHealthCheckLogSink
+                                                        defines a destination for
+                                                        health check event logs.
+                                                      properties:
+                                                        file:
+                                                          description: |-
+                                                            File defines the file sink configuration.
+                                                            Required when type is File.
+                                                          properties:
+                                                            path:
+                                                              description: |-
+                                                                Path specifies the file path for health check event output.
+                                                                Use /dev/stdout to write to standard output.
+                                                              minLength: 1
+                                                              type: string
+                                                          required:
+                                                          - path
+                                                          type: object
+                                                        type:
+                                                          description: Type defines
+                                                            the type of sink.
+                                                          enum:
+                                                          - File
+                                                          type: string
+                                                      required:
+                                                      - type
+                                                      type: object
+                                                      x-kubernetes-validations:
+                                                      - message: If ProxyHealthCheckLogSink
+                                                          type is File, file field
+                                                          needs to be set.
+                                                        rule: 'self.type == ''File''
+                                                          ? has(self.file) : !has(self.file)'
+                                                    maxItems: 1
+                                                    type: array
+                                                type: object
                                               healthyThreshold:
                                                 default: 1
                                                 description: HealthyThreshold defines
@@ -4733,6 +5155,7 @@ spec:
                                                     description: |-
                                                       Method defines the HTTP method used for health checking.
                                                       Defaults to GET
+                                                    maxLength: 16
                                                     type: string
                                                   path:
                                                     description: Path defines the
@@ -4741,6 +5164,45 @@ spec:
                                                     maxLength: 1024
                                                     minLength: 1
                                                     type: string
+                                                  requestBody:
+                                                    description: RequestBody defines
+                                                      the HTTP request body payload
+                                                      sent during health checking.
+                                                    properties:
+                                                      binary:
+                                                        description: Binary payload
+                                                          base64 encoded.
+                                                        format: byte
+                                                        type: string
+                                                      text:
+                                                        description: Text payload
+                                                          in plain text.
+                                                        type: string
+                                                      type:
+                                                        allOf:
+                                                        - enum:
+                                                          - Text
+                                                          - Binary
+                                                        - enum:
+                                                          - Text
+                                                          - Binary
+                                                        description: Type defines
+                                                          the type of the payload.
+                                                        type: string
+                                                    required:
+                                                    - type
+                                                    type: object
+                                                    x-kubernetes-validations:
+                                                    - message: If payload type is
+                                                        Text, text field needs to
+                                                        be set.
+                                                      rule: 'self.type == ''Text''
+                                                        ? has(self.text) : !has(self.text)'
+                                                    - message: If payload type is
+                                                        Binary, binary field needs
+                                                        to be set.
+                                                      rule: 'self.type == ''Binary''
+                                                        ? has(self.binary) : !has(self.binary)'
                                                   retriableStatuses:
                                                     description: |-
                                                       RetriableStatuses defines a list of HTTP response statuses considered retriable.
@@ -4757,6 +5219,13 @@ spec:
                                                 required:
                                                 - path
                                                 type: object
+                                                x-kubernetes-validations:
+                                                - message: The requestBody field can
+                                                    only be set when method is POST
+                                                    or PUT.
+                                                  rule: '!has(self.requestBody) ||
+                                                    (has(self.method) && self.method.upperAscii()
+                                                    in [''POST'',''PUT''])'
                                               initialJitter:
                                                 description: |-
                                                   InitialJitter defines the maximum time Envoy will wait before the first health check.
@@ -5114,6 +5583,44 @@ spec:
                                                 items:
                                                   type: string
                                                 type: array
+                                              outOfBand:
+                                                description: |-
+                                                  OutOfBand enables out-of-band ORCA load reporting. When set, Envoy opens a
+                                                  server-streaming gRPC connection to each endpoint's
+                                                  xds.service.orca.v3.OpenRcaService/StreamCoreMetrics and pulls load
+                                                  reports periodically, instead of relying on in-band ORCA metrics
+                                                  carried in response headers/trailers.
+
+                                                  The backend must implement OpenRcaService for this to take effect.
+                                                properties:
+                                                  authority:
+                                                    description: |-
+                                                      Authority overrides the :authority header on the OutOfBand gRPC stream.
+                                                      If unset, Envoy uses the endpoint hostname, then the dialed address, then
+                                                      the cluster name.
+                                                    maxLength: 259
+                                                    minLength: 1
+                                                    pattern: ^[^\x00\n\r]*$
+                                                    type: string
+                                                  port:
+                                                    description: |-
+                                                      Port overrides the port used for the OutOfBand reporting connection, e.g. to
+                                                      reach a separate reporting sidecar. Defaults to the endpoint's port.
+                                                    format: int32
+                                                    maximum: 65535
+                                                    minimum: 1
+                                                    type: integer
+                                                  reportingPeriod:
+                                                    description: |-
+                                                      ReportingPeriod is how often Envoy requests load reports from the server.
+                                                      Must be greater than 0. Defaults to 10s.
+                                                    pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
+                                                    type: string
+                                                    x-kubernetes-validations:
+                                                    - message: reportingPeriod must
+                                                        be greater than 0
+                                                      rule: duration(self) > duration('0s')
+                                                type: object
                                               weightExpirationPeriod:
                                                 description: If a given endpoint has
                                                   not reported load metrics in this
@@ -6299,7 +6806,7 @@ spec:
                               If not set, the cookies will default to the host of the request, not including the subdomains.
                               If set, the cookies will be set on the specified domain and all subdomains.
                               This means that requests to any subdomain will not require reauthentication after users log in to the parent domain.
-                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9]))*$
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                             type: string
                           cookieNames:
                             description: |-
@@ -6414,12 +6921,24 @@ spec:
                               If the configured header is "Authorization", EG forwards the ID token using
                               the "Bearer " prefix. For any other header, EG forwards the raw token value.
                               If not specified, the ID token will not be forwarded.
+
+                              Note: when passThroughAuthHeader is enabled, this header must not be the same
+                              as a header a JWT provider extracts from (the "Authorization" header by
+                              default). The forwarded ID token header is owned by Envoy, and Envoy rejects
+                              an OAuth2 configuration whose pass-through matcher keys on it.
                             properties:
                               header:
-                                description: Header is the upstream request header
-                                  that will carry the ID token.
+                                description: |-
+                                  Header is the upstream request header that will carry the ID token.
+                                  It must be a valid HTTP header name. Pseudo-headers (names starting with ":")
+                                  and the "Host" header are not allowed.
+                                maxLength: 256
                                 minLength: 1
+                                pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                 type: string
+                                x-kubernetes-validations:
+                                - message: header cannot be the Host header
+                                  rule: self.lowerAscii() != 'host'
                             required:
                             - header
                             type: object
@@ -6852,6 +7371,80 @@ spec:
                                                   server and not to a specific service.
                                                 type: string
                                             type: object
+                                          healthCheckLog:
+                                            description: |-
+                                              HealthCheckLog defines health check event logging configuration for this cluster.
+                                              When set, HC probe outcomes are logged to the configured sinks.
+                                              Takes precedence over the gateway-level EnvoyProxy.spec.telemetry.healthCheckLog.
+                                            properties:
+                                              matches:
+                                                description: |-
+                                                  Matches defines which health check probe outcomes produce a log entry.
+                                                  When omitted or empty, all events are logged.
+
+                                                  Each value must be unique. Multiple values are ORed. If any failure type is
+                                                  specified then a success type must also be specified, and vice versa.
+                                                items:
+                                                  description: ProxyHealthCheckLogEventType
+                                                    specifies which health check probe
+                                                    outcomes produce a log entry.
+                                                  enum:
+                                                  - Failure
+                                                  - FailureSeriesStart
+                                                  - Success
+                                                  - HealthyTransition
+                                                  type: string
+                                                maxItems: 4
+                                                type: array
+                                                x-kubernetes-list-type: set
+                                                x-kubernetes-validations:
+                                                - message: a failure type and a success
+                                                    type must both be specified together
+                                                  rule: self.exists(e, e == 'Failure'
+                                                    || e == 'FailureSeriesStart')
+                                                    == self.exists(e, e == 'Success'
+                                                    || e == 'HealthyTransition')
+                                              sinks:
+                                                description: |-
+                                                  Sinks defines where health check events are written.
+                                                  When omitted, events are written to /dev/stdout.
+                                                items:
+                                                  description: ProxyHealthCheckLogSink
+                                                    defines a destination for health
+                                                    check event logs.
+                                                  properties:
+                                                    file:
+                                                      description: |-
+                                                        File defines the file sink configuration.
+                                                        Required when type is File.
+                                                      properties:
+                                                        path:
+                                                          description: |-
+                                                            Path specifies the file path for health check event output.
+                                                            Use /dev/stdout to write to standard output.
+                                                          minLength: 1
+                                                          type: string
+                                                      required:
+                                                      - path
+                                                      type: object
+                                                    type:
+                                                      description: Type defines the
+                                                        type of sink.
+                                                      enum:
+                                                      - File
+                                                      type: string
+                                                  required:
+                                                  - type
+                                                  type: object
+                                                  x-kubernetes-validations:
+                                                  - message: If ProxyHealthCheckLogSink
+                                                      type is File, file field needs
+                                                      to be set.
+                                                    rule: 'self.type == ''File'' ?
+                                                      has(self.file) : !has(self.file)'
+                                                maxItems: 1
+                                                type: array
+                                            type: object
                                           healthyThreshold:
                                             default: 1
                                             description: HealthyThreshold defines
@@ -6927,6 +7520,7 @@ spec:
                                                 description: |-
                                                   Method defines the HTTP method used for health checking.
                                                   Defaults to GET
+                                                maxLength: 16
                                                 type: string
                                               path:
                                                 description: Path defines the HTTP
@@ -6935,6 +7529,43 @@ spec:
                                                 maxLength: 1024
                                                 minLength: 1
                                                 type: string
+                                              requestBody:
+                                                description: RequestBody defines the
+                                                  HTTP request body payload sent during
+                                                  health checking.
+                                                properties:
+                                                  binary:
+                                                    description: Binary payload base64
+                                                      encoded.
+                                                    format: byte
+                                                    type: string
+                                                  text:
+                                                    description: Text payload in plain
+                                                      text.
+                                                    type: string
+                                                  type:
+                                                    allOf:
+                                                    - enum:
+                                                      - Text
+                                                      - Binary
+                                                    - enum:
+                                                      - Text
+                                                      - Binary
+                                                    description: Type defines the
+                                                      type of the payload.
+                                                    type: string
+                                                required:
+                                                - type
+                                                type: object
+                                                x-kubernetes-validations:
+                                                - message: If payload type is Text,
+                                                    text field needs to be set.
+                                                  rule: 'self.type == ''Text'' ? has(self.text)
+                                                    : !has(self.text)'
+                                                - message: If payload type is Binary,
+                                                    binary field needs to be set.
+                                                  rule: 'self.type == ''Binary'' ?
+                                                    has(self.binary) : !has(self.binary)'
                                               retriableStatuses:
                                                 description: |-
                                                   RetriableStatuses defines a list of HTTP response statuses considered retriable.
@@ -6951,6 +7582,11 @@ spec:
                                             required:
                                             - path
                                             type: object
+                                            x-kubernetes-validations:
+                                            - message: The requestBody field can only
+                                                be set when method is POST or PUT.
+                                              rule: '!has(self.requestBody) || (has(self.method)
+                                                && self.method.upperAscii() in [''POST'',''PUT''])'
                                           initialJitter:
                                             description: |-
                                               InitialJitter defines the maximum time Envoy will wait before the first health check.
@@ -7301,6 +7937,44 @@ spec:
                                             items:
                                               type: string
                                             type: array
+                                          outOfBand:
+                                            description: |-
+                                              OutOfBand enables out-of-band ORCA load reporting. When set, Envoy opens a
+                                              server-streaming gRPC connection to each endpoint's
+                                              xds.service.orca.v3.OpenRcaService/StreamCoreMetrics and pulls load
+                                              reports periodically, instead of relying on in-band ORCA metrics
+                                              carried in response headers/trailers.
+
+                                              The backend must implement OpenRcaService for this to take effect.
+                                            properties:
+                                              authority:
+                                                description: |-
+                                                  Authority overrides the :authority header on the OutOfBand gRPC stream.
+                                                  If unset, Envoy uses the endpoint hostname, then the dialed address, then
+                                                  the cluster name.
+                                                maxLength: 259
+                                                minLength: 1
+                                                pattern: ^[^\x00\n\r]*$
+                                                type: string
+                                              port:
+                                                description: |-
+                                                  Port overrides the port used for the OutOfBand reporting connection, e.g. to
+                                                  reach a separate reporting sidecar. Defaults to the endpoint's port.
+                                                format: int32
+                                                maximum: 65535
+                                                minimum: 1
+                                                type: integer
+                                              reportingPeriod:
+                                                description: |-
+                                                  ReportingPeriod is how often Envoy requests load reports from the server.
+                                                  Must be greater than 0. Defaults to 10s.
+                                                pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
+                                                type: string
+                                                x-kubernetes-validations:
+                                                - message: reportingPeriod must be
+                                                    greater than 0
+                                                  rule: duration(self) > duration('0s')
+                                            type: object
                                           weightExpirationPeriod:
                                             description: If a given endpoint has not
                                               reported load metrics in this long,
@@ -8179,7 +8853,7 @@ spec:
                               If not set, the cookies will default to the host of the request, not including the subdomains.
                               If set, the cookies will be set on the specified domain and all subdomains.
                               This means that requests to any subdomain will not require reauthentication after users log in to the parent domain.
-                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9]))*$
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                             type: string
                           cookieNames:
                             description: |-
@@ -8294,12 +8968,24 @@ spec:
                               If the configured header is "Authorization", EG forwards the ID token using
                               the "Bearer " prefix. For any other header, EG forwards the raw token value.
                               If not specified, the ID token will not be forwarded.
+
+                              Note: when passThroughAuthHeader is enabled, this header must not be the same
+                              as a header a JWT provider extracts from (the "Authorization" header by
+                              default). The forwarded ID token header is owned by Envoy, and Envoy rejects
+                              an OAuth2 configuration whose pass-through matcher keys on it.
                             properties:
                               header:
-                                description: Header is the upstream request header
-                                  that will carry the ID token.
+                                description: |-
+                                  Header is the upstream request header that will carry the ID token.
+                                  It must be a valid HTTP header name. Pseudo-headers (names starting with ":")
+                                  and the "Host" header are not allowed.
+                                maxLength: 256
                                 minLength: 1
+                                pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                 type: string
+                                x-kubernetes-validations:
+                                - message: header cannot be the Host header
+                                  rule: self.lowerAscii() != 'host'
                             required:
                             - header
                             type: object
@@ -8732,6 +9418,80 @@ spec:
                                                   server and not to a specific service.
                                                 type: string
                                             type: object
+                                          healthCheckLog:
+                                            description: |-
+                                              HealthCheckLog defines health check event logging configuration for this cluster.
+                                              When set, HC probe outcomes are logged to the configured sinks.
+                                              Takes precedence over the gateway-level EnvoyProxy.spec.telemetry.healthCheckLog.
+                                            properties:
+                                              matches:
+                                                description: |-
+                                                  Matches defines which health check probe outcomes produce a log entry.
+                                                  When omitted or empty, all events are logged.
+
+                                                  Each value must be unique. Multiple values are ORed. If any failure type is
+                                                  specified then a success type must also be specified, and vice versa.
+                                                items:
+                                                  description: ProxyHealthCheckLogEventType
+                                                    specifies which health check probe
+                                                    outcomes produce a log entry.
+                                                  enum:
+                                                  - Failure
+                                                  - FailureSeriesStart
+                                                  - Success
+                                                  - HealthyTransition
+                                                  type: string
+                                                maxItems: 4
+                                                type: array
+                                                x-kubernetes-list-type: set
+                                                x-kubernetes-validations:
+                                                - message: a failure type and a success
+                                                    type must both be specified together
+                                                  rule: self.exists(e, e == 'Failure'
+                                                    || e == 'FailureSeriesStart')
+                                                    == self.exists(e, e == 'Success'
+                                                    || e == 'HealthyTransition')
+                                              sinks:
+                                                description: |-
+                                                  Sinks defines where health check events are written.
+                                                  When omitted, events are written to /dev/stdout.
+                                                items:
+                                                  description: ProxyHealthCheckLogSink
+                                                    defines a destination for health
+                                                    check event logs.
+                                                  properties:
+                                                    file:
+                                                      description: |-
+                                                        File defines the file sink configuration.
+                                                        Required when type is File.
+                                                      properties:
+                                                        path:
+                                                          description: |-
+                                                            Path specifies the file path for health check event output.
+                                                            Use /dev/stdout to write to standard output.
+                                                          minLength: 1
+                                                          type: string
+                                                      required:
+                                                      - path
+                                                      type: object
+                                                    type:
+                                                      description: Type defines the
+                                                        type of sink.
+                                                      enum:
+                                                      - File
+                                                      type: string
+                                                  required:
+                                                  - type
+                                                  type: object
+                                                  x-kubernetes-validations:
+                                                  - message: If ProxyHealthCheckLogSink
+                                                      type is File, file field needs
+                                                      to be set.
+                                                    rule: 'self.type == ''File'' ?
+                                                      has(self.file) : !has(self.file)'
+                                                maxItems: 1
+                                                type: array
+                                            type: object
                                           healthyThreshold:
                                             default: 1
                                             description: HealthyThreshold defines
@@ -8807,6 +9567,7 @@ spec:
                                                 description: |-
                                                   Method defines the HTTP method used for health checking.
                                                   Defaults to GET
+                                                maxLength: 16
                                                 type: string
                                               path:
                                                 description: Path defines the HTTP
@@ -8815,6 +9576,43 @@ spec:
                                                 maxLength: 1024
                                                 minLength: 1
                                                 type: string
+                                              requestBody:
+                                                description: RequestBody defines the
+                                                  HTTP request body payload sent during
+                                                  health checking.
+                                                properties:
+                                                  binary:
+                                                    description: Binary payload base64
+                                                      encoded.
+                                                    format: byte
+                                                    type: string
+                                                  text:
+                                                    description: Text payload in plain
+                                                      text.
+                                                    type: string
+                                                  type:
+                                                    allOf:
+                                                    - enum:
+                                                      - Text
+                                                      - Binary
+                                                    - enum:
+                                                      - Text
+                                                      - Binary
+                                                    description: Type defines the
+                                                      type of the payload.
+                                                    type: string
+                                                required:
+                                                - type
+                                                type: object
+                                                x-kubernetes-validations:
+                                                - message: If payload type is Text,
+                                                    text field needs to be set.
+                                                  rule: 'self.type == ''Text'' ? has(self.text)
+                                                    : !has(self.text)'
+                                                - message: If payload type is Binary,
+                                                    binary field needs to be set.
+                                                  rule: 'self.type == ''Binary'' ?
+                                                    has(self.binary) : !has(self.binary)'
                                               retriableStatuses:
                                                 description: |-
                                                   RetriableStatuses defines a list of HTTP response statuses considered retriable.
@@ -8831,6 +9629,11 @@ spec:
                                             required:
                                             - path
                                             type: object
+                                            x-kubernetes-validations:
+                                            - message: The requestBody field can only
+                                                be set when method is POST or PUT.
+                                              rule: '!has(self.requestBody) || (has(self.method)
+                                                && self.method.upperAscii() in [''POST'',''PUT''])'
                                           initialJitter:
                                             description: |-
                                               InitialJitter defines the maximum time Envoy will wait before the first health check.
@@ -9181,6 +9984,44 @@ spec:
                                             items:
                                               type: string
                                             type: array
+                                          outOfBand:
+                                            description: |-
+                                              OutOfBand enables out-of-band ORCA load reporting. When set, Envoy opens a
+                                              server-streaming gRPC connection to each endpoint's
+                                              xds.service.orca.v3.OpenRcaService/StreamCoreMetrics and pulls load
+                                              reports periodically, instead of relying on in-band ORCA metrics
+                                              carried in response headers/trailers.
+
+                                              The backend must implement OpenRcaService for this to take effect.
+                                            properties:
+                                              authority:
+                                                description: |-
+                                                  Authority overrides the :authority header on the OutOfBand gRPC stream.
+                                                  If unset, Envoy uses the endpoint hostname, then the dialed address, then
+                                                  the cluster name.
+                                                maxLength: 259
+                                                minLength: 1
+                                                pattern: ^[^\x00\n\r]*$
+                                                type: string
+                                              port:
+                                                description: |-
+                                                  Port overrides the port used for the OutOfBand reporting connection, e.g. to
+                                                  reach a separate reporting sidecar. Defaults to the endpoint's port.
+                                                format: int32
+                                                maximum: 65535
+                                                minimum: 1
+                                                type: integer
+                                              reportingPeriod:
+                                                description: |-
+                                                  ReportingPeriod is how often Envoy requests load reports from the server.
+                                                  Must be greater than 0. Defaults to 10s.
+                                                pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
+                                                type: string
+                                                x-kubernetes-validations:
+                                                - message: reportingPeriod must be
+                                                    greater than 0
+                                                  rule: duration(self) > duration('0s')
+                                            type: object
                                           weightExpirationPeriod:
                                             description: If a given endpoint has not
                                               reported load metrics in this long,
@@ -10109,7 +10950,7 @@ spec:
                                   If not set, the cookies will default to the host of the request, not including the subdomains.
                                   If set, the cookies will be set on the specified domain and all subdomains.
                                   This means that requests to any subdomain will not require reauthentication after users log in to the parent domain.
-                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9]))*$
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                                 type: string
                               cookieNames:
                                 description: |-
@@ -10224,12 +11065,24 @@ spec:
                                   If the configured header is "Authorization", EG forwards the ID token using
                                   the "Bearer " prefix. For any other header, EG forwards the raw token value.
                                   If not specified, the ID token will not be forwarded.
+
+                                  Note: when passThroughAuthHeader is enabled, this header must not be the same
+                                  as a header a JWT provider extracts from (the "Authorization" header by
+                                  default). The forwarded ID token header is owned by Envoy, and Envoy rejects
+                                  an OAuth2 configuration whose pass-through matcher keys on it.
                                 properties:
                                   header:
-                                    description: Header is the upstream request header
-                                      that will carry the ID token.
+                                    description: |-
+                                      Header is the upstream request header that will carry the ID token.
+                                      It must be a valid HTTP header name. Pseudo-headers (names starting with ":")
+                                      and the "Host" header are not allowed.
+                                    maxLength: 256
                                     minLength: 1
+                                    pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                     type: string
+                                    x-kubernetes-validations:
+                                    - message: header cannot be the Host header
+                                      rule: self.lowerAscii() != 'host'
                                 required:
                                 - header
                                 type: object
@@ -10665,6 +11518,82 @@ spec:
                                                       server and not to a specific service.
                                                     type: string
                                                 type: object
+                                              healthCheckLog:
+                                                description: |-
+                                                  HealthCheckLog defines health check event logging configuration for this cluster.
+                                                  When set, HC probe outcomes are logged to the configured sinks.
+                                                  Takes precedence over the gateway-level EnvoyProxy.spec.telemetry.healthCheckLog.
+                                                properties:
+                                                  matches:
+                                                    description: |-
+                                                      Matches defines which health check probe outcomes produce a log entry.
+                                                      When omitted or empty, all events are logged.
+
+                                                      Each value must be unique. Multiple values are ORed. If any failure type is
+                                                      specified then a success type must also be specified, and vice versa.
+                                                    items:
+                                                      description: ProxyHealthCheckLogEventType
+                                                        specifies which health check
+                                                        probe outcomes produce a log
+                                                        entry.
+                                                      enum:
+                                                      - Failure
+                                                      - FailureSeriesStart
+                                                      - Success
+                                                      - HealthyTransition
+                                                      type: string
+                                                    maxItems: 4
+                                                    type: array
+                                                    x-kubernetes-list-type: set
+                                                    x-kubernetes-validations:
+                                                    - message: a failure type and
+                                                        a success type must both be
+                                                        specified together
+                                                      rule: self.exists(e, e == 'Failure'
+                                                        || e == 'FailureSeriesStart')
+                                                        == self.exists(e, e == 'Success'
+                                                        || e == 'HealthyTransition')
+                                                  sinks:
+                                                    description: |-
+                                                      Sinks defines where health check events are written.
+                                                      When omitted, events are written to /dev/stdout.
+                                                    items:
+                                                      description: ProxyHealthCheckLogSink
+                                                        defines a destination for
+                                                        health check event logs.
+                                                      properties:
+                                                        file:
+                                                          description: |-
+                                                            File defines the file sink configuration.
+                                                            Required when type is File.
+                                                          properties:
+                                                            path:
+                                                              description: |-
+                                                                Path specifies the file path for health check event output.
+                                                                Use /dev/stdout to write to standard output.
+                                                              minLength: 1
+                                                              type: string
+                                                          required:
+                                                          - path
+                                                          type: object
+                                                        type:
+                                                          description: Type defines
+                                                            the type of sink.
+                                                          enum:
+                                                          - File
+                                                          type: string
+                                                      required:
+                                                      - type
+                                                      type: object
+                                                      x-kubernetes-validations:
+                                                      - message: If ProxyHealthCheckLogSink
+                                                          type is File, file field
+                                                          needs to be set.
+                                                        rule: 'self.type == ''File''
+                                                          ? has(self.file) : !has(self.file)'
+                                                    maxItems: 1
+                                                    type: array
+                                                type: object
                                               healthyThreshold:
                                                 default: 1
                                                 description: HealthyThreshold defines
@@ -10742,6 +11671,7 @@ spec:
                                                     description: |-
                                                       Method defines the HTTP method used for health checking.
                                                       Defaults to GET
+                                                    maxLength: 16
                                                     type: string
                                                   path:
                                                     description: Path defines the
@@ -10750,6 +11680,45 @@ spec:
                                                     maxLength: 1024
                                                     minLength: 1
                                                     type: string
+                                                  requestBody:
+                                                    description: RequestBody defines
+                                                      the HTTP request body payload
+                                                      sent during health checking.
+                                                    properties:
+                                                      binary:
+                                                        description: Binary payload
+                                                          base64 encoded.
+                                                        format: byte
+                                                        type: string
+                                                      text:
+                                                        description: Text payload
+                                                          in plain text.
+                                                        type: string
+                                                      type:
+                                                        allOf:
+                                                        - enum:
+                                                          - Text
+                                                          - Binary
+                                                        - enum:
+                                                          - Text
+                                                          - Binary
+                                                        description: Type defines
+                                                          the type of the payload.
+                                                        type: string
+                                                    required:
+                                                    - type
+                                                    type: object
+                                                    x-kubernetes-validations:
+                                                    - message: If payload type is
+                                                        Text, text field needs to
+                                                        be set.
+                                                      rule: 'self.type == ''Text''
+                                                        ? has(self.text) : !has(self.text)'
+                                                    - message: If payload type is
+                                                        Binary, binary field needs
+                                                        to be set.
+                                                      rule: 'self.type == ''Binary''
+                                                        ? has(self.binary) : !has(self.binary)'
                                                   retriableStatuses:
                                                     description: |-
                                                       RetriableStatuses defines a list of HTTP response statuses considered retriable.
@@ -10766,6 +11735,13 @@ spec:
                                                 required:
                                                 - path
                                                 type: object
+                                                x-kubernetes-validations:
+                                                - message: The requestBody field can
+                                                    only be set when method is POST
+                                                    or PUT.
+                                                  rule: '!has(self.requestBody) ||
+                                                    (has(self.method) && self.method.upperAscii()
+                                                    in [''POST'',''PUT''])'
                                               initialJitter:
                                                 description: |-
                                                   InitialJitter defines the maximum time Envoy will wait before the first health check.
@@ -11123,6 +12099,44 @@ spec:
                                                 items:
                                                   type: string
                                                 type: array
+                                              outOfBand:
+                                                description: |-
+                                                  OutOfBand enables out-of-band ORCA load reporting. When set, Envoy opens a
+                                                  server-streaming gRPC connection to each endpoint's
+                                                  xds.service.orca.v3.OpenRcaService/StreamCoreMetrics and pulls load
+                                                  reports periodically, instead of relying on in-band ORCA metrics
+                                                  carried in response headers/trailers.
+
+                                                  The backend must implement OpenRcaService for this to take effect.
+                                                properties:
+                                                  authority:
+                                                    description: |-
+                                                      Authority overrides the :authority header on the OutOfBand gRPC stream.
+                                                      If unset, Envoy uses the endpoint hostname, then the dialed address, then
+                                                      the cluster name.
+                                                    maxLength: 259
+                                                    minLength: 1
+                                                    pattern: ^[^\x00\n\r]*$
+                                                    type: string
+                                                  port:
+                                                    description: |-
+                                                      Port overrides the port used for the OutOfBand reporting connection, e.g. to
+                                                      reach a separate reporting sidecar. Defaults to the endpoint's port.
+                                                    format: int32
+                                                    maximum: 65535
+                                                    minimum: 1
+                                                    type: integer
+                                                  reportingPeriod:
+                                                    description: |-
+                                                      ReportingPeriod is how often Envoy requests load reports from the server.
+                                                      Must be greater than 0. Defaults to 10s.
+                                                    pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
+                                                    type: string
+                                                    x-kubernetes-validations:
+                                                    - message: reportingPeriod must
+                                                        be greater than 0
+                                                      rule: duration(self) > duration('0s')
+                                                type: object
                                               weightExpirationPeriod:
                                                 description: If a given endpoint has
                                                   not reported load metrics in this

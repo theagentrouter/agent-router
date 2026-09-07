@@ -212,6 +212,8 @@ jobs:
         include:
           - name: latest
             envoy_gateway_version: v0.0.0-latest
+          - name: v1.9.0
+            envoy_gateway_version: v1.9.0
           - name: v1.8.1
             envoy_gateway_version: v1.8.1
     steps:
@@ -378,19 +380,65 @@ jobs:
       - if: failure()
         run: cat ollama.log || true
 
+  compute_version:
+    # Runs on PRs too, so GitVersion's output shows up in checks before it can affect main; docker_push/helm_push below stay push-only, so nothing publishes here.
+    name: Compute dev version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+        with:
+          fetch-depth: 0
+      - name: Install GitVersion
+        continue-on-error: true
+        uses: gittools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
+        with:
+          versionSpec: "6.x"
+      - name: Determine next version
+        id: gitversion
+        continue-on-error: true
+        # GitVersion reads the branch from GITHUB_REF, which on a PR is "refs/pull/N/merge"; override it to the PR's base branch so the preview uses that branch's config instead of GitVersion's default PullRequest config.
+        env:
+          GITHUB_REF: ${{ github.event_name == 'pull_request' && format('refs/heads/{0}', github.base_ref) || github.ref }}
+        uses: gittools/actions/gitversion/execute@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
+      - name: Compute dev tag
+        id: version
+        env:
+          MMP: ${{ steps.gitversion.outputs.majorMinorPatch }}
+        run: |
+          DEV_TAG=""
+          if [ -n "$MMP" ]; then
+            DEV_TAG="v${MMP}-dev.$(date -u +%Y-%m-%d-%H-%M)"
+          fi
+          if [ -z "$MMP" ]; then
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              echo "::error::GitVersion produced no majorMinorPatch; fix GitVersion before merging."
+              exit 1
+            fi
+            echo "::warning::GitVersion produced no majorMinorPatch (setup/execute step likely failed above); this push to main will fall back to SHA-based tagging only."
+          fi
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ -n "$DEV_TAG" ]; then
+            echo "version=$DEV_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
+
   docker_push:
     # Docker builds are verified in test_e2e job, so we only need to push the images when the event is a push event.
     if: github.event_name == 'push'
     name: Push Docker Images
-    needs: [ci-required]
+    needs: [ci-required, compute_version]
     uses: ./.github/workflows/docker_build_job.yaml
+    with:
+      tag: ${{ needs.compute_version.outputs.version }}
     secrets: inherit
 
   helm_push:
     name: Push Helm chart
     # Only push the Helm chart to the GHR when merged into the main branch.
     if: github.event_name == 'push'
-    needs: [docker_push]
+    needs: [docker_push, compute_version]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
@@ -399,11 +447,17 @@ jobs:
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
-      - run: |
+      - env:
+          DEV_VERSION: ${{ needs.compute_version.outputs.version }}
+        run: |
           make helm-push HELM_CHART_VERSION=v0.0.0-latest
           make helm-push HELM_CHART_VERSION=0.0.0-latest
           make helm-push HELM_CHART_VERSION=v0.0.0-${{ github.sha }} TAG=${{ github.sha }}
           make helm-push HELM_CHART_VERSION=0.0.0-${{ github.sha }} TAG=${{ github.sha }}
+          if [ -n "$DEV_VERSION" ]; then
+            make helm-push HELM_CHART_VERSION=${DEV_VERSION} TAG=${DEV_VERSION}
+            make helm-push HELM_CHART_VERSION=${DEV_VERSION#v} TAG=${DEV_VERSION}
+          fi
 
   # Aggregate all the required jobs and make it easier to customize CI required jobs
   ci-required:
@@ -418,6 +472,7 @@ jobs:
       - test_data_plane
       - test_data_plane_mcp
       - test_e2e_aigw
+      - compute_version
     # We need this to run always to force-fail (and not skip) if any needed
     # job has failed. Otherwise, a skipped job will not fail the workflow.
     if: always()

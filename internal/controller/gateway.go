@@ -40,8 +40,6 @@ import (
 )
 
 const (
-	// FilterConfigKeyInSecret is the key to store the filter config in the secret.
-	FilterConfigKeyInSecret = "filter-config.yaml" //nolint: gosec
 	// defaultOwnedBy is the default value for the ModelsOwnedBy field in the filter config.
 	defaultOwnedBy = "Envoy AI Gateway"
 )
@@ -574,48 +572,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	if err = c.writeFilterConfigBundle(ctx, gatewayName, gatewayNamespace, configSecretNamespace, marshaled, uuid); err != nil {
 		return false, err
 	}
-	// TODO(huabing): this can be removed in the next release.
-	if err = c.writeLegacyFilterConfigSecret(ctx, gatewayName, gatewayNamespace, configSecretNamespace, marshaled); err != nil {
-		return false, err
-	}
 	return hasEffectiveRoute, nil
-}
-
-func (c *GatewayController) writeLegacyFilterConfigSecret(
-	ctx context.Context,
-	gatewayName,
-	gatewayNamespace,
-	configSecretNamespace string,
-	marshaled []byte,
-) error {
-	legacySecretName := legacyFilterConfigSecretName(gatewayName, gatewayNamespace)
-
-	// Create legacy secret only if the secret name and content still fit Kubernetes limits.
-	if len(legacySecretName) > k8sObjectNameMaxLen || len(marshaled) > corev1.MaxSecretSize {
-		return nil
-	}
-
-	data := map[string]string{FilterConfigKeyInSecret: string(marshaled)}
-	secret, err := c.kube.CoreV1().Secrets(configSecretNamespace).Get(ctx, legacySecretName, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: legacySecretName, Namespace: configSecretNamespace},
-				StringData: data,
-			}
-			if _, err = c.kube.CoreV1().Secrets(configSecretNamespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-				return fmt.Errorf("failed to create secret %s: %w", legacySecretName, err)
-			}
-			return nil
-		}
-		return fmt.Errorf("failed to get secret %s: %w", legacySecretName, err)
-	}
-
-	secret.StringData = data
-	if _, err := c.kube.CoreV1().Secrets(configSecretNamespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("failed to update secret %s: %w", secret.Name, err)
-	}
-	return nil
 }
 
 // reconcileFilterConfigSecretForMCPGateway updates the filter config secret for the external processor.
@@ -981,8 +938,8 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 }
 
 func (c *GatewayController) getSecretData(ctx context.Context, namespace, name, dataKey string) (string, error) {
-	secret := &corev1.Secret{}
-	if err := c.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, secret); err != nil {
+	secret, err := c.kube.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
 		return "", fmt.Errorf("failed to get secret %s: %w", name, err)
 	}
 	if secret.Data != nil {
