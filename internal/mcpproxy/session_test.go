@@ -684,7 +684,7 @@ func TestSendRequestPerBackend_BOMPrefixedJSON(t *testing.T) {
 	bomBody := append([]byte{0xEF, 0xBB, 0xBF}, msg1...)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(bomBody)
 	}))

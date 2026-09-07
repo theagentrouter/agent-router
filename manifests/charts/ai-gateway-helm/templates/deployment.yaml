@@ -36,6 +36,9 @@ spec:
       {{- if .Values.controller.hostNetwork }}
       dnsPolicy: ClusterFirstWithHostNet
       {{- end }}
+      {{- with .Values.controller.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.controller.podSecurityContext | nindent 8 }}
       containers:

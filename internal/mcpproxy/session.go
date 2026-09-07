@@ -447,7 +447,7 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 		return fmt.Errorf("MCP GET request failed with status code %d, body=%s", httpResp.StatusCode, string(body))
 	}
 
-	if httpResp.Header.Get("Content-Type") == "application/json" {
+	if isJSONContentType(httpResp.Header.Get("Content-Type")) {
 		// Try to decode as a single JSON-RPC message first.
 		var respBody []byte
 		respBody, err = io.ReadAll(bodyReader)

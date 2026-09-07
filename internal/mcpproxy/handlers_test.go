@@ -1093,7 +1093,7 @@ func TestProxyResponseBody_JSONResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	httpResp := &http.Response{
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Header:     http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
 		Body:       io.NopCloser(bytes.NewReader(body)),
 		StatusCode: http.StatusOK,
 	}

@@ -804,7 +804,7 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 }
 
 func copyProxyHeaders(resp *http.Response, w http.ResponseWriter) {
-	isJSONResponse := resp.Header.Get("Content-Type") == "application/json"
+	isJSONResponse := isJSONContentType(resp.Header.Get("Content-Type"))
 	for k, v := range resp.Header {
 		// Skip content-length header for non JSON response since we might modify the response.
 		if !isJSONResponse && strings.EqualFold(k, "content-length") {
@@ -827,7 +827,7 @@ func (m *mcpRequestContext) proxyResponseBody(ctx context.Context, s *session, w
 	// Try to decode as a single JSON-RPC message first; if that fails, fall through to the
 	// SSE parser using the already-read bytes.
 	var sseReader io.Reader = resp.Body
-	if resp.Header.Get("Content-Type") == "application/json" {
+	if isJSONContentType(resp.Header.Get("Content-Type")) {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			m.l.Error("failed to read response body", slog.String("error", err.Error()))

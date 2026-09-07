@@ -147,6 +147,8 @@ controller:
     tag: ""
   imagePullPolicy: IfNotPresent
   replicaCount: 1
+  # Optional. Empty omits the field from the pod spec.
+  priorityClassName: ""
   imagePullSecrets: []
   podAnnotations: {}
   podLabels: {}
