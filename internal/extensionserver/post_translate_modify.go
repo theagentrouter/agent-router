@@ -28,6 +28,8 @@ import (
 	upstream_codecv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/upstream_codec/v3"
 	httpconnectionmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
+	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -137,6 +139,14 @@ func (s *Server) PostTranslateModify(ctx context.Context, req *egextension.PostT
 		return nil, fmt.Errorf("failed to build clusters for InferencePool endpoint pickers: %w", err)
 	}
 	req.Clusters = append(req.Clusters, cs...)
+
+	// Envoy Gateway merges a rule's weighted InferencePool backendRefs into a single cluster and a
+	// single non-weighted route, since it doesn't support WeightedClusters for custom backend kinds.
+	// Recover the real per-pool weights from the owning HTTPRoute and split each such route into one
+	// route per pool, gated by a RuntimeFraction cascade that reproduces the configured weights.
+	if err = s.splitWeightedInferencePoolRoutes(ctx, req.Routes); err != nil {
+		return nil, fmt.Errorf("failed to split weighted InferencePool routes: %w", err)
+	}
 
 	// Modify listeners and routes to support InferencePool backends.
 	if err = s.maybeModifyListenerAndRoutes(req.Listeners, req.Routes); err != nil {
@@ -334,7 +344,7 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	httpRouteRuleIndex := clusterName.ruleIndex
 
 	// Check if this rule has InferencePool backends.
-	pool := getInferencePoolByMetadata(cluster.Metadata)
+	pools := getInferencePoolsByMetadata(cluster.Metadata)
 	// Get the HTTPRoute object from the cluster name.
 	var aigwRoute aigv1b1.AIGatewayRoute
 	err = s.k8sClient.Get(ctx, client.ObjectKey{Namespace: httpRouteNamespace, Name: httpRouteName}, &aigwRoute)
@@ -363,7 +373,7 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	}
 
 	// Only process LoadAssignment for non-InferencePool backends.
-	if pool == nil {
+	if len(pools) == 0 {
 		switch {
 		case cluster.LoadAssignment == nil:
 			// LoadAssignment is nil when the cluster's endpoints are EDS-managed: delivered out of band
@@ -448,7 +458,7 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	// Route upstream egress through a forward proxy when the owning Gateway's GatewayConfig
 	// configures one. InferencePool clusters use in-cluster ORIGINAL_DST endpoints, so they are
 	// excluded.
-	if pool == nil {
+	if len(pools) == 0 {
 		if err = s.maybeWrapClusterInForwardProxy(ctx, cluster, &aigwRoute); err != nil {
 			return fmt.Errorf("failed to configure forward proxy for cluster %s: %w", cluster.Name, err)
 		}
@@ -669,6 +679,260 @@ func (s *Server) gatewayConfigForGateway(ctx context.Context, gatewayName, gatew
 	return &gatewayConfig, nil
 }
 
+// weightedInferencePool pairs an InferencePool with the real weight its backendRef carries on the
+// HTTPRoute rule that referenced it.
+type weightedInferencePool struct {
+	pool   *gwaiev1.InferencePool
+	weight int32
+}
+
+// splitWeightedInferencePoolRoutes rewrites every route whose metadata carries 2+ InferencePools
+// (Envoy Gateway merges a rule's weighted InferencePool backendRefs into one cluster and one
+// non-weighted route since it doesn't support WeightedClusters for custom backend kinds) into
+// sibling routes gated by a RuntimeFraction cascade that reproduces the rule's real per-pool
+// weights, recovered from the owning HTTPRoute object.
+//
+// Any route this can't confidently split (HTTPRoute or matching rule not found, k8s error, no
+// InferencePool backendRef left with non-zero weight) is logged and left unmodified, rather than
+// failing the whole translate pass.
+func (s *Server) splitWeightedInferencePoolRoutes(ctx context.Context, routeConfigs []*routev3.RouteConfiguration) error {
+	cache := make(map[client.ObjectKey]*gwapiv1.HTTPRoute)
+	for _, rc := range routeConfigs {
+		for _, vh := range rc.VirtualHosts {
+			newRoutes := make([]*routev3.Route, 0, len(vh.Routes))
+			for _, route := range vh.Routes {
+				pools := getInferencePoolsByMetadata(route.Metadata)
+				if len(pools) < 2 {
+					newRoutes = append(newRoutes, route)
+					continue
+				}
+				split, err := s.splitInferencePoolRoute(ctx, cache, route, pools)
+				if err != nil {
+					s.log.Error(err, "failed to split weighted InferencePool route, leaving it unmodified", "route", route.Name)
+					newRoutes = append(newRoutes, route)
+					continue
+				}
+				newRoutes = append(newRoutes, split...)
+			}
+			vh.Routes = newRoutes
+		}
+	}
+	return nil
+}
+
+// splitInferencePoolRoute resolves the real, non-zero backendRef weight of each of the route's
+// InferencePools from the owning HTTPRoute, and builds the corresponding split routes.
+func (s *Server) splitInferencePoolRoute(ctx context.Context, cache map[client.ObjectKey]*gwapiv1.HTTPRoute, route *routev3.Route, pools []*gwaiev1.InferencePool) ([]*routev3.Route, error) {
+	key, sectionName, ok := httpRouteRefFromMetadata(route)
+	if !ok {
+		return nil, fmt.Errorf("could not determine owning HTTPRoute from route metadata")
+	}
+	httpRoute, err := s.retrieveAndCacheHTTPRoute(ctx, cache, key)
+	if err != nil {
+		return nil, err
+	}
+	if httpRoute == nil {
+		return nil, fmt.Errorf("HTTPRoute %s/%s not found", key.Namespace, key.Name)
+	}
+	weighted, err := matchInferencePoolWeights(httpRoute, sectionName, pools)
+	if err != nil {
+		return nil, err
+	}
+	if len(weighted) == 0 {
+		return nil, fmt.Errorf("no InferencePool backendRef in HTTPRoute %s/%s has non-zero weight", key.Namespace, key.Name)
+	}
+	return buildWeightedInferencePoolRoutes(route, weighted), nil
+}
+
+// httpRouteRefFromMetadata extracts the namespace, name and (optional) rule sectionName of the
+// HTTPRoute that produced this route, from the "envoy-gateway" resource metadata Envoy Gateway
+// stamps on every generated route. Returns ok=false if no HTTPRoute resource entry is present.
+func httpRouteRefFromMetadata(route *routev3.Route) (key client.ObjectKey, sectionName string, ok bool) {
+	if route.Metadata == nil || route.Metadata.FilterMetadata == nil {
+		return client.ObjectKey{}, "", false
+	}
+	eg, found := route.Metadata.FilterMetadata[envoyGatewayMetadataNamespace]
+	if !found || eg.Fields == nil {
+		return client.ObjectKey{}, "", false
+	}
+	resources, found := eg.Fields[envoyGatewayMetadataResourcesKey]
+	if !found || resources.GetListValue() == nil {
+		return client.ObjectKey{}, "", false
+	}
+	for _, resource := range resources.GetListValue().Values {
+		st := resource.GetStructValue()
+		if st == nil || st.Fields == nil {
+			continue
+		}
+		if kind, kindOK := st.Fields["kind"]; !kindOK || kind.GetStringValue() != "HTTPRoute" {
+			continue
+		}
+		name := st.Fields["name"].GetStringValue()
+		namespace := st.Fields["namespace"].GetStringValue()
+		if name == "" || namespace == "" {
+			continue
+		}
+		var section string
+		if sn, snOK := st.Fields["sectionName"]; snOK {
+			section = sn.GetStringValue()
+		}
+		return client.ObjectKey{Namespace: namespace, Name: name}, section, true
+	}
+	return client.ObjectKey{}, "", false
+}
+
+// retrieveAndCacheHTTPRoute returns the HTTPRoute for the key and caches the result, so one
+// translation pass hits the API server at most once per HTTPRoute.
+func (s *Server) retrieveAndCacheHTTPRoute(ctx context.Context, cache map[client.ObjectKey]*gwapiv1.HTTPRoute, key client.ObjectKey) (*gwapiv1.HTTPRoute, error) {
+	if cached, ok := cache[key]; ok {
+		return cached, nil
+	}
+	var httpRoute gwapiv1.HTTPRoute
+	if err := s.k8sClient.Get(ctx, key, &httpRoute); err != nil {
+		if apierrors.IsNotFound(err) {
+			cache[key] = nil
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get HTTPRoute %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	cache[key] = &httpRoute
+	return &httpRoute, nil
+}
+
+// isInferencePoolBackendRef reports whether the backendRef targets an InferencePool.
+func isInferencePoolBackendRef(ref *gwapiv1.HTTPBackendRef) bool {
+	return ref.Group != nil && string(*ref.Group) == gwaiev1.GroupName &&
+		ref.Kind != nil && string(*ref.Kind) == "InferencePool"
+}
+
+// matchInferencePoolWeights finds the HTTPRouteRule that produced the given route - correlated via
+// sectionName when set, otherwise via the rule's InferencePool backendRef name set matching the
+// pools' names exactly - and returns each pool paired with its real backendRef weight, in the same
+// order as `pools`. A zero-weight backendRef means no traffic (Gateway API semantics), so such a
+// pool is dropped and the returned slice can be shorter than `pools`.
+func matchInferencePoolWeights(httpRoute *gwapiv1.HTTPRoute, sectionName string, pools []*gwaiev1.InferencePool) ([]weightedInferencePool, error) {
+	poolNames := make(map[string]struct{}, len(pools))
+	for _, pool := range pools {
+		poolNames[pool.Name] = struct{}{}
+	}
+
+	var rule *gwapiv1.HTTPRouteRule
+	for i := range httpRoute.Spec.Rules {
+		r := &httpRoute.Spec.Rules[i]
+		if sectionName != "" {
+			if r.Name != nil && string(*r.Name) == sectionName {
+				rule = r
+				break
+			}
+			continue
+		}
+		ruleNames := make(map[string]struct{}, len(r.BackendRefs))
+		for i := range r.BackendRefs {
+			ref := &r.BackendRefs[i]
+			if isInferencePoolBackendRef(ref) {
+				ruleNames[string(ref.Name)] = struct{}{}
+			}
+		}
+		if mapKeysEqual(ruleNames, poolNames) {
+			rule = r
+			break
+		}
+	}
+	if rule == nil {
+		return nil, fmt.Errorf("no matching HTTPRoute rule found for InferencePools in %s/%s", httpRoute.Namespace, httpRoute.Name)
+	}
+
+	weightByName := make(map[string]int32, len(rule.BackendRefs))
+	for i := range rule.BackendRefs {
+		ref := &rule.BackendRefs[i]
+		if !isInferencePoolBackendRef(ref) {
+			continue
+		}
+		weight := int32(1)
+		if ref.Weight != nil {
+			weight = *ref.Weight
+		}
+		if weight == 0 {
+			continue
+		}
+		weightByName[string(ref.Name)] = weight
+	}
+
+	result := make([]weightedInferencePool, 0, len(pools))
+	for _, pool := range pools {
+		if w, wOK := weightByName[pool.Name]; wOK {
+			result = append(result, weightedInferencePool{pool: pool, weight: w})
+		}
+	}
+	return result, nil
+}
+
+// mapKeysEqual reports whether a and b contain exactly the same set of keys.
+func mapKeysEqual(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// buildWeightedInferencePoolRoutes splits route into one sibling route per weighted pool.
+//
+// A single remaining pool (every other backendRef weighed 0) needs no duplication: 100% of
+// traffic already reaches it, so its metadata is simply rewritten down to that one pool.
+//
+// For 2+ pools, each route but the last carries a RuntimeFraction gating whether it matches;
+// the last route is left unconditional, absorbing whatever didn't match any earlier one. For
+// pools in order with weights w_1..w_N, let S_i be the suffix sum w_i+w_{i+1}+...+w_N; route i
+// (i<N) matches with probability w_i/S_i. This cascade of independent per-request coin-flips
+// reduces exactly to the unconditional probability w_i/S_1 for every pool, regardless of order.
+func buildWeightedInferencePoolRoutes(route *routev3.Route, weighted []weightedInferencePool) []*routev3.Route {
+	if len(weighted) == 1 {
+		clone, ok := proto.Clone(route).(*routev3.Route)
+		if !ok {
+			return []*routev3.Route{route}
+		}
+		buildEPPMetadataForRoute(clone, []*gwaiev1.InferencePool{weighted[0].pool})
+		return []*routev3.Route{clone}
+	}
+
+	suffixSum := make([]int64, len(weighted))
+	var sum int64
+	for i := len(weighted) - 1; i >= 0; i-- {
+		sum += int64(weighted[i].weight)
+		suffixSum[i] = sum
+	}
+
+	const denominator = 1_000_000
+	routes := make([]*routev3.Route, 0, len(weighted))
+	for i, wp := range weighted {
+		clone, ok := proto.Clone(route).(*routev3.Route)
+		if !ok {
+			continue
+		}
+		clone.Name = fmt.Sprintf("%s/inferencepool/%s", route.Name, wp.pool.Name)
+		if i < len(weighted)-1 {
+			numerator := uint32((int64(wp.weight) * denominator) / suffixSum[i]) // #nosec G115 -- bounded by denominator.
+			if clone.Match == nil {
+				clone.Match = &routev3.RouteMatch{}
+			}
+			clone.Match.RuntimeFraction = &corev3.RuntimeFractionalPercent{
+				DefaultValue: &typev3.FractionalPercent{
+					Numerator:   numerator,
+					Denominator: typev3.FractionalPercent_MILLION,
+				},
+			}
+		}
+		buildEPPMetadataForRoute(clone, []*gwaiev1.InferencePool{wp.pool})
+		routes = append(routes, clone)
+	}
+	return routes
+}
+
 // maybeModifyListenerAndRoutes modifies listeners and routes to support InferencePool backends.
 // This function performs the following operations:
 // 1. Identifies listeners and routes that use InferencePool backends
@@ -695,36 +959,42 @@ func (s *Server) maybeModifyListenerAndRoutes(listeners []*listenerv3.Listener, 
 
 	// inferencePoolRoutes builds a matrix of route configs and the inference pools they use.
 	routeNameToRoute := make(map[string]*routev3.RouteConfiguration)
-	routeNameToVHRouteNameToInferencePool := make(map[string]map[string]*gwaiev1.InferencePool)
+	routeNameToVHRouteNameToInferencePools := make(map[string]map[string][]*gwaiev1.InferencePool)
 	for _, routeCfg := range routes {
 		routeNameToRoute[routeCfg.Name] = routeCfg
 		for _, vh := range routeCfg.VirtualHosts {
 			for _, route := range vh.Routes {
-				if pool := getInferencePoolByMetadata(route.Metadata); pool != nil {
-					if routeNameToVHRouteNameToInferencePool[routeCfg.Name] == nil {
-						routeNameToVHRouteNameToInferencePool[routeCfg.Name] = make(map[string]*gwaiev1.InferencePool)
+				if pools := getInferencePoolsByMetadata(route.Metadata); len(pools) > 0 {
+					if routeNameToVHRouteNameToInferencePools[routeCfg.Name] == nil {
+						routeNameToVHRouteNameToInferencePools[routeCfg.Name] = make(map[string][]*gwaiev1.InferencePool)
 					}
-					routeNameToVHRouteNameToInferencePool[routeCfg.Name][route.Name] = pool
+					routeNameToVHRouteNameToInferencePools[routeCfg.Name][route.Name] = pools
 				}
 			}
 		}
 	}
 
-	// listenerToInferencePools builds a matrix of listeners and the inference pools they use.
+	// listenerToInferencePools builds a matrix of listeners and the inference pools they use,
+	// deduplicated by ext_proc filter name since the same pool can appear on multiple routes.
 	listenerToInferencePools := make(map[string][]*gwaiev1.InferencePool)
 	for listener, routeCfgNames := range listenerNameToRouteNames {
+		seen := make(map[string]struct{})
 		for _, name := range routeCfgNames {
 			if routeNameToRoute[name] == nil {
 				continue
 			}
-			if routeNameToVHRouteNameToInferencePool[name] == nil {
+			if routeNameToVHRouteNameToInferencePools[name] == nil {
 				continue
 			}
-			for _, pool := range routeNameToVHRouteNameToInferencePool[name] {
-				if listenerToInferencePools[listener] == nil {
-					listenerToInferencePools[listener] = make([]*gwaiev1.InferencePool, 0)
+			for _, pools := range routeNameToVHRouteNameToInferencePools[name] {
+				for _, pool := range pools {
+					key := httpFilterNameForInferencePool(pool)
+					if _, ok := seen[key]; ok {
+						continue
+					}
+					seen[key] = struct{}{}
+					listenerToInferencePools[listener] = append(listenerToInferencePools[listener], pool)
 				}
-				listenerToInferencePools[listener] = append(listenerToInferencePools[listener], pool)
 			}
 		}
 	}
@@ -839,25 +1109,21 @@ func (s *Server) patchVirtualHostWithInferencePool(vh *routev3.VirtualHost, infe
 		if err != nil {
 			return fmt.Errorf("failed to marshal ExtProcPerRoute to Any: %w", err)
 		}
-		inferencePool := getInferencePoolByMetadata(route.Metadata)
-		if inferencePool == nil {
-			for key, pool := range inferenceMatrix {
-				s.log.Info("disabling inference pool filter", "route", route.Name, "filter", key, "pool", pool.Name)
-				if route.TypedPerFilterConfig == nil {
-					route.TypedPerFilterConfig = make(map[string]*anypb.Any)
-				}
-				route.TypedPerFilterConfig[key] = overrideAny
+		routePools := getInferencePoolsByMetadata(route.Metadata)
+		routePoolKeys := make(map[string]struct{}, len(routePools))
+		for _, pool := range routePools {
+			routePoolKeys[httpFilterNameForInferencePool(pool)] = struct{}{}
+		}
+		for key, pool := range inferenceMatrix {
+			if _, ok := routePoolKeys[key]; ok {
+				// This route is one of the pools using this filter: leave it enabled.
+				continue
 			}
-		} else {
-			for key, pool := range inferenceMatrix {
-				if key != httpFilterNameForInferencePool(inferencePool) {
-					s.log.Info("disabling inference pool filter", "route", route.Name, "filter", key, "pool", pool.Name)
-					if route.TypedPerFilterConfig == nil {
-						route.TypedPerFilterConfig = make(map[string]*anypb.Any)
-					}
-					route.TypedPerFilterConfig[key] = overrideAny
-				}
+			s.log.Info("disabling inference pool filter", "route", route.Name, "filter", key, "pool", pool.Name)
+			if route.TypedPerFilterConfig == nil {
+				route.TypedPerFilterConfig = make(map[string]*anypb.Any)
 			}
+			route.TypedPerFilterConfig[key] = overrideAny
 		}
 	}
 	return nil
