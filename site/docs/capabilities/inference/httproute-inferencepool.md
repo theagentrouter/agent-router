@@ -103,7 +103,7 @@ curl -X POST "http://${GATEWAY_IP}/v1/chat/completions" \
 
 ## Weighted Routing Across Multiple InferencePools
 
-A single HTTPRoute rule can list more than one `InferencePool` backendRef. Envoy AI Gateway splits traffic across the referenced pools according to each backendRef's `weight`, using the same weight semantics defined by the [Gateway API `BackendRef`](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.BackendRef) (default `1`; a `weight: 0` backendRef receives no traffic).
+A single HTTPRoute rule can list more than one `InferencePool` backendRef. Envoy AI Gateway splits traffic across the referenced pools according to each backendRef's `weight`, using the same weight semantics defined by the [Gateway API `BackendRef`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendref) (default `1`; a `weight: 0` backendRef receives no traffic).
 
 This is useful for canary rollouts of a new model version, splitting load across pools running different accelerators, or gradually shifting traffic from one InferencePool to another.
 
@@ -144,6 +144,18 @@ spec:
 Each InferencePool keeps its own Endpoint Picker Provider (EPP), so a request assigned to `secondary-inference-pool` is only ever scored and forwarded by that pool's EPP — the pools remain fully independent of one another. Weights can be changed at any time by updating the HTTPRoute; there's no need to touch the InferencePool resources themselves.
 
 > **Note**: This weighted, multi-pool split is currently only available through HTTPRoute. [AIGatewayRoute](./aigatewayroute-inferencepool.md) rules still allow only one InferencePool backend each.
+
+A rule can also mix InferencePools with other backend kinds, such as a Service, for example to move traffic from a Service to an InferencePool gradually. Requests sent to the Service don't go through any endpoint picker.
+
+The following rules apply to any HTTPRoute rule that references an InferencePool:
+
+- Every referenced InferencePool must set `endpointPickerRef`. If one doesn't, all of the rule's requests return `500`.
+- If every backendRef has `weight: 0`, the rule returns `500`. A `weight: 0` backendRef receives no traffic ([`BackendRef`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendref)), so this follows the [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httprouterule) rule that requests with no backend to go to get a `500`.
+- If a backendRef is invalid, for example because the InferencePool doesn't exist, its share of the traffic returns `500` and the other backends keep their weights, as the [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httprouterule) specifies.
+
+InferencePools without an `endpointPickerRef` may be supported in a future release.
+
+> **Note**: Weighted routing across InferencePools requires an Envoy Gateway version that builds one cluster per custom backendRef ([envoyproxy/gateway#10270](https://github.com/envoyproxy/gateway/pull/10270)). With an older Envoy Gateway, a rule with more than one backendRef that is an InferencePool doesn't work.
 
 ## Next Steps
 
