@@ -101,6 +101,50 @@ curl -X POST "http://${GATEWAY_IP}/v1/chat/completions" \
 5. **Request Forwarding**: Request is forwarded to the selected inference backend
 6. **Response Return**: Response is returned to the client
 
+## Weighted Routing Across Multiple InferencePools
+
+A single HTTPRoute rule can list more than one `InferencePool` backendRef. Envoy AI Gateway splits traffic across the referenced pools according to each backendRef's `weight`, using the same weight semantics defined by the [Gateway API `BackendRef`](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.BackendRef) (default `1`; a `weight: 0` backendRef receives no traffic).
+
+This is useful for canary rollouts of a new model version, splitting load across pools running different accelerators, or gradually shifting traffic from one InferencePool to another.
+
+For example, to send roughly 70% of traffic to `primary-inference-pool` and 30% to `secondary-inference-pool`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: inference-pool-weighted
+  namespace: default
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: inference-pool-with-httproute
+      namespace: default
+  rules:
+    - backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: primary-inference-pool
+          namespace: default
+          port: 8080
+          weight: 70
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: secondary-inference-pool
+          namespace: default
+          port: 8080
+          weight: 30
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+```
+
+Each InferencePool keeps its own Endpoint Picker Provider (EPP), so a request assigned to `secondary-inference-pool` is only ever scored and forwarded by that pool's EPP — the pools remain fully independent of one another. Weights can be changed at any time by updating the HTTPRoute; there's no need to touch the InferencePool resources themselves.
+
+> **Note**: This weighted, multi-pool split is currently only available through HTTPRoute. [AIGatewayRoute](./aigatewayroute-inferencepool.md) rules still allow only one InferencePool backend each.
+
 ## Next Steps
 
 - Explore [AIGatewayRoute + InferencePool](./aigatewayroute-inferencepool.md) for advanced AI-specific features
