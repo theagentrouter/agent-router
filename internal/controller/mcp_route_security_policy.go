@@ -717,9 +717,66 @@ func (e *invalidMetadataError) Unwrap() error { return e.err }
 // fetchOAuthAuthServerMetadata fetches OAuth authorization server metadata from the well-known endpoint
 // with exponential backoff retry logic. It returns the fetched metadata or an error if all attempts fail.
 func fetchOAuthAuthServerMetadata(authServer, metadataURL string, maxRetryElapsedTime time.Duration) (*OAuthAuthServerMetadata, error) {
+	// An explicitly configured metadata URL is used verbatim: the whole point of the field is that
+	// the document lives somewhere the issuer does not lead to, so there is nothing to derive.
+	if metadataURL != "" {
+		metadata, err := fetchFirstUsableMetadata([]string{metadataURL}, maxRetryElapsedTime)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch authorization server metadata from %q: %w", metadataURL, err)
+		}
+		return metadata, nil
+	}
+
+	authServerURL, err := url.Parse(authServer)
+	if err != nil {
+		return nil, fmt.Errorf("invalid authorization server URL: %w", err)
+	}
+
+	// Build the well-known URL according to the spec: https://datatracker.ietf.org/doc/html/rfc8414#section-3
+	// Some providers like Descope do not honor the spec and put the well-known endpoint
+	// after the issuer path, so we try a set of variants to maximize compatibility.
+	// See: https://modelcontextprotocol.io/specification/draft/basic/authorization#authorization-server-metadata-discovery
+	wellKnownURLVariants := []string{
+		fmt.Sprintf("%s://%s%s%s",
+			authServerURL.Scheme,
+			authServerURL.Host,
+			oauthWellKnownAuthorizationServerMetadataPath,
+			strings.TrimSuffix(authServerURL.Path, "/"),
+		),
+		fmt.Sprintf("%s://%s%s%s",
+			authServerURL.Scheme,
+			authServerURL.Host,
+			oidcWellKnownMetadataPath,
+			strings.TrimSuffix(authServerURL.Path, "/"),
+		),
+		fmt.Sprintf("%s://%s%s%s",
+			authServerURL.Scheme,
+			authServerURL.Host,
+			strings.TrimSuffix(authServerURL.Path, "/"),
+			oauthWellKnownAuthorizationServerMetadataPath,
+		),
+		fmt.Sprintf("%s://%s%s%s",
+			authServerURL.Scheme,
+			authServerURL.Host,
+			strings.TrimSuffix(authServerURL.Path, "/"),
+			oidcWellKnownMetadataPath,
+		),
+	}
+
+	metadata, err := fetchFirstUsableMetadata(wellKnownURLVariants, maxRetryElapsedTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover authorization server metadata for issuer %q: %w", authServer, err)
+	}
+	return metadata, nil
+}
+
+// fetchFirstUsableMetadata tries each candidate URL in order, with exponential backoff per URL,
+// and returns the first usable document. A URL that answers with a 4xx or with a document we
+// cannot use is a miss, and the next URL is tried. Any other failure is returned immediately.
+func fetchFirstUsableMetadata(candidateURLs []string, maxRetryElapsedTime time.Duration) (*OAuthAuthServerMetadata, error) {
 	httpClient := &http.Client{Timeout: httpClientTimeout}
 
-	operation := func(wellKnownURL string, metadata *OAuthAuthServerMetadata) error {
+	fetchOnce := func(wellKnownURL string, metadata *OAuthAuthServerMetadata) error {
 		resp, err := httpClient.Get(wellKnownURL)
 		if err != nil {
 			urlError, dnsError := &url.Error{}, &net.DNSError{}
@@ -770,66 +827,13 @@ func fetchOAuthAuthServerMetadata(authServer, metadataURL string, maxRetryElapse
 		return nil
 	}
 
-	// An explicitly configured metadata URL is used verbatim: the whole point of the field is that
-	// the document lives somewhere the issuer does not lead to, so there is nothing to derive.
-	if metadataURL != "" {
-		return fetchFromWellKnownURLs(metadataURL, []string{metadataURL}, operation, maxRetryElapsedTime)
-	}
-
-	authServerURL, err := url.Parse(authServer)
-	if err != nil {
-		return nil, fmt.Errorf("invalid authorization server URL: %w", err)
-	}
-
-	// Build the well-known URL according to the spec: https://datatracker.ietf.org/doc/html/rfc8414#section-3
-	// Some providers like Descope do not honor the spec and put the well-known endpoint
-	// after the issuer path, so we try a set of variants to maximize compatibility.
-	// See: https://modelcontextprotocol.io/specification/draft/basic/authorization#authorization-server-metadata-discovery
-	wellKnownURLVariants := []string{
-		fmt.Sprintf("%s://%s%s%s",
-			authServerURL.Scheme,
-			authServerURL.Host,
-			oauthWellKnownAuthorizationServerMetadataPath,
-			strings.TrimSuffix(authServerURL.Path, "/"),
-		),
-		fmt.Sprintf("%s://%s%s%s",
-			authServerURL.Scheme,
-			authServerURL.Host,
-			oidcWellKnownMetadataPath,
-			strings.TrimSuffix(authServerURL.Path, "/"),
-		),
-		fmt.Sprintf("%s://%s%s%s",
-			authServerURL.Scheme,
-			authServerURL.Host,
-			strings.TrimSuffix(authServerURL.Path, "/"),
-			oauthWellKnownAuthorizationServerMetadataPath,
-		),
-		fmt.Sprintf("%s://%s%s%s",
-			authServerURL.Scheme,
-			authServerURL.Host,
-			strings.TrimSuffix(authServerURL.Path, "/"),
-			oidcWellKnownMetadataPath,
-		),
-	}
-
-	return fetchFromWellKnownURLs(authServer, wellKnownURLVariants, operation, maxRetryElapsedTime)
-}
-
-// fetchFromWellKnownURLs tries each URL in order and returns the first usable document.
-// A URL that answers with a 4xx or with a document we cannot use is a miss, and the next URL is tried.
-func fetchFromWellKnownURLs(
-	subject string,
-	wellKnownURLs []string,
-	operation func(string, *OAuthAuthServerMetadata) error,
-	maxRetryElapsedTime time.Duration,
-) (*OAuthAuthServerMetadata, error) {
 	var lastErr error
-	for _, wellKnownURL := range wellKnownURLs {
+	for _, wellKnownURL := range candidateURLs {
 		var metadata OAuthAuthServerMetadata
 		b := backoff.NewExponentialBackOff()
 		b.MaxElapsedTime = maxRetryElapsedTime
 		err := backoff.Retry(func() error {
-			return operation(wellKnownURL, &metadata)
+			return fetchOnce(wellKnownURL, &metadata)
 		}, b)
 		if err == nil { // Success.
 			return &metadata, nil
@@ -853,7 +857,7 @@ func fetchFromWellKnownURLs(
 
 	// We can only get here if every URL was a 4xx or returned an unusable document.
 	// Return the last failure.
-	return nil, fmt.Errorf("no usable authorization server metadata found for %q: %w", subject, lastErr)
+	return nil, fmt.Errorf("no usable metadata at any candidate URL: %w", lastErr)
 }
 
 func oauthProtectedResourceMetadataName(mcpRouteName string) string {
