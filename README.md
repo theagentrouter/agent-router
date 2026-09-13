@@ -15,6 +15,7 @@
 <p align="center">
   <a href="https://theagentrouter.ai/docs">Documentation</a> ·
   <a href="https://theagentrouter.ai/docs/getting-started/">Quickstart</a> ·
+  <a href="https://tetrate.ai">Try as a Service</a> ·
   <a href="https://theagentrouter.ai/blog">Blog</a> ·
   <a href="https://theagentrouter.ai/release-notes/">Release Notes</a> ·
   <a href="https://theagentrouter.ai/talks">Talks</a>
@@ -47,6 +48,8 @@ OPENAI_API_KEY=sk-your-key aigw run
 ```
 
 Then point any OpenAI-compatible client at `http://localhost:1975/v1`. See the [CLI guide](https://theagentrouter.ai/docs/cli/) for installation and provider auto-configuration, or the [Getting Started guide](https://theagentrouter.ai/docs/getting-started/) to deploy on Kubernetes with Envoy Gateway.
+
+Don't want to run it yourself? Try Agent Router as a service at [tetrate.ai](https://tetrate.ai).
 
 ## Usage
 

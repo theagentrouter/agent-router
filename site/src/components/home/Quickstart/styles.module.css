@@ -46,6 +46,33 @@
   margin-bottom: 26px;
 }
 
+.ctas {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+/* the panel is dark in both themes, so this CTA carries its own on-dark
+   colours rather than the light-ground .button--secondary */
+.ctaService {
+  display: inline-block;
+  padding: var(--ifm-button-padding-vertical) var(--ifm-button-padding-horizontal);
+  border: 1px solid var(--ar-marquee-500);
+  border-radius: var(--ifm-button-border-radius);
+  color: #f3efeb;
+  font-weight: var(--ifm-button-font-weight);
+  line-height: var(--ifm-line-height-base);
+  text-decoration: none;
+  transition: background-color var(--ifm-transition-fast) ease;
+}
+
+.ctaService:hover,
+.ctaService:focus {
+  background-color: rgba(255, 85, 0, 0.12);
+  color: #ffffff;
+  text-decoration: none;
+}
+
 .tabs {
   display: flex;
   gap: 8px;

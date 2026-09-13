@@ -14,6 +14,7 @@ export const hero = {
     'Integrate once. Switch models without rewriting.',
   ctas: [
     { label: 'Get Started', to: '/docs/getting-started/' },
+    { label: 'See it in action', to: 'https://tetrate.ai' },
     { label: 'View on GitHub', to: 'https://github.com/theagentrouter/agent-router' },
   ] satisfies Cta[],
   sub: 'An Agentic AI Foundation project · Powered by Envoy',
@@ -115,6 +116,7 @@ export const quickstart = {
   title: 'From laptop to production',
   body:
     'One command on your laptop. The same configuration ships to a dedicated gateway or a Kubernetes cluster — only the packaging changes.',
+  serviceCta: { label: 'Try it as a service', to: 'https://tetrate.ai' } satisfies Cta,
   tabs: [
     {
       id: 'local',

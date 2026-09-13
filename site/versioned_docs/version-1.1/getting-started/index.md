@@ -9,6 +9,10 @@ sidebar_position: 2
 Agent Router runs two ways. The fastest is one command on your laptop; the same
 configuration then ships to Kubernetes for production.
 
+:::tip
+Don't want to run it yourself? Try Agent Router as a service at [tetrate.ai](https://tetrate.ai).
+:::
+
 ## Run locally in 60 seconds
 
 The standalone CLI starts an OpenAI-compatible router on your machine — no
