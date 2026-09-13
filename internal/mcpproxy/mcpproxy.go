@@ -235,9 +235,10 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 				span.RecordRouteToBackend(backend.Name, string(initResult.sessionID), true)
 			}
 			entries[entryIndex] = compositeSessionEntry{
-				sessionID:    initResult.sessionID,
-				backendName:  backend.Name,
-				capabilities: initResult.result.Capabilities,
+				sessionID:       initResult.sessionID,
+				backendName:     backend.Name,
+				capabilities:    initResult.result.Capabilities,
+				protocolVersion: initResult.result.ProtocolVersion,
 			}
 		})
 	}

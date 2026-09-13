@@ -999,3 +999,144 @@ func TestGetHeartbeatInterval(t *testing.T) {
 		})
 	}
 }
+
+func TestMinProtocolVersion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		versions []string
+		want     string
+	}{
+		{name: "no values", versions: nil, want: ""},
+		{name: "only empty values", versions: []string{"", ""}, want: ""},
+		{name: "min of two", versions: []string{"2025-06-18", "2025-11-25"}, want: "2025-06-18"},
+		{name: "unsorted input", versions: []string{"2025-11-25", "2025-06-18"}, want: "2025-06-18"},
+		{name: "duplicates", versions: []string{"2025-11-25", "2025-11-25"}, want: "2025-11-25"},
+		{name: "skips empty values", versions: []string{"", "2025-11-25", "2025-06-18"}, want: "2025-06-18"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, minProtocolVersion(tt.versions...))
+		})
+	}
+}
+
+func TestSession_NegotiatedProtocolVersion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		backends      map[filterapi.MCPBackendName]*compositeSessionEntry
+		clientVersion string
+		want          string
+	}{
+		{
+			name: "min across backends at client version",
+			backends: map[filterapi.MCPBackendName]*compositeSessionEntry{
+				"backend1": {backendName: "backend1", protocolVersion: "2025-06-18"},
+				"backend2": {backendName: "backend2", protocolVersion: "2025-11-25"},
+			},
+			clientVersion: "2025-06-18",
+			want:          "2025-06-18",
+		},
+		{
+			name: "single backend older than client",
+			backends: map[filterapi.MCPBackendName]*compositeSessionEntry{
+				"backend1": {backendName: "backend1", protocolVersion: "2025-11-25"},
+			},
+			clientVersion: "2026-07-28",
+			want:          "2025-11-25",
+		},
+		{
+			name: "capped at client version",
+			backends: map[filterapi.MCPBackendName]*compositeSessionEntry{
+				"backend1": {backendName: "backend1", protocolVersion: "2026-07-28"},
+			},
+			clientVersion: "2025-06-18",
+			want:          "2025-06-18",
+		},
+		{
+			name: "no backend version returns empty",
+			backends: map[filterapi.MCPBackendName]*compositeSessionEntry{
+				"backend1": {backendName: "backend1"},
+				"backend2": {backendName: "backend2", protocolVersion: ""},
+			},
+			clientVersion: "2025-06-18",
+			want:          "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := &session{perBackendSessions: tt.backends}
+			require.Equal(t, tt.want, s.negotiatedProtocolVersion(tt.clientVersion))
+		})
+	}
+}
+
+func TestClientToGatewaySessionIDFromEntries_ProtocolVersion(t *testing.T) {
+	t.Parallel()
+	entries := []compositeSessionEntry{
+		{backendName: "b1", sessionID: "sid-1", protocolVersion: "2025-11-25"},
+		{backendName: "b2", sessionID: "sid-2", protocolVersion: "2025-06-18"},
+		{backendName: "b3", sessionID: "sid-3", protocolVersion: ""},
+	}
+	id := clientToGatewaySessionIDFromEntries("subj", entries, "route1")
+	m, route, err := id.backendSessionIDs()
+	require.NoError(t, err)
+	require.Equal(t, "route1", route)
+	require.Equal(t, "2025-11-25", m["b1"].protocolVersion)
+	require.Equal(t, "2025-06-18", m["b2"].protocolVersion)
+	require.Empty(t, m["b3"].protocolVersion)
+
+	// Hand-built 3-field legacy ID (no protocol version field) must parse with empty version.
+	capHex := encodeCapabilityFlags(nil)
+	legacy := clientToGatewaySessionID(
+		"route1@subj@" +
+			"b1:" + base64.StdEncoding.EncodeToString([]byte("sid-1")) + ":" + capHex,
+	)
+	lm, _, err := legacy.backendSessionIDs()
+	require.NoError(t, err)
+	require.Empty(t, lm["b1"].protocolVersion)
+}
+
+func TestSendRequestPerBackend_ProtocolVersionHeader(t *testing.T) {
+	tests := []struct {
+		name            string
+		protocolVersion string
+		want            string
+	}{
+		{name: "uses backend reported version", protocolVersion: "2025-11-25", want: "2025-11-25"},
+		{name: "empty version falls back to default", protocolVersion: "", want: protocolVersion20250618},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headersCh := make(chan http.Header, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				headersCh <- r.Header.Clone()
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+
+			proxy := newTestMCPProxy()
+			proxy.backendListenerAddr = server.URL
+
+			s := &session{reqCtx: proxy}
+			ch := make(chan *backendEvent, 1)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			err := s.sendRequestPerBackend(ctx, ch, "test-route", filterapi.MCPBackend{Name: "backend1"}, &compositeSessionEntry{
+				sessionID:       "sess1",
+				protocolVersion: tt.protocolVersion,
+			}, http.MethodGet, nil, nil)
+			require.NoError(t, err)
+
+			select {
+			case hdr := <-headersCh:
+				require.Equal(t, tt.want, hdr.Get("mcp-protocol-version"))
+			case <-ctx.Done():
+				require.Fail(t, "timed out waiting for backend request")
+			}
+		})
+	}
+}

@@ -2497,3 +2497,77 @@ func TestMCPProxy_handleCompletionComplete_NeverModeBareName(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rr.Code)
 }
+
+func TestServePOST_InitializeRequest_NegotiatesProtocolVersion(t *testing.T) {
+	tests := []struct {
+		name            string
+		backendResponse string
+		clientVersion   string
+		want            string
+	}{
+		{
+			name: "backend newer than client is capped at client version",
+			backendResponse: `{"jsonrpc":"2.0","id":1,"result":` +
+				`{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"b","version":"1"}}}`,
+			clientVersion: "2025-06-18",
+			want:          "2025-06-18",
+		},
+		{
+			name: "backend older than client wins",
+			backendResponse: `{"jsonrpc":"2.0","id":1,"result":` +
+				`{"protocolVersion":"2025-03-26","capabilities":{},"serverInfo":{"name":"b","version":"1"}}}`,
+			clientVersion: "2025-06-18",
+			want:          "2025-03-26",
+		},
+		{
+			name: "backend omits version falls back to legacy default",
+			backendResponse: `{"jsonrpc":"2.0","id":1,"result":` +
+				`{"capabilities":{},"serverInfo":{"name":"b","version":"1"}}}`,
+			clientVersion: "2025-06-18",
+			want:          "2025-06-18",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(sessionIDHeader) == "" {
+					w.Header().Set(sessionIDHeader, "test-session-123")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(tt.backendResponse))
+					return
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			t.Cleanup(testServer.Close)
+
+			proxy := newTestMCPProxy()
+			proxy.backendListenerAddr = testServer.URL
+
+			id, err := jsonrpc.MakeID("test-1")
+			require.NoError(t, err)
+			initReq := &jsonrpc.Request{
+				Method: "initialize",
+				ID:     id,
+				Params: []byte(`{"protocolVersion":"` + tt.clientVersion + `","capabilities":{},"clientInfo":{"name":"c","version":"1"}}`),
+			}
+			body, err := jsonrpc.EncodeMessage(initReq)
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+			rr := httptest.NewRecorder()
+
+			proxy.servePOST(rr, req)
+			require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+			var resp struct {
+				Result struct {
+					ProtocolVersion string `json:"protocolVersion"`
+				} `json:"result"`
+			}
+			require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+			require.Equal(t, tt.want, resp.Result.ProtocolVersion)
+		})
+	}
+}

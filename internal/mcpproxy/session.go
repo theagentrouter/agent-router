@@ -364,7 +364,13 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 	addMCPHeaders(req, request, params, routeName, backend.Name)
 	s.reqCtx.applyLogHeaderMappings(req, request)
 	s.reqCtx.applyOriginalPathHeaders(req)
-	req.Header.Set(protocolVersionHeader, protocolVersion20250618)
+	version := cse.protocolVersion
+	if version == "" {
+		// Backends that did not report a version (or pre-existing session IDs)
+		// keep the previous behaviour.
+		version = protocolVersion20250618
+	}
+	req.Header.Set(protocolVersionHeader, version)
 	req.Header.Set(sessionIDHeader, cse.sessionID.String())
 	if httpMethod != http.MethodGet {
 		req.Header.Set("Content-type", "application/json")
@@ -551,6 +557,10 @@ type (
 		sessionID    gatewayToMCPServerSessionID
 		lastEventID  string
 		capabilities *mcpsdk.ServerCapabilities
+		// protocolVersion is the MCP protocol version the backend reported in its
+		// initialize result. Empty when the backend did not report one, or when the
+		// session ID was minted before this field existed.
+		protocolVersion string
 	}
 )
 
@@ -697,6 +707,44 @@ func (s *session) mergedCapabilities() *mcpsdk.ServerCapabilities {
 	return merged
 }
 
+// minProtocolVersion returns the smallest non-empty version. MCP protocol
+// versions are ISO-8601 dates (YYYY-MM-DD), so lexicographic order is
+// chronological order. Returns "" when no version was supplied.
+func minProtocolVersion(versions ...string) string {
+	smallest := ""
+	for _, v := range versions {
+		if v == "" {
+			continue
+		}
+		if smallest == "" || v < smallest {
+			smallest = v
+		}
+	}
+	return smallest
+}
+
+// negotiatedProtocolVersion returns the version the gateway should advertise to
+// the client: the minimum version reported by any backend in this session,
+// capped at the version the client asked for, because a server must not claim a
+// newer version than the client requested. Returns "" when no backend reported a
+// version, so the caller can keep the legacy default.
+func (s *session) negotiatedProtocolVersion(clientVersion string) string {
+	var versions []string
+	for _, entry := range s.perBackendSessions {
+		if entry.protocolVersion != "" {
+			versions = append(versions, entry.protocolVersion)
+		}
+	}
+	smallest := minProtocolVersion(versions...)
+	if smallest == "" {
+		return ""
+	}
+	if clientVersion != "" && clientVersion < smallest {
+		return clientVersion
+	}
+	return smallest
+}
+
 // String implements fmt.Stringer.
 func (g gatewayToMCPServerSessionID) String() string { return string(g) }
 
@@ -725,11 +773,11 @@ func (c clientToGatewaySessionID) backendSessionIDs() (map[filterapi.MCPBackendN
 	// The subject (prefix[firstAt+1:]) is retained inside the encrypted session ID for
 	// anti-hijacking purposes but is not needed during parsing.
 
-	// Each backend segment format: {backendName}:{base64(sessionID)}:{capHex}
-	// The capHex field is optional for backward compatibility with old session IDs.
+	// Each backend segment format: {backendName}:{base64(sessionID)}:{capHex}:{protocolVersion}
+	// The capHex and protocolVersion fields are optional for backward compatibility with old session IDs.
 	for _, part := range strings.Split(backendSessions, ",") {
-		// Split into at most 3 fields: backendName, base64SessionID, capHex.
-		fields := strings.SplitN(part, ":", 3)
+		// Split into at most 4 fields: backendName, base64SessionID, capHex, protocolVersion.
+		fields := strings.SplitN(part, ":", 4)
 		if len(fields) < 2 {
 			return nil, "", fmt.Errorf("invalid session ID: missing ':' separator in backend session ID part %q", part)
 		}
@@ -750,15 +798,20 @@ func (c clientToGatewaySessionID) backendSessionIDs() (map[filterapi.MCPBackendN
 		// Parse capability flags from the third field, defaulting to all capabilities
 		// for backward compatibility with session IDs that don't include them.
 		var caps *mcpsdk.ServerCapabilities
-		if len(fields) == 3 {
+		if len(fields) >= 3 {
 			caps = decodeCapabilityFlags(fields[2])
 		} else {
 			caps = decodeCapabilityFlags("") // defaults to all capabilities
 		}
+		var protocolVersion string
+		if len(fields) == 4 {
+			protocolVersion = fields[3]
+		}
 		perBackendSessionIDs[backendName] = &compositeSessionEntry{
-			backendName:  backendName,
-			sessionID:    sessionID,
-			capabilities: caps,
+			backendName:     backendName,
+			sessionID:       sessionID,
+			capabilities:    caps,
+			protocolVersion: protocolVersion,
 		}
 	}
 	return perBackendSessionIDs, route, nil
@@ -778,6 +831,8 @@ func clientToGatewaySessionIDFromEntries(subject string, entries []compositeSess
 		_, _ = b.WriteString(base64.StdEncoding.EncodeToString([]byte(entry.sessionID)))
 		_, _ = b.WriteString(":")
 		_, _ = b.WriteString(encodeCapabilityFlags(entry.capabilities))
+		_, _ = b.WriteString(":")
+		_, _ = b.WriteString(entry.protocolVersion)
 		_, _ = b.WriteString(",")
 	}
 	sessionID := b.String()[:b.Len()-1] // string the trailing ','.
