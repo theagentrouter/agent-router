@@ -2855,10 +2855,10 @@ func requireClusterWeight(t *testing.T, weightedClusters []*routev3.WeightedClus
 // see requireNoExtProcOverride for asserting a filter is left enabled.
 func requireExtProcOverride(t *testing.T, filterConfig map[string]*anypb.Any, filterName string) {
 	t.Helper()
-	any, ok := filterConfig[filterName]
+	anyCfg, ok := filterConfig[filterName]
 	require.True(t, ok, "missing TypedPerFilterConfig entry for %s", filterName)
 	override := &extprocv3.ExtProcPerRoute{}
-	require.NoError(t, any.UnmarshalTo(override))
+	require.NoError(t, anyCfg.UnmarshalTo(override))
 	require.True(t, override.GetDisabled())
 }
 
