@@ -94,7 +94,7 @@ static_resources:
                             headers:
                               - name: x-ai-eg-model
                                 string_match:
-                                  exact: gpt-4o-mini
+                                  exact: gpt-5-nano
                           route:
                             auto_host_rewrite: true
                             cluster: openai
@@ -293,7 +293,52 @@ static_resources:
                                   exact: body-mutation-anthropic
                           route:
                             cluster: testupstream-body-mutation-anthropic
+                        - match:
+                            prefix: "/"
+                            headers:
+                              - name: x-test-backend
+                                string_match:
+                                  exact: dynmd-cred
+                          route:
+                            cluster: testupstream-dynmd-cred
+                        - match:
+                            prefix: "/"
+                            headers:
+                              - name: x-test-backend
+                                string_match:
+                                  exact: aws-dynmd-cred
+                          route:
+                            cluster: testupstream-aws-dynmd-cred
                 http_filters:
+                  # Stand-in for a trusted credential-resolving filter (e.g. ext_authz): turns the
+                  # x-test-dynmd-api-key request header into dynamic metadata and removes the
+                  # header, so the credential reaches the extproc only if the upstream ext_proc
+                  # filter's forwarding_namespaces actually delivers downstream-set metadata.
+                  - name: envoy.filters.http.header_to_metadata
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.header_to_metadata.v3.Config
+                      request_rules:
+                        - header: x-test-dynmd-api-key
+                          on_header_present:
+                            metadata_namespace: test.credential.injector
+                            key: api-key
+                            type: STRING
+                          remove: true
+                  # Stand-in producer of a struct-valued AWS credential, the shape
+                  # credentialOverride.fromDynamicMetadata expects for AWSCredentials. Struct
+                  # delivery is worth proving separately: ext_proc request_attributes cannot carry
+                  # structs, forwarding_namespaces must.
+                  - name: envoy.filters.http.set_metadata
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.set_metadata.v3.Config
+                      metadata:
+                        - metadata_namespace: test.aws.credential.injector
+                          allow_overwrite: true
+                          value:
+                            x-aigw-aws-credentials:
+                              accessKeyId: ASIADYNAMICMETADATA
+                              secretAccessKey: metadata-secret
+                              sessionToken: session-token-from-dynamic-metadata
                   - name: envoy.filters.http.ext_proc
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
@@ -736,6 +781,7 @@ static_resources:
       connect_timeout: 30s
       per_connection_buffer_limit_bytes: 52428800
       type: STRICT_DNS
+      dns_lookup_family: V4_ONLY
       outlier_detection:
         consecutive_5xx: 1
         interval: 1s
@@ -817,6 +863,7 @@ static_resources:
       connect_timeout: 30s
       per_connection_buffer_limit_bytes: 52428800
       type: STRICT_DNS
+      dns_lookup_family: V4_ONLY
       outlier_detection:
         consecutive_5xx: 1
         interval: 1s
@@ -1072,6 +1119,7 @@ static_resources:
       connect_timeout: 30s
       per_connection_buffer_limit_bytes: 52428800
       type: STRICT_DNS
+      dns_lookup_family: V4_ONLY
       outlier_detection:
         consecutive_5xx: 1
         interval: 1s
@@ -1150,6 +1198,7 @@ static_resources:
       connect_timeout: 30s
       per_connection_buffer_limit_bytes: 52428800
       type: STRICT_DNS
+      dns_lookup_family: V4_ONLY
       outlier_detection:
         consecutive_5xx: 1
         interval: 1s
@@ -1216,6 +1265,7 @@ static_resources:
       connect_timeout: 30s
       per_connection_buffer_limit_bytes: 52428800
       type: STRICT_DNS
+      dns_lookup_family: V4_ONLY
       outlier_detection:
         consecutive_5xx: 1
         interval: 1s
@@ -1747,6 +1797,132 @@ static_resources:
                   filter_metadata:
                     aigateway.envoy.io:
                       per_route_rule_backend_name: "testupstream-body-mutation-anthropic"
+    # testupstream-dynmd-cred sources its API key from dynamic metadata written by the downstream
+    # header_to_metadata filter. forwarding_namespaces mirrors what the extension server emits for
+    # a credentialOverride.fromDynamicMetadata policy; without it Envoy sends an empty
+    # MetadataContext and the credential silently falls back to the configured one.
+    - name: testupstream-dynmd-cred
+      connect_timeout: 0.25s
+      type: STATIC
+      per_connection_buffer_limit_bytes: 52428800
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http_protocol_options: {}
+          http_filters:
+            - name: upstream_extproc
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                allow_mode_override: true
+                request_attributes:
+                  - xds.upstream_host_metadata.filter_metadata['aigateway.envoy.io']['per_route_rule_backend_name']
+                processing_mode:
+                  request_header_mode: "SEND"
+                  request_body_mode: "NONE"
+                  response_header_mode: "SKIP"
+                  response_body_mode: "NONE"
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: extproc_cluster
+                  timeout: 30s
+                message_timeout: 60s
+                metadataOptions:
+                  receivingNamespaces:
+                    untyped:
+                      - io.envoy.ai_gateway
+                  forwardingNamespaces:
+                    untyped:
+                      - test.credential.injector
+            - name: envoy.filters.http.header_mutation
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.header_mutation.v3.HeaderMutation
+                mutations:
+                  request_mutations:
+                    - append:
+                        append_action: ADD_IF_ABSENT
+                        header:
+                          key: content-length
+                          value: "%DYNAMIC_METADATA(io.envoy.ai_gateway:content_length)%"
+            - name: envoy.filters.http.upstream_codec
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.upstream_codec.v3.UpstreamCodec
+      load_assignment:
+        cluster_name: testupstream-dynmd-cred
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 8080
+                metadata:
+                  filter_metadata:
+                    aigateway.envoy.io:
+                      per_route_rule_backend_name: "testupstream-dynmd-cred"
+    # testupstream-aws-dynmd-cred signs with the struct-valued AWS credential from the downstream
+    # set_metadata filter, forwarded through forwarding_namespaces.
+    - name: testupstream-aws-dynmd-cred
+      connect_timeout: 0.25s
+      type: STATIC
+      per_connection_buffer_limit_bytes: 52428800
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http_protocol_options: {}
+          http_filters:
+            - name: upstream_extproc
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                allow_mode_override: true
+                request_attributes:
+                  - xds.upstream_host_metadata.filter_metadata['aigateway.envoy.io']['per_route_rule_backend_name']
+                processing_mode:
+                  request_header_mode: "SEND"
+                  request_body_mode: "NONE"
+                  response_header_mode: "SKIP"
+                  response_body_mode: "NONE"
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: extproc_cluster
+                  timeout: 30s
+                message_timeout: 60s
+                metadataOptions:
+                  receivingNamespaces:
+                    untyped:
+                      - io.envoy.ai_gateway
+                  forwardingNamespaces:
+                    untyped:
+                      - test.aws.credential.injector
+            - name: envoy.filters.http.header_mutation
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.header_mutation.v3.HeaderMutation
+                mutations:
+                  request_mutations:
+                    - append:
+                        append_action: ADD_IF_ABSENT
+                        header:
+                          key: content-length
+                          value: "%DYNAMIC_METADATA(io.envoy.ai_gateway:content_length)%"
+            - name: envoy.filters.http.upstream_codec
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.upstream_codec.v3.UpstreamCodec
+      load_assignment:
+        cluster_name: testupstream-aws-dynmd-cred
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 8080
+                metadata:
+                  filter_metadata:
+                    aigateway.envoy.io:
+                      per_route_rule_backend_name: "testupstream-aws-dynmd-cred"
 
 overload_manager:
   refresh_interval: 0.25s

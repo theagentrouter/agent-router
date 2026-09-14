@@ -1235,7 +1235,7 @@ data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}],"usageMetadata":{
 			endOfStream:   true,
 			wantError:     false,
 			wantHeaderMut: nil,
-			wantBodyMut: []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":{"text":"let me think step by step and reply you."}}}],"object":"chat.completion.chunk"}
+			wantBodyMut: []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"let me think step by step and reply you."}}],"object":"chat.completion.chunk"}
 
 data: {"choices":[{"index":0,"delta":{"content":"Hello","role":"assistant"}}],"object":"chat.completion.chunk"}
 
@@ -1257,9 +1257,9 @@ data: {"candidates":[{"content":{"parts":[{"text":"The answer is 42.", "thoughtS
 			endOfStream:   true,
 			wantError:     false,
 			wantHeaderMut: nil,
-			wantBodyMut: []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":{"text":"let me think about this."}}}],"object":"chat.completion.chunk"}
+			wantBodyMut: []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"let me think about this."}}],"object":"chat.completion.chunk"}
 
-data: {"choices":[{"index":0,"delta":{"content":"The answer is 42.","role":"assistant","reasoning_content":{"signature":"dGVzdHNpZ25hdHVyZQ=="}}}],"object":"chat.completion.chunk"}
+data: {"choices":[{"index":0,"delta":{"content":"The answer is 42.","role":"assistant","thinking_blocks":[{"type":"thinking","signature":"dGVzdHNpZ25hdHVyZQ=="}]}}],"object":"chat.completion.chunk"}
 
 data: {"choices":[],"object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":23,"total_tokens":33,"completion_tokens_details":{"reasoning_tokens":15},"prompt_tokens_details":{}}}
 
@@ -1927,9 +1927,11 @@ data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather",
 	assert.Equal(t, "get_weather", secondChunk.Choices[0].Delta.ToolCalls[0].Function.Name)
 	assert.JSONEq(t, `{"location":"Paris"}`, secondChunk.Choices[0].Delta.ToolCalls[0].Function.Arguments)
 
-	// Verify signature is present in reasoning content
-	require.NotNil(t, secondChunk.Choices[0].Delta.ReasoningContent)
-	assert.Equal(t, "dG9vbGNhbGxzaWduYXR1cmU=", secondChunk.Choices[0].Delta.ReasoningContent.Signature)
+	// Verify signature is present in thinking_blocks (reasoning_content stays a plain string)
+	require.Nil(t, secondChunk.Choices[0].Delta.ReasoningContent)
+	require.Len(t, secondChunk.Choices[0].Delta.ThinkingBlocks, 1)
+	assert.Equal(t, "thinking", secondChunk.Choices[0].Delta.ThinkingBlocks[0].Type)
+	assert.Equal(t, "dG9vbGNhbGxzaWduYXR1cmU=", secondChunk.Choices[0].Delta.ThinkingBlocks[0].Signature)
 
 	// Third chunk is usage - verify it exists
 	thirdChunk := chatCompletionChunks[2]

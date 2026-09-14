@@ -41,11 +41,9 @@ func TestNewAWSHandler(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, handler)
 
-		awsH, ok := handler.(*awsHandler)
-		require.True(t, ok)
-		require.Equal(t, "us-east-1", awsH.region)
-		require.NotNil(t, awsH.credentialsProvider)
-		require.NotNil(t, awsH.signer)
+		require.Equal(t, "us-east-1", handler.region)
+		require.NotNil(t, handler.credentialsProvider)
+		require.NotNil(t, handler.signer)
 	})
 
 	t.Run("default credential chain with environment variables", func(t *testing.T) {
@@ -67,12 +65,10 @@ func TestNewAWSHandler(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, handler)
 
-		awsH, ok := handler.(*awsHandler)
-		require.True(t, ok)
-		require.Equal(t, "us-west-2", awsH.region)
+		require.Equal(t, "us-west-2", handler.region)
 
 		// Verify credentials can be retrieved from environment
-		creds, err := awsH.credentialsProvider.Retrieve(t.Context())
+		creds, err := handler.credentialsProvider.Retrieve(t.Context())
 		require.NoError(t, err)
 		require.Equal(t, "test-key-id", creds.AccessKeyID)
 		require.Equal(t, "test-secret-key", creds.SecretAccessKey)
@@ -156,7 +152,7 @@ func TestAWSHandler_Do_SignsOverResolvedHost(t *testing.T) {
 	newHandler := func(t *testing.T) *awsHandler {
 		h, err := newAWSHandler(t.Context(), &filterapi.AWSAuth{CredentialFileLiteral: awsFileBody, Region: "us-east-1"})
 		require.NoError(t, err)
-		return h.(*awsHandler)
+		return h
 	}
 
 	// recompute reproduces the handler's request construction and signing for a known host/region using

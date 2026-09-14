@@ -773,6 +773,15 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 				return err
 			}
 		}
+		// Signatures ride on thinking_blocks (reasoning_content is a plain string).
+		for i := range delta.ThinkingBlocks {
+			tb := &delta.ThinkingBlocks[i]
+			if err := s.handleReasoningDelta(&openai.StreamReasoningContent{
+				Text: tb.Thinking, Signature: tb.Signature,
+			}, out); err != nil {
+				return err
+			}
+		}
 
 		// Handle text content.
 		if delta.Content != nil && *delta.Content != "" {

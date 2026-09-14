@@ -70,6 +70,9 @@ var (
 	//go:embed testdata/anthropic.yaml
 	anthropicYAML string
 
+	//go:embed testdata/anthropic-prefix.yaml
+	anthropicPrefixYAML string
+
 	//go:embed testdata/openai-otel.yaml
 	openaiOTELYAML string
 
@@ -377,8 +380,6 @@ func TestWriteConfig(t *testing.T) {
 				EnvoyVersion: "1.35.0",
 				OTELLog:      &otelLogConfig{Exporter: "console"},
 			},
-			// TODO: raise issue in EG to allow doing effectively this:
-			// "--component-log-level ext_proc:trace,http:debug,connection:debug"
 			expected: debugYAML,
 		},
 		{
@@ -455,6 +456,26 @@ func TestWriteConfig(t *testing.T) {
 				OTELLog: &otelLogConfig{Exporter: "console"},
 			},
 			expected: anthropicYAML,
+		},
+		{
+			name: "Anthropic (path prefix)",
+			input: ConfigData{
+				Backends: []Backend{
+					{
+						Name:     "anthropic",
+						Hostname: "api.anthropic.com",
+						Port:     443,
+						NeedsTLS: true,
+					},
+				},
+				Anthropic: &AnthropicConfig{
+					BackendName: "anthropic",
+					SchemaName:  "Anthropic",
+					Version:     "api/v1",
+				},
+				OTELLog: &otelLogConfig{Exporter: "console"},
+			},
+			expected: anthropicPrefixYAML,
 		},
 	}
 
@@ -537,6 +558,11 @@ func TestParseURL(t *testing.T) {
 		{
 			name:          "unsupported scheme",
 			baseURL:       "ftp://example.com",
+			expectedError: fmt.Errorf("invalid base URL: unsupported scheme \"ftp\""),
+		},
+		{
+			name:          "unsupported scheme with explicit port",
+			baseURL:       "ftp://example.com:21",
 			expectedError: fmt.Errorf("invalid base URL: unsupported scheme \"ftp\""),
 		},
 	}

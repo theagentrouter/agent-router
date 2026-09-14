@@ -20,7 +20,7 @@ const (
 	// Chat completion models (one per real provider).
 
 	// OpenAIModelName is the OpenAI chat completion model.
-	OpenAIModelName = "gpt-4o-mini"
+	OpenAIModelName = "gpt-5-nano"
 	// AWSBedrockModelName is the AWS Bedrock chat completion model.
 	AWSBedrockModelName = "us.amazon.nova-micro-v1:0"
 	// AzureOpenAIModelName is the Azure OpenAI chat completion model.

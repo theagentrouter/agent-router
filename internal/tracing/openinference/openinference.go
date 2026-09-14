@@ -23,7 +23,7 @@ const (
 	// SpanKindEmbedding indicates an Embedding operation.
 	SpanKindEmbedding = "EMBEDDING"
 
-	// SpanKindTokenCounter indicates a token counting operation.
+	// SpanKindTokenCounter indicates a token counting operation (e.g., tokenize, count_tokens).
 	SpanKindTokenCounter = "TOKEN_COUNTER"
 )
 

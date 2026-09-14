@@ -447,7 +447,7 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 		return fmt.Errorf("MCP GET request failed with status code %d, body=%s", httpResp.StatusCode, string(body))
 	}
 
-	if httpResp.Header.Get("Content-Type") == "application/json" {
+	if isJSONContentType(httpResp.Header.Get("Content-Type")) {
 		// Try to decode as a single JSON-RPC message first.
 		var respBody []byte
 		respBody, err = io.ReadAll(bodyReader)
@@ -681,6 +681,16 @@ func (s *session) mergedCapabilities() *mcpsdk.ServerCapabilities {
 		if caps.Completions != nil {
 			if merged.Completions == nil {
 				merged.Completions = &mcpsdk.CompletionCapabilities{}
+			}
+		}
+		for id, ext := range caps.Extensions {
+			if merged.Extensions == nil {
+				merged.Extensions = make(map[string]any, len(caps.Extensions))
+			}
+			// First backend to declare an extension wins, so the merge is stable regardless of
+			// map iteration order.
+			if _, ok := merged.Extensions[id]; !ok {
+				merged.Extensions[id] = ext
 			}
 		}
 	}

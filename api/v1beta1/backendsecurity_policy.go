@@ -53,7 +53,6 @@ type BackendSecurityPolicy struct {
 // +kubebuilder:validation:XValidation:rule="self.type == 'AzureCredentials' ? (has(self.azureCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey)) : true",message="When type is AzureCredentials, only azureCredentials field should be set"
 // +kubebuilder:validation:XValidation:rule="self.type == 'GCPCredentials' ? (has(self.gcpCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.anthropicAPIKey)) : true",message="When type is GCPCredentials, only gcpCredentials field should be set"
 // +kubebuilder:validation:XValidation:rule="self.type == 'AnthropicAPIKey' ? (has(self.anthropicAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials)) : true",message="When type is AnthropicAPIKey, only anthropicAPIKey field should be set"
-// +kubebuilder:validation:XValidation:rule="!has(self.credentialOverride) || self.type != 'AWSCredentials'",message="credentialOverride is not supported for AWSCredentials"
 type BackendSecurityPolicySpec struct {
 	// TargetRefs are the names of the AIServiceBackend or InferencePool resources this BackendSecurityPolicy is being attached to.
 	// Attaching multiple BackendSecurityPolicies to the same resource is invalid and will result in an error
@@ -101,7 +100,10 @@ type BackendSecurityPolicySpec struct {
 	AnthropicAPIKey *BackendSecurityPolicyAnthropicAPIKey `json:"anthropicAPIKey,omitempty"`
 
 	// CredentialOverride, when set, sources the upstream credential per-request instead of using
-	// the static credential configured above. Supported for all types except AWSCredentials.
+	// the static credential configured above.
+	//
+	// For AWSCredentials the credential is the three-part SigV4 input rather than a single string;
+	// see the source types for how each carries it.
 	//
 	// +optional
 	CredentialOverride *BackendSecurityPolicyCredentialOverride `json:"credentialOverride,omitempty"`
@@ -395,6 +397,17 @@ type CredentialOverrideFromRequestHeaders struct {
 	//   AzureCredentials → x-aigw-azure-access-token
 	//   GCPCredentials  → x-aigw-gcp-access-token
 	//
+	// For AWSCredentials this is a prefix, not a single header name, since SigV4 needs three
+	// inputs. Defaults to "x-aigw-aws-", yielding:
+	//   x-aigw-aws-access-key-id
+	//   x-aigw-aws-secret-access-key
+	//   x-aigw-aws-session-token     (optional; omit for long-lived credentials)
+	// All three are stripped before the backend sees them. An access key ID without a secret
+	// access key, or the reverse, fails the request instead of falling back.
+	//
+	// Prefer FromDynamicMetadata for AWSCredentials. Headers are client-settable, and a secret
+	// access key on the wire is a worse leak than an API key.
+	//
 	// +optional
 	Header string `json:"header,omitempty"`
 
@@ -413,11 +426,23 @@ type CredentialOverrideFromDynamicMetadata struct {
 	// Namespace is the Envoy metadata namespace written by the trusted filter.
 	// Example: "envoy.filters.http.ext_authz"
 	//
+	// List the namespace in the Gateway's GatewayConfig under
+	// extProc.metadataForwardingNamespaces. Envoy forwards only the namespaces listed there,
+	// and only untyped metadata is read.
+	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Namespace string `json:"namespace"`
 
 	// Key is the metadata key within the namespace. Defaults to the x-aigw-* name for the auth type.
+	//
+	// For every type except AWSCredentials the value must be a string holding the credential.
+	// For AWSCredentials it must be a struct, since SigV4 needs three inputs:
+	//   accessKeyId
+	//   secretAccessKey
+	//   sessionToken     (optional; omit for long-lived credentials)
+	// Field names are fixed. accessKeyId without secretAccessKey, or the reverse, fails the
+	// request instead of falling back. Defaults to "x-aigw-aws-credentials".
 	//
 	// +optional
 	Key string `json:"key,omitempty"`

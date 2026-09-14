@@ -85,6 +85,7 @@ func TestChatCompletionsEndpointSpec_GetTranslator(t *testing.T) {
 	spec := ChatCompletionsEndpointSpec{}
 	supported := []filterapi.VersionedAPISchema{
 		{Name: filterapi.APISchemaOpenAI, Prefix: "v1"},
+		{Name: filterapi.APISchemaAWSOpenAI},
 		{Name: filterapi.APISchemaAWSBedrock},
 		{Name: filterapi.APISchemaAWSAnthropic},
 		{Name: filterapi.APISchemaAzureOpenAI, Version: "2024-02-01"},
@@ -105,6 +106,16 @@ func TestChatCompletionsEndpointSpec_GetTranslator(t *testing.T) {
 	t.Run("unsupported", func(t *testing.T) {
 		_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: "Unknown"}, "override")
 		require.ErrorContains(t, err, "unsupported API schema")
+	})
+
+	t.Run("AWSOpenAI request", func(t *testing.T) {
+		awsTranslator, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI}, "")
+		require.NoError(t, err)
+		original := []byte(`{"model":"us.openai.gpt-5.6-luna","messages":[]}`)
+		headers, body, err := awsTranslator.RequestBody(original, &openai.ChatCompletionRequest{Model: "us.openai.gpt-5.6-luna"}, false)
+		require.NoError(t, err)
+		require.Equal(t, internalapi.Header{":path", "/openai/v1/chat/completions"}, headers[0])
+		require.Equal(t, original, body)
 	})
 }
 
@@ -385,6 +396,24 @@ func TestResponsesEndpointSpec_GetTranslator(t *testing.T) {
 
 	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAzureOpenAI}, "override")
 	require.NoError(t, err)
+
+	awsTranslator, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI}, "us.openai.gpt-5.6-luna")
+	require.NoError(t, err)
+	headers, body, err := awsTranslator.RequestBody(
+		[]byte(`{"model":"gpt-5.6-luna","input":"hello"}`),
+		&openai.ResponseRequest{Model: "gpt-5.6-luna"},
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, internalapi.Header{":path", "/openai/v1/responses"}, headers[0])
+	require.JSONEq(t, `{"model":"us.openai.gpt-5.6-luna","input":"hello"}`, string(body))
+
+	awsTranslator, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI}, "")
+	require.NoError(t, err)
+	original := []byte(`{"model":"us.openai.gpt-5.6-luna","input":"hello"}`)
+	_, body, err = awsTranslator.RequestBody(original, &openai.ResponseRequest{Model: "us.openai.gpt-5.6-luna"}, false)
+	require.NoError(t, err)
+	require.Equal(t, original, body)
 }
 
 func TestTokenizeEndpointSpec_ParseBody(t *testing.T) {
@@ -1723,4 +1752,52 @@ func TestRedactUnionField_MarshalError(t *testing.T) {
 	// so the field logs as absent rather than leaking content.
 	out := redactUnionField(errMarshaler{})
 	require.Equal(t, errMarshaler{}, out)
+}
+
+func TestMessagesCountTokensEndpointSpec_ParseBody(t *testing.T) {
+	spec := MessagesCountTokensEndpointSpec{}
+
+	t.Run("invalid json", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseBody([]byte("["), false)
+		require.ErrorContains(t, err, "malformed request")
+	})
+
+	t.Run("missing model", func(t *testing.T) {
+		body, err := json.Marshal(map[string]any{"messages": []any{}})
+		require.NoError(t, err)
+
+		_, _, _, _, err = spec.ParseBody(body, false)
+		require.ErrorContains(t, err, "model field is required")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		body, err := json.Marshal(map[string]any{
+			"model":    "claude-opus-4-6",
+			"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+		})
+		require.NoError(t, err)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.Equal(t, "claude-opus-4-6", model)
+		require.False(t, stream) // count_tokens is never streaming
+		require.NotNil(t, parsed)
+		require.Nil(t, mutated)
+	})
+}
+
+func TestMessagesCountTokensEndpointSpec_GetTranslator(t *testing.T) {
+	spec := MessagesCountTokensEndpointSpec{}
+	for _, schema := range []filterapi.VersionedAPISchema{
+		{Name: filterapi.APISchemaGCPAnthropic},
+		{Name: filterapi.APISchemaAWSAnthropic},
+		{Name: filterapi.APISchemaAnthropic},
+	} {
+		translator, err := spec.GetTranslator(schema, "override")
+		require.NoError(t, err)
+		require.NotNil(t, translator)
+	}
+
+	_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
+	require.ErrorContains(t, err, "unsupported")
 }

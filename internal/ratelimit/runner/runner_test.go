@@ -8,6 +8,7 @@ package runner
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	rlsconfv3 "github.com/envoyproxy/go-control-plane/ratelimit/config/ratelimit/v3"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -164,6 +166,20 @@ func TestStart(t *testing.T) {
 
 		cancel()
 		require.NoError(t, <-errCh)
+	})
+
+	t.Run("no error when stopped before the server starts serving", func(t *testing.T) {
+		// Left to chance Serve wins the race every time, so hold Start at the log line
+		// sitting between the go statement and Serve to let the stop land first.
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		logger := funcr.New(func(_, args string) {
+			if strings.Contains(args, "starting rate limit xDS config server") {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}, funcr.Options{})
+
+		require.NoError(t, New(logger, 0).Start(ctx))
 	})
 }
 

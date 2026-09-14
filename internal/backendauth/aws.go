@@ -31,7 +31,8 @@ type awsHandler struct {
 	region              string
 }
 
-func newAWSHandler(ctx context.Context, awsAuth *filterapi.AWSAuth) (filterapi.BackendAuthHandler, error) {
+// newAWSHandler returns the concrete type so awsCredentialOverrideHandler can reach signWith.
+func newAWSHandler(ctx context.Context, awsAuth *filterapi.AWSAuth) (*awsHandler, error) {
 	if awsAuth == nil {
 		return nil, fmt.Errorf("aws auth configuration is required")
 	}
@@ -83,6 +84,17 @@ func newAWSHandler(ctx context.Context, awsAuth *filterapi.AWSAuth) (filterapi.B
 // This assumes that during the transformation, the path is set in the header mutation as well as
 // the body in the body mutation.
 func (a *awsHandler) Do(ctx context.Context, requestHeaders map[string]string, mutatedBody []byte) ([]internalapi.Header, error) {
+	credentials, err := a.credentialsProvider.Retrieve(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot retrieve AWS credentials: %w", err)
+	}
+	return a.signWith(ctx, &credentials, requestHeaders, mutatedBody)
+}
+
+// signWith signs with the given credentials, from either the handler's own provider or a
+// per-request source. Only the credentials vary: host and region are resolved identically on both
+// paths, so a per-request credential still gets VPC endpoint and region self-correction.
+func (a *awsHandler) signWith(ctx context.Context, credentials *aws.Credentials, requestHeaders map[string]string, mutatedBody []byte) ([]internalapi.Header, error) {
 	method := requestHeaders[":method"]
 	path := requestHeaders[":path"]
 	host := a.signingHost(requestHeaders)
@@ -117,12 +129,7 @@ func (a *awsHandler) Do(ctx context.Context, requestHeaders map[string]string, m
 	// https://github.com/envoyproxy/envoy/blob/60b2b5187cf99db79ecfc54675354997af4765ea/source/extensions/filters/http/ext_proc/processor_state.cc#L180-L183
 	req.ContentLength = -1
 
-	credentials, err := a.credentialsProvider.Retrieve(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("cannot retrieve AWS credentials: %w", err)
-	}
-
-	err = a.signer.SignHTTP(ctx, credentials, req,
+	err = a.signer.SignHTTP(ctx, *credentials, req,
 		hex.EncodeToString(payloadHash[:]), "bedrock", region, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("cannot sign request: %w", err)

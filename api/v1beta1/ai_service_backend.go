@@ -45,6 +45,8 @@ type AIServiceBackendList struct {
 }
 
 // AIServiceBackendSpec details the AIServiceBackend configuration.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.headerValueFilters) || self.schema.name == 'GCPAnthropic' || self.schema.name == 'AWSAnthropic'",message="headerValueFilters is only honored by GCPAnthropic and AWSAnthropic backends"
 type AIServiceBackendSpec struct {
 	// APISchema specifies the API schema of the output format of requests from
 	// Envoy that this AIServiceBackend can accept as incoming requests.
@@ -75,6 +77,19 @@ type AIServiceBackendSpec struct {
 	// before sending it to the backend.
 	// +optional
 	BodyMutation *HTTPBodyMutation `json:"bodyMutation,omitempty"`
+
+	// HeaderValueFilters filter individual values out of multi-valued request headers before sending
+	// the request to this backend, so that one value an upstream provider does not accept does not
+	// fail the whole request. At most one filter per header name.
+	//
+	// Only GCPAnthropic and AWSAnthropic backends honor this, and today only for the
+	// `anthropic-beta` header — a filter naming any other header is accepted but has no effect.
+	// Setting it on a backend with any other schema is rejected.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=16
+	HeaderValueFilters []HTTPHeaderValueFilter `json:"headerValueFilters,omitempty"`
 
 	// TODO: maybe add backend-level LLMRequestCost configuration that overrides the AIGatewayRoute-level LLMRequestCost.
 	// 	That may be useful for the backend that has a different cost calculation logic.

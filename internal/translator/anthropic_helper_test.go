@@ -17,6 +17,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
@@ -125,6 +126,61 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 					},
 				},
 			},
+		},
+		{
+			name: "eager_input_streaming true is forwarded",
+			openAIReq: &openai.ChatCompletionRequest{
+				Tools: []openai.Tool{
+					{
+						Type: "function",
+						Function: &openai.FunctionDefinition{
+							Name:                "get_weather",
+							EagerInputStreaming: ptr.To(true),
+						},
+					},
+				},
+			},
+			expectedTools: []anthropic.ToolUnionParam{
+				{
+					OfTool: &anthropic.ToolParam{
+						Name:                "get_weather",
+						Description:         anthropic.String(""),
+						EagerInputStreaming: anthropic.Bool(true),
+					},
+				},
+			},
+		},
+		{
+			// An explicit false must survive as false rather than collapse into unset, since
+			// Anthropic reads it as "keep buffering" even when the legacy beta header is on.
+			name: "eager_input_streaming false is forwarded, not dropped",
+			openAIReq: &openai.ChatCompletionRequest{
+				Tools: []openai.Tool{
+					{
+						Type: "function",
+						Function: &openai.FunctionDefinition{
+							Name:                "get_weather",
+							EagerInputStreaming: ptr.To(false),
+						},
+					},
+				},
+			},
+			expectedTools: []anthropic.ToolUnionParam{
+				{
+					OfTool: &anthropic.ToolParam{
+						Name:                "get_weather",
+						Description:         anthropic.String(""),
+						EagerInputStreaming: anthropic.Bool(false),
+					},
+				},
+			},
+		},
+		{
+			name: "eager_input_streaming omitted stays unset",
+			openAIReq: &openai.ChatCompletionRequest{
+				Tools: openaiTestTool,
+			},
+			expectedTools: anthropicTestTool,
 		},
 		{
 			name: "tool_definition_with_required_field",
@@ -254,42 +310,27 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "skips function tool with nil function definition",
+			name: "rejects function tool with nil function definition",
 			openAIReq: &openai.ChatCompletionRequest{
 				Tools: []openai.Tool{
 					{
 						Type:     "function",
-						Function: nil, // This tool has the correct type but a nil definition and should be skipped.
-					},
-					{
-						Type:     "function",
-						Function: &openai.FunctionDefinition{Name: "get_weather"}, // This is a valid tool.
+						Function: nil,
 					},
 				},
 			},
-			// We expect only the valid function tool to be translated.
-			expectedTools: []anthropic.ToolUnionParam{
-				{OfTool: &anthropic.ToolParam{Name: "get_weather", Description: anthropic.String("")}},
-			},
-			expectErr: false,
+			expectErr: true,
 		},
 		{
-			name: "skips non-function tools",
+			name: "rejects non-function tools",
 			openAIReq: &openai.ChatCompletionRequest{
 				Tools: []openai.Tool{
 					{
 						Type: "retrieval",
 					},
-					{
-						Type:     "function",
-						Function: &openai.FunctionDefinition{Name: "get_weather"},
-					},
 				},
 			},
-			expectedTools: []anthropic.ToolUnionParam{
-				{OfTool: &anthropic.ToolParam{Name: "get_weather", Description: anthropic.String("")}},
-			},
-			expectErr: false,
+			expectErr: true,
 		},
 		{
 			name: "tool definition without type field",
@@ -706,50 +747,111 @@ func TestSystemPromptExtractionCoverage(t *testing.T) {
 
 func TestOutputConfigAvailable(t *testing.T) {
 	tests := []struct {
-		name     string
-		model    string
-		expected bool
+		name      string
+		apiSchema filterapi.APISchemaName
+		model     string
+		expected  bool
 	}{
+		// Models supported on both AWS Bedrock (InvokeModel) and GCP Vertex AI.
 		{
-			name:     "claude-sonnet-4-5-20250514 supported",
-			model:    "claude-sonnet-4-5-20250514",
-			expected: true,
+			name:      "claude-sonnet-4-5 supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-sonnet-4-5-20250514",
+			expected:  true,
 		},
 		{
-			name:     "claude-opus-4-6-20250514 supported",
-			model:    "claude-opus-4-6-20250514",
-			expected: true,
+			name:      "claude-sonnet-4-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-sonnet-4-5@20250514",
+			expected:  true,
 		},
 		{
-			name:     "claude-sonnet-4-6-20250514 supported",
-			model:    "claude-sonnet-4-6-20250514",
-			expected: true,
+			name:      "claude-opus-4-6 supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-opus-4-6-20250514",
+			expected:  true,
 		},
 		{
-			name:     "claude-3-sonnet not supported",
-			model:    "claude-3-sonnet",
-			expected: false,
+			name:      "claude-sonnet-4-6 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-sonnet-4-6",
+			expected:  true,
+		},
+		// Newer models: supported on GCP Vertex AI, not on AWS Bedrock (InvokeModel).
+		{
+			name:      "claude-opus-4-7 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-opus-4-7",
+			expected:  true,
 		},
 		{
-			name:     "claude-3.5-sonnet not supported",
-			model:    "claude-3.5-sonnet",
-			expected: false,
+			name:      "claude-opus-4-7 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-opus-4-7",
+			expected:  false,
 		},
 		{
-			name:     "gpt-4 not supported",
-			model:    "gpt-4",
-			expected: false,
+			name:      "claude-opus-4-8 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-opus-4-8",
+			expected:  true,
 		},
 		{
-			name:     "empty model not supported",
-			model:    "",
-			expected: false,
+			name:      "claude-opus-4-8 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-opus-4-8",
+			expected:  false,
+		},
+		{
+			name:      "claude-fable-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-fable-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-fable-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-fable-5",
+			expected:  false,
+		},
+		// Unsupported models on either backend.
+		{
+			name:      "claude-3-sonnet not supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-3-sonnet",
+			expected:  false,
+		},
+		{
+			name:      "claude-3.5-sonnet not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-3.5-sonnet",
+			expected:  false,
+		},
+		{
+			name:      "gpt-4 not supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "gpt-4",
+			expected:  false,
+		},
+		{
+			name:      "empty model not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "",
+			expected:  false,
+		},
+		// Schemas not wired up to buildAnthropicParams fail closed rather than
+		// falling back to AWS's model list.
+		{
+			name:      "unrecognized schema fails closed",
+			apiSchema: filterapi.APISchemaAnthropic,
+			model:     "claude-sonnet-4-5-20250514",
+			expected:  false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := outputConfigAvailable(tt.model)
+			result := outputConfigAvailable(tt.apiSchema, tt.model)
 			require.Equal(t, tt.expected, result)
 		})
 	}
@@ -1156,13 +1258,15 @@ func TestEffortAvailable(t *testing.T) {
 func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 	tests := []struct {
 		name           string
+		apiSchema      filterapi.APISchemaName
 		request        *openai.ChatCompletionRequest
 		expectSchema   bool
 		expectedSchema map[string]any
 		expectErr      bool
 	}{
 		{
-			name: "structured output with json_schema on supported model",
+			name:      "structured output with json_schema on supported model",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-sonnet-4-5-20250514",
 				MaxCompletionTokens: ptr.To(int64(1024)),
@@ -1193,7 +1297,8 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			},
 		},
 		{
-			name: "structured output skipped on unsupported model",
+			name:      "structured output skipped on unsupported model",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-3-sonnet",
 				MaxCompletionTokens: ptr.To(int64(1024)),
@@ -1216,7 +1321,8 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			expectSchema: false,
 		},
 		{
-			name: "no response format",
+			name:      "no response format",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-sonnet-4-5-20250514",
 				MaxCompletionTokens: ptr.To(int64(1024)),
@@ -1230,7 +1336,8 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			expectSchema: false,
 		},
 		{
-			name: "invalid json schema returns error",
+			name:      "invalid json schema returns error",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-sonnet-4-5-20250514",
 				MaxCompletionTokens: ptr.To(int64(1024)),
@@ -1252,11 +1359,98 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			},
 			expectErr: true,
 		},
+		{
+			name:      "structured output enabled on GCP for supported model",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			request: &openai.ChatCompletionRequest{
+				Model:               "claude-sonnet-4-6",
+				MaxCompletionTokens: ptr.To(int64(1024)),
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    "user",
+						Content: openai.StringOrUserRoleContentUnion{Value: "test"},
+					}},
+				},
+				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
+					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+						Type: "json_schema",
+						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+							Name:   "test_schema",
+							Schema: []byte(`{"type":"object","properties":{"name":{"type":"string"}}}`),
+						},
+					},
+				},
+			},
+			expectSchema: true,
+			expectedSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type": "string",
+					},
+				},
+			},
+		},
+		{
+			// claude-opus-4-8 is supported on GCP Vertex AI but not on AWS Bedrock
+			// (InvokeModel), so structured output must be enabled here.
+			name:      "structured output enabled on GCP for GCP-only model",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			request: &openai.ChatCompletionRequest{
+				Model:               "claude-opus-4-8",
+				MaxCompletionTokens: ptr.To(int64(1024)),
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    "user",
+						Content: openai.StringOrUserRoleContentUnion{Value: "test"},
+					}},
+				},
+				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
+					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+						Type: "json_schema",
+						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+							Name:   "test_schema",
+							Schema: []byte(`{"type":"object"}`),
+						},
+					},
+				},
+			},
+			expectSchema: true,
+			expectedSchema: map[string]any{
+				"type": "object",
+			},
+		},
+		{
+			// Mirror of the case above: the same GCP-only model must NOT enable
+			// structured output on the AWS Bedrock (InvokeModel) path.
+			name:      "structured output skipped on AWS for GCP-only model",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			request: &openai.ChatCompletionRequest{
+				Model:               "claude-opus-4-8",
+				MaxCompletionTokens: ptr.To(int64(1024)),
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    "user",
+						Content: openai.StringOrUserRoleContentUnion{Value: "test"},
+					}},
+				},
+				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
+					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+						Type: "json_schema",
+						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+							Name:   "test_schema",
+							Schema: []byte(`{"type":"object"}`),
+						},
+					},
+				},
+			},
+			expectSchema: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			params, err := buildAnthropicParams(tt.request, "AWSAnthropic", "")
+			params, err := buildAnthropicParams(tt.request, tt.apiSchema, "")
 
 			if tt.expectErr {
 				require.Error(t, err)
@@ -1278,7 +1472,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 
 	t.Run("structured output enabled via modelNameOverride when request model is custom", func(t *testing.T) {
 		request := &openai.ChatCompletionRequest{
-			Model:               "my-custom-model", // User-defined name that doesn't match outputConfigModels.
+			Model:               "my-custom-model", // User-defined name that doesn't match any supported model identifier.
 			MaxCompletionTokens: ptr.To(int64(1024)),
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1297,7 +1491,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			},
 		}
 		// The modelNameOverride contains a recognized model identifier.
-		params, err := buildAnthropicParams(request, "AWSAnthropic", "us.anthropic.claude-sonnet-4-5-20250514-v1:0")
+		params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "us.anthropic.claude-sonnet-4-5-20250514-v1:0")
 		require.NoError(t, err)
 		require.NotNil(t, params)
 		require.NotNil(t, params.OutputConfig.Format.Schema)
@@ -1434,7 +1628,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			params, err := buildAnthropicParams(tt.request, "AWSAnthropic", "")
+			params, err := buildAnthropicParams(tt.request, filterapi.APISchemaAWSAnthropic, "")
 			require.NoError(t, err)
 			require.NotNil(t, params)
 			require.Equal(t, tt.expectedEffort, params.OutputConfig.Effort)
@@ -1453,7 +1647,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 				}},
 			},
 		}
-		_, err := buildAnthropicParams(request, "AWSAnthropic", "")
+		_, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "")
 		require.Error(t, err)
 		require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
 		require.Contains(t, err.Error(), "unsupported reasoning effort level")
@@ -1472,7 +1666,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			},
 		}
 		// The modelNameOverride contains a recognized model identifier.
-		params, err := buildAnthropicParams(request, "AWSAnthropic", "us.anthropic.claude-opus-4-5-20250514-v1:0")
+		params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "us.anthropic.claude-opus-4-5-20250514-v1:0")
 		require.NoError(t, err)
 		require.NotNil(t, params)
 		require.Equal(t, anthropic.OutputConfigEffortHigh, params.OutputConfig.Effort)
@@ -1491,7 +1685,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			},
 		}
 		// The modelNameOverride points to an unsupported model.
-		params, err := buildAnthropicParams(request, "AWSAnthropic", "us.anthropic.claude-3-sonnet-20240229-v1:0")
+		params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "us.anthropic.claude-3-sonnet-20240229-v1:0")
 		require.NoError(t, err)
 		require.NotNil(t, params)
 		require.Equal(t, anthropic.OutputConfigEffort(""), params.OutputConfig.Effort)

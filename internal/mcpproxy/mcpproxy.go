@@ -44,6 +44,8 @@ type mcpRequestContext struct {
 // defaultMaxRequestBodySize is the default maximum allowed POST body size in bytes (4 MiB).
 const defaultMaxRequestBodySize = 4 * 1024 * 1024
 
+var errNoMatchingBackendSelector = errors.New("backendSelector matches no route backends")
+
 // getMaxRequestBodySize returns the configured POST body limit from the environment variable,
 // falling back to 4 MiB if the variable is unset or invalid.
 func getMaxRequestBodySize() int64 {
@@ -163,9 +165,34 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 
 	forwardHeaders := extractForwardHeaders(m.requestHeaders, backends.forwardHeaders)
 
+	// spec.backendSelector, if configured, is evaluated once per candidate backend here,
+	// at session-initialize time, rather than on every subsequent call in the session.
+	// With no selector configured, all backends are considered (unchanged behavior).
+	selectedBackends := backends.backends
+	if backends.backendSelector != nil {
+		filtered := make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(backends.backends))
+		// The JWT and CEL headers are identical for every candidate backend in this loop --
+		// only request.mcp.backend changes -- so parse/build them once and reuse across
+		// all candidates instead of redoing it per backend.
+		authzCtx := m.newAuthzContext(&authorizationRequest{Headers: m.requestHeaders})
+		for name, backend := range backends.backends {
+			allowed, _ := m.authorizeRequestWith(backends.backendSelector, &authorizationRequest{
+				Headers: m.requestHeaders,
+				Backend: name,
+			}, authzCtx)
+			if allowed {
+				filtered[name] = backend
+			}
+		}
+		if len(filtered) == 0 {
+			return nil, fmt.Errorf("%w for route %s", errNoMatchingBackendSelector, routeName)
+		}
+		selectedBackends = filtered
+	}
+
 	// Extract per-backend forward headers.
 	perBackendHeaders := make(map[filterapi.MCPBackendName]map[string]string)
-	for _, backend := range backends.backends {
+	for _, backend := range selectedBackends {
 		if len(backend.ForwardHeaders) > 0 {
 			if h := extractPerBackendForwardHeaders(m.requestHeaders, backend.ForwardHeaders); h != nil {
 				perBackendHeaders[backend.Name] = h
@@ -178,12 +205,12 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 		entries []compositeSessionEntry
 		counter int
 	)
-	entries = make([]compositeSessionEntry, len(backends.backends))
+	entries = make([]compositeSessionEntry, len(selectedBackends))
 
 	if m.l.Enabled(ctx, slog.LevelDebug) {
 		m.l.Debug("initializing MCP sessions to backends", slog.String("route", routeName), slog.Any("backends", backends))
 	}
-	for _, backend := range backends.backends {
+	for _, backend := range selectedBackends {
 		entryIndex := counter
 		counter++
 		// Initialize sessions to all backends in parallel to reduce the overall latency of session creation.

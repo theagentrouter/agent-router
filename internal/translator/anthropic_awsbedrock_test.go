@@ -1885,3 +1885,166 @@ func TestAnthropicToAWSBedrockTranslator_RequestBody_MixedUserContentWithToolRes
 	require.Len(t, mixedMsg.Content[1].ToolResult.Content, 1)
 	assert.Equal(t, "72°F and sunny", *mixedMsg.Content[1].ToolResult.Content[0].Text)
 }
+
+func TestAnthropicToAWSBedrockTranslator_RequestBody_CacheControl(t *testing.T) {
+	ephemeral := func() *anthropicschema.CacheControl {
+		return &anthropicschema.CacheControl{Ephemeral: &anthropicschema.CacheControlEphemeral{Type: "ephemeral"}}
+	}
+
+	translator := NewAnthropicToAWSBedrockTranslator("")
+	req := &anthropicschema.MessagesRequest{
+		Model:     "test-model",
+		MaxTokens: 100,
+		System: &anthropicschema.SystemPrompt{
+			Texts: []anthropicschema.TextBlockParam{
+				{Type: "text", Text: "You are a helpful assistant", CacheControl: ephemeral()},
+			},
+		},
+		Tools: []anthropicschema.ToolUnion{
+			{
+				Tool: &anthropicschema.Tool{
+					Type:         "custom",
+					Name:         "get_weather",
+					Description:  "Get the weather",
+					InputSchema:  json.RawMessage(`{"type":"object"}`),
+					CacheControl: ephemeral(),
+				},
+			},
+		},
+		Messages: []anthropicschema.MessageParam{
+			{
+				Role: anthropicschema.MessageRoleUser,
+				Content: anthropicschema.MessageContent{
+					Array: []anthropicschema.ContentBlockParam{
+						{Text: &anthropicschema.TextBlockParam{Type: "text", Text: "cache this", CacheControl: ephemeral()}},
+					},
+				},
+			},
+			{
+				Role: anthropicschema.MessageRoleAssistant,
+				Content: anthropicschema.MessageContent{
+					Array: []anthropicschema.ContentBlockParam{
+						{Text: &anthropicschema.TextBlockParam{Type: "text", Text: "and this", CacheControl: ephemeral()}},
+					},
+				},
+			},
+			{
+				Role: anthropicschema.MessageRoleUser,
+				Content: anthropicschema.MessageContent{
+					Array: []anthropicschema.ContentBlockParam{
+						{ToolResult: &anthropicschema.ToolResultBlockParam{
+							Type:         "tool_result",
+							ToolUseID:    "tu_abc",
+							Content:      &anthropicschema.ToolResultContent{Text: "72°F and sunny"},
+							CacheControl: ephemeral(),
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	rawBody, err := json.Marshal(req)
+	require.NoError(t, err)
+	_, body, err := translator.RequestBody(rawBody, req, false)
+	require.NoError(t, err)
+
+	var bedrockReq awsbedrock.ConverseInput
+	require.NoError(t, json.Unmarshal(body, &bedrockReq))
+
+	// System: text block followed by its own cache point block.
+	require.Len(t, bedrockReq.System, 2)
+	require.NotNil(t, bedrockReq.System[0].Text)
+	require.Nil(t, bedrockReq.System[1].Text)
+	require.NotNil(t, bedrockReq.System[1].CachePoint)
+	assert.Equal(t, "default", bedrockReq.System[1].CachePoint.Type)
+
+	// Tools: tool spec followed by its own cache point element. Bedrock's Tool is a union, so the
+	// cache point element must not carry a toolSpec key at all.
+	require.Len(t, bedrockReq.ToolConfig.Tools, 2)
+	require.NotNil(t, bedrockReq.ToolConfig.Tools[0].ToolSpec)
+	require.Nil(t, bedrockReq.ToolConfig.Tools[0].CachePoint)
+	require.Nil(t, bedrockReq.ToolConfig.Tools[1].ToolSpec)
+	require.NotNil(t, bedrockReq.ToolConfig.Tools[1].CachePoint)
+	rawTool, err := json.Marshal(bedrockReq.ToolConfig.Tools[1])
+	require.NoError(t, err)
+	assert.NotContains(t, string(rawTool), "toolSpec")
+
+	// User text, assistant text and tool result each get their own trailing cache point block.
+	require.Len(t, bedrockReq.Messages, 3)
+	for i, msg := range bedrockReq.Messages {
+		require.Len(t, msg.Content, 2, "messages[%d] should have a content block and a cache point block", i)
+		require.NotNil(t, msg.Content[1].CachePoint, "messages[%d] is missing its cache point block", i)
+		assert.Equal(t, "default", msg.Content[1].CachePoint.Type)
+	}
+	require.NotNil(t, bedrockReq.Messages[0].Content[0].Text)
+	require.NotNil(t, bedrockReq.Messages[1].Content[0].Text)
+	require.NotNil(t, bedrockReq.Messages[2].Content[0].ToolResult)
+}
+
+func TestAnthropicToAWSBedrockTranslator_RequestBody_NoCacheControl(t *testing.T) {
+	translator := NewAnthropicToAWSBedrockTranslator("")
+	req := &anthropicschema.MessagesRequest{
+		Model:     "test-model",
+		MaxTokens: 100,
+		System: &anthropicschema.SystemPrompt{
+			Texts: []anthropicschema.TextBlockParam{{Type: "text", Text: "You are a helpful assistant"}},
+		},
+		Tools: []anthropicschema.ToolUnion{
+			{Tool: &anthropicschema.Tool{Type: "custom", Name: "get_weather", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+		},
+		Messages: []anthropicschema.MessageParam{
+			{
+				Role: anthropicschema.MessageRoleUser,
+				Content: anthropicschema.MessageContent{
+					Array: []anthropicschema.ContentBlockParam{
+						{Text: &anthropicschema.TextBlockParam{Type: "text", Text: "hello"}},
+					},
+				},
+			},
+		},
+	}
+
+	rawBody, err := json.Marshal(req)
+	require.NoError(t, err)
+	_, body, err := translator.RequestBody(rawBody, req, false)
+	require.NoError(t, err)
+	assert.NotContains(t, string(body), "cachePoint")
+}
+
+func TestAnthropicToAWSBedrockTranslator_RequestBody_CacheControlOnPromotedSystemMessage(t *testing.T) {
+	translator := NewAnthropicToAWSBedrockTranslator("")
+	req := &anthropicschema.MessagesRequest{
+		Model:     "test-model",
+		MaxTokens: 100,
+		Messages: []anthropicschema.MessageParam{
+			{
+				Role: "system",
+				Content: anthropicschema.MessageContent{
+					Array: []anthropicschema.ContentBlockParam{
+						{Text: &anthropicschema.TextBlockParam{
+							Type:         "text",
+							Text:         "You are a helpful assistant",
+							CacheControl: &anthropicschema.CacheControl{Ephemeral: &anthropicschema.CacheControlEphemeral{Type: "ephemeral"}},
+						}},
+					},
+				},
+			},
+			{Role: anthropicschema.MessageRoleUser, Content: anthropicschema.MessageContent{Text: "Hello"}},
+		},
+	}
+
+	rawBody, err := json.Marshal(req)
+	require.NoError(t, err)
+	_, body, err := translator.RequestBody(rawBody, req, false)
+	require.NoError(t, err)
+
+	var bedrockReq awsbedrock.ConverseInput
+	require.NoError(t, json.Unmarshal(body, &bedrockReq))
+
+	require.Len(t, bedrockReq.System, 2)
+	require.NotNil(t, bedrockReq.System[0].Text)
+	assert.Equal(t, "You are a helpful assistant", *bedrockReq.System[0].Text)
+	require.NotNil(t, bedrockReq.System[1].CachePoint)
+	assert.Equal(t, "default", bedrockReq.System[1].CachePoint.Type)
+}

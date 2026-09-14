@@ -1,49 +1,33 @@
 import React from 'react';
-import clsx from 'clsx';
-import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
-import HomepageFeatures from '@site/src/components/HomepageFeatures';
-import LLMProviders from '@site/src/components/LLMProviders';
-import Adopters from '@site/src/components/Adopters';
+import Hero from '@site/src/components/home/Hero';
+import HowItFits from '@site/src/components/home/HowItFits';
+import Capabilities from '@site/src/components/home/Capabilities';
+import Quickstart from '@site/src/components/home/Quickstart';
+import ProvidersStrip from '@site/src/components/home/ProvidersStrip';
+import Community from '@site/src/components/home/Community';
 import LatestBlogs from '@site/src/components/LatestBlogs';
+import Adopters from '@site/src/components/Adopters';
 
-function HomepageHeader() {
-  const {siteConfig} = useDocusaurusContext();
-  return (
-    <header className="heroBanner">
-      <div className="container">
-        <img className="heroImage" src="./img/ai-gw-logo.svg" alt="Envoy AI Gateway"/>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
-        <div className="buttons">
-          <Link
-            className="button button--secondary button--lg"
-            href="/docs/getting-started/">
-            Get Started
-          </Link>
-          <Link
-            className="button button--secondary button--lg"
-            href="https://github.com/envoyproxy/ai-gateway">
-            View on GitHub
-          </Link>
-        </div>
-      </div>
-    </header>
-  );
-}
-
+/**
+ * Homepage — "Warm Minimal + Pop" (see design/mockups/b2-warm-minimal-pop.html).
+ * All copy lives in src/data/home/; sections are self-contained components.
+ */
 export default function Home(): React.ReactElement {
-  const {siteConfig} = useDocusaurusContext();
+  const { siteConfig } = useDocusaurusContext();
   return (
-    <Layout
-      title={`${siteConfig.title}`}
-      description={`${siteConfig.tagline}`}>
-      <HomepageHeader />
+    <Layout title={siteConfig.title} description={siteConfig.tagline}>
+      <Hero />
       <main>
-        <HomepageFeatures />
-        <LatestBlogs />
-        <LLMProviders />
+        {/* social proof first: provider breadth, then who runs it */}
+        <ProvidersStrip />
         <Adopters />
+        <HowItFits />
+        <Capabilities />
+        <Quickstart />
+        <LatestBlogs />
+        <Community />
       </main>
     </Layout>
   );

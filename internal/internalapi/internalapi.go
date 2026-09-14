@@ -41,6 +41,13 @@ const (
 	MCPBackendHeader = EnvoyAIGatewayHeaderPrefix + "mcp-backend"
 	// MCPRouteHeader is the special header key used to identify the mcp route.
 	MCPRouteHeader = EnvoyAIGatewayHeaderPrefix + "mcp-route"
+	// MCPSubjectHeader carries the authenticated subject (the JWT "sub" claim) as extracted
+	// and verified by Envoy's JWT filter via a claimToHeaders mapping.
+	MCPSubjectHeader = EnvoyAIGatewayHeaderPrefix + "mcp-subject"
+	// MCPBackendSubsetHeader is the trusted, shim-supplied comma-separated backend subset a request may fan out to.
+	MCPBackendSubsetHeader = EnvoyAIGatewayHeaderPrefix + "mcp-backend-subset"
+	// MCPBackendSubsetMetadataKey is the dynamic metadata key the shim sets; Envoy renders it into MCPBackendSubsetHeader.
+	MCPBackendSubsetMetadataKey = "mcp_backend_subset"
 	// MCPBackendListenerPort is the port for the MCP backend listener.
 	MCPBackendListenerPort = 10088
 	// MCPProxyPort is the port where the MCP proxy listens.
@@ -69,7 +76,21 @@ const (
 	MCPMetadataHeaderToolName = MCPMetadataHeaderPrefix + "tool-name"
 	// MCPMetadataHeaderResourceURI is the special header key used to pass the MCP resource URI in the filter metadata.
 	MCPMetadataHeaderResourceURI = MCPMetadataHeaderPrefix + "resource-uri"
+
+	// AWSCredentialOverrideHeaderPrefix is the default prefix for the three headers carrying a
+	// per-request SigV4 credential. SigV4 takes three inputs, so unlike other auth types this is a
+	// prefix, not a full header name.
+	AWSCredentialOverrideHeaderPrefix = "x-aigw-aws-" //nolint:gosec // G101: a header name prefix, not a credential.
+	// AWSCredentialOverrideMetadataKey is the default metadata key for a per-request AWS
+	// credential. One key, not a prefix: the value is a struct holding all three inputs.
+	AWSCredentialOverrideMetadataKey = "x-aigw-aws-credentials" //nolint:gosec // G101: a metadata key name, not a credential.
 )
+
+// AWSCredentialOverrideHeaderNames derives the three SigV4 header names from a prefix. The
+// controller builds its strip list from it, the extproc reads them; it lives here so both agree.
+func AWSCredentialOverrideHeaderNames(prefix string) (accessKeyID, secretAccessKey, sessionToken string) {
+	return prefix + "access-key-id", prefix + "secret-access-key", prefix + "session-token"
+}
 
 // MCPInternalHeadersToMetadata maps special MCP headers to metadata keys.
 //

@@ -145,6 +145,15 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 			}
 		}
 
+		// Project the verified "sub" claim into a trusted, gateway-set header so the MCP proxy can
+		// read the authenticated subject without re-parsing the client-controlled bearer token.
+		// Envoy's JWT filter overwrites this header from the verified token, so any client-supplied
+		// value is discarded here.
+		jwtProvider.ClaimToHeaders = append(jwtProvider.ClaimToHeaders, egv1a1.ClaimToHeader{
+			Claim:  "sub",
+			Header: internalapi.MCPSubjectHeader,
+		})
+
 		// Add ClaimToHeaders to extract JWT claims and set them as HTTP headers.
 		// Envoy's JWT filter will extract these claims and add them to the request headers,
 		// which can then be forwarded to backend MCP servers.
@@ -165,6 +174,10 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 		c.logger.Info("Configuring Ext Auth in SecurityPolicy")
 		securityPolicySpec.ExtAuth = extAuth.DeepCopy()
 	}
+
+	// Propagate MergeType so the auto-generated SecurityPolicy can merge with (instead of
+	// overriding) a parent Gateway/Listener-level SecurityPolicy, e.g. an IP allowlist.
+	securityPolicySpec.MergeType = mcpRoute.Spec.SecurityPolicy.MergeType
 
 	// The SecurityPolicy should only apply to the HTTPRoute MCP proxy rule.
 	// However, since HTTPRouteRule name is experimental in Gateway API, and some vendors (e.g. GKE Gateway) do not
@@ -253,6 +266,13 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context
 	}
 
 	ensureCORSHeaders(backendTrafficPolicy.Spec.ResponseOverride[0].Response.Header)
+
+	// Propagate MergeType so the auto-generated OAuth BackendTrafficPolicy can merge with
+	// (instead of overriding) an operator-defined BackendTrafficPolicy targeting the same
+	// route, e.g. one configuring rate limiting.
+	if btp := mcpRoute.Spec.BackendTrafficPolicy; btp != nil {
+		backendTrafficPolicy.Spec.MergeType = btp.MergeType
+	}
 
 	// Target the HTTPRoute MCP proxy rule only.
 	backendTrafficPolicy.Spec.TargetRefs = []gwapiv1.LocalPolicyTargetReferenceWithSectionName{
@@ -667,15 +687,26 @@ type httpError struct {
 
 func (h *httpError) Error() string { return fmt.Sprintf("HTTP %d %s", h.statusCode, h.status) }
 
+// invalidMetadataError represents a well-known endpoint that answered with a document we cannot use.
+// Some authorization servers return 200 with an empty JSON object at a well-known path they do not
+// actually implement, which must be treated as a miss rather than a successful discovery.
+type invalidMetadataError struct {
+	url string
+	err error
+}
+
+func (e *invalidMetadataError) Error() string {
+	return fmt.Sprintf("unusable authorization server metadata at %s: %v", e.url, e.err)
+}
+
+func (e *invalidMetadataError) Unwrap() error { return e.err }
+
 // fetchOAuthAuthServerMetadata fetches OAuth authorization server metadata from the well-known endpoint
 // with exponential backoff retry logic. It returns the fetched metadata or an error if all attempts fail.
 func fetchOAuthAuthServerMetadata(authServer string, maxRetryElapsedTime time.Duration) (*OAuthAuthServerMetadata, error) {
-	var (
-		metadata   OAuthAuthServerMetadata
-		httpClient = &http.Client{Timeout: httpClientTimeout}
-	)
+	httpClient := &http.Client{Timeout: httpClientTimeout}
 
-	operation := func(wellKnownURL string) error {
+	operation := func(wellKnownURL string, metadata *OAuthAuthServerMetadata) error {
 		resp, err := httpClient.Get(wellKnownURL)
 		if err != nil {
 			urlError, dnsError := &url.Error{}, &net.DNSError{}
@@ -707,10 +738,22 @@ func fetchOAuthAuthServerMetadata(authServer string, maxRetryElapsedTime time.Du
 			return err
 		}
 
-		if err := json.Unmarshal(body, &metadata); err != nil {
-			// JSON parsing errors are permanent, don't retry.
-			return backoff.Permanent(fmt.Errorf("failed to parse JSON: %w", err))
+		var fetched OAuthAuthServerMetadata
+		if err := json.Unmarshal(body, &fetched); err != nil {
+			// A body that is not a metadata document at all, such as the HTML a catch-all route
+			// serves. Retrying this URL will not change the response, so move to the next variant.
+			return backoff.Permanent(&invalidMetadataError{url: wellKnownURL, err: fmt.Errorf("failed to parse JSON: %w", err)})
 		}
+		// RFC 8414 Section 2 makes issuer REQUIRED, so a document without one is not a metadata
+		// document, however well-formed. This is the case for authorization servers that answer 200
+		// with an empty JSON object at a well-known path they do not actually implement.
+		// Anything beyond this is caller-specific: discoverJWKSURI requires jwks_uri, while the
+		// served metadata passes the fetched document through as-is.
+		// https://datatracker.ietf.org/doc/html/rfc8414#section-2
+		if fetched.Issuer == "" {
+			return backoff.Permanent(&invalidMetadataError{url: wellKnownURL, err: errors.New("missing issuer")})
+		}
+		*metadata = fetched
 		return nil
 	}
 
@@ -750,29 +793,37 @@ func fetchOAuthAuthServerMetadata(authServer string, maxRetryElapsedTime time.Du
 		),
 	}
 
+	var lastErr error
 	for _, wellKnownURL := range wellKnownURLVariants {
+		var metadata OAuthAuthServerMetadata
 		b := backoff.NewExponentialBackOff()
 		b.MaxElapsedTime = maxRetryElapsedTime
 		err = backoff.Retry(func() error {
-			return operation(wellKnownURL)
+			return operation(wellKnownURL, &metadata)
 		}, b)
+		if err == nil { // Success.
+			return &metadata, nil
+		}
+		lastErr = err
 
 		var httpErr *httpError
+		var invalidErr *invalidMetadataError
 		switch {
 		case errors.As(err, &httpErr) && httpErr.statusCode >= 400 && httpErr.statusCode < 500:
 			// If it is a 4xx error, try the next URL variant instead of retrying or failing
 			continue
-		case err != nil:
+		case errors.As(err, &invalidErr):
+			// The endpoint answered but the document is unusable, try the next URL variant.
+			continue
+		default:
 			// Other errors, return immediately as the backoff time is exhausted.
 			return nil, err
-		default: // Success
-			return &metadata, nil
 		}
 	}
 
-	// We can only get here if the backoff failed and there were no more URLs to try.
+	// We can only get here if every variant was a 4xx or returned an unusable document.
 	// Return the last failure.
-	return nil, err
+	return nil, fmt.Errorf("no usable authorization server metadata found for %q: %w", authServer, lastErr)
 }
 
 func oauthProtectedResourceMetadataName(mcpRouteName string) string {

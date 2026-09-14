@@ -599,10 +599,13 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [MCPAuthorizationTarget](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpauthorizationtarget)
 - [MCPBackendAPIKey](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendapikey)
 - [MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendsecuritypolicy)
+- [MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselector)
+- [MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselectorrule)
 - [MCPHeaderForward](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpheaderforward)
 - [MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteauthorization)
 - [MCPRouteAuthorizationRule](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteauthorizationrule)
 - [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutebackendref)
+- [MCPRouteBackendTrafficPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutebackendtrafficpolicy)
 - [MCPRouteOAuth](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteoauth)
 - [MCPRouteSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutesecuritypolicy)
 - [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutespec)
@@ -925,6 +928,11 @@ APISchema defines the API schema.
   type="enum"
   required="false"
   description="APISchemaAWSAnthropic is the schema for Anthropic models hosted on AWS Bedrock.<br />Uses the native Anthropic Messages API format for requests and responses.<br />When used with /v1/chat/completions endpoint, translates OpenAI format to Anthropic.<br />When used with /v1/messages endpoint, passes through native Anthropic format.<br />https://aws.amazon.com/bedrock/anthropic/<br />https://docs.claude.com/en/api/claude-on-amazon-bedrock<br />"
+/><ApiField
+  name="AWSOpenAI"
+  type="enum"
+  required="false"
+  description="APISchemaAWSOpenAI is the OpenAI-compatible API schema provided by AWS.<br />"
 />
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-awscredentialsfile">AWSCredentialsFile</a>
 
@@ -1887,6 +1895,60 @@ MCPBackendSecurityPolicy defines the security policy for a backend MCP server.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselector">MCPBackendSelector</a>
+
+
+
+**Appears in:**
+- [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutespec)
+
+MCPBackendSelector defines which of a MCPRoute's backends a request may fan out to.
+
+##### Fields
+
+
+
+<ApiField
+  name="defaultAction"
+  type="[AuthorizationAction](#github-com-envoyproxy-gateway-api-v1alpha1-authorizationaction)"
+  required="false"
+  defaultValue="Deny"
+  description="DefaultAction is the action to take when no rules match. If unspecified, defaults to Deny."
+/><ApiField
+  name="rules"
+  type="[MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselectorrule) array"
+  required="false"
+  description="Rules defines a list of backend selection rules.<br />These rules are evaluated in order, the first matching rule will be applied,<br />and the rest will be skipped.<br />If no rules are defined, DefaultAction is applied to every candidate backend<br />(defaults to Deny)."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselectorrule">MCPBackendSelectorRule</a>
+
+
+
+**Appears in:**
+- [MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselector)
+
+MCPBackendSelectorRule defines a single backend selection rule.
+
+##### Fields
+
+
+
+<ApiField
+  name="cel"
+  type="string"
+  required="false"
+  description="CEL specifies a Common Expression Language (CEL) expression, evaluated once for<br />each backend already listed in backendRefs. It does not parse a list of backends<br />out of the request. Each evaluation binds request.mcp.backend to the name of the<br />one candidate backend under test, so the expression should answer `is this backend<br />allowed`, not `which backends should be used`. The expression must return a<br />boolean; evaluation errors or non-boolean results are treated as `no match`. A<br />match means the rule applies, and Action below decides whether that's an Allow or<br />a Deny for that backend.<br />Example CEL expressions:<br />	* `request.mcp.backend in request.auth.jwt.claims.mcp_backends`<br />	* `(`,` + request.headers[`x-ai-eg-mcp-backend-subset`] + `,`).contains(`,` + request.mcp.backend + `,`)`<br />Available attributes are the same as documented on MCPRouteAuthorizationRule.CEL,<br />except request.mcp.method, request.mcp.tool, and request.mcp.params are not<br />populated (no MCP method has been selected yet at backend-selection time).<br />Note: The CEL expression support is experimental, and the attributes<br />available to the expression may change in future releases."
+/><ApiField
+  name="action"
+  type="[AuthorizationAction](#github-com-envoyproxy-gateway-api-v1alpha1-authorizationaction)"
+  required="false"
+  defaultValue="Allow"
+  description="Action is the decision for matching backends. If unspecified, defaults to Allow."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpheaderforward">MCPHeaderForward</a>
 
 
@@ -2041,6 +2103,29 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutebackendtrafficpolicy">MCPRouteBackendTrafficPolicy</a>
+
+
+
+**Appears in:**
+- [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutespec)
+
+MCPRouteBackendTrafficPolicy configures how the Envoy Gateway BackendTrafficPolicy
+resources auto-generated for a MCPRoute interact with other BackendTrafficPolicy
+resources (e.g. an operator-defined rate limiting policy) targeting the same HTTPRoute.
+
+##### Fields
+
+
+
+<ApiField
+  name="mergeType"
+  type="[MergeType](#github-com-envoyproxy-gateway-api-v1alpha1-mergetype)"
+  required="false"
+  description="MergeType determines how the auto-generated BackendTrafficPolicy (for example, the<br />OAuth protected resource metadata policy) is merged with other BackendTrafficPolicy<br />configurations targeting the same route or a parent Gateway/Listener.<br />When set, the auto-generated BackendTrafficPolicy will merge with the closest parent<br />BackendTrafficPolicy in the route's attachment hierarchy instead of overriding it<br />entirely, per Envoy Gateway's merge semantics.<br />If unset, no merging occurs, and the auto-generated BackendTrafficPolicy fully<br />overrides any other BackendTrafficPolicy targeting the same route.<br />See: https://gateway.envoyproxy.io/docs/tasks/traffic/backend-traffic-policy/"
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteoauth">MCPRouteOAuth</a>
 
 
@@ -2063,7 +2148,7 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
 /><ApiField
   name="audiences"
   type="string array"
-  required="true"
+  required="false"
   description="Audiences is a list of JWT audiences allowed access.<br />It is recommended to set this field for token audience validation, as it is a security best practice to prevent token misuse.<br />Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-audience-binding-and-validation"
 /><ApiField
   name="jwks"
@@ -2116,6 +2201,11 @@ MCPRouteSecurityPolicy defines the security policy for a MCPRoute.
   type="[MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteauthorization)"
   required="false"
   description="Authorization defines the configuration for the MCP spec compatible authorization."
+/><ApiField
+  name="mergeType"
+  type="[MergeType](#github-com-envoyproxy-gateway-api-v1alpha1-mergetype)"
+  required="false"
+  description="MergeType determines how the auto-generated SecurityPolicy for this MCPRoute (which<br />enforces OAuth/JWT, API key, or external authorization) is merged with other<br />SecurityPolicy configurations targeting the same route or a parent Gateway/Listener.<br />When set, the auto-generated SecurityPolicy will merge with the closest parent<br />SecurityPolicy in the route's attachment hierarchy (for example, one targeting a<br />Gateway, Gateway listener, ListenerSet, or ListenerSet listener) instead of<br />overriding it entirely, per Envoy Gateway's merge semantics.<br />If unset, no merging occurs, and the auto-generated SecurityPolicy fully overrides<br />any other SecurityPolicy targeting the same route.<br />See: https://gateway.envoyproxy.io/docs/tasks/security/apikey-authn/"
 />
 
 
@@ -2163,6 +2253,16 @@ MCPRouteSpec details the MCPRoute configuration.
   type="[MCPRouteSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutesecuritypolicy)"
   required="false"
   description="SecurityPolicy defines the security policy for this MCPRoute."
+/><ApiField
+  name="backendTrafficPolicy"
+  type="[MCPRouteBackendTrafficPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutebackendtrafficpolicy)"
+  required="false"
+  description="BackendTrafficPolicy configures the auto-generated Envoy Gateway BackendTrafficPolicy<br />resources for this MCPRoute, for example the OAuth protected resource metadata policy<br />created when SecurityPolicy.OAuth is configured."
+/><ApiField
+  name="backendSelector"
+  type="[MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselector)"
+  required="false"
+  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered."
 />
 
 
@@ -3059,6 +3159,8 @@ MCPRouteList contains a list of MCPRoute.
 - [HTTPBodyField](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpbodyfield)
 - [HTTPBodyMutation](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpbodymutation)
 - [HTTPHeaderMutation](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadermutation)
+- [HTTPHeaderValueFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefilter)
+- [HTTPHeaderValueFilterMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefiltermode)
 - [JWKS](#github-com-envoyproxy-ai-gateway-api-v1beta1-jwks)
 - [JWTSource](#github-com-envoyproxy-ai-gateway-api-v1beta1-jwtsource)
 - [LLMRequestCost](#github-com-envoyproxy-ai-gateway-api-v1beta1-llmrequestcost)
@@ -3067,11 +3169,16 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPAuthorizationTarget](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpauthorizationtarget)
 - [MCPBackendAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikey)
 - [MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy)
+- [MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)
+- [MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselectorrule)
 - [MCPHeaderForward](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpheaderforward)
+- [MCPPromptFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter)
 - [MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorization)
 - [MCPRouteAuthorizationRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorizationrule)
 - [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
+- [MCPRouteBackendTrafficPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendtrafficpolicy)
 - [MCPRouteOAuth](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteoauth)
+- [MCPRoutePrefixMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode)
 - [MCPRouteSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutesecuritypolicy)
 - [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutespec)
 - [MCPRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutestatus)
@@ -3308,6 +3415,11 @@ AIServiceBackendSpec details the AIServiceBackend configuration.
   type="[HTTPBodyMutation](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpbodymutation)"
   required="false"
   description="BodyMutation defines the mutation of HTTP request body JSON fields that will be applied to the request<br />before sending it to the backend."
+/><ApiField
+  name="headerValueFilters"
+  type="[HTTPHeaderValueFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefilter) array"
+  required="false"
+  description="HeaderValueFilters filter individual values out of multi-valued request headers before sending<br />the request to this backend, so that one value an upstream provider does not accept does not<br />fail the whole request. At most one filter per header name.<br />Only GCPAnthropic and AWSAnthropic backends honor this, and today only for the<br />`anthropic-beta` header — a filter naming any other header is accepted but has no effect.<br />Setting it on a backend with any other schema is rejected."
 />
 
 
@@ -3385,6 +3497,11 @@ APISchema defines the API schema.
   type="enum"
   required="false"
   description="APISchemaAWSAnthropic is the schema for Anthropic models hosted on AWS Bedrock.<br />Uses the native Anthropic Messages API format for requests and responses.<br />When used with /v1/chat/completions endpoint, translates OpenAI format to Anthropic.<br />When used with /v1/messages endpoint, passes through native Anthropic format.<br />https://aws.amazon.com/bedrock/anthropic/<br />https://docs.claude.com/en/api/claude-on-amazon-bedrock<br />"
+/><ApiField
+  name="AWSOpenAI"
+  type="enum"
+  required="false"
+  description="APISchemaAWSOpenAI is the OpenAI-compatible API schema provided by AWS.<br />"
 />
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-awscredentialsfile">AWSCredentialsFile</a>
 
@@ -3792,7 +3909,7 @@ Only one type of BackendSecurityPolicy can be defined.
   name="credentialOverride"
   type="[BackendSecurityPolicyCredentialOverride](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicycredentialoverride)"
   required="false"
-  description="CredentialOverride, when set, sources the upstream credential per-request instead of using<br />the static credential configured above. Supported for all types except AWSCredentials."
+  description="CredentialOverride, when set, sources the upstream credential per-request instead of using<br />the static credential configured above.<br />For AWSCredentials the credential is the three-part SigV4 input rather than a single string;<br />see the source types for how each carries it."
 />
 
 
@@ -3879,12 +3996,12 @@ dynamic metadata produced by a trusted filter running earlier in the filter chai
   name="namespace"
   type="string"
   required="true"
-  description="Namespace is the Envoy metadata namespace written by the trusted filter.<br />Example: `envoy.filters.http.ext_authz`"
+  description="Namespace is the Envoy metadata namespace written by the trusted filter.<br />Example: `envoy.filters.http.ext_authz`<br />List the namespace in the Gateway's GatewayConfig under<br />extProc.metadataForwardingNamespaces. Envoy forwards only the namespaces listed there,<br />and only untyped metadata is read."
 /><ApiField
   name="key"
   type="string"
   required="false"
-  description="Key is the metadata key within the namespace. Defaults to the x-aigw-* name for the auth type."
+  description="Key is the metadata key within the namespace. Defaults to the x-aigw-* name for the auth type.<br />For every type except AWSCredentials the value must be a string holding the credential.<br />For AWSCredentials it must be a struct, since SigV4 needs three inputs:<br />  accessKeyId<br />  secretAccessKey<br />  sessionToken     (optional; omit for long-lived credentials)<br />Field names are fixed. accessKeyId without secretAccessKey, or the reverse, fails the<br />request instead of falling back. Defaults to `x-aigw-aws-credentials`."
 /><ApiField
   name="fallbackToConfigured"
   type="boolean"
@@ -3911,7 +4028,7 @@ CredentialOverrideFromRequestHeaders sources the per-request credential from a r
   name="header"
   type="string"
   required="false"
-  description="Header is the name of the request header that carries the credential.<br />Defaults to the x-aigw-* header for the configured auth type:<br />  APIKey          → x-aigw-api-key<br />  AnthropicAPIKey → x-aigw-anthropic-api-key<br />  AzureAPIKey     → x-aigw-azure-api-key<br />  AzureCredentials → x-aigw-azure-access-token<br />  GCPCredentials  → x-aigw-gcp-access-token"
+  description="Header is the name of the request header that carries the credential.<br />Defaults to the x-aigw-* header for the configured auth type:<br />  APIKey          → x-aigw-api-key<br />  AnthropicAPIKey → x-aigw-anthropic-api-key<br />  AzureAPIKey     → x-aigw-azure-api-key<br />  AzureCredentials → x-aigw-azure-access-token<br />  GCPCredentials  → x-aigw-gcp-access-token<br />For AWSCredentials this is a prefix, not a single header name, since SigV4 needs three<br />inputs. Defaults to `x-aigw-aws-`, yielding:<br />  x-aigw-aws-access-key-id<br />  x-aigw-aws-secret-access-key<br />  x-aigw-aws-session-token     (optional; omit for long-lived credentials)<br />All three are stripped before the backend sees them. An access key ID without a secret<br />access key, or the reverse, fails the request instead of falling back.<br />Prefer FromDynamicMetadata for AWSCredentials. Headers are client-settable, and a secret<br />access key on the wire is a worse leak than an API key."
 /><ApiField
   name="fallbackToConfigured"
   type="boolean"
@@ -4043,7 +4160,7 @@ GCPCredentialsFile specifies the service account key json file to authenticate w
 **Appears in:**
 - [GatewayConfigSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigspec)
 
-GatewayConfigExtProc holds runtime-specific configuration for the external processor.
+GatewayConfigExtProc holds configuration for the external processor.
 
 ##### Fields
 
@@ -4054,6 +4171,11 @@ GatewayConfigExtProc holds runtime-specific configuration for the external proce
   type="[KubernetesContainerSpec](https://gateway.envoyproxy.io/docs/api/extension_types/#kubernetescontainerspec)"
   required="false"
   description="Kubernetes defines the configuration for running the external processor as a Kubernetes container."
+/><ApiField
+  name="metadataForwardingNamespaces"
+  type="string array"
+  required="false"
+  description="MetadataForwardingNamespaces lists the untyped dynamic metadata namespaces Envoy forwards<br />to the external processor for this Gateway's AI traffic. A BackendSecurityPolicy using<br />credentialOverride.fromDynamicMetadata receives metadata only from a namespace listed here.<br />Under Envoy Gateway's mergeGateways, every Gateway in the class shares one Envoy, so a<br />namespace any one of them declares is forwarded for all of their AI traffic."
 />
 
 
@@ -4210,6 +4332,69 @@ HTTPHeaderMutation defines the mutation of HTTP headers that will be applied to 
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefilter">HTTPHeaderValueFilter</a>
+
+
+
+**Appears in:**
+- [AIServiceBackendSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-aiservicebackendspec)
+
+HTTPHeaderValueFilter filters individual values out of a multi-valued request header before the
+request is forwarded to this backend.
+
+This drops (or restricts to) specific values from a comma-separated header while forwarding the
+rest untouched, so one unsupported value does not fail the whole request.
+
+Only comma-delimited headers are supported. Values are matched exactly, after surrounding
+whitespace is trimmed. To remove a header entirely, use HeaderMutation.Remove instead.
+
+##### Fields
+
+
+
+<ApiField
+  name="name"
+  type="[HTTPHeaderName](#sigs-k8s-io-gateway-api-apis-v1-httpheadername)"
+  required="true"
+  description="Name is the name of the header whose values are filtered. Header names are<br />case-insensitive (see https://datatracker.ietf.org/doc/html/rfc2616#section-4.2)."
+/><ApiField
+  name="mode"
+  type="[HTTPHeaderValueFilterMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefiltermode)"
+  required="false"
+  defaultValue="Denylist"
+  description="Mode selects the filtering semantics. Defaults to Denylist."
+/><ApiField
+  name="values"
+  type="string array"
+  required="false"
+  description="Values is the list of header values to drop (Denylist) or keep (Allowlist).<br />An empty list leaves the header unchanged."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefiltermode">HTTPHeaderValueFilterMode</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [HTTPHeaderValueFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefilter)
+
+HTTPHeaderValueFilterMode specifies the filtering semantics of an HTTPHeaderValueFilter.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="Denylist"
+  type="enum"
+  required="false"
+  description="HTTPHeaderValueFilterModeDenylist drops the values listed in Values, keeping everything else.<br />New values the gateway has not been configured for pass through untouched.<br />"
+/><ApiField
+  name="Allowlist"
+  type="enum"
+  required="false"
+  description="HTTPHeaderValueFilterModeAllowlist keeps only the values listed in Values, dropping everything<br />else. New values the gateway has not been configured for are dropped.<br />"
+/>
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-jwks">JWKS</a>
 
 
@@ -4445,6 +4630,60 @@ MCPBackendSecurityPolicy defines the security policy for a backend MCP server.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector">MCPBackendSelector</a>
+
+
+
+**Appears in:**
+- [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutespec)
+
+MCPBackendSelector defines which of a MCPRoute's backends a request may fan out to.
+
+##### Fields
+
+
+
+<ApiField
+  name="defaultAction"
+  type="[AuthorizationAction](#github-com-envoyproxy-gateway-api-v1alpha1-authorizationaction)"
+  required="false"
+  defaultValue="Deny"
+  description="DefaultAction is the action to take when no rules match. If unspecified, defaults to Deny."
+/><ApiField
+  name="rules"
+  type="[MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselectorrule) array"
+  required="false"
+  description="Rules defines a list of backend selection rules.<br />These rules are evaluated in order, the first matching rule will be applied,<br />and the rest will be skipped.<br />If no rules are defined, DefaultAction is applied to every candidate backend<br />(defaults to Deny)."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselectorrule">MCPBackendSelectorRule</a>
+
+
+
+**Appears in:**
+- [MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)
+
+MCPBackendSelectorRule defines a single backend selection rule.
+
+##### Fields
+
+
+
+<ApiField
+  name="cel"
+  type="string"
+  required="false"
+  description="CEL specifies a Common Expression Language (CEL) expression, evaluated once for<br />each backend already listed in backendRefs. It does not parse a list of backends<br />out of the request. Each evaluation binds request.mcp.backend to the name of the<br />one candidate backend under test, so the expression should answer `is this backend<br />allowed`, not `which backends should be used`. The expression must return a<br />boolean; evaluation errors or non-boolean results are treated as `no match`. A<br />match means the rule applies, and Action below decides whether that's an Allow or<br />a Deny for that backend.<br />Example CEL expressions:<br />	* `request.mcp.backend in request.auth.jwt.claims.mcp_backends`<br />	* `(`,` + request.headers[`x-ai-eg-mcp-backend-subset`] + `,`).contains(`,` + request.mcp.backend + `,`)`<br />Available attributes are the same as documented on MCPRouteAuthorizationRule.CEL,<br />except request.mcp.method, request.mcp.tool, and request.mcp.params are not<br />populated (no MCP method has been selected yet at backend-selection time).<br />Note: The CEL expression support is experimental, and the attributes<br />available to the expression may change in future releases."
+/><ApiField
+  name="action"
+  type="[AuthorizationAction](#github-com-envoyproxy-gateway-api-v1alpha1-authorizationaction)"
+  required="false"
+  defaultValue="Allow"
+  description="Action is the decision for matching backends. If unspecified, defaults to Allow."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpheaderforward">MCPHeaderForward</a>
 
 
@@ -4468,6 +4707,44 @@ MCPHeaderForward specifies a header to extract from the incoming request and for
   type="string"
   required="false"
   description="BackendHeader is the header name to use when forwarding to the backend.<br />If not specified, the original header name is used."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter">MCPPromptFilter</a>
+
+
+
+**Appears in:**
+- [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
+
+MCPPromptFilter filters prompts using include and exclude patterns with exact matches or regular expressions.
+Exclude rules take precedence over include rules (deny-wins). When both include and exclude are specified,
+a prompt must match an include rule AND not match any exclude rule to be allowed.
+
+##### Fields
+
+
+
+<ApiField
+  name="include"
+  type="string array"
+  required="false"
+  description="Include is a list of prompt names to include. Only the specified prompts will be available."
+/><ApiField
+  name="includeRegex"
+  type="string array"
+  required="false"
+  description="IncludeRegex is a list of RE2-compatible regular expressions that, when matched, include the prompt.<br />Only prompts matching these patterns will be available."
+/><ApiField
+  name="exclude"
+  type="string array"
+  required="false"
+  description="Exclude is a list of prompt names to exclude. The specified prompts will not be available.<br />Exclude rules take precedence over include rules."
+/><ApiField
+  name="excludeRegex"
+  type="string array"
+  required="false"
+  description="ExcludeRegex is a list of RE2-compatible regular expressions that, when matched, exclude the prompt.<br />Prompts matching these patterns will not be available. Exclude rules take precedence over include rules."
 />
 
 
@@ -4587,6 +4864,11 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   required="false"
   description="ToolSelector filters the tools exposed by this MCP server.<br />Supports exact matches and RE2-compatible regular expressions for both include and exclude patterns.<br />If not specified, all tools from the MCP server are exposed."
 /><ApiField
+  name="promptSelector"
+  type="[MCPPromptFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter)"
+  required="false"
+  description="PromptSelector filters the prompts exposed by this MCP server, analogous to ToolSelector.<br />If not specified, all prompts from the MCP server are exposed.<br />This is also used to determine which prompt names can be safely exposed unprefixed when<br />this backend's effective PrefixMode is Never: only prompts named in Include are validated<br />for cross-backend uniqueness and exposed bare. If unset while PrefixMode is Never, this<br />backend's prompts are not exposed bare (they keep the `<backendName>__` prefix) because<br />their names cannot be proven unique at admission time."
+/><ApiField
   name="securityPolicy"
   type="[MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy)"
   required="false"
@@ -4596,6 +4878,34 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   type="[MCPHeaderForward](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpheaderforward) array"
   required="false"
   description="ForwardHeaders specifies HTTP headers to extract from the incoming client request<br />and forward to this backend MCP server.<br />This enables per-user authentication passthrough (e.g., personal access tokens)<br />without requiring OAuth configuration.<br />Each entry specifies a header name to extract and an optional rename for the backend."
+/><ApiField
+  name="prefixMode"
+  type="[MCPRoutePrefixMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode)"
+  required="false"
+  description="PrefixMode controls how tool and prompt names from this backend are prefixed.<br />Takes precedence over the route-level PrefixMode when set."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendtrafficpolicy">MCPRouteBackendTrafficPolicy</a>
+
+
+
+**Appears in:**
+- [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutespec)
+
+MCPRouteBackendTrafficPolicy configures how the Envoy Gateway BackendTrafficPolicy
+resources auto-generated for a MCPRoute interact with other BackendTrafficPolicy
+resources (e.g. an operator-defined rate limiting policy) targeting the same HTTPRoute.
+
+##### Fields
+
+
+
+<ApiField
+  name="mergeType"
+  type="[MergeType](#github-com-envoyproxy-gateway-api-v1alpha1-mergetype)"
+  required="false"
+  description="MergeType determines how the auto-generated BackendTrafficPolicy (for example, the<br />OAuth protected resource metadata policy) is merged with other BackendTrafficPolicy<br />configurations targeting the same route or a parent Gateway/Listener.<br />When set, the auto-generated BackendTrafficPolicy will merge with the closest parent<br />BackendTrafficPolicy in the route's attachment hierarchy instead of overriding it<br />entirely, per Envoy Gateway's merge semantics.<br />If unset, no merging occurs, and the auto-generated BackendTrafficPolicy fully<br />overrides any other BackendTrafficPolicy targeting the same route.<br />See: https://gateway.envoyproxy.io/docs/tasks/traffic/backend-traffic-policy/"
 />
 
 
@@ -4621,7 +4931,7 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
 /><ApiField
   name="audiences"
   type="string array"
-  required="true"
+  required="false"
   description="Audiences is a list of JWT audiences allowed access.<br />It is recommended to set this field for token audience validation, as it is a security best practice to prevent token misuse.<br />Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-audience-binding-and-validation"
 /><ApiField
   name="jwks"
@@ -4641,6 +4951,40 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode">MCPRoutePrefixMode</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
+- [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutespec)
+
+MCPRoutePrefixMode controls how tool and prompt names are prefixed when exposed to clients.
+
+PrefixMode can be set at the route level (MCPRouteSpec) and overridden per backend
+(MCPRouteBackendRef); the per-backend value takes precedence when set. A single route can
+therefore mix Always and Never backends. This is intentional: it lets an operator keep the
+route-level default (Always is recommended for most routes, since it guarantees a collision-free
+catalog without any extra configuration) while opting specific, well-known backends into bare
+names, e.g. to match tool names an existing client or interactive MCP App already hardcodes.
+Per-backend override is meant as a targeted escape hatch, not a replacement for choosing one
+naming policy for the route as a whole.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="Always"
+  type="enum"
+  required="false"
+  description="MCPRoutePrefixModeAlways prefixes tool/prompt names with `<backendName>__`.<br />This is the default and preserves existing behavior.<br />"
+/><ApiField
+  name="Never"
+  type="enum"
+  required="false"
+  description="MCPRoutePrefixModeNever exposes tool/prompt names unprefixed.<br />Tool names must be unique across all Never-mode backends on the route.<br />"
+/>
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutesecuritypolicy">MCPRouteSecurityPolicy</a>
 
 
@@ -4674,6 +5018,11 @@ MCPRouteSecurityPolicy defines the security policy for a MCPRoute.
   type="[MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorization)"
   required="false"
   description="Authorization defines the configuration for the MCP spec compatible authorization."
+/><ApiField
+  name="mergeType"
+  type="[MergeType](#github-com-envoyproxy-gateway-api-v1alpha1-mergetype)"
+  required="false"
+  description="MergeType determines how the auto-generated SecurityPolicy for this MCPRoute (which<br />enforces OAuth/JWT, API key, or external authorization) is merged with other<br />SecurityPolicy configurations targeting the same route or a parent Gateway/Listener.<br />When set, the auto-generated SecurityPolicy will merge with the closest parent<br />SecurityPolicy in the route's attachment hierarchy (for example, one targeting a<br />Gateway, Gateway listener, ListenerSet, or ListenerSet listener) instead of<br />overriding it entirely, per Envoy Gateway's merge semantics.<br />If unset, no merging occurs, and the auto-generated SecurityPolicy fully overrides<br />any other SecurityPolicy targeting the same route.<br />See: https://gateway.envoyproxy.io/docs/tasks/security/apikey-authn/"
 />
 
 
@@ -4721,6 +5070,21 @@ MCPRouteSpec details the MCPRoute configuration.
   type="[MCPRouteSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutesecuritypolicy)"
   required="false"
   description="SecurityPolicy defines the security policy for this MCPRoute."
+/><ApiField
+  name="backendTrafficPolicy"
+  type="[MCPRouteBackendTrafficPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendtrafficpolicy)"
+  required="false"
+  description="BackendTrafficPolicy configures the auto-generated Envoy Gateway BackendTrafficPolicy<br />resources for this MCPRoute, for example the OAuth protected resource metadata policy<br />created when SecurityPolicy.OAuth is configured."
+/><ApiField
+  name="backendSelector"
+  type="[MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)"
+  required="false"
+  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered."
+/><ApiField
+  name="prefixMode"
+  type="[MCPRoutePrefixMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode)"
+  required="false"
+  description="PrefixMode controls how tool and prompt names from all backends on this route are prefixed."
 />
 
 

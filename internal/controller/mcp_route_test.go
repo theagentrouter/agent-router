@@ -403,6 +403,7 @@ func Test_newHTTPRoute_MCPOauth(t *testing.T) {
 		Spec: aigv1b1.MCPRouteSpec{
 			SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{OAuth: &aigv1b1.MCPRouteOAuth{}},
 			Path:           ptr.To("/mcp"),
+			Headers:        []gwapiv1.HTTPHeaderMatch{{Name: "x-match", Value: "yes"}},
 			ParentRefs:     []gwapiv1.ParentReference{{Name: gwapiv1.ObjectName("gw")}},
 			BackendRefs:    []aigv1b1.MCPRouteBackendRef{{}},
 		},
@@ -419,6 +420,9 @@ func Test_newHTTPRoute_MCPOauth(t *testing.T) {
 	require.Equal(t, "/.well-known/oauth-protected-resource/mcp", ptr.Deref(oauthRules[0].Matches[0].Path.Value, ""))
 	require.Equal(t, "/.well-known/oauth-authorization-server/mcp", ptr.Deref(oauthRules[1].Matches[0].Path.Value, ""))
 	require.Equal(t, "/.well-known/openid-configuration/mcp", ptr.Deref(oauthRules[2].Matches[0].Path.Value, ""))
+	for _, rule := range oauthRules {
+		require.Equal(t, mcpRoute.Spec.Headers, rule.Matches[0].Headers)
+	}
 }
 
 func Test_newHTTPRoute_MCP_Hostnames(t *testing.T) {
@@ -1025,5 +1029,162 @@ func TestMCPRouteController_Reconcile_DeletionWithMissingGateway(t *testing.T) {
 		require.NotContains(t, current.Finalizers, aiGatewayControllerFinalizer)
 	} else {
 		require.True(t, apierrors.IsNotFound(err))
+	}
+}
+
+func TestValidatePerBackendPrefixMode(t *testing.T) {
+	always := aigv1b1.MCPRoutePrefixModeAlways
+	never := aigv1b1.MCPRoutePrefixModeNever
+
+	backendRef := func(name string, prefixMode *aigv1b1.MCPRoutePrefixMode, include ...string) aigv1b1.MCPRouteBackendRef {
+		ref := aigv1b1.MCPRouteBackendRef{
+			BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName(name)},
+			PrefixMode:             prefixMode,
+		}
+		if len(include) > 0 {
+			ref.ToolSelector = &aigv1b1.MCPToolFilter{Include: include}
+		}
+		return ref
+	}
+
+	backendRefWithPrompts := func(name string, prefixMode *aigv1b1.MCPRoutePrefixMode, toolInclude, promptInclude []string) aigv1b1.MCPRouteBackendRef {
+		ref := backendRef(name, prefixMode, toolInclude...)
+		ref.PromptSelector = &aigv1b1.MCPPromptFilter{Include: promptInclude}
+		return ref
+	}
+
+	tests := []struct {
+		name        string
+		routeMode   *aigv1b1.MCPRoutePrefixMode
+		backendRefs []aigv1b1.MCPRouteBackendRef
+		wantErr     string // empty means no error expected
+	}{
+		{
+			name:        "no prefixMode anywhere defaults to Always: no validation required",
+			routeMode:   nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{backendRef("a", nil), backendRef("b", nil)},
+		},
+		{
+			name:        "per-backend Never without toolSelector.include: rejected",
+			routeMode:   nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{backendRef("a", &never)},
+			wantErr:     `prefixMode Never requires backend "a" to explicitly enumerate its tools via toolSelector.include`,
+		},
+		{
+			name:      "per-backend Never with unique tools: accepted",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &never, "search"),
+				backendRef("b", &never, "list"),
+			},
+		},
+		{
+			name:      "per-backend Never with colliding tools: rejected",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &never, "search"),
+				backendRef("b", &never, "search"),
+			},
+			wantErr: `prefixMode Never requires tool names to be unique across backends, but "search" is declared by both "a" and "b"`,
+		},
+		{
+			// Route-level PrefixMode=Never must fall back onto backends that don't set their
+			// own PrefixMode, mirroring effectivePrefixMode's runtime resolution. Without this,
+			// a route-level Never route with no per-backend override would bypass validation
+			// entirely, even though every backend behaves as Never at request time.
+			name:        "route-level Never inherited by backend without own PrefixMode: still requires toolSelector.include",
+			routeMode:   &never,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{backendRef("a", nil)},
+			wantErr:     `prefixMode Never requires backend "a" to explicitly enumerate its tools via toolSelector.include`,
+		},
+		{
+			name:      "route-level Never inherited by two backends with colliding tools: rejected",
+			routeMode: &never,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", nil, "search"),
+				backendRef("b", nil, "search"),
+			},
+			wantErr: `prefixMode Never requires tool names to be unique across backends, but "search" is declared by both "a" and "b"`,
+		},
+		{
+			name:      "route-level Never inherited by backends with unique tools: accepted",
+			routeMode: &never,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", nil, "search"),
+				backendRef("b", nil, "list"),
+			},
+		},
+		{
+			// Per-backend PrefixMode takes precedence over the route-level default, so a
+			// backend explicitly opting back into Always is exempt from the Never validation
+			// even though the route default is Never.
+			name:      "per-backend Always overrides route-level Never: exempt from validation",
+			routeMode: &never,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &always), // no toolSelector.include, would fail if treated as Never.
+			},
+		},
+		{
+			name:      "route-level Always (explicit) with no per-backend override: no validation required",
+			routeMode: &always,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", nil),
+			},
+		},
+		{
+			// promptSelector is opt-in: a Never-mode backend that only declares toolSelector
+			// (no promptSelector) is still accepted, because it just means the backend's
+			// prompts stay prefixed (see mcpproxy.mergePromptsList) rather than being rejected.
+			name:      "per-backend Never with tools but no promptSelector: accepted",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &never, "search"),
+			},
+		},
+		{
+			name:      "per-backend Never with unique promptSelector.include across backends: accepted",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRefWithPrompts("a", &never, []string{"search"}, []string{"greeting"}),
+				backendRefWithPrompts("b", &never, []string{"list"}, []string{"farewell"}),
+			},
+		},
+		{
+			name:      "per-backend Never with colliding promptSelector.include: rejected",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRefWithPrompts("a", &never, []string{"search"}, []string{"greeting"}),
+				backendRefWithPrompts("b", &never, []string{"list"}, []string{"greeting"}),
+			},
+			wantErr: `prefixMode Never requires prompt names to be unique across backends, but "greeting" is declared by both "a" and "b"`,
+		},
+		{
+			// Tool and prompt names live in separate namespaces (tools/call vs prompts/get), so
+			// the same literal name declared as a tool by one backend and a prompt by another
+			// must not be treated as a collision.
+			name:      "per-backend Never with same name as tool on one backend and prompt on another: accepted",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &never, "shared-name"),
+				backendRefWithPrompts("b", &never, []string{"list"}, []string{"shared-name"}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			route := &aigv1b1.MCPRoute{
+				Spec: aigv1b1.MCPRouteSpec{
+					PrefixMode:  tt.routeMode,
+					BackendRefs: tt.backendRefs,
+				},
+			}
+			err := validatePerBackendPrefixMode(route)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.wantErr)
+			}
+		})
 	}
 }

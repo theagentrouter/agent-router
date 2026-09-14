@@ -241,10 +241,16 @@ test-e2e: build-e2e ## Run the end-to-end tests with a local kind cluster.
 	@echo "Run E2E tests"
 	@go test -v ./tests/e2e/... $(GO_TEST_ARGS) $(GO_TEST_E2E_ARGS)
 
+# TODO: remove this once there's a new release for GAIE
+# contains https://github.com/kubernetes-sigs/gateway-api-inference-extension/pull/3033
+WORKAROUND_GAIE_EPP_IMAGE ?= us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/lwepp:main
+
 # This runs the end-to-end tests for the controller and extproc with a local kind cluster.
 .PHONY: test-e2e-inference-extension
 test-e2e-inference-extension: build-e2e ## Run the end-to-end tests with a local kind cluster for Gateway API Inference Extension.
 	@echo "Run E2E tests for inference extension"
+	docker pull $(WORKAROUND_GAIE_EPP_IMAGE)
+	docker tag $(WORKAROUND_GAIE_EPP_IMAGE) registry.k8s.io/gateway-api-inference-extension/lwepp:v1.6.0
 	@go test -v ./tests/e2e-inference-extension/... $(GO_TEST_ARGS) $(GO_TEST_E2E_ARGS)
 
 # This runs the end-to-end upgrade tests for the controller and extproc with a local kind cluster.
@@ -296,13 +302,20 @@ build.%: ## Build a binary for the given command under the internal/cmd director
 	done
 
 # This builds the docker images for the controller, extproc and testupstream for the e2e tests.
+#
+# Set TEST_SKIP_BUILD=true to skip rebuilding the images, e.g. when they were already built
+# by a previous run and haven't changed.
 .PHONY: build-e2e
 build-e2e: ## Build the docker images for the controller, extproc and testupstream for the e2e tests.
+ifeq ($(TEST_SKIP_BUILD),true)
+	@echo "Skipping build-e2e because TEST_SKIP_BUILD=true"
+else
 	@$(MAKE) docker-build.controller DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.extproc DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.testupstream CMD_PATH_PREFIX=tests/internal/testupstreamlib DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.testmcpserver CMD_PATH_PREFIX=tests/internal/testmcp DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.testextauthserver CMD_PATH_PREFIX=tests/internal/testextauth DOCKER_BUILD_ARGS="--load"
+endif
 
 # This builds a docker image for a given command.
 #

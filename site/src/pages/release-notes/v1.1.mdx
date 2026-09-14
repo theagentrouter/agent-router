@@ -1,0 +1,104 @@
+---
+title: Envoy AI Gateway v1.1.x Release Series
+description: Token counting, per-request credentials, stream idle timeout, MCP hostname routing, OpenTelemetry GenAI tracing, and HTTP CONNECT egress
+toc_min_heading_level: 2
+toc_max_heading_level: 4
+---
+
+import Link from '@docusaurus/Link';
+import {
+  ReleaseSeriesLayout,
+  ReleaseHeader,
+  FeatureSectionCard,
+  PatchRelease,
+  ItemList,
+  Dependencies
+} from '../../components/ReleaseNotes';
+import releaseData from '../../data/releases/v1.1.json';
+import React from 'react';
+
+export const { series, releases, navigation } = releaseData;
+export const mainRelease = releases[0];
+export const patchReleases = releases.slice(1).reverse();
+
+<ReleaseSeriesLayout
+  title={series.title}
+  subtitle={series.subtitle}
+  seriesVersion={series.version}
+  badgeText={series.badge}
+  badgeType={series.badgeType}
+  previousSeries={navigation.previous}
+>
+
+<ReleaseHeader
+  version={mainRelease.version}
+  date={mainRelease.date}
+  type={mainRelease.type}
+  tags={mainRelease.tags}
+>
+
+{mainRelease.overview}
+
+</ReleaseHeader>
+
+## ✨ New Features
+
+{mainRelease.features.map((featureSection, index) => (
+  <FeatureSectionCard key={index} section={featureSection} />
+))}
+
+## 🔗 API Updates
+
+{mainRelease.apiChanges.length > 0 && (
+  <ItemList items={mainRelease.apiChanges} />
+)}
+
+{mainRelease.deprecations?.length > 0 && (
+  <>
+    ### Deprecations
+    <ItemList items={mainRelease.deprecations} />
+  </>
+)}
+
+## 📖 Upgrade Guidance
+
+Upgrading from **v1.0** requires no CRD migrations. New fields are optional and backward compatible. Review the Helm security-context change if you override the controller image.
+
+If the official controller image works for you, no action is needed. To restore empty security contexts:
+
+```yaml
+controller:
+  podSecurityContext: {}
+  securityContext: {}
+```
+
+JSON logs: set `controller.logFormat` and `extProc.logFormat` to `json`. Enable a PDB with `controller.podDisruptionBudget.enabled: true` when you run more than one replica.
+
+## 📦 Dependencies Versions
+
+<Dependencies dependencies={mainRelease.dependencies} />
+
+## ⏩ Patch Releases
+
+{patchReleases.map((release, index) => (
+  <PatchRelease
+    key={index}
+    version={release.version}
+    date={release.date}
+    type={release.type}
+    tags={release.tags}
+    overview={release.overview}
+    features={release.features}
+    bugFixes={release.bugFixes}
+  />
+))}
+
+## 🙏 Acknowledgements
+
+Thank you to everyone who made v1.1 possible
+
+## 🔮 What's Next
+
+The roadmap is community-driven — [join us](https://github.com/envoyproxy/ai-gateway) and help shape it.
+
+</ReleaseSeriesLayout>

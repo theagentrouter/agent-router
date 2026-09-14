@@ -572,6 +572,33 @@ func Test_filterSensitiveHeadersForLogging(t *testing.T) {
 	require.Contains(t, hm.Headers, &corev3.HeaderValue{Key: "authorization", Value: "sensitive"})
 }
 
+func Test_isSensitiveHeader(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want bool
+	}{
+		{"authorization", true},
+		{"Authorization", true},
+		{"x-api-key", true},
+		// x-aigw- headers carry per-request credential overrides.
+		{"x-aigw-api-key", true},
+		{"x-aigw-aws-secret-access-key", true},
+		// The prefix is configurable, so keeping an existing injector's names must not lose
+		// redaction. Match on the credential-part suffix.
+		{"x-aws-secret-access-key", true},
+		{"x-aws-access-key-id", true},
+		{"x-aws-session-token", true},
+		{"X-Tenant-AWS-Secret-Access-Key", true},
+		{"content-type", false},
+		{"x-request-id", false},
+		{"user-agent", false},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			require.Equal(t, tc.want, isSensitiveHeader(tc.key, sensitiveHeaderKeys))
+		})
+	}
+}
+
 func Test_filterRequestBodyResponseHeaders(t *testing.T) {
 	buf := internaltesting.CaptureOutput("test")[0]
 	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{

@@ -1,0 +1,37 @@
+/* sits directly under the hero, which soft-exits to paper — same ground
+   so the strip reads as the hero's proof line */
+.section {
+  background: var(--ar-paper);
+  padding: 40px 0 72px;
+}
+:global([data-theme='dark']) .section { background: var(--ar-ink-800); }
+
+.label {
+  display: block;
+  text-align: center;
+  margin-bottom: 36px;
+  font: 600 var(--ar-text-xs) / 1 var(--ar-font-ui);
+  letter-spacing: var(--ar-tracking-label);
+  text-transform: uppercase;
+  color: var(--ar-on-cream-marquee);
+}
+:global([data-theme='dark']) .label { color: var(--ar-marquee-400); }
+
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 40px 52px;
+}
+
+.strip img {
+  height: 28px;
+  width: auto;
+  filter: grayscale(1) contrast(0.85);
+  opacity: 0.72;
+  transition: filter 0.2s, opacity 0.2s;
+}
+.strip img:hover { filter: none; opacity: 1; }
+:global([data-theme='dark']) .strip img { filter: grayscale(1) invert(1) contrast(0.7); opacity: 0.6; }
+:global([data-theme='dark']) .strip img:hover { opacity: 0.9; }

@@ -102,6 +102,44 @@ type MCPRouteSpec struct {
 	// +kubebuilder:validation:Optional
 	// +optional
 	SecurityPolicy *MCPRouteSecurityPolicy `json:"securityPolicy,omitempty"`
+
+	// BackendTrafficPolicy configures the auto-generated Envoy Gateway BackendTrafficPolicy
+	// resources for this MCPRoute, for example the OAuth protected resource metadata policy
+	// created when SecurityPolicy.OAuth is configured.
+	//
+	// +kubebuilder:validation:Optional
+	// +optional
+	BackendTrafficPolicy *MCPRouteBackendTrafficPolicy `json:"backendTrafficPolicy,omitempty"`
+
+	// BackendSelector restricts which of this route's backends a given request may fan
+	// out to, evaluated once per candidate backend when a client session is initialized.
+	// If unspecified, all backends on the route are considered.
+	//
+	// +kubebuilder:validation:Optional
+	// +optional
+	BackendSelector *MCPBackendSelector `json:"backendSelector,omitempty"`
+}
+
+// MCPRouteBackendTrafficPolicy configures how the Envoy Gateway BackendTrafficPolicy
+// resources auto-generated for a MCPRoute interact with other BackendTrafficPolicy
+// resources (e.g. an operator-defined rate limiting policy) targeting the same HTTPRoute.
+type MCPRouteBackendTrafficPolicy struct {
+	// MergeType determines how the auto-generated BackendTrafficPolicy (for example, the
+	// OAuth protected resource metadata policy) is merged with other BackendTrafficPolicy
+	// configurations targeting the same route or a parent Gateway/Listener.
+	//
+	// When set, the auto-generated BackendTrafficPolicy will merge with the closest parent
+	// BackendTrafficPolicy in the route's attachment hierarchy instead of overriding it
+	// entirely, per Envoy Gateway's merge semantics.
+	//
+	// If unset, no merging occurs, and the auto-generated BackendTrafficPolicy fully
+	// overrides any other BackendTrafficPolicy targeting the same route.
+	//
+	// See: https://gateway.envoyproxy.io/docs/tasks/traffic/backend-traffic-policy/
+	//
+	// +kubebuilder:validation:XValidation:rule="self != 'Replace'",message="Replace is not a valid MergeType for BackendTrafficPolicy"
+	// +optional
+	MergeType *egv1a1.MergeType `json:"mergeType,omitempty"`
 }
 
 // MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP server.
@@ -272,6 +310,24 @@ type MCPRouteSecurityPolicy struct {
 	//
 	// +optional
 	Authorization *MCPRouteAuthorization `json:"authorization,omitempty"`
+
+	// MergeType determines how the auto-generated SecurityPolicy for this MCPRoute (which
+	// enforces OAuth/JWT, API key, or external authorization) is merged with other
+	// SecurityPolicy configurations targeting the same route or a parent Gateway/Listener.
+	//
+	// When set, the auto-generated SecurityPolicy will merge with the closest parent
+	// SecurityPolicy in the route's attachment hierarchy (for example, one targeting a
+	// Gateway, Gateway listener, ListenerSet, or ListenerSet listener) instead of
+	// overriding it entirely, per Envoy Gateway's merge semantics.
+	//
+	// If unset, no merging occurs, and the auto-generated SecurityPolicy fully overrides
+	// any other SecurityPolicy targeting the same route.
+	//
+	// See: https://gateway.envoyproxy.io/docs/tasks/security/apikey-authn/
+	//
+	// +kubebuilder:validation:XValidation:rule="self != 'Replace'",message="Replace is not a valid MergeType for SecurityPolicy"
+	// +optional
+	MergeType *egv1a1.MergeType `json:"mergeType,omitempty"`
 }
 
 // MCPRouteOAuth defines a MCP spec compatible OAuth authentication configuration for a MCPRoute.
@@ -289,6 +345,7 @@ type MCPRouteOAuth struct {
 	//
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=32
+	// +optional
 	Audiences []string `json:"audiences"`
 
 	// JWKS defines how a JSON Web Key Sets (JWKS) can be obtained to verify the access tokens presented by the clients.
@@ -386,6 +443,62 @@ type MCPRouteAuthorizationRule struct {
 	CEL *string `json:"cel,omitempty"`
 
 	// Action is the authorization decision for matching requests. If unspecified, defaults to Allow.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default:=Allow
+	// +optional
+	Action *egv1a1.AuthorizationAction `json:"action,omitempty"`
+}
+
+// MCPBackendSelector defines which of a MCPRoute's backends a request may fan out to.
+type MCPBackendSelector struct {
+	// DefaultAction is the action to take when no rules match. If unspecified, defaults to Deny.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default:=Deny
+	// +optional
+	DefaultAction *egv1a1.AuthorizationAction `json:"defaultAction,omitempty"`
+
+	// Rules defines a list of backend selection rules.
+	// These rules are evaluated in order, the first matching rule will be applied,
+	// and the rest will be skipped.
+	//
+	// If no rules are defined, DefaultAction is applied to every candidate backend
+	// (defaults to Deny).
+	//
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Rules []MCPBackendSelectorRule `json:"rules,omitempty"`
+}
+
+// MCPBackendSelectorRule defines a single backend selection rule.
+type MCPBackendSelectorRule struct {
+	// CEL specifies a Common Expression Language (CEL) expression, evaluated once for
+	// each backend already listed in backendRefs. It does not parse a list of backends
+	// out of the request. Each evaluation binds request.mcp.backend to the name of the
+	// one candidate backend under test, so the expression should answer "is this backend
+	// allowed", not "which backends should be used". The expression must return a
+	// boolean; evaluation errors or non-boolean results are treated as "no match". A
+	// match means the rule applies, and Action below decides whether that's an Allow or
+	// a Deny for that backend.
+	//
+	// Example CEL expressions:
+	//	* `request.mcp.backend in request.auth.jwt.claims.mcp_backends`
+	//	* `("," + request.headers["x-ai-eg-mcp-backend-subset"] + ",").contains("," + request.mcp.backend + ",")`
+	//
+	// Available attributes are the same as documented on MCPRouteAuthorizationRule.CEL,
+	// except request.mcp.method, request.mcp.tool, and request.mcp.params are not
+	// populated (no MCP method has been selected yet at backend-selection time).
+	//
+	// Note: The CEL expression support is experimental, and the attributes
+	// available to the expression may change in future releases.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=4096
+	// +optional
+	CEL *string `json:"cel,omitempty"`
+
+	// Action is the decision for matching backends. If unspecified, defaults to Allow.
 	//
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default:=Allow

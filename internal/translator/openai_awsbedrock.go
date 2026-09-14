@@ -8,6 +8,7 @@ package translator
 import (
 	"bytes"
 	"cmp"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -445,7 +446,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) ResponseBody(_ map[string
 
 	// AWS Bedrock Converse API does not support N(multiple choices) > 0, so there could be only one choice.
 	choice := openai.ChatCompletionResponseChoice{
-		Index: (int64)(0),
+		Index: int64(0),
 		Message: openai.ChatCompletionResponseChoiceMessage{
 			Role: bedrockResp.Output.Message.Role,
 		},
@@ -466,10 +467,27 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) ResponseBody(_ map[string
 				choice.Message.Content = output.Text
 			}
 		case output.ReasoningContent != nil:
-			choice.Message.ReasoningContent = &openai.ReasoningContentUnion{
-				Value: &openai.ReasoningContent{
-					ReasoningContent: output.ReasoningContent,
-				},
+			// Reasoning text goes to the plain-string reasoning_content; signature and
+			// redacted content go to thinking_blocks (they cannot be represented in a
+			// plain string). This mirrors the streaming path and the Gemini helper.
+			if rt := output.ReasoningContent.ReasoningText; rt != nil {
+				// Only set reasoning_content when there is actual text; a
+				// signature-only block must not emit an empty string.
+				if rt.Text != "" {
+					choice.Message.ReasoningContent = &openai.ReasoningContentUnion{Value: rt.Text}
+				}
+				// Surface the block (text and/or signature) so a signature still
+				// round-trips even without accompanying text.
+				if rt.Text != "" || rt.Signature != "" {
+					choice.Message.ThinkingBlocks = append(choice.Message.ThinkingBlocks, openai.ThinkingBlock{
+						Type: "thinking", Thinking: rt.Text, Signature: rt.Signature,
+					})
+				}
+			}
+			if rc := output.ReasoningContent.RedactedContent; rc != nil {
+				choice.Message.ThinkingBlocks = append(choice.Message.ThinkingBlocks, openai.ThinkingBlock{
+					Type: "redacted_thinking", Data: base64.StdEncoding.EncodeToString(rc),
+				})
 			}
 		}
 	}
@@ -606,23 +624,30 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) convertEvent(event *awsbe
 				},
 			})
 		case event.Delta.ReasoningContent != nil:
-			reasoningDelta := &openai.StreamReasoningContent{}
+			delta := &openai.ChatCompletionResponseChunkChoiceDelta{Role: o.role}
 
-			// Map all relevant fields from the Bedrock delta to our flattened OpenAI delta struct.
-			if event.Delta.ReasoningContent != nil {
-				reasoningDelta.Text = event.Delta.ReasoningContent.Text
-				reasoningDelta.Signature = event.Delta.ReasoningContent.Signature
+			// Reasoning text goes to the plain-string reasoning_content; signatures and
+			// redacted content go to thinking_blocks (they cannot be represented in a
+			// plain string).
+			if event.Delta.ReasoningContent.Text != "" {
+				delta.ReasoningContent = &openai.StreamReasoningContent{
+					Text: event.Delta.ReasoningContent.Text,
+				}
 			}
-			if event.Delta.ReasoningContent.RedactedContent != nil {
-				reasoningDelta.RedactedContent = event.Delta.ReasoningContent.RedactedContent
+			if sig := event.Delta.ReasoningContent.Signature; sig != "" {
+				delta.ThinkingBlocks = append(delta.ThinkingBlocks, openai.ThinkingBlock{
+					Type: "thinking", Signature: sig,
+				})
+			}
+			if rc := event.Delta.ReasoningContent.RedactedContent; rc != nil {
+				delta.ThinkingBlocks = append(delta.ThinkingBlocks, openai.ThinkingBlock{
+					Type: "redacted_thinking", Data: base64.StdEncoding.EncodeToString(rc),
+				})
 			}
 
 			chunk.Choices = append(chunk.Choices, openai.ChatCompletionResponseChunkChoice{
 				Index: 0,
-				Delta: &openai.ChatCompletionResponseChunkChoiceDelta{
-					Role:             o.role,
-					ReasoningContent: reasoningDelta,
-				},
+				Delta: delta,
 			})
 		}
 	// contentBlockStart event.
