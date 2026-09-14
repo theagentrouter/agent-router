@@ -49,9 +49,14 @@ export default function Quickstart(): React.ReactElement {
             <span className={styles.label}>{quickstart.label}</span>
             <h2 className={styles.title}>{quickstart.title}</h2>
             <p className={styles.body}>{quickstart.body}</p>
-            <Link className="button button--primary" to={active.cta.to}>
-              {active.cta.label}
-            </Link>
+            <div className={styles.ctas}>
+              <Link className="button button--primary" to={active.cta.to}>
+                {active.cta.label}
+              </Link>
+              <Link className={styles.ctaService} to={quickstart.serviceCta.to}>
+                {quickstart.serviceCta.label}
+              </Link>
+            </div>
           </div>
           <div>
             <div className={styles.tabs} role="tablist" aria-label="Where to run Agent Router">

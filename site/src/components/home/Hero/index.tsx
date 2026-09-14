@@ -19,9 +19,11 @@ export default function Hero(): React.ReactElement {
         <Link className="button button--primary button--lg" to={hero.ctas[0].to}>
           {hero.ctas[0].label}
         </Link>
-        <Link className="button button--secondary button--lg" to={hero.ctas[1].to}>
-          {hero.ctas[1].label}
-        </Link>
+        {hero.ctas.slice(1).map((cta) => (
+          <Link key={cta.to} className="button button--secondary button--lg" to={cta.to}>
+            {cta.label}
+          </Link>
+        ))}
       </div>
       <p className={styles.sub}>{hero.sub}</p>
     </header>
