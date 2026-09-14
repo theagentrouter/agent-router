@@ -256,6 +256,40 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_AnthropicBetaHeader(t *te
 			expected: []string{"interleaved-thinking-2025-05-14", "context-1m-2025-08-07"},
 		},
 		{
+			name:     "all five confirmed Bedrock flags",
+			headers:  map[string]string{"anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14,token-efficient-tools-2025-02-19,tool-search-tool-2025-10-19"},
+			expected: []string{"context-1m-2025-08-07", "interleaved-thinking-2025-05-14", "fine-grained-tool-streaming-2025-05-14", "token-efficient-tools-2025-02-19", "tool-search-tool-2025-10-19"},
+		},
+		{
+			name:     "unsupported flags are dropped",
+			headers:  map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,prompt-caching-2024-07-31,tool-search-tool-2025-10-19"},
+			expected: []string{"interleaved-thinking-2025-05-14", "tool-search-tool-2025-10-19"},
+		},
+		{
+			name:     "Anthropic API umbrella flag is rewritten to the Bedrock tool search flag",
+			headers:  map[string]string{"anthropic-beta": "advanced-tool-use-2025-11-20"},
+			expected: []string{"tool-search-tool-2025-10-19"},
+		},
+		{
+			name:     "umbrella flag deduplicated with the explicitly sent Bedrock flag",
+			headers:  map[string]string{"anthropic-beta": "advanced-tool-use-2025-11-20,tool-search-tool-2025-10-19"},
+			expected: []string{"tool-search-tool-2025-10-19"},
+		},
+		{
+			name:     "umbrella flag combined with other supported flags",
+			headers:  map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,advanced-tool-use-2025-11-20"},
+			expected: []string{"interleaved-thinking-2025-05-14", "tool-search-tool-2025-10-19"},
+		},
+		{
+			name:     "umbrella flag with unsupported siblings only forwards the mapped flag",
+			headers:  map[string]string{"anthropic-beta": "advanced-tool-use-2025-11-20,code-execution-2025-08-25,files-api-2025-04-14"},
+			expected: []string{"tool-search-tool-2025-10-19"},
+		},
+		{
+			name:    "only unsupported flags results in no anthropic_beta",
+			headers: map[string]string{"anthropic-beta": "prompt-caching-2024-07-31,memory-2025-08-18"},
+		},
+		{
 			name:    "no beta header",
 			headers: map[string]string{},
 		},
@@ -308,6 +342,144 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_AnthropicBetaHeader(t *te
 			require.Len(t, betaValues, len(tt.expected))
 			for i, expected := range tt.expected {
 				require.Equal(t, expected, betaValues[i])
+			}
+		})
+	}
+}
+
+func TestAnthropicToAWSAnthropicTranslator_RequestBody_HeaderValueFilter(t *testing.T) {
+	tests := []struct {
+		name             string
+		requestHeaders   map[string]string
+		filterHeader     string
+		filterMode       string
+		filterValues     []string
+		wantBody         []string
+		wantBetaHeader   string
+		wantHeaderChange bool
+	}{
+		// NOTE: SetRequestHeaders already applies awsBedrockSupportedAnthropicBetas (and the
+		// Anthropic-API-name aliases) before any of this runs, so these cases deliberately use
+		// values that survive that allowlist. Using a non-allowlisted value here would pass
+		// vacuously — the value would already be gone before the operator filter saw it.
+		{
+			name:           "no filter configured forwards all allowlisted betas unchanged",
+			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,context-1m-2025-08-07"},
+			wantBody:       []string{"interleaved-thinking-2025-05-14", "context-1m-2025-08-07"},
+		},
+		{
+			// Bedrock reads anthropic_beta from the body, so the filtered set has to land there —
+			// filtering only the header would leave the rejected value in the request.
+			name:             "denylist drops the configured value from body and header",
+			requestHeaders:   map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,context-1m-2025-08-07"},
+			filterHeader:     "anthropic-beta",
+			filterMode:       "Denylist",
+			filterValues:     []string{"context-1m-2025-08-07"},
+			wantBody:         []string{"interleaved-thinking-2025-05-14"},
+			wantBetaHeader:   "interleaved-thinking-2025-05-14",
+			wantHeaderChange: true,
+		},
+		{
+			name:             "allowlist keeps only the sanctioned value",
+			requestHeaders:   map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,context-1m-2025-08-07"},
+			filterHeader:     "anthropic-beta",
+			filterMode:       "Allowlist",
+			filterValues:     []string{"interleaved-thinking-2025-05-14"},
+			wantBody:         []string{"interleaved-thinking-2025-05-14"},
+			wantBetaHeader:   "interleaved-thinking-2025-05-14",
+			wantHeaderChange: true,
+		},
+		{
+			// The setter is called for every configured filter, so a filter on an unrelated header
+			// must not reach the body's anthropic_beta field.
+			name:           "filter on a different header is ignored",
+			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,context-1m-2025-08-07"},
+			filterHeader:   "x-some-other-header",
+			filterMode:     "Denylist",
+			filterValues:   []string{"context-1m-2025-08-07"},
+			wantBody:       []string{"interleaved-thinking-2025-05-14", "context-1m-2025-08-07"},
+		},
+		{
+			name:             "filter header name matching is case-insensitive",
+			requestHeaders:   map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,context-1m-2025-08-07"},
+			filterHeader:     "Anthropic-Beta",
+			filterMode:       "Denylist",
+			filterValues:     []string{"context-1m-2025-08-07"},
+			wantBody:         []string{"interleaved-thinking-2025-05-14"},
+			wantBetaHeader:   "interleaved-thinking-2025-05-14",
+			wantHeaderChange: true,
+		},
+		{
+			// The built-in allowlist runs first, so a value it strips never reaches the operator
+			// filter: denying an already-stripped value is a no-op, not a second drop.
+			name:           "value already stripped by the built-in allowlist never reaches the filter",
+			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13"},
+			filterHeader:   "anthropic-beta",
+			filterMode:     "Denylist",
+			filterValues:   []string{"thinking-token-count-2026-05-13"},
+			wantBody:       []string{"interleaved-thinking-2025-05-14"},
+		},
+		{
+			// advanced-tool-use-2025-11-20 is aliased to tool-search-tool-2025-10-19 before the
+			// filter runs, so an operator filter has to name the Bedrock-side value.
+			name:             "filter matches the post-alias Bedrock value",
+			requestHeaders:   map[string]string{"anthropic-beta": "advanced-tool-use-2025-11-20,context-1m-2025-08-07"},
+			filterHeader:     "anthropic-beta",
+			filterMode:       "Denylist",
+			filterValues:     []string{"tool-search-tool-2025-10-19"},
+			wantBody:         []string{"context-1m-2025-08-07"},
+			wantBetaHeader:   "context-1m-2025-08-07",
+			wantHeaderChange: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+			translator.(RequestHeadersSetter).SetRequestHeaders(tt.requestHeaders)
+			if tt.filterHeader != "" {
+				translator.(HeaderValueFilterSetter).SetHeaderValueFilter(tt.filterHeader, tt.filterMode, tt.filterValues)
+			}
+
+			originalReq := &anthropicschema.MessagesRequest{
+				Model: "anthropic.claude-3-sonnet-20240229-v1:0",
+				Messages: []anthropicschema.MessageParam{
+					{
+						Role: anthropicschema.MessageRoleUser,
+						Content: anthropicschema.MessageContent{
+							Array: []anthropicschema.ContentBlockParam{
+								{Text: &anthropicschema.TextBlockParam{Text: "Hello"}},
+							},
+						},
+					},
+				},
+			}
+			rawBody, err := json.Marshal(originalReq)
+			require.NoError(t, err)
+
+			headerMutation, bodyMutation, err := translator.RequestBody(rawBody, originalReq, false)
+			require.NoError(t, err)
+
+			var modifiedReq map[string]any
+			require.NoError(t, json.Unmarshal(bodyMutation, &modifiedReq))
+			betaValues, ok := modifiedReq["anthropic_beta"].([]any)
+			require.True(t, ok)
+			require.Len(t, betaValues, len(tt.wantBody))
+			for i, expected := range tt.wantBody {
+				require.Equal(t, expected, betaValues[i])
+			}
+
+			var betaHeader *internalapi.Header
+			for i := range headerMutation {
+				if headerMutation[i].Key() == anthropicBetaHeaderName {
+					betaHeader = &headerMutation[i]
+				}
+			}
+			if tt.wantHeaderChange {
+				require.NotNil(t, betaHeader, "expected anthropic-beta header to be overwritten")
+				assert.Equal(t, tt.wantBetaHeader, betaHeader.Value())
+			} else {
+				require.Nil(t, betaHeader, "anthropic-beta header should not be overwritten")
 			}
 		})
 	}

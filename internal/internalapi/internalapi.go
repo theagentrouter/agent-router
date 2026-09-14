@@ -10,6 +10,7 @@ package internalapi
 import (
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -27,12 +28,26 @@ const (
 	InternalEndpointMetadataNamespace = "aigateway.envoy.io"
 	// InternalMetadataBackendNameKey is the key used to store the backend name
 	InternalMetadataBackendNameKey = "per_route_rule_backend_name"
+	// InternalMetadataUpstreamHostKey is the key used to store the resolved upstream host on endpoint
+	// metadata (e.g. consumed by the AWS backend auth handler for SigV4 signing).
+	InternalMetadataUpstreamHostKey = "upstream_host"
 	// InternalMetadataRouteNameKey is the key used to store the route name.
 	InternalMetadataRouteNameKey = "aigw_route_name"
+	// UpstreamHostHeader carries the upstream host resolved at config time from the upstream ext_proc
+	// filter to backend auth handlers. The AWS handler derives its SigV4 signing region from this host,
+	// so there is no separate region header.
+	UpstreamHostHeader = EnvoyAIGatewayHeaderPrefix + "upstream-host"
 	// MCPBackendHeader is the special header key used to specify the target backend name.
 	MCPBackendHeader = EnvoyAIGatewayHeaderPrefix + "mcp-backend"
 	// MCPRouteHeader is the special header key used to identify the mcp route.
 	MCPRouteHeader = EnvoyAIGatewayHeaderPrefix + "mcp-route"
+	// MCPSubjectHeader carries the authenticated subject (the JWT "sub" claim) as extracted
+	// and verified by Envoy's JWT filter via a claimToHeaders mapping.
+	MCPSubjectHeader = EnvoyAIGatewayHeaderPrefix + "mcp-subject"
+	// MCPBackendSubsetHeader is the trusted, shim-supplied comma-separated backend subset a request may fan out to.
+	MCPBackendSubsetHeader = EnvoyAIGatewayHeaderPrefix + "mcp-backend-subset"
+	// MCPBackendSubsetMetadataKey is the dynamic metadata key the shim sets; Envoy renders it into MCPBackendSubsetHeader.
+	MCPBackendSubsetMetadataKey = "mcp_backend_subset"
 	// MCPBackendListenerPort is the port for the MCP backend listener.
 	MCPBackendListenerPort = 10088
 	// MCPProxyPort is the port where the MCP proxy listens.
@@ -61,7 +76,21 @@ const (
 	MCPMetadataHeaderToolName = MCPMetadataHeaderPrefix + "tool-name"
 	// MCPMetadataHeaderResourceURI is the special header key used to pass the MCP resource URI in the filter metadata.
 	MCPMetadataHeaderResourceURI = MCPMetadataHeaderPrefix + "resource-uri"
+
+	// AWSCredentialOverrideHeaderPrefix is the default prefix for the three headers carrying a
+	// per-request SigV4 credential. SigV4 takes three inputs, so unlike other auth types this is a
+	// prefix, not a full header name.
+	AWSCredentialOverrideHeaderPrefix = "x-aigw-aws-" //nolint:gosec // G101: a header name prefix, not a credential.
+	// AWSCredentialOverrideMetadataKey is the default metadata key for a per-request AWS
+	// credential. One key, not a prefix: the value is a struct holding all three inputs.
+	AWSCredentialOverrideMetadataKey = "x-aigw-aws-credentials" //nolint:gosec // G101: a metadata key name, not a credential.
 )
+
+// AWSCredentialOverrideHeaderNames derives the three SigV4 header names from a prefix. The
+// controller builds its strip list from it, the extproc reads them; it lives here so both agree.
+func AWSCredentialOverrideHeaderNames(prefix string) (accessKeyID, secretAccessKey, sessionToken string) {
+	return prefix + "access-key-id", prefix + "secret-access-key", prefix + "session-token"
+}
 
 // MCPInternalHeadersToMetadata maps special MCP headers to metadata keys.
 //
@@ -105,6 +134,8 @@ const (
 	XDSClusterMetadataBackendNamePath = "xds.cluster_metadata.filter_metadata['aigateway.envoy.io']['per_route_rule_backend_name']"
 	// XDSUpstreamHostMetadataBackendNamePath is the full attribute path to access the backend name in upstream host metadata in xDS attributes.
 	XDSUpstreamHostMetadataBackendNamePath = "xds.upstream_host_metadata.filter_metadata['aigateway.envoy.io']['per_route_rule_backend_name']"
+	// XDSUpstreamHostMetadataUpstreamHostPath is the full attribute path to access the resolved upstream host in upstream host metadata in xDS attributes.
+	XDSUpstreamHostMetadataUpstreamHostPath = "xds.upstream_host_metadata.filter_metadata['aigateway.envoy.io']['upstream_host']"
 	// XDSRouteMetadataRouteNamePath is the full attribute path to access the route name in route metadata in xDS attributes.
 	XDSRouteMetadataRouteNamePath = "xds.route_metadata.filter_metadata['aigateway.envoy.io']['aigw_route_name']"
 )
@@ -114,6 +145,28 @@ const (
 // route rule in a specific AIGatewayRoute.
 func PerRouteRuleRefBackendName(namespace, name, routeName string, routeRuleIndex, refIndex int) string {
 	return fmt.Sprintf("%s/%s/route/%s/rule/%d/ref/%d", namespace, name, routeName, routeRuleIndex, refIndex)
+}
+
+// awsBedrockHostRE matches an AWS Bedrock runtime host — public, FIPS, PrivateLink (VPCE), or the
+// newer api.aws domain — and captures the region, e.g. bedrock-runtime.us-east-1.amazonaws.com,
+// bedrock-runtime-fips.us-east-1.amazonaws.com, vpce-<id>.bedrock-runtime.us-east-1.vpce.amazonaws.com,
+// and bedrock-runtime.us-east-1.api.aws all yield "us-east-1". The anchors reject a spoofed suffix such
+// as bedrock-runtime.us-east-1.amazonaws.com.evil.com.
+var awsBedrockHostRE = regexp.MustCompile(`(?:^|\.)bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.(?:vpce\.amazonaws\.com|amazonaws\.com|api\.aws)$`)
+
+// AWSBedrockRegionFromHost returns the AWS region encoded in a Bedrock signing host, or "" if no region
+// can be derived from host. It is used to self-correct the SigV4 signing region when the resolved
+// upstream host disagrees with the handler's configured region (e.g. a VPCE in a different region than
+// the gateway was configured for).
+//
+// Any other host — including a custom/internal hostname such as bedrock.corp.internal, which encodes no
+// region at all — yields "", and the caller falls back to its statically configured region. That
+// fallback is correct in that case, not a bug: there is no region to extract from an arbitrary hostname.
+func AWSBedrockRegionFromHost(host string) string {
+	if m := awsBedrockHostRE.FindStringSubmatch(host); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 const (

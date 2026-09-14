@@ -1,0 +1,112 @@
+.section {
+  background: var(--ar-cream-2);
+  padding: 104px 0;
+}
+:global([data-theme='dark']) .section { background: var(--ar-ink-900); }
+
+/* backstage panel — curtain gradient + sequin texture (kit ceiling 0.06) */
+.panel {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--ar-gradient-curtain);
+  color: #f3efeb;
+  border-radius: 28px;
+  padding: 64px;
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 64px;
+  align-items: center;
+  box-shadow: var(--ar-shadow-lg);
+}
+.panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--ar-texture-sequin);
+}
+
+.label {
+  font: 600 var(--ar-text-xs) / 1 var(--ar-font-ui);
+  letter-spacing: var(--ar-tracking-label);
+  text-transform: uppercase;
+  color: var(--ar-gilt-300);
+}
+
+.title {
+  font: 800 var(--ar-text-2xl) / 1.15 var(--ar-font-display);
+  margin: 14px 0 18px;
+  color: #f3efeb;
+}
+
+.body {
+  color: #b8afa6;
+  font-size: var(--ar-text-sm);
+  margin-bottom: 26px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.tab {
+  font: 600 var(--ar-text-xs) / 1 var(--ar-font-ui);
+  letter-spacing: var(--ar-tracking-label);
+  text-transform: uppercase;
+  color: #b8afa6;
+  background: transparent;
+  border: 1px solid rgba(243, 239, 235, 0.18);
+  border-radius: 999px;
+  padding: 9px 16px;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.tab:hover { color: #f3efeb; }
+.tabActive {
+  color: var(--ar-gilt-300);
+  border-color: var(--ar-gilt-300);
+  background: rgba(243, 239, 235, 0.06);
+}
+
+.term {
+  background: rgba(18, 16, 14, 0.75);
+  border: 1px solid rgba(243, 239, 235, 0.14);
+  border-radius: var(--ar-radius-lg);
+  overflow: hidden;
+  backdrop-filter: blur(4px);
+}
+
+.termBar {
+  display: flex;
+  gap: 6px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(243, 239, 235, 0.1);
+}
+.termBar i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(243, 239, 235, 0.18);
+}
+
+.termPre {
+  margin: 0;
+  padding: 22px 24px;
+  font: 400 0.85rem / 1.7 var(--ar-font-mono);
+  color: #e8e2db;
+  overflow-x: auto;
+  background: transparent;
+  border-radius: 0;
+  /* tallest tab (Kubernetes, 9 lines) sets the floor so switching doesn't jump */
+  min-height: 210px;
+}
+
+.comment { color: #8a7f76; }
+.cmd { color: var(--ar-verdigris-400); }
+.env { color: var(--ar-gilt-300); }
+
+@media (max-width: 996px) {
+  .panel { grid-template-columns: 1fr; padding: 36px; gap: 36px; }
+}

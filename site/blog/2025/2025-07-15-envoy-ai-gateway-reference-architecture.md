@@ -3,13 +3,13 @@ slug: envoy-ai-gateway-reference-architecture
 title: A Reference Architecture for Adopters of Envoy AI Gateway
 authors: [missberg, alexagriffith]
 tags: [reference, adopters]
-image: /img/blog/ref-arch-blog-hero.png
+image: /img/og/blog/envoy-ai-gateway-reference-architecture.png
 description: Explore how to build a scalable GenAI platform using a two-tier architecture with Envoy AI Gateway. Centralize access to external and self-hosted LLMs through a unified API while managing credentials, costs, and governance.
 ---
 
 # A Reference Architecture for Adopters of Envoy AI Gateway
 
-![Reference Architecture for Envoy AI Gateway](/img/blog/ref-arch-blog-hero.png)
+![Reference Architecture for Envoy AI Gateway](/img/og/blog/envoy-ai-gateway-reference-architecture.png)
 
 # Building a Scalable, Flexible, Cloud-Native GenAI Platform with Open Source Solutions
 

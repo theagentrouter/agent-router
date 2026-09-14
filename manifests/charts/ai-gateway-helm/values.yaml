@@ -65,6 +65,14 @@ extProc:
   ##   # GCP ADC authentication requests will use this proxy if set.
   ##   - name: AI_GATEWAY_GCP_AUTH_PROXY_URL
   ##     value: "http://proxy.example.com:8080"
+  ##   # Emit OpenTelemetry GenAI span attributes instead of the default
+  ##   # OpenInference ones, and the OpenTelemetry MCP attributes instead of the
+  ##   # gateway-specific mcp.* ones. An unrecognized value fails startup.
+  ##   - name: AI_GATEWAY_TRACING_SEMCONV
+  ##     value: "gen_ai"
+  ##   # The GenAI conventions treat message content as opt-in.
+  ##   - name: OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+  ##     value: "true"
   ##
   extraEnvVars: []
 
@@ -139,6 +147,8 @@ controller:
     tag: ""
   imagePullPolicy: IfNotPresent
   replicaCount: 1
+  # Optional. Empty omits the field from the pod spec.
+  priorityClassName: ""
   imagePullSecrets: []
   podAnnotations: {}
   podLabels: {}

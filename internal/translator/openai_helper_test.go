@@ -1469,3 +1469,44 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_SignatureDelta(t *testing.T)
 	}
 	assert.True(t, hasSignatureDelta, "expected a signature_delta event")
 }
+
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingBlocks(t *testing.T) {
+	// Signatures now ride on delta.thinking_blocks (reasoning_content is a plain
+	// string), so a chunk carrying thinking_blocks must round-trip both the thinking
+	// text and its signature to the Anthropic protocol.
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "claude-3",
+	}
+
+	input := `data: {"id":"chatcmpl-tb","choices":[{"index":0,"delta":{"role":"assistant","thinking_blocks":[{"type":"thinking","thinking":"deep thought","signature":"sig_tb"}]}}],"model":"gpt-4o"}` + "\n\n" +
+		`data: {"id":"chatcmpl-tb","choices":[{"index":0,"delta":{"content":"Answer"}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-tb","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-tb","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	state.buffer.WriteString(input)
+
+	var out []byte
+	err := state.processBuffer(&out, true)
+	require.NoError(t, err)
+
+	events := parseSSEEventsFromBytes(out)
+
+	var hasThinkingBlock, hasThinkingDelta, hasSignatureDelta bool
+	for _, e := range events {
+		switch {
+		case e.eventType == "content_block_start" && bytes.Contains([]byte(e.data), []byte(`"thinking"`)):
+			hasThinkingBlock = true
+		case e.eventType == "content_block_delta" && bytes.Contains([]byte(e.data), []byte(`"thinking_delta"`)):
+			hasThinkingDelta = true
+			assert.Contains(t, e.data, `"deep thought"`)
+		case e.eventType == "content_block_delta" && bytes.Contains([]byte(e.data), []byte(`"signature_delta"`)):
+			hasSignatureDelta = true
+			assert.Contains(t, e.data, `"sig_tb"`)
+		}
+	}
+	assert.True(t, hasThinkingBlock, "expected a thinking content_block_start")
+	assert.True(t, hasThinkingDelta, "expected a thinking_delta event")
+	assert.True(t, hasSignatureDelta, "expected a signature_delta event")
+}

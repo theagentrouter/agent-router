@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -610,6 +611,63 @@ data: {"type": "message_stop"}
 		require.Contains(t, bodyStr, `"finish_reason":"stop"`)
 		require.Contains(t, bodyStr, `"prompt_tokens":25`)
 		require.Contains(t, bodyStr, `"completion_tokens":15`)
+		require.Contains(t, bodyStr, string(sseDoneMessage))
+		// The ping event is translated into an empty keep-alive chunk and does
+		// not consume the role-bearing first chunk: the role still lands on the
+		// first real content chunk.
+		require.Contains(t, bodyStr, `"delta":{}}`)
+		require.Contains(t, bodyStr, `"role":"assistant"`)
+	})
+
+	t.Run("emits empty keep-alive chunk on ping", func(t *testing.T) {
+		sseStream := `
+event: message_start
+data: {"type": "message_start", "message": {"id": "msg_ping", "type": "message", "role": "assistant", "content": [], "model": "claude-opus-4-20250514", "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 5, "output_tokens": 1}}}
+
+event: ping
+data: {"type": "ping"}
+
+event: content_block_start
+data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+
+event: ping
+data: {"type": "ping"}
+
+event: content_block_delta
+data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi"}}
+
+event: content_block_stop
+data: {"type": "content_block_stop", "index": 0}
+
+event: message_delta
+data: {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence":null}, "usage": {"output_tokens": 3}}
+
+event: message_stop
+data: {"type": "message_stop"}
+
+`
+		eventStreamData, err := wrapAnthropicSSEInEventStream(sseStream)
+		require.NoError(t, err)
+
+		openAIReq := &openai.ChatCompletionRequest{Stream: true, Model: "test-model", MaxTokens: new(int64)}
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "").(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
+		_, _, err = translator.RequestBody(nil, openAIReq, false)
+		require.NoError(t, err)
+
+		_, bm, _, _, err := translator.ResponseBody(map[string]string{}, bytes.NewReader(eventStreamData), true, nil)
+		require.NoError(t, err)
+		require.NotNil(t, bm)
+
+		bodyStr := string(bm)
+		// Each ping produces exactly one empty-delta keep-alive chunk.
+		require.Equal(t, 2, strings.Count(bodyStr, `"delta":{}}`))
+		// The empty keep-alive chunks carry the active message ID so downstream
+		// clients see a well-formed chunk.
+		require.Contains(t, bodyStr, `"id":"msg_ping"`)
+		// The assistant role is still emitted on the first real content chunk,
+		// not consumed by the preceding ping chunk.
+		require.Contains(t, bodyStr, `"role":"assistant"`)
+		require.Contains(t, bodyStr, `"content":"Hi"`)
 		require.Contains(t, bodyStr, string(sseDoneMessage))
 	})
 

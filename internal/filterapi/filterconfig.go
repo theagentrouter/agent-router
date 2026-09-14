@@ -141,6 +141,9 @@ type VersionedAPISchema struct {
 
 // OpenAIPrefix returns the OpenAI API prefix for the VersionedAPISchema.
 func (v VersionedAPISchema) OpenAIPrefix() string {
+	if v.Name == APISchemaAWSOpenAI && v.Prefix == "" {
+		return "openai/v1"
+	}
 	return v.Prefix
 }
 
@@ -178,6 +181,8 @@ const (
 	// Used for Claude models hosted on AWS Bedrock. Supports both OpenAI and Anthropic input formats
 	// depending on the endpoint path, similar to APISchemaGCPAnthropic.
 	APISchemaAWSAnthropic APISchemaName = "AWSAnthropic"
+	// APISchemaAWSOpenAI represents the AWS OpenAI-compatible API schema.
+	APISchemaAWSOpenAI APISchemaName = "AWSOpenAI"
 )
 
 // RouteRuleName is the name of the route rule.
@@ -197,6 +202,9 @@ type Backend struct {
 	HeaderMutation *HTTPHeaderMutation `json:"httpHeaderMutation,omitempty"`
 	// Body mutations to be applied to the request before sending to the backend. Optional.
 	BodyMutation *HTTPBodyMutation `json:"httpBodyMutation,omitempty"`
+	// HeaderValueFilters filter individual values out of multi-valued request headers before sending
+	// the request to the backend. Optional.
+	HeaderValueFilters []HTTPHeaderValueFilter `json:"headerValueFilters,omitempty"`
 }
 
 // BackendAuth corresponds partially to BackendSecurityPolicy in api/v1alpha1/api.go.
@@ -223,21 +231,23 @@ type BackendAuth struct {
 type CredentialOverride struct {
 	// HeaderName is the request header that carries the per-request credential.
 	// Set for fromRequestHeaders source; empty for fromDynamicMetadata source.
+	// For AWS this is a prefix, not a full header name: see
+	// internalapi.AWSCredentialOverrideHeaderNames for the three names derived from it.
 	HeaderName string `json:"headerName,omitempty"`
 	// DynamicMetadataNamespace is the Envoy metadata namespace to read from.
 	// Set for fromDynamicMetadata source; empty for fromRequestHeaders source.
 	DynamicMetadataNamespace string `json:"dynamicMetadataNamespace,omitempty"`
 	// DynamicMetadataKey is the key within DynamicMetadataNamespace.
+	// For AWS the value is a struct with accessKeyId/secretAccessKey/sessionToken, not a string.
 	DynamicMetadataKey string `json:"dynamicMetadataKey,omitempty"`
 	// FallbackToConfigured controls behaviour when the source value is absent.
 	// true falls back to the static credential; false returns 401 to the caller.
 	FallbackToConfigured bool `json:"fallbackToConfigured"`
-	// InputHeaderToRemove is the header that should be stripped before the request
-	// reaches the upstream backend. Only set for HeaderName source.
-	// The controller adds this to the backend HeaderMutation.Remove list so the
-	// HeaderMutator tells Envoy to remove it upstream while keeping it visible
-	// in the local requestHeaders map for the handler to read.
-	InputHeaderToRemove string `json:"inputHeaderToRemove,omitempty"`
+	// InputHeadersToRemove are stripped before the request reaches the backend. Only set for the
+	// HeaderName source; one entry for every auth type except AWS, which has three.
+	// The controller adds these to HeaderMutation.Remove, so Envoy drops them upstream while they
+	// stay visible in the local requestHeaders map for the handler to read.
+	InputHeadersToRemove []string `json:"inputHeadersToRemove,omitempty"`
 }
 
 // AWSAuth defines the credentials needed to access AWS.
@@ -323,6 +333,16 @@ func (g GCPAuth) LogValue() slog.Value {
 		slog.String("region", g.Region),
 		slog.String("projectName", g.ProjectName),
 	)
+}
+
+// HTTPHeaderValueFilter filters individual values out of a multi-valued request header before
+// forwarding upstream. Mode is either "Denylist" (drop the listed Values) or "Allowlist" (keep only
+// the listed Values).
+type HTTPHeaderValueFilter struct {
+	// Name is the lower-cased name of the header whose values are filtered.
+	Name   string   `json:"name"`
+	Mode   string   `json:"mode"`
+	Values []string `json:"values,omitempty"`
 }
 
 // HTTPHeaderMutation defines the mutation of HTTP headers that will be applied to the request

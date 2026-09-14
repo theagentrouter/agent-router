@@ -1,6 +1,6 @@
 ---
 title: Release Notes
-description: Release Notes for Envoy AI Gateway
+description: Release Notes for Agent Router
 ---
 
 import Link from '@docusaurus/Link';
@@ -13,10 +13,12 @@ import v05Data from '../../data/releases/v0.5.json';
 import v06Data from '../../data/releases/v0.6.json';
 import v07Data from '../../data/releases/v0.7.json';
 import v10Data from '../../data/releases/v1.0.json';
+import v11Data from '../../data/releases/v1.1.json';
 import indexData from '../../data/releases/index.json';
 import styles from '../../components/ReleaseNotes/ReleaseNotes.module.css';
 
 export const allReleases = [
+  ...v11Data.releases,
   ...v10Data.releases,
   ...v07Data.releases,
   ...v06Data.releases,
@@ -40,18 +42,30 @@ export const getMarkerStyle = (type) => {
 
 # Release Notes
 
-Stay up-to-date with the latest improvements, features, and fixes in Envoy AI Gateway.
+Stay up-to-date with the latest improvements, features, and fixes in Agent Router.
 
 <div className={styles.releaseNotesGrid}>
   <ReleaseCard
+    version="v1.1.x"
+    date="August 21, 2026 - Current"
+    summary={v11Data.series.subtitle}
+    tags={v11Data.releases[0].tags.slice(0, 10)}
+    linkTo="/release-notes/v1.1"
+    linkText="View Release Notes →"
+    badge={v11Data.series.badge}
+    featured={true}
+    versions={v11Data.releases.map(release => release.version).join(', ')}
+  />
+
+  <ReleaseCard
     version="v1.0.x"
-    date="June 23, 2026 - Current (GA)"
+    date="June 23, 2026 - August 21, 2026"
     summary={v10Data.series.subtitle}
     tags={v10Data.releases[0].tags.slice(0, 10)}
     linkTo="/release-notes/v1.0"
     linkText="View Release Notes →"
     badge={v10Data.series.badge}
-    featured={true}
+    featured={false}
     versions={v10Data.releases.map(release => release.version).join(', ')}
   />
 
@@ -163,8 +177,8 @@ Stay up-to-date with the latest improvements, features, and fixes in Envoy AI Ga
 
 ## Community and Support
 
-Envoy AI Gateway is a community-driven project. We welcome your contributions and feedback!
+Agent Router is a community-driven project. We welcome your contributions and feedback!
 
-- 💬 Join our <a href={indexData.community.slack}>Slack channel</a>
+- 💬 Join our <a href={indexData.community.discord}>Discord</a>
 - 📅 Attend our <a href={indexData.community.meetings}>weekly community meetings</a>
 - 🐛 Report issues or contribute on <a href={indexData.community.github}>GitHub</a>

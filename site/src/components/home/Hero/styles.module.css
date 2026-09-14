@@ -1,0 +1,98 @@
+/* Warm-minimal hero: one stage glow + faded A-pattern, soft exit into the
+   next section (no hard bottom edge). */
+.hero {
+  position: relative;
+  isolation: isolate;
+  background: linear-gradient(
+    180deg,
+    var(--ar-cream) 0%,
+    var(--ar-cream) 66%,
+    var(--ar-paper) 100%
+  );
+  text-align: center;
+  padding: 104px 24px 144px;
+  overflow: hidden;
+}
+:global([data-theme='dark']) .hero {
+  background: linear-gradient(
+    180deg,
+    var(--ar-ink-900) 0%,
+    var(--ar-ink-900) 66%,
+    var(--ar-ink-800) 100%
+  );
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background: var(--ar-glow-marquee);
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent 92%);
+          mask-image: linear-gradient(to bottom, #000 55%, transparent 92%);
+}
+
+.hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: var(--ar-pattern-sparse);
+  background-size: var(--ar-pattern-lg);
+  background-position: center top;
+  opacity: var(--ar-pattern-alpha-light);
+  -webkit-mask-image: linear-gradient(to bottom, #000, transparent 68%);
+          mask-image: linear-gradient(to bottom, #000, transparent 68%);
+}
+:global([data-theme='dark']) .hero::after { opacity: var(--ar-pattern-alpha-dark); }
+
+.mark {
+  width: 96px;
+  margin: 0 auto 36px;
+  display: block;
+}
+
+.headline {
+  font: 800 clamp(3rem, 6vw, 4.75rem) / 1.04 var(--ar-font-display);
+  letter-spacing: var(--ar-tracking-display);
+  max-width: 26ch;
+  margin: 0 auto;
+  color: var(--ar-fg);
+}
+
+/* oxidise flourish — cream-safe gradient stops on light */
+.accent {
+  background: linear-gradient(120deg, #e04400 0%, #b83700 45%, #116355 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+:global([data-theme='dark']) .accent {
+  background: linear-gradient(120deg, #ff7a33 0%, #ff5500 45%, #31c4aa 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+.lead {
+  margin: 28px auto 0;
+  font-size: var(--ar-text-lg);
+  color: var(--ar-fg-muted);
+  max-width: 52ch;
+}
+.lead b { color: var(--ar-fg); font-weight: 600; }
+
+.ctas {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  margin-top: 40px;
+  flex-wrap: wrap;
+}
+
+.sub {
+  margin: 36px 0 0;
+  font: 500 var(--ar-text-sm) / 1 var(--ar-font-ui);
+  color: var(--ar-fg-subtle);
+}

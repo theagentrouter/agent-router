@@ -39,7 +39,6 @@ import (
 
 // extProcFlags is the struct that holds the flags passed to the external processor.
 type extProcFlags struct {
-	configPath                             string        // path to the configuration file.
 	configBundlePath                       string        // path to the sharded configuration bundle directory.
 	extProcAddr                            string        // gRPC address for the external processor.
 	logLevel                               slog.Level    // log level for the external processor.
@@ -89,12 +88,6 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 		fs    = flag.NewFlagSet("AI Gateway External Processor", flag.ContinueOnError)
 	)
 
-	fs.StringVar(&flags.configPath,
-		"configPath",
-		"",
-		"path to the configuration file. The file must be in YAML format specified in filterapi.Config type. "+
-			"The configuration file is watched for changes.",
-	)
 	fs.StringVar(&flags.configBundlePath,
 		"configBundlePath",
 		"",
@@ -165,8 +158,8 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 		return extProcFlags{}, fmt.Errorf("failed to parse extProcFlags: %w", err)
 	}
 
-	if flags.configPath == "" && flags.configBundlePath == "" {
-		errs = append(errs, fmt.Errorf("either configPath or configBundlePath must be provided"))
+	if flags.configBundlePath == "" {
+		errs = append(errs, fmt.Errorf("configBundlePath must be provided"))
 	}
 	if err := flags.logLevel.UnmarshalText([]byte(*logLevelPtr)); err != nil {
 		errs = append(errs, fmt.Errorf("failed to unmarshal log level: %w", err))
@@ -229,7 +222,6 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	l.Info("starting external processor",
 		slog.String("version", version.Parse()),
 		slog.String("address", flags.extProcAddr),
-		slog.String("configPath", flags.configPath),
 		slog.String("configBundlePath", flags.configBundlePath),
 	)
 
@@ -314,6 +306,7 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	rerankMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationRerank)
 	tokenizeMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTokenize)
 	responsesInputTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationResponsesInputTokens)
+	countTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationCountTokens)
 	mcpMetrics := metrics.NewMCP(meter, metricsRequestHeaderAttributes)
 
 	extproc.LogRequestHeaderAttributes = logRequestHeaderAttributes
@@ -349,9 +342,11 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	// Use /tokenize to be consistent with vLLM: https://github.com/vllm-project/vllm/blob/344b50d5258d7cf3f136416e1dbcd9b5ee99bb00/vllm/entrypoints/serve/tokenize/api_router.py#L37
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/tokenize"), extproc.NewFactory(
 		tokenizeMetricsFactory, tracing.TokenizeTracer(), endpointspec.TokenizeEndpointSpec{}))
+	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/messages/count_tokens"), extproc.NewFactory(
+		countTokensMetricsFactory, tracing.CountTokensTracer(), endpointspec.MessagesCountTokensEndpointSpec{}))
 
 	// Create and register gRPC server with ExternalProcessorServer (the service Envoy calls).
-	if err = startConfigWatcher(ctx, &flags, server, l, time.Second*5); err != nil {
+	if err = filterapi.StartConfigBundleWatcher(ctx, flags.configBundlePath, server, l, time.Second*5); err != nil {
 		return fmt.Errorf("failed to start config watcher: %w", err)
 	}
 
@@ -375,7 +370,7 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 		if err != nil {
 			return fmt.Errorf("failed to create MCP proxy: %w", err)
 		}
-		if err = startConfigWatcher(ctx, &flags, mcpProxyConfig, l, time.Second*5); err != nil {
+		if err = filterapi.StartConfigBundleWatcher(ctx, flags.configBundlePath, mcpProxyConfig, l, time.Second*5); err != nil {
 			return fmt.Errorf("failed to start config watcher: %w", err)
 		}
 
@@ -439,14 +434,6 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	// it would be extremely hard to debug issues where the external processor fails to start.
 	fmt.Fprintf(stderr, "AI Gateway External Processor is ready\n")
 	return s.Serve(extProcLis)
-}
-
-func startConfigWatcher(ctx context.Context, flags *extProcFlags, rcv filterapi.ConfigReceiver, l *slog.Logger, tick time.Duration) error {
-	if flags.configBundlePath != "" {
-		return filterapi.StartConfigBundleWatcher(ctx, flags.configBundlePath, rcv, l, tick)
-	}
-	// TODO(huabing): the legacy config watcher can be removed in the next release
-	return filterapi.StartLegacyConfigWatcher(ctx, flags.configPath, rcv, l, tick)
 }
 
 func listen(ctx context.Context, name, network, address string) (net.Listener, error) {

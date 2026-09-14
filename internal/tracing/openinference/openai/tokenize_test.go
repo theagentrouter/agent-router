@@ -145,7 +145,7 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 				HideOutputs: false,
 			},
 			expectedAttrs: map[string]interface{}{
-				openinference.SpanKind:            openinference.SpanKindLLM,
+				openinference.SpanKind:            openinference.SpanKindTokenCounter,
 				openinference.LLMSystem:           openinference.LLMSystemOpenAI,
 				openinference.LLMModelName:        "gpt-4",
 				openinference.InputValue:          `{"model":"gpt-4","messages":[...]}`,
@@ -175,7 +175,7 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 				HideOutputs: false,
 			},
 			expectedAttrs: map[string]interface{}{
-				openinference.SpanKind:        openinference.SpanKindLLM,
+				openinference.SpanKind:        openinference.SpanKindTokenCounter,
 				openinference.LLMSystem:       openinference.LLMSystemOpenAI,
 				openinference.LLMModelName:    "gpt-3.5-turbo",
 				openinference.InputValue:      `{"model":"gpt-3.5-turbo","prompt":"Complete this"}`,
@@ -207,7 +207,7 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 				HideOutputs: false,
 			},
 			expectedAttrs: map[string]interface{}{
-				openinference.SpanKind:     openinference.SpanKindLLM,
+				openinference.SpanKind:     openinference.SpanKindTokenCounter,
 				openinference.LLMSystem:    openinference.LLMSystemOpenAI,
 				openinference.LLMModelName: "gpt-4",
 				"tokenize.request_type":    "chat",

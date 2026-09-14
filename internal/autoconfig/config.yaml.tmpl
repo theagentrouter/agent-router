@@ -95,6 +95,11 @@ spec:
     level:
 {{- if .Debug }}
       default: debug
+      # Keep these two components out of the blanket debug level: at debug
+      # they each dump the full request headers (including the Authorization
+      # header the extproc injects with the backend API key) to the log.
+      http: info
+      ext_proc: info
 {{- else }}
       default: error
 {{- end }}
@@ -324,7 +329,11 @@ spec:
   schema:
     name: {{ .OpenAI.SchemaName }}
 {{- if .OpenAI.Version }}
+{{- if eq .OpenAI.SchemaName "AzureOpenAI" }}
     version: "{{ .OpenAI.Version }}"
+{{- else }}
+    prefix: "{{ .OpenAI.Version }}"
+{{- end }}
 {{- end }}
   backendRef:
     name: {{ .OpenAI.BackendName }}
@@ -357,7 +366,7 @@ spec:
   schema:
     name: {{ .Anthropic.SchemaName }}
 {{- if .Anthropic.Version }}
-    version: "{{ .Anthropic.Version }}"
+    prefix: "{{ .Anthropic.Version }}"
 {{- end }}
   backendRef:
     name: {{ .Anthropic.BackendName }}

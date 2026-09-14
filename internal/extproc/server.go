@@ -185,6 +185,8 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 				if internalReqID == "" {
 					return status.Errorf(codes.Internal, "missing internal request ID header from router filter")
 				}
+				upstreamHostAttrs := req.GetAttributes()["envoy.filters.http.ext_proc"]
+				setUpstreamHostAttributes(headersMap, upstreamHostAttrs)
 			} else {
 				// For router filter, create a unique internal request ID to avoid race conditions
 				// with duplicate x-request-id values by appending a UUID suffix to the original request ID
@@ -434,6 +436,24 @@ func resolveRouteName(attributes *structpb.Struct) string {
 	return ""
 }
 
+func setUpstreamHostAttributes(headers map[string]string, attributes *structpb.Struct) {
+	// The upstream-host header is an internal, controller-derived value. A downstream client could also
+	// send it, so drop any inbound copy before overlaying trusted xDS metadata — otherwise, for an
+	// endpoint with no derivable metadata (e.g. EDS), the client-supplied value would survive and drive
+	// the AWS handler's SigV4 host.
+	delete(headers, internalapi.UpstreamHostHeader)
+
+	if attributes == nil {
+		return
+	}
+
+	if v, ok := attributes.Fields[internalapi.XDSUpstreamHostMetadataUpstreamHostPath]; ok {
+		if host := v.GetStringValue(); host != "" {
+			headers[internalapi.UpstreamHostHeader] = host
+		}
+	}
+}
+
 // Check implements [grpc_health_v1.HealthServer].
 func (s *Server) Check(context.Context, *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
 	return &grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_SERVING}, nil
@@ -451,12 +471,25 @@ func (s *Server) List(context.Context, *grpc_health_v1.HealthListRequest) (*grpc
 	}}, nil
 }
 
-// isSensitiveHeader reports whether the header name should be redacted in logs.
-// In addition to the static sensitiveHeaderKeys list, any header with the "x-aigw-"
-// prefix is treated as sensitive because it carries per-request credential overrides.
+// awsCredentialHeaderSuffixes are the tails of the three per-request SigV4 credential headers.
+// The prefix is configurable, so match on the suffix: otherwise a prefix outside x-aigw- (say
+// "x-aws-", to keep an existing injector unchanged) leaks the secret access key into debug logs.
+var awsCredentialHeaderSuffixes = []string{"-access-key-id", "-secret-access-key", "-session-token"}
+
+// isSensitiveHeader reports whether the header should be redacted in logs. Beyond the static
+// sensitiveHeaderKeys list: anything under "x-aigw-", which carries per-request credential
+// overrides, and any AWS SigV4 credential part under any prefix.
 func isSensitiveHeader(key string, sensitiveKeys []string) bool {
 	lower := strings.ToLower(key)
-	return slices.Contains(sensitiveKeys, lower) || strings.HasPrefix(lower, "x-aigw-")
+	if slices.Contains(sensitiveKeys, lower) || strings.HasPrefix(lower, "x-aigw-") {
+		return true
+	}
+	for _, suffix := range awsCredentialHeaderSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // filterSensitiveHeadersForLogging filters out sensitive headers from the provided HeaderMap for logging.

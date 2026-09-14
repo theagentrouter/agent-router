@@ -1,4 +1,4 @@
-# Envoy AI Gateway Documentation Site
+# Agent Router Documentation Site
 
 This file provides guidelines for AI coding assistants working on the documentation site.
 
@@ -9,6 +9,45 @@ This file provides guidelines for AI coding assistants working on the documentat
 - **Diagrams**: Mermaid (enabled via `@docusaurus/theme-mermaid`)
 - **Node.js**: 22.0+ required
 - **Package Manager**: npm 10.9.0
+
+## Brand System (Agent Router)
+
+The visual identity is vendored from
+[theagentrouter/brand-assets](https://github.com/theagentrouter/brand-assets)
+into `src/css/brand/` (tokens + A-pattern), `static/fonts/`, and
+`static/img/brand/` — **never edit vendored files here**; change them upstream
+and re-sync (see `src/css/brand/README.md`). Site chrome maps brand tokens onto
+Infima variables in `src/css/custom.css`.
+
+Rules that must not regress:
+
+- **Ink or white on orange, by ramp step**: `#FF5500` (Marquee 500) is a
+  mark/display colour and never a fill behind text. Interactive orange steps
+  down the ramp — buttons are Marquee 600 `#E04400` with white text, hover
+  700 `#B83700`; orange text on light grounds is Marquee 700.
+- **Envoy magenta `#AC6199` is transition-only** (the rebrand announcement
+  bar and "formerly" badges) — never in UI, marks, or new content.
+- **Pattern discipline**: one texture per screen, clipped to whole sections,
+  faded under text; opacity ceilings 0.06 light / 0.10 dark.
+- **Dark mode is real**: every new component needs `[data-theme='dark']`
+  coverage (semantic `--ar-*` tokens give most of it for free).
+
+## Renaming Rules (formerly Envoy AI Gateway)
+
+The product name is renamed **in prose only**. Frozen identifiers that must
+never be renamed: the `aigateway.envoyproxy.io` API group and annotations,
+all CRD kinds (`AIGatewayRoute`, `AIServiceBackend`, …), the `aigw` CLI (and
+its literal `--help` output quoted in docs), `envoyproxy/ai-gateway`
+repo/image/chart paths, and the `envoy-ai-gateway-system` namespace.
+Blog history, talks data, and release-notes series titles keep the old name.
+Run `npm run check:brand` after any docs-wide edit — CI-grade assertions
+guard all of the above.
+
+## Homepage Content
+
+All homepage copy lives in `src/data/home/` (`index.ts`, `providers.ts`);
+section components live in `src/components/home/`. To change homepage text,
+edit the data modules — do not hardcode copy in components.
 
 ## Project Structure
 

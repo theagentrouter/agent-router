@@ -244,26 +244,21 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 
 	podspec := &pod.Spec
 
-	// Resolve config secret sources.
-	// Prefer bundled config when available/valid, and fall back to legacy config for compatibility.
-	// If neither exists, skip mutation to avoid blocking Envoy pod creation.
+	// Resolve the config bundle.
+	// If it does not exist, skip mutation to avoid blocking Envoy pod creation.
 	// The controller will later trigger new pod mutations by updating pod/deployment annotations when the config secrets are created.
-	legacyConfigSecretName := legacyFilterConfigSecretName(gatewayName, gatewayNamespace)
 	bundleConfigIndexSecretName := FilterConfigBundleIndexSecretName(gatewayName, gatewayNamespace)
 
 	bundleConfigIndexSecret, err := g.kube.CoreV1().Secrets(pod.Namespace).Get(ctx, bundleConfigIndexSecretName, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
+		g.logger.Info("no filter config secret found, skipping mutation",
+			"gateway_name", gatewayName, "gateway_namespace", gatewayNamespace)
+		return nil
+	}
+	if err != nil {
 		return fmt.Errorf("failed to get bundled filter config secret %s: %w", bundleConfigIndexSecretName, err)
 	}
-	hasBundleConfig := err == nil && bundleConfigIndexSecret != nil
-
-	legacyConfigSecret, err := g.kube.CoreV1().Secrets(pod.Namespace).Get(ctx, legacyConfigSecretName, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to get legacy filter config secret %s: %w", legacyConfigSecretName, err)
-	}
-	hasLegacyConfig := err == nil && legacyConfigSecret != nil
-
-	if !hasBundleConfig && !hasLegacyConfig {
+	if bundleConfigIndexSecret == nil {
 		g.logger.Info("no filter config secret found, skipping mutation",
 			"gateway_name", gatewayName, "gateway_namespace", gatewayNamespace)
 		return nil
@@ -275,7 +270,6 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 	}
 
 	// Now we construct the AI Gateway managed containers and volumes.
-	filterConfigVolumeName := legacyFilterConfigVolumeName(gatewayName, gatewayNamespace)
 	filterConfigBundleVolumeName := filterConfigBundleVolumeName(gatewayName, gatewayNamespace)
 	volumes := []corev1.Volume{
 		{
@@ -285,54 +279,42 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 			},
 		},
 	}
-	if hasLegacyConfig {
-		volumes = append(volumes, corev1.Volume{
-			Name: filterConfigVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{SecretName: legacyConfigSecretName},
-			},
-		})
-	}
-
-	// Mount the shared config secrets if bundled config exists.
-	if hasBundleConfig {
-		projections := []corev1.VolumeProjection{
-			{
-				Secret: &corev1.SecretProjection{
-					LocalObjectReference: corev1.LocalObjectReference{Name: bundleConfigIndexSecretName},
-					Items: []corev1.KeyToPath{
-						{
-							Key:  FilterConfigBundleIndexKey,
-							Path: filterapi.ConfigBundleIndexFileName,
-						},
+	projections := []corev1.VolumeProjection{
+		{
+			Secret: &corev1.SecretProjection{
+				LocalObjectReference: corev1.LocalObjectReference{Name: bundleConfigIndexSecretName},
+				Items: []corev1.KeyToPath{
+					{
+						Key:  FilterConfigBundleIndexKey,
+						Path: filterapi.ConfigBundleIndexFileName,
 					},
 				},
 			},
-		}
-		optional := true
-		for i := range maxFilterConfigBundleSlots {
-			projections = append(projections, corev1.VolumeProjection{
-				Secret: &corev1.SecretProjection{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, i),
-					},
-					Optional: &optional,
-					Items: []corev1.KeyToPath{
-						{
-							Key:  FilterConfigBundlePartKey,
-							Path: filterapi.ConfigBundlePartPath(i),
-						},
+		},
+	}
+	optional := true
+	for i := range maxFilterConfigBundleSlots {
+		projections = append(projections, corev1.VolumeProjection{
+			Secret: &corev1.SecretProjection{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, i),
+				},
+				Optional: &optional,
+				Items: []corev1.KeyToPath{
+					{
+						Key:  FilterConfigBundlePartKey,
+						Path: filterapi.ConfigBundlePartPath(i),
 					},
 				},
-			})
-		}
-		volumes = append(volumes, corev1.Volume{
-			Name: filterConfigBundleVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Projected: &corev1.ProjectedVolumeSource{Sources: projections},
 			},
 		})
 	}
+	volumes = append(volumes, corev1.Volume{
+		Name: filterConfigBundleVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{Sources: projections},
+		},
+	})
 	podspec.Volumes = append(podspec.Volumes, volumes...)
 
 	// Add imagePullSecrets for extProc if configured
@@ -340,50 +322,24 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 		podspec.ImagePullSecrets = append(podspec.ImagePullSecrets, g.imagePullSecrets...)
 	}
 
-	const (
-		filterConfigMountPath       = "/etc/filter-config"
-		filterConfigFullPath        = filterConfigMountPath + "/" + FilterConfigKeyInSecret
-		filterConfigBundleMountPath = "/etc/filter-config-bundle"
-	)
+	const filterConfigBundleMountPath = "/etc/filter-config-bundle"
 	udsMountPath := filepath.Dir(g.udsPath)
 
 	// Build the extproc container via the shared builder. The builder produces the
 	// base container (image, env, base args, UDS mount, resources, securityContext,
 	// GatewayConfig volumeMounts, readiness probe); the secret-presence-driven parts
-	// (-configPath / -configBundlePath args and the legacy/bundle volumeMounts) are
+	// (-configBundlePath and its volumeMount) are
 	// added below, since they depend on which filter-config secrets exist at pod
 	// creation time and must stay out of the drift hash.
 	input := extProcContainerInput{gatewayConfig: gatewayConfig, needMCP: len(mcpRoutes.Items) > 0}
 	container := g.buildExtProcContainer(input)
 
-	// Prepend the config-routing flags so the arg order matches what extproc
-	// expects (configPath/bundlePath first, then base args).
-	configArgs := []string{}
-	if !hasBundleConfig { // for backward compatibility when upgrading from the previous version and the secret is created by the previous version
-		configArgs = append(configArgs, "-configPath", filterConfigFullPath)
-	}
-	if hasBundleConfig {
-		configArgs = append(configArgs, "-configBundlePath", filterConfigBundleMountPath)
-	}
-	if len(configArgs) > 0 {
-		container.Args = append(configArgs, container.Args...)
-	}
-
-	if hasLegacyConfig {
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name:      filterConfigVolumeName,
-			MountPath: filterConfigMountPath,
-			ReadOnly:  true,
-		})
-	}
-
-	if hasBundleConfig {
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name:      filterConfigBundleVolumeName,
-			MountPath: filterConfigBundleMountPath,
-			ReadOnly:  true,
-		})
-	}
+	container.Args = append([]string{"-configBundlePath", filterConfigBundleMountPath}, container.Args...)
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      filterConfigBundleVolumeName,
+		MountPath: filterConfigBundleMountPath,
+		ReadOnly:  true,
+	})
 
 	if g.extProcAsSideCar {
 		// RestartPolicy is set by the builder for the sidecar case.

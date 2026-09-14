@@ -331,6 +331,7 @@ spec:
                     - GCPAnthropic
                     - Anthropic
                     - AWSAnthropic
+                    - AWSOpenAI
                     type: string
                   prefix:
                     description: |-
@@ -725,6 +726,59 @@ spec:
                     - name
                     x-kubernetes-list-type: map
                 type: object
+              headerValueFilters:
+                description: |-
+                  HeaderValueFilters filter individual values out of multi-valued request headers before sending
+                  the request to this backend, so that one value an upstream provider does not accept does not
+                  fail the whole request. At most one filter per header name.
+
+                  Only GCPAnthropic and AWSAnthropic backends honor this, and today only for the
+                  `anthropic-beta` header — a filter naming any other header is accepted but has no effect.
+                  Setting it on a backend with any other schema is rejected.
+                items:
+                  description: |-
+                    HTTPHeaderValueFilter filters individual values out of a multi-valued request header before the
+                    request is forwarded to this backend.
+
+                    This drops (or restricts to) specific values from a comma-separated header while forwarding the
+                    rest untouched, so one unsupported value does not fail the whole request.
+
+                    Only comma-delimited headers are supported. Values are matched exactly, after surrounding
+                    whitespace is trimmed. To remove a header entirely, use HeaderMutation.Remove instead.
+                  properties:
+                    mode:
+                      default: Denylist
+                      description: Mode selects the filtering semantics. Defaults
+                        to Denylist.
+                      enum:
+                      - Denylist
+                      - Allowlist
+                      type: string
+                    name:
+                      description: |-
+                        Name is the name of the header whose values are filtered. Header names are
+                        case-insensitive (see https://datatracker.ietf.org/doc/html/rfc2616#section-4.2).
+                      maxLength: 256
+                      minLength: 1
+                      pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                      type: string
+                    values:
+                      description: |-
+                        Values is the list of header values to drop (Denylist) or keep (Allowlist).
+                        An empty list leaves the header unchanged.
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - name
+                  type: object
+                maxItems: 16
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               schema:
                 description: |-
                   APISchema specifies the API schema of the output format of requests from
@@ -746,6 +800,7 @@ spec:
                     - GCPAnthropic
                     - Anthropic
                     - AWSAnthropic
+                    - AWSOpenAI
                     type: string
                   prefix:
                     description: |-
@@ -782,6 +837,11 @@ spec:
             - backendRef
             - schema
             type: object
+            x-kubernetes-validations:
+            - message: headerValueFilters is only honored by GCPAnthropic and AWSAnthropic
+                backends
+              rule: '!has(self.headerValueFilters) || self.schema.name == ''GCPAnthropic''
+                || self.schema.name == ''AWSAnthropic'''
           status:
             description: Status defines the status details of the AIServiceBackend.
             properties:

@@ -114,19 +114,22 @@ func compileAuthorization(auth *filterapi.MCPRouteAuthorization) (*compiledAutho
 	return compiled, nil
 }
 
-// authorizeRequest authorizes the request based on the given MCPRouteAuthorization configuration.
-func (m *mcpRequestContext) authorizeRequest(authorization *compiledAuthorization, req *authorizationRequest) (bool, []string) {
-	if authorization == nil {
-		return true, nil
-	}
+// authzContext holds the parts of authorization that are the same no matter how many
+// targets (e.g. candidate backends) a single incoming request is checked against: the
+// parsed JWT claims/scopes, and the CEL activation built from headers/auth. Only
+// request.mcp.* varies per check, so activationFor patches just that part in place
+// instead of rebuilding the whole activation.
+type authzContext struct {
+	claims     jwt.MapClaims
+	scopes     sets.Set[string]
+	activation map[string]any
+	mcp        map[string]any // same map as activation["request"].(map[string]any)["mcp"]
+}
 
-	defaultAction := authorization.DefaultAction == filterapi.AuthorizationActionAllow
-
-	// If no rules are defined, return the default action.
-	if len(authorization.Rules) == 0 {
-		return defaultAction, nil
-	}
-
+// newAuthzContext parses the bearer token once. Callers that check many targets against
+// the same request should build this once and reuse it via authorizeRequestWith, instead
+// of re-parsing the token for every target.
+func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest) *authzContext {
 	scopeSet := sets.New[string]()
 	claims := jwt.MapClaims{}
 
@@ -147,6 +150,43 @@ func (m *mcpRequestContext) authorizeRequest(authorization *compiledAuthorizatio
 			delete(claims, "scp")
 		}
 	}
+	return &authzContext{claims: claims, scopes: scopeSet}
+}
+
+// activationFor returns the CEL activation for req, building it on the first call and
+// patching only request.mcp.* on later calls.
+func (a *authzContext) activationFor(req *authorizationRequest) map[string]any {
+	if a.mcp == nil {
+		a.activation, a.mcp = buildCELActivation(req, a.claims, a.scopes)
+		return a.activation
+	}
+	a.mcp["method"] = req.MCPMethod
+	a.mcp["backend"] = req.Backend
+	a.mcp["tool"] = req.Tool
+	a.mcp["params"] = normalizeParams(req.Params)
+	return a.activation
+}
+
+// authorizeRequest authorizes the request based on the given MCPRouteAuthorization configuration.
+// It builds a fresh, call-scoped authzContext. Callers that authorize the same request
+// against many targets (e.g. newSession's per-candidate-backend loop) should build an
+// authzContext once via newAuthzContext and call authorizeRequestWith directly instead.
+func (m *mcpRequestContext) authorizeRequest(authorization *compiledAuthorization, req *authorizationRequest) (bool, []string) {
+	if authorization == nil {
+		return true, nil
+	}
+	// If no rules are defined, return the default action without parsing the JWT.
+	if len(authorization.Rules) == 0 {
+		return authorization.DefaultAction == filterapi.AuthorizationActionAllow, nil
+	}
+	return m.authorizeRequestWith(authorization, req, m.newAuthzContext(req))
+}
+
+// authorizeRequestWith is authorizeRequest's matching logic, parameterized on an
+// authzContext so the JWT parsing and CEL activation building can be shared across
+// multiple calls for the same underlying request.
+func (m *mcpRequestContext) authorizeRequestWith(authorization *compiledAuthorization, req *authorizationRequest, ac *authzContext) (bool, []string) {
+	defaultAction := authorization.DefaultAction == filterapi.AuthorizationActionAllow
 
 	var requiredScopesForChallenge []string
 	var celActivation map[string]any
@@ -158,7 +198,7 @@ func (m *mcpRequestContext) authorizeRequest(authorization *compiledAuthorizatio
 		// Evaluate CEL expression if present.
 		if rule.celProgram != nil {
 			if celActivation == nil {
-				celActivation = buildCELActivation(req, claims, scopeSet)
+				celActivation = ac.activationFor(req)
 			}
 			match, err := m.evalRuleCEL(rule, celActivation)
 			if err != nil {
@@ -181,13 +221,13 @@ func (m *mcpRequestContext) authorizeRequest(authorization *compiledAuthorizatio
 		}
 
 		// Check source if specified.
-		if !claimsSatisfied(claims, rule.Source.JWT.Claims) {
+		if !claimsSatisfied(ac.claims, rule.Source.JWT.Claims) {
 			continue
 		}
 
 		// Scopes check doesn't make much sense if action is deny, we check it anyway.
 		requiredScopes := rule.Source.JWT.Scopes
-		if scopesSatisfied(scopeSet, requiredScopes) {
+		if scopesSatisfied(ac.scopes, requiredScopes) {
 			return action, nil
 		}
 
@@ -202,7 +242,11 @@ func (m *mcpRequestContext) authorizeRequest(authorization *compiledAuthorizatio
 	return defaultAction, requiredScopesForChallenge
 }
 
-func buildCELActivation(req *authorizationRequest, claims jwt.MapClaims, scopes sets.Set[string]) map[string]any {
+// buildCELActivation returns the CEL activation map, and separately the "request.mcp"
+// sub-map within it so callers can patch request.mcp.* in place on later evaluations
+// without rebuilding headers/auth. Both returned values share the same underlying map
+// for "mcp" -- mutating the second return value is visible through the first.
+func buildCELActivation(req *authorizationRequest, claims jwt.MapClaims, scopes sets.Set[string]) (map[string]any, map[string]any) {
 	// Normalize headers to lowercased keys to align with Envoy's behavior.
 	// Expose both single-value and multi-value header views for CEL.
 	// - request.headers: lowercased keys, first value only.
@@ -218,6 +262,12 @@ func buildCELActivation(req *authorizationRequest, claims jwt.MapClaims, scopes 
 		headersAll[lk] = append([]string(nil), v...)
 	}
 
+	mcp := map[string]any{
+		"method":  req.MCPMethod,
+		"backend": req.Backend,
+		"tool":    req.Tool,
+		"params":  normalizeParams(req.Params),
+	}
 	request := map[string]any{
 		"method":      req.HTTPMethod,
 		"host":        req.Host,
@@ -230,17 +280,10 @@ func buildCELActivation(req *authorizationRequest, claims jwt.MapClaims, scopes 
 				"scopes": sets.List(scopes),
 			},
 		},
-		"mcp": map[string]any{
-			"method":  req.MCPMethod,
-			"backend": req.Backend,
-			"tool":    req.Tool,
-			"params":  normalizeParams(req.Params),
-		},
+		"mcp": mcp,
 	}
 	// Only request is supported for now. Future expansions may include more context.
-	return map[string]any{
-		"request": request,
-	}
+	return map[string]any{"request": request}, mcp
 }
 
 // CEL sees the Go value as it is and we need to normalize it to a map[string]any so that CEL can refer to fields by their

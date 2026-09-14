@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
@@ -61,7 +62,6 @@ func Test_parseAndValidateFlags(t *testing.T) {
 		for _, tc := range []struct {
 			name             string
 			args             []string
-			configPath       string
 			configBundlePath string
 			addr             string
 			rootPrefix       string
@@ -70,141 +70,141 @@ func Test_parseAndValidateFlags(t *testing.T) {
 			enableRedaction  bool
 		}{
 			{
-				name:            "minimal extProcFlags",
-				args:            []string{"-configPath", "/path/to/config.yaml"},
-				configPath:      "/path/to/config.yaml",
-				addr:            ":1063",
-				rootPrefix:      "/",
-				logLevel:        slog.LevelInfo,
-				logFormat:       "text",
-				enableRedaction: false,
+				name:             "minimal extProcFlags",
+				args:             []string{"-configBundlePath", "/path/to/config-bundle"},
+				configBundlePath: "/path/to/config-bundle",
+				addr:             ":1063",
+				rootPrefix:       "/",
+				logLevel:         slog.LevelInfo,
+				logFormat:        "text",
+				enableRedaction:  false,
 			},
 			{
-				name:            "log format json",
-				args:            []string{"-configPath", "/path/to/config.yaml", "-logFormat", "json"},
-				configPath:      "/path/to/config.yaml",
-				addr:            ":1063",
-				rootPrefix:      "/",
-				logLevel:        slog.LevelInfo,
-				logFormat:       "json",
-				enableRedaction: false,
+				name:             "log format json",
+				args:             []string{"-configBundlePath", "/path/to/config-bundle", "-logFormat", "json"},
+				configBundlePath: "/path/to/config-bundle",
+				addr:             ":1063",
+				rootPrefix:       "/",
+				logLevel:         slog.LevelInfo,
+				logFormat:        "json",
+				enableRedaction:  false,
 			},
 			{
-				name:            "custom addr",
-				args:            []string{"-configPath", "/path/to/config.yaml", "-extProcAddr", "unix:///tmp/ext_proc.sock"},
-				configPath:      "/path/to/config.yaml",
-				addr:            "unix:///tmp/ext_proc.sock",
-				rootPrefix:      "/",
-				logLevel:        slog.LevelInfo,
-				enableRedaction: false,
+				name:             "custom addr",
+				args:             []string{"-configBundlePath", "/path/to/config-bundle", "-extProcAddr", "unix:///tmp/ext_proc.sock"},
+				configBundlePath: "/path/to/config-bundle",
+				addr:             "unix:///tmp/ext_proc.sock",
+				rootPrefix:       "/",
+				logLevel:         slog.LevelInfo,
+				enableRedaction:  false,
 			},
 			{
-				name:            "log level debug",
-				args:            []string{"-configPath", "/path/to/config.yaml", "-logLevel", "debug"},
-				configPath:      "/path/to/config.yaml",
-				addr:            ":1063",
-				rootPrefix:      "/",
-				logLevel:        slog.LevelDebug,
-				enableRedaction: false,
+				name:             "log level debug",
+				args:             []string{"-configBundlePath", "/path/to/config-bundle", "-logLevel", "debug"},
+				configBundlePath: "/path/to/config-bundle",
+				addr:             ":1063",
+				rootPrefix:       "/",
+				logLevel:         slog.LevelDebug,
+				enableRedaction:  false,
 			},
 			{
-				name:            "log level debug with redaction enabled",
-				args:            []string{"-configPath", "/path/to/config.yaml", "-logLevel", "debug", "-enableRedaction"},
-				configPath:      "/path/to/config.yaml",
-				addr:            ":1063",
-				rootPrefix:      "/",
-				logLevel:        slog.LevelDebug,
-				enableRedaction: true,
+				name:             "log level debug with redaction enabled",
+				args:             []string{"-configBundlePath", "/path/to/config-bundle", "-logLevel", "debug", "-enableRedaction"},
+				configBundlePath: "/path/to/config-bundle",
+				addr:             ":1063",
+				rootPrefix:       "/",
+				logLevel:         slog.LevelDebug,
+				enableRedaction:  true,
 			},
 			{
-				name:            "log level warn",
-				args:            []string{"-configPath", "/path/to/config.yaml", "-logLevel", "warn"},
-				configPath:      "/path/to/config.yaml",
-				addr:            ":1063",
-				rootPrefix:      "/",
-				logLevel:        slog.LevelWarn,
-				enableRedaction: false,
+				name:             "log level warn",
+				args:             []string{"-configBundlePath", "/path/to/config-bundle", "-logLevel", "warn"},
+				configBundlePath: "/path/to/config-bundle",
+				addr:             ":1063",
+				rootPrefix:       "/",
+				logLevel:         slog.LevelWarn,
+				enableRedaction:  false,
 			},
 			{
-				name:            "log level error",
-				args:            []string{"-configPath", "/path/to/config.yaml", "-logLevel", "error"},
-				configPath:      "/path/to/config.yaml",
-				addr:            ":1063",
-				rootPrefix:      "/",
-				logLevel:        slog.LevelError,
-				enableRedaction: false,
+				name:             "log level error",
+				args:             []string{"-configBundlePath", "/path/to/config-bundle", "-logLevel", "error"},
+				configBundlePath: "/path/to/config-bundle",
+				addr:             ":1063",
+				rootPrefix:       "/",
+				logLevel:         slog.LevelError,
+				enableRedaction:  false,
 			},
 			{
 				name: "all extProcFlags",
 				args: []string{
-					"-configPath", "/path/to/config.yaml",
+					"-configBundlePath", "/path/to/config-bundle",
 					"-extProcAddr", "unix:///tmp/ext_proc.sock",
 					"-logLevel", "debug",
 					"-rootPrefix", "/foo/bar/",
 				},
-				configPath:      "/path/to/config.yaml",
-				addr:            "unix:///tmp/ext_proc.sock",
-				rootPrefix:      "/foo/bar/",
-				logLevel:        slog.LevelDebug,
-				enableRedaction: false,
+				configBundlePath: "/path/to/config-bundle",
+				addr:             "unix:///tmp/ext_proc.sock",
+				rootPrefix:       "/foo/bar/",
+				logLevel:         slog.LevelDebug,
+				enableRedaction:  false,
 			},
 			{
-				name:            "with endpoint prefixes",
-				args:            []string{"-configPath", "/path/to/config.yaml", "-endpointPrefixes", "openai:/,cohere:/cohere,anthropic:/anthropic"},
-				configPath:      "/path/to/config.yaml",
-				addr:            ":1063",
-				rootPrefix:      "/",
-				logLevel:        slog.LevelInfo,
-				enableRedaction: false,
+				name:             "with endpoint prefixes",
+				args:             []string{"-configBundlePath", "/path/to/config-bundle", "-endpointPrefixes", "openai:/,cohere:/cohere,anthropic:/anthropic"},
+				configBundlePath: "/path/to/config-bundle",
+				addr:             ":1063",
+				rootPrefix:       "/",
+				logLevel:         slog.LevelInfo,
+				enableRedaction:  false,
 			},
 			{
 				name: "with metrics header mapping",
 				args: []string{
-					"-configPath", "/path/to/config.yaml",
+					"-configBundlePath", "/path/to/config-bundle",
 					"-metricsRequestHeaderAttributes", "x-tenant-id:tenant.id,x-tenant-id:tenant.id",
 				},
-				configPath:      "/path/to/config.yaml",
-				rootPrefix:      "/",
-				addr:            ":1063",
-				logLevel:        slog.LevelInfo,
-				enableRedaction: false,
+				configBundlePath: "/path/to/config-bundle",
+				rootPrefix:       "/",
+				addr:             ":1063",
+				logLevel:         slog.LevelInfo,
+				enableRedaction:  false,
 			},
 			{
 				name: "with base header mapping",
 				args: []string{
-					"-configPath", "/path/to/config.yaml",
+					"-configBundlePath", "/path/to/config-bundle",
 					"-metricsRequestHeaderAttributes", "x-team-id:team.id,x-user-id:user.id",
 				},
-				configPath:      "/path/to/config.yaml",
-				rootPrefix:      "/",
-				addr:            ":1063",
-				logLevel:        slog.LevelInfo,
-				enableRedaction: false,
+				configBundlePath: "/path/to/config-bundle",
+				rootPrefix:       "/",
+				addr:             ":1063",
+				logLevel:         slog.LevelInfo,
+				enableRedaction:  false,
 			},
 			{
 				name: "with tracing header attributes",
 				args: []string{
-					"-configPath", "/path/to/config.yaml",
+					"-configBundlePath", "/path/to/config-bundle",
 					"-spanRequestHeaderAttributes", "x-session-id:session.id,x-user-id:user.id",
 				},
-				configPath:      "/path/to/config.yaml",
-				rootPrefix:      "/",
-				addr:            ":1063",
-				logLevel:        slog.LevelInfo,
-				enableRedaction: false,
+				configBundlePath: "/path/to/config-bundle",
+				rootPrefix:       "/",
+				addr:             ":1063",
+				logLevel:         slog.LevelInfo,
+				enableRedaction:  false,
 			},
 			{
 				name: "with both metrics and tracing headers",
 				args: []string{
-					"-configPath", "/path/to/config.yaml",
+					"-configBundlePath", "/path/to/config-bundle",
 					"-metricsRequestHeaderAttributes", "x-user-id:user.id",
 					"-spanRequestHeaderAttributes", "x-session-id:session.id",
 				},
-				configPath:      "/path/to/config.yaml",
-				rootPrefix:      "/",
-				addr:            ":1063",
-				logLevel:        slog.LevelInfo,
-				enableRedaction: false,
+				configBundlePath: "/path/to/config-bundle",
+				rootPrefix:       "/",
+				addr:             ":1063",
+				logLevel:         slog.LevelInfo,
+				enableRedaction:  false,
 			},
 			{
 				name:             "bundle path only",
@@ -219,7 +219,6 @@ func Test_parseAndValidateFlags(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				flags, err := parseAndValidateFlags(tc.args)
 				require.NoError(t, err)
-				require.Equal(t, tc.configPath, flags.configPath)
 				require.Equal(t, tc.configBundlePath, flags.configBundlePath)
 				require.Equal(t, tc.addr, flags.extProcAddr)
 				require.Equal(t, tc.logLevel, flags.logLevel)
@@ -244,31 +243,31 @@ func Test_parseAndValidateFlags(t *testing.T) {
 			{
 				name:          "invalid log level",
 				args:          []string{"-logLevel", "invalid"},
-				expectedError: "either configPath or configBundlePath must be provided\nfailed to unmarshal log level: slog: level string \"invalid\": unknown name",
+				expectedError: "configBundlePath must be provided\nfailed to unmarshal log level: slog: level string \"invalid\": unknown name",
 			},
 			{
 				name:          "invalid log format",
-				args:          []string{"-configPath", "/path/to/config.yaml", "-logFormat", "yaml"},
+				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-logFormat", "yaml"},
 				expectedError: `invalid log format: "yaml", must be "text" or "json"`,
 			},
 			{
 				name:          "invalid endpoint prefixes - unknown key",
-				args:          []string{"-configPath", "/path/to/config.yaml", "-endpointPrefixes", "foo:/x"},
+				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-endpointPrefixes", "foo:/x"},
 				expectedError: "failed to parse endpoint prefixes: unknown endpointPrefixes key \"foo\" at position 1 (allowed: openai, cohere, anthropic)",
 			},
 			{
 				name:          "invalid endpoint prefixes - missing colon",
-				args:          []string{"-configPath", "/path/to/config.yaml", "-endpointPrefixes", "openai"},
+				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-endpointPrefixes", "openai"},
 				expectedError: "failed to parse endpoint prefixes: invalid endpointPrefixes pair at position 1: \"openai\" (expected format: key:value)",
 			},
 			{
 				name:          "invalid tracing header attributes - missing colon",
-				args:          []string{"-configPath", "/path/to/config.yaml", "-spanRequestHeaderAttributes", "x-session-id"},
+				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-spanRequestHeaderAttributes", "x-session-id"},
 				expectedError: "failed to parse tracing header mapping: invalid header-attribute pair at position 1: \"x-session-id\" (expected format: header:attribute)",
 			},
 			{
 				name:          "invalid tracing header attributes - empty header",
-				args:          []string{"-configPath", "/path/to/config.yaml", "-spanRequestHeaderAttributes", ":session.id"},
+				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-spanRequestHeaderAttributes", ":session.id"},
 				expectedError: "failed to parse tracing header mapping: empty header or attribute at position 1: \":session.id\"",
 			},
 		}
@@ -279,6 +278,11 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				require.EqualError(t, err, tt.expectedError)
 			})
 		}
+	})
+
+	t.Run("legacy config path is rejected", func(t *testing.T) {
+		_, err := parseAndValidateFlags([]string{"-configPath", "/path/to/config.yaml"})
+		require.EqualError(t, err, "failed to parse extProcFlags: flag provided but not defined: -configPath")
 	})
 }
 
@@ -313,17 +317,27 @@ func TestListenAddress(t *testing.T) {
 
 // TestExtProcStartupMessage ensures other programs can rely on the startup message to STDERR.
 func TestExtProcStartupMessage(t *testing.T) {
-	// Create a temporary config file.
+	// Create a temporary config bundle.
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "config.yaml")
-	require.NoError(t, os.WriteFile(configPath, []byte(`
+	configRaw := []byte(`
 version: dev
 backends:
 - name: openai
   schema:
     name: OpenAI
     version: v1
-`), 0o600))
+`)
+	configBundlePath := filepath.Join(tmpDir, "config-bundle")
+	part := filterapi.ConfigBundlePart{Name: "config", Path: filterapi.ConfigBundlePartPath(0), SizeBytes: len(configRaw)}
+	partPath := filepath.Join(configBundlePath, filepath.FromSlash(part.Path))
+	require.NoError(t, os.MkdirAll(filepath.Dir(partPath), 0o700))
+	require.NoError(t, os.WriteFile(partPath, configRaw, 0o600))
+	indexRaw, err := filterapi.MarshalConfigBundleIndex(&filterapi.ConfigBundleIndex{
+		Checksum: filterapi.ConfigBundleChecksum(configRaw),
+		Parts:    []filterapi.ConfigBundlePart{part},
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(configBundlePath, filterapi.ConfigBundleIndexFileName), indexRaw, 0o600))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -352,7 +366,7 @@ backends:
 	errCh := make(chan error, 1)
 	go func() {
 		args := []string{
-			"-configPath", configPath,
+			"-configBundlePath", configBundlePath,
 			"-extProcAddr", ":0",
 			"-adminPort", "0",
 			"-mcpAddr", "unix://" + socketPath,

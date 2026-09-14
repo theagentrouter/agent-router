@@ -1,0 +1,208 @@
+{
+  "series": {
+    "version": "v1.1",
+    "title": "Envoy AI Gateway v1.1.x",
+    "subtitle": "Token counting, per-request credentials, stream idle timeout, MCP hostname routing, OpenTelemetry GenAI tracing, and HTTP CONNECT egress.",
+    "badge": "Latest",
+    "badgeType": "milestone"
+  },
+  "releases": [
+    {
+      "version": "v1.1.0",
+      "date": "August 21, 2026",
+      "type": "minor",
+      "tags": [
+        { "text": "Tokenize API", "type": "feature" },
+        { "text": "Count Tokens", "type": "feature" },
+        { "text": "Per-Request Credentials", "type": "feature" },
+        { "text": "Stream Idle Timeout", "type": "feature" },
+        { "text": "MCP Hostnames", "type": "feature" },
+        { "text": "OTel GenAI Tracing", "type": "feature" },
+        { "text": "Forward Proxy", "type": "feature" },
+        { "text": "Helm Hardening", "type": "feature" }
+      ],
+      "overview": "Envoy AI Gateway v1.1.0 is the first minor release on the stable 1.x API. It adds token counting across providers, per-request upstream credentials, stream idle timeout with failover, MCP hostname routing and CEL backend selection, optional OpenTelemetry GenAI tracing, and HTTP CONNECT egress. Upgrading from v1.0 needs no CRD migrations; the only operator-facing change is Helm's restricted controller security context.",
+      "features": [
+        {
+          "title": "Token Counting APIs",
+          "items": [
+            {
+              "title": "vLLM-compatible <code>/tokenize</code> across providers",
+              "description": "Count tokens for a prompt without generating a completion. Chat messages and completion prompts use the <a href=\"https://docs.vllm.ai/en/latest/api/tokenization.html\">vLLM tokenize</a> request shape against vLLM, Vertex AI Gemini, GCP Anthropic, AWS Bedrock Converse, and AWS Anthropic. Native Anthropic clients can use <code>/anthropic/v1/messages/count_tokens</code>; Responses API clients can use <code>/v1/responses/input_tokens</code> (OpenAI and Azure OpenAI)."
+            },
+            {
+              "title": "Anthropic-format <code>/anthropic/v1/models</code>",
+              "description": "Claude clients that call Anthropic's model list endpoint now get the gateway's configured catalog in Anthropic's response shape, scoped by hostname the same way <code>/v1/models</code> is."
+            }
+          ]
+        },
+        {
+          "title": "Per-Request Credentials & Egress",
+          "items": [
+            {
+              "title": "Per-request upstream credentials via <code>credentialOverride</code>",
+              "description": "A trusted filter can supply the backend credential per request instead of sharing one static key in <code>BackendSecurityPolicy</code>. Source from Envoy dynamic metadata (preferred) or a request header the gateway strips before the backend. API keys, Anthropic, Azure, GCP, and AWS SigV4 are supported."
+            },
+            {
+              "title": "HTTP CONNECT forward proxy",
+              "description": "<code>GatewayConfig.spec.forwardProxy</code> tunnels upstream LLM connections through an HTTP CONNECT proxy (<code>host:port</code>). Bedrock requests through PrivateLink now sign over the actual upstream host, so VPC endpoints no longer fail with a silent 403."
+            }
+          ]
+        },
+        {
+          "title": "Streaming Resilience",
+          "items": [
+            {
+              "title": "Stream idle timeout with failover",
+              "description": "<code>AIGatewayRouteRule.streamIdleTimeout</code> bounds how long Envoy waits without upstream bytes on a streaming response. If it fires before the first token, a retry policy can fail over to the next backend; mid-stream it returns 504. Pair with a <code>BackendTrafficPolicy</code> whose retry covers reset."
+            }
+          ]
+        },
+        {
+          "title": "MCP Gateway",
+          "items": [
+            {
+              "title": "Hostname routing and backend selection",
+              "description": "<code>MCPRoute.spec.hostnames</code> scopes an MCP endpoint to specific hosts. <code>backendSelector</code> restricts which backends a session fans out to via CEL rules evaluated at initialize (default Deny). Initialize now advertises merged backend capabilities, and the controller shares one Envoy Gateway <code>Backend</code> per namespace."
+            }
+          ]
+        },
+        {
+          "title": "Observability",
+          "items": [
+            {
+              "title": "OpenTelemetry GenAI conventions and Grafana dashboard",
+              "description": "Set <code>AI_GATEWAY_TRACING_SEMCONV=gen_ai</code> on the ext-proc to emit <code>gen_ai.*</code> span attributes. An example dashboard for <code>gen_ai_*</code> Prometheus metrics ships in <code>examples/monitoring/grafana-dashboard.json</code>. Controller and ext-proc logs accept <code>--logFormat=json</code>; MCP resource reads populate <code>mcp_resource_uri</code> in access-log metadata."
+            }
+          ]
+        },
+        {
+          "title": "Provider Translation & API Compatibility",
+          "items": [
+            {
+              "title": "Structured output for Claude on Vertex AI",
+              "description": "JSON-schema constrained decoding now works for Claude models on Vertex AI that advertise <code>output_config</code>. OpenAI <code>reasoning_effort</code> is forwarded to Bedrock as <code>reasoning_config</code>."
+            },
+            {
+              "title": "Responses API <code>tool_search</code>, unknown tools, and Codex inputs",
+              "description": "The Responses API accepts the built-in <code>tool_search</code> tool and <code>additional_tools</code>, preserves unknown tool types, and accepts Codex-style agent input items."
+            }
+          ]
+        },
+        {
+          "title": "Helm & Operations",
+          "items": [
+            {
+              "title": "Controller hardening and sharded config secrets",
+              "description": "The chart can emit a PDB, honour <code>topologySpreadConstraints</code>, and attach extra <code>podLabels</code>. Filter configuration is split across multiple Secrets so large Gateway configs no longer hit Kubernetes' 1 MiB Secret size limit."
+            }
+          ]
+        }
+      ],
+      "apiChanges": [
+        {
+          "title": "<code>AIGatewayRouteRule.name</code>",
+          "description": "Optional unique name copied onto the generated <code>HTTPRoute</code> rule. <code>route-not-found</code> is reserved."
+        },
+        {
+          "title": "<code>AIGatewayRouteRule.streamIdleTimeout</code>",
+          "description": "Optional Gateway API duration; unset means no per-try idle timeout."
+        },
+        {
+          "title": "<code>BackendSecurityPolicy.spec.credentialOverride</code>",
+          "description": "Optional per-request credential source. Exactly one of <code>fromRequestHeaders</code> or <code>fromDynamicMetadata</code>. <code>fallbackToConfigured</code> defaults to <code>true</code>."
+        },
+        {
+          "title": "<code>GatewayConfig.spec.forwardProxy</code>",
+          "description": "Optional HTTP CONNECT proxy. <code>address</code> is required (<code>host:port</code>)."
+        },
+        {
+          "title": "<code>MCPRoute.spec.hostnames</code>",
+          "description": "Optional list of hostnames (max 16)."
+        },
+        {
+          "title": "<code>MCPRoute.spec.backendSelector</code>",
+          "description": "Optional CEL selector evaluated at session initialize. <code>defaultAction</code> defaults to Deny."
+        }
+      ],
+      "deprecations": [],
+      "bugFixes": [
+        {
+          "title": "Stale <code>Content-Encoding</code> on translated error responses",
+          "description": "Translated error bodies no longer keep the upstream <code>Content-Encoding</code> header. Clients no longer fail to decode an uncompressed error payload that still claimed to be gzip or brotli."
+        },
+        {
+          "title": "Anthropic ping events keep streams alive",
+          "description": "Anthropic <code>ping</code> SSE events now emit an empty chunk on translated paths, so intermediaries and clients that time out on silence no longer drop a healthy Claude stream."
+        },
+        {
+          "title": "Gateway local replies are not reprocessed as upstream responses",
+          "description": "Ext-proc no longer treats Envoy local replies (rate-limit, timeout, auth) as provider payloads. Local error bodies pass through instead of being force-translated into a malformed LLM response."
+        },
+        {
+          "title": "Anthropic <code>cache_control</code> on the Bedrock path",
+          "description": "Prompt-caching <code>cache_control</code> markers now translate onto AWS Bedrock, including tool-result cache control and Bedrock tool cache points as their own <code>tools[]</code> element. Cached prefixes that previously silently dropped now actually hit Bedrock's cache."
+        },
+        {
+          "title": "Bedrock <code>reasoning_content</code> serialized as a plain string",
+          "description": "Non-streaming and streaming Bedrock reasoning content is emitted as a plain string, with signatures carried via <code>thinking_blocks</code>. Clients that expected a string and previously received an object no longer fail to parse Claude-on-Bedrock reasoning."
+        },
+        {
+          "title": "Unsupported Anthropic tool types error instead of dropping",
+          "description": "Unknown Anthropic tool types now fail the request rather than being silently stripped. You get a clear error instead of a tool-less prompt that looks like it succeeded."
+        },
+        {
+          "title": "Cross-namespace <code>InferencePool</code> <code>backendRef</code> honours namespace",
+          "description": "An <code>InferencePool</code> referenced from another namespace is now resolved in that namespace instead of the route's. Cross-namespace inference pools that previously 404'd at reconcile now work when the ReferenceGrant allows them."
+        },
+        {
+          "title": "Anthropic streaming cache tokens no longer double-counted",
+          "description": "Input and cache token counts on Anthropic <code>message_delta</code> events are merged once, including on the OpenAI→Anthropic streaming path. Usage metrics and access logs no longer inflate cached-token cost on streaming Claude calls."
+        },
+        {
+          "title": "Credential leak in Envoy ext-proc debug logs",
+          "description": "Envoy HTTP and ext-proc debug logging is capped, and credential header mutations are always redacted in debug output. Passthrough endpoints also redact user content. Debug-level logging is no longer a credential-exfiltration path."
+        },
+        {
+          "title": "Gemini streaming tool-call finish reasons and reasoning tokens",
+          "description": "Newer Gemini models such as gemini-3.5-flash now map streaming tool-call finish reasons correctly, and reasoning tokens are counted in streaming metrics. Streaming Gemini tool use no longer reports a wrong finish reason or drops thinking-token usage."
+        }
+      ],
+      "breakingChanges": [
+        {
+          "title": "Helm controller security context defaults",
+          "description": "The Helm chart now sets a restricted <code>podSecurityContext</code> and container <code>securityContext</code> on the controller (non-root UID/GID 65532, all capabilities dropped, no privilege escalation, RuntimeDefault seccomp). Previously both were empty. If you run a custom controller image that cannot use UID 65532, override <code>controller.podSecurityContext</code> and <code>controller.securityContext</code> in your values."
+        }
+      ],
+      "dependencies": [
+        {
+          "title": "Go 1.26.4",
+          "description": "Continues on Go 1.26.4, same as v1.0."
+        },
+        {
+          "title": "Envoy Gateway v1.8.1",
+          "description": "Built on Envoy Gateway v1.8.1 for proven data plane capabilities."
+        },
+        {
+          "title": "Envoy v1.38",
+          "description": "Leveraging Envoy Proxy v1.38.1 for battle-tested networking."
+        },
+        {
+          "title": "Gateway API v1.5.1",
+          "description": "Support for Gateway API v1.5.1 specifications."
+        },
+        {
+          "title": "Gateway API Inference Extension v1.0.2",
+          "description": "Continued integration with Gateway API Inference Extension v1.0.2 for intelligent endpoint selection."
+        },
+        {
+          "title": "MCP Go SDK v1.7.0",
+          "description": "Updated from v1.6.1 to v1.7.0 for the latest Model Context Protocol features."
+        }
+      ]
+    }
+  ],
+  "navigation": {
+    "previous": { "version": "v1.0.x Series", "path": "/release-notes/v1.0" }
+  }
+}

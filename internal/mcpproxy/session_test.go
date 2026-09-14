@@ -245,6 +245,25 @@ func TestMergedCapabilities(t *testing.T) {
 				Resources: &mcpsdk.ResourceCapabilities{ListChanged: true, Subscribe: true},
 			},
 		},
+		{
+			name: "union of extensions across backends",
+			backends: map[filterapi.MCPBackendName]*compositeSessionEntry{
+				"b1": {capabilities: &mcpsdk.ServerCapabilities{
+					Extensions: map[string]any{"io.modelcontextprotocol/ui": map[string]any{}},
+				}},
+				"b2": {capabilities: &mcpsdk.ServerCapabilities{
+					Tools:      &mcpsdk.ToolCapabilities{ListChanged: true},
+					Extensions: map[string]any{"example.com/other": map[string]any{}},
+				}},
+			},
+			want: &mcpsdk.ServerCapabilities{
+				Tools: &mcpsdk.ToolCapabilities{ListChanged: true},
+				Extensions: map[string]any{
+					"io.modelcontextprotocol/ui": map[string]any{},
+					"example.com/other":          map[string]any{},
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -665,7 +684,7 @@ func TestSendRequestPerBackend_BOMPrefixedJSON(t *testing.T) {
 	bomBody := append([]byte{0xEF, 0xBB, 0xBF}, msg1...)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(bomBody)
 	}))

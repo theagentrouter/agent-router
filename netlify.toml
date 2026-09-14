@@ -20,3 +20,25 @@ command = "npm run build"
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "camera=(), microphone=(), geolocation=()"
     Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+
+# Redirect the whole aigateway.envoyproxy.io domain to theagentrouter.ai.
+# Matching on the full host means deploy previews (*.netlify.app) are unaffected.
+# force = true is required because Docusaurus publishes real files at these paths,
+# and Netlify would otherwise serve them instead of applying the redirect.
+[[redirects]]
+  from = "https://aigateway.envoyproxy.io/*"
+  to = "https://theagentrouter.ai/:splat"
+  status = 301
+  force = true
+
+# Self-hosted brand fonts and hashed build assets are immutable.
+[[headers]]
+  for = "/fonts/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    Access-Control-Allow-Origin = "*"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

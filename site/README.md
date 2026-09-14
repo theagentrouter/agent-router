@@ -1,65 +1,41 @@
-# Website
+# theagentrouter.ai
 
-This website is built using [Docusaurus](https://docusaurus.io/), a modern static website generator.
+The website for **Agent Router** — the open source control plane for GenAI and
+agent traffic, formerly **Envoy AI Gateway**, now an Agentic AI Foundation
+project. Built with [Docusaurus](https://docusaurus.io/).
 
-### Local Development
+This directory is the `site/` folder of the main
+[agent-router](https://github.com/theagentrouter/agent-router) repository; Netlify
+builds it from the repo-root `netlify.toml` (base `site/`).
 
-### Requirements {#requirements}
+## Development
 
-- [Node.js](https://nodejs.org/en/download/) version 18.0 or above (which can be checked by running `node -v`). You can use [nvm](https://github.com/nvm-sh/nvm) for managing multiple Node versions on a single machine installed.
-  - When installing Node.js, you are recommended to check all checkboxes related to dependencies.
-
-### Install
+Requires Node.js 22+ (see `.nvmrc`).
 
 ```
 npm install
+npm run start        # dev server with hot reload
+npm run build        # production build (broken links fail the build)
+npm run serve        # serve the production build
+npm run typecheck    # TypeScript check
+npm run check:brand  # rename-safety assertions (see AGENTS.md)
 ```
 
-### Run locally
+## Where things live
 
-#### NPX
+- `docs/` — current ("Next") docs; `versioned_docs/` + `versions.json` — released versions (1.1 renders at `/docs/`)
+- `blog/` — posts under `blog/YYYY/`; authors in `blog/authors.yml`
+- `src/data/home/` — **all homepage copy** (hero, capabilities, quickstart, community, providers)
+- `src/components/home/` — homepage section components (one directory per section, CSS modules)
+- `src/data/` — adopters, talks, release-notes data (JSON)
+- `src/css/brand/` — vendored brand tokens + A-pattern (do not edit; see its README)
+- `src/css/custom.css` — brand → Infima mapping layer and site chrome
+- `static/img/brand/` — logo cuts, favicons, og cards
 
-```
-npx docusaurus start
-```
+## Contributing
 
-#### NPM
-
-```
-npm run start
-```
-
-#### **When to Use Which?**
-
-- Use npx docusaurus start:
-  - For quick tests or temporary runs without installing the Docusaurus CLI.
-  - If you want to use the latest version of Docusaurus globally.
-- Use npm run start:
-  - For consistent and reproducible builds, ensuring you use the local version of Docusaurus.
-  - In your development workflow, where the start script is part of your project setup.
-
-### Updating versions
-
-When generating a new version:
-
-- Use Docusaurus to generate the versioned docs: `npm run docusaurus docs:version <version>`.
-- Edit the `versioned_docs/version-{version}/_vars.json` and set the right version values.
-- Update the `versioned_docs/version-{version}/compatibility.md`.
-- Update the `docusaurus.config.ts` to include the new version.
-
-### AI Coding Assistants
-
-This directory includes an `AGENTS.md` file with guidelines for AI coding assistants.
-To enable it for your preferred tool, create a symlink:
-
-**Cursor:**
-
-```
-ln -s AGENTS.md .cursorrules
-```
-
-**Claude Code:**
-
-```
-ln -s AGENTS.md CLAUDE.md
-```
+- DCO sign-off required (`git commit -s`); Conventional Commit subjects
+- Branch before opening a PR; never commit directly to `main`
+- See the repo-root [CONTRIBUTING.md](../CONTRIBUTING.md) for the full workflow
+- Read `AGENTS.md` for documentation conventions, brand rules, and the
+  renaming rules (which identifiers must never be renamed)

@@ -105,7 +105,7 @@ func SetupAll(ctx context.Context, clusterName string, aigwOpts AIGatewayHelmOpt
 	// The following code sets up the kind cluster, installs the Envoy Gateway, and installs the AI Gateway.
 	// They must be idempotent and can be run multiple times so that we can run the tests multiple times on
 	// failures.
-	if err := initKindCluster(ctx, clusterName); err != nil {
+	if err := initKindCluster(ctx, clusterName, inferenceExtension); err != nil {
 		return fmt.Errorf("failed to initialize kind cluster: %w", err)
 	}
 	if err := initMetalLB(ctx); err != nil {
@@ -132,7 +132,7 @@ func SetupAll(ctx context.Context, clusterName string, aigwOpts AIGatewayHelmOpt
 	return nil
 }
 
-func initKindCluster(ctx context.Context, clusterName string) (err error) {
+func initKindCluster(ctx context.Context, clusterName string, inferenceExtension bool) (err error) {
 	initLog("Setting up the kind cluster")
 	start := time.Now()
 	defer func() {
@@ -162,13 +162,20 @@ func initKindCluster(ctx context.Context, clusterName string) (err error) {
 	}
 
 	initLog("\tLoading Docker images into kind cluster")
-	for _, image := range []string{
+	loadImages := []string{
 		"docker.io/envoyproxy/ai-gateway-controller:latest",
 		"docker.io/envoyproxy/ai-gateway-extproc:latest",
 		"docker.io/envoyproxy/ai-gateway-testupstream:latest",
 		"docker.io/envoyproxy/ai-gateway-testmcpserver:latest",
 		"docker.io/envoyproxy/ai-gateway-testextauthserver:latest",
-	} {
+	}
+	if inferenceExtension {
+		loadImages = append(loadImages,
+			// TODO: remvoe this after upstream issue fixed.
+			// see https://github.com/kubernetes-sigs/gateway-api-inference-extension/issues/3035
+			"registry.k8s.io/gateway-api-inference-extension/lwepp:v1.6.0")
+	}
+	for _, image := range loadImages {
 		cmd := testsinternal.GoToolCmdContext(ctx, "kind", "load", "docker-image", image, "--name", clusterName)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -383,17 +390,6 @@ func installInferencePoolEnvironment(ctx context.Context) (err error) {
 		fmt.Sprintf("https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/%s/manifests.yaml", infExtVersion),
 	); err != nil {
 		return fmt.Errorf("failed to install inference extension CRDs: %w", err)
-	}
-	baseURL := fmt.Sprintf("https://github.com/kubernetes-sigs/gateway-api-inference-extension/raw/%s/config/manifests", infExtVersion)
-	for _, manifest := range []string{
-		"vllm/sim-deployment.yaml",
-		"inferencepool-resources.yaml",
-		"inferenceobjective.yaml",
-	} {
-		initLog(fmt.Sprintf("\tApplying InferencePool manifest: %s", manifest))
-		if err = KubectlApplyManifest(ctx, fmt.Sprintf("%s/%s", baseURL, manifest)); err != nil {
-			return fmt.Errorf("failed to apply InferencePool manifest %s: %w", manifest, err)
-		}
 	}
 	return nil
 }
@@ -616,8 +612,12 @@ func kubectlWaitForDaemonSetReady(ctx context.Context, namespace, daemonset stri
 
 // RequireWaitForGatewayPodReady waits for the Envoy Gateway pod with the given selector to be ready.
 func RequireWaitForGatewayPodReady(t *testing.T, selector string) {
-	requireWaitForGatewayPod(t, selector)
-	RequireWaitForPodReady(t, EnvoyGatewayNamespace, selector)
+	RequireWaitForGatewayPodReadyWithNamespace(t, EnvoyGatewayNamespace, selector)
+}
+
+func RequireWaitForGatewayPodReadyWithNamespace(t *testing.T, namespace, selector string) {
+	requireWaitForGatewayPod(t, namespace, selector)
+	RequireWaitForPodReady(t, namespace, selector)
 }
 
 // RequireGatewayListenerAddressViaMetalLB gets the external IP address of the Gateway via MetalLB.
@@ -634,13 +634,13 @@ func RequireGatewayListenerAddressViaMetalLB(t *testing.T, namespace, name strin
 
 // requireWaitForGatewayPod waits for the Envoy Gateway pod containing the
 // extproc container.
-func requireWaitForGatewayPod(t *testing.T, selector string) {
+func requireWaitForGatewayPod(t *testing.T, namespace, selector string) {
 	waitUntilKubectl(t, 2*time.Minute, 1*time.Second, func(output string) error {
 		if !strings.Contains(output, "ai-gateway-extproc") {
 			return fmt.Errorf("container not found, output: %s", output)
 		}
 		return nil
-	}, "get", "pod", "-n", EnvoyGatewayNamespace,
+	}, "get", "pod", "-n", namespace,
 		"--selector="+selector, "-o", "jsonpath='{.items[0].spec.initContainers[*].name} {.items[0].spec.containers[*].name}'")
 }
 

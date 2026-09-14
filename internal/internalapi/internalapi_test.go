@@ -265,3 +265,33 @@ func TestFormatRequestHeaderAttributeMapping(t *testing.T) {
 		})
 	}
 }
+
+// Recognized forms, all case-sensitive lowercase:
+//   - Public: bedrock-runtime.<region>.amazonaws.com
+//   - Public FIPS: bedrock-runtime-fips.<region>.amazonaws.com
+//   - PrivateLink (VPCE): <vpce-id>.bedrock-runtime.<region>.vpce.amazonaws.com
+//   - PrivateLink FIPS: <vpce-id>.bedrock-runtime-fips.<region>.vpce.amazonaws.com
+//   - Newer API domain: bedrock-runtime.<region>.api.aws
+func TestAWSBedrockRegionFromHost(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host string
+		want string
+	}{
+		{"public bedrock host", "bedrock-runtime.us-east-1.amazonaws.com", "us-east-1"},
+		{"vpce host", "vpce-123.bedrock-runtime.us-west-2.vpce.amazonaws.com", "us-west-2"},
+		{"prefixed bedrock host", "aaa.bedrock-runtime.eu-central-1.amazonaws.com", "eu-central-1"},
+		{"fips public bedrock host", "bedrock-runtime-fips.us-east-1.amazonaws.com", "us-east-1"},
+		{"fips vpce host", "vpce-123.bedrock-runtime-fips.us-west-2.vpce.amazonaws.com", "us-west-2"},
+		{"api.aws domain host", "bedrock-runtime.ap-southeast-2.api.aws", "ap-southeast-2"},
+		{"non-bedrock host", "api.openai.com", ""},
+		{"custom internal host has no derivable region", "bedrock.corp.internal", ""},
+		{"spoofed suffix is rejected", "bedrock-runtime.us-east-1.amazonaws.com.evil.com", ""},
+		{"spoofed api.aws suffix is rejected", "bedrock-runtime.us-east-1.api.aws.evil.com", ""},
+		{"empty", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, AWSBedrockRegionFromHost(tc.host))
+		})
+	}
+}

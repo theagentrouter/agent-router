@@ -21,6 +21,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -70,7 +71,7 @@ func (o *openAIToAWSAnthropicTranslatorV1ChatCompletion) RequestBody(_ []byte, o
 		o.streamParser = newAnthropicStreamParser(o.requestModel)
 	}
 
-	params, err := buildAnthropicParams(openAIReq, "AWSAnthropic", o.modelNameOverride)
+	params, err := buildAnthropicParams(openAIReq, filterapi.APISchemaAWSAnthropic, o.modelNameOverride)
 	if err != nil {
 		return
 	}

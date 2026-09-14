@@ -47,7 +47,7 @@ func truncateAndAppendHash(base, hash string, maxLen int) string {
 // example: gateway-ns1-c6d39be275c7
 func FilterConfigBundleIndexSecretName(gwName, gwNamespace string) string {
 	rawIdentity := fmt.Sprintf("%s/%s", gwNamespace, gwName)
-	return truncateAndAppendHash(legacyFilterConfigSecretName(gwName, gwNamespace), shortStableHash(rawIdentity), k8sObjectNameMaxLen)
+	return truncateAndAppendHash(fmt.Sprintf("%s-%s", gwName, gwNamespace), shortStableHash(rawIdentity), k8sObjectNameMaxLen)
 }
 
 // example: gateway-ns1-c6d39be275c7-part-000
@@ -71,16 +71,4 @@ func filterConfigBundleVolumeName(gwName, gwNamespace string) string {
 	volumeBase := fmt.Sprintf("%s%s-%s", mutationNamePrefix, gwName, gwNamespace)
 	base := truncateAndAppendHash(volumeBase, shortStableHash(rawIdentity), k8sVolumeNameMaxLen-len(suffix))
 	return base + suffix
-}
-
-// example: gateway-ns1
-func legacyFilterConfigSecretName(gwName, gwNamespace string) string {
-	return fmt.Sprintf("%s-%s", gwName, gwNamespace)
-}
-
-// example: ai-gateway-gw-default-3d45476e8d68
-func legacyFilterConfigVolumeName(gwName, gwNamespace string) string {
-	rawIdentity := fmt.Sprintf("%s/%s", gwNamespace, gwName)
-	volumeBase := fmt.Sprintf("%s%s-%s", mutationNamePrefix, gwName, gwNamespace)
-	return truncateAndAppendHash(volumeBase, shortStableHash(rawIdentity), k8sVolumeNameMaxLen)
 }

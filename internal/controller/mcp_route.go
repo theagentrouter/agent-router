@@ -92,6 +92,13 @@ func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1
 		return nil
 	}
 
+	// Validate prefixMode=Never (whether set per-backend or inherited from the route-level
+	// default): each effectively-Never backend must declare toolSelector.include, and tool
+	// names must be unique across all effectively-Never backends on the route.
+	if err := validatePerBackendPrefixMode(mcpRoute); err != nil {
+		return err
+	}
+
 	// Ensure the shared per-namespace MCP proxy Backend exists before creating/updating the HTTPRoute.
 	sharedBackendName, err := c.ensureMCPProxyBackend(ctx, mcpRoute.Namespace)
 	if err != nil {
@@ -341,6 +348,7 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 						Type:  ptr.To(gwapiv1.PathMatchExact),
 						Value: ptr.To(protectedResourceSuffixPath),
 					},
+					Headers: mcpRoute.Spec.Headers,
 				},
 			},
 			Filters: []gwapiv1.HTTPRouteFilter{
@@ -371,6 +379,7 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 						Type:  ptr.To(gwapiv1.PathMatchExact),
 						Value: ptr.To(authServerSuffixPath),
 					},
+					Headers: mcpRoute.Spec.Headers,
 				},
 			},
 			Filters: []gwapiv1.HTTPRouteFilter{
@@ -394,6 +403,7 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 						Type:  ptr.To(gwapiv1.PathMatchExact),
 						Value: ptr.To(authServerSuffixPathOIDC),
 					},
+					Headers: mcpRoute.Spec.Headers,
 				},
 			},
 			Filters: []gwapiv1.HTTPRouteFilter{
@@ -911,4 +921,62 @@ func (c *MCPRouteController) readAPIKey(ctx context.Context, namespace string, a
 		}
 	}
 	return key, nil
+}
+
+// validatePerBackendPrefixMode checks that prefixMode=Never is used correctly, whether it is
+// set on a specific backend or inherited from the route-level default: every backend whose
+// *effective* PrefixMode is Never must declare toolSelector.include, and the declared tool
+// names must be unique across all Never-mode backends on the route. Prompt names are validated
+// the same way, but only for backends that opt in by declaring promptSelector.include — a
+// Never-mode backend that leaves promptSelector unset simply keeps its prompts prefixed (see
+// mcpproxy.mergePromptsList), so no declaration is required for backends without prompts.
+//
+// The effective-mode resolution here (per-backend override falling back to the route-level
+// default, itself defaulting to Always) must stay in sync with effectivePrefixMode in
+// internal/mcpproxy/config.go, which performs the same resolution at request time.
+//
+// The exact-list requirement (as opposed to allowing an unfiltered or regex toolSelector/
+// promptSelector for Never mode) is intentional: it is what lets uniqueness of bare names be
+// proven here, at admission time, before the route is ever accepted, rather than discovered as
+// a runtime ambiguity between live backend catalogs that can change independently of this
+// resource. Always-mode backends don't need this restriction because their prefixed names
+// ("<backendName>__<tool>") can't collide with each other as long as backend names are unique,
+// which is already enforced elsewhere.
+func validatePerBackendPrefixMode(mcpRoute *aigv1b1.MCPRoute) error {
+	routeMode := aigv1b1.MCPRoutePrefixModeAlways
+	if mcpRoute.Spec.PrefixMode != nil {
+		routeMode = *mcpRoute.Spec.PrefixMode
+	}
+
+	seenTools := make(map[string]string)   // tool name → first backend name that claimed it
+	seenPrompts := make(map[string]string) // prompt name → first backend name that claimed it
+	for _, ref := range mcpRoute.Spec.BackendRefs {
+		effectiveMode := routeMode
+		if ref.PrefixMode != nil {
+			effectiveMode = *ref.PrefixMode
+		}
+		if effectiveMode != aigv1b1.MCPRoutePrefixModeNever {
+			continue
+		}
+		backendName := string(ref.Name)
+		if ref.ToolSelector == nil || len(ref.ToolSelector.Include) == 0 {
+			return fmt.Errorf("prefixMode Never requires backend %q to explicitly enumerate its tools via toolSelector.include so names can be validated for uniqueness", backendName)
+		}
+		for _, tool := range ref.ToolSelector.Include {
+			if first, collision := seenTools[tool]; collision {
+				return fmt.Errorf("prefixMode Never requires tool names to be unique across backends, but %q is declared by both %q and %q", tool, first, backendName)
+			}
+			seenTools[tool] = backendName
+		}
+		if ref.PromptSelector == nil {
+			continue // Opt-in: this backend's prompts stay prefixed under Never mode.
+		}
+		for _, prompt := range ref.PromptSelector.Include {
+			if first, collision := seenPrompts[prompt]; collision {
+				return fmt.Errorf("prefixMode Never requires prompt names to be unique across backends, but %q is declared by both %q and %q", prompt, first, backendName)
+			}
+			seenPrompts[prompt] = backendName
+		}
+	}
+	return nil
 }

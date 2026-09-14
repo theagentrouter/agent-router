@@ -41,6 +41,11 @@ spec:
   logging:
     level:
       default: debug
+      # Keep these two components out of the blanket debug level: at debug
+      # they each dump the full request headers (including the Authorization
+      # header the extproc injects with the backend API key) to the log.
+      http: info
+      ext_proc: info
   telemetry:
     accessLog:
       settings:

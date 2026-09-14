@@ -7,18 +7,29 @@ package e2e
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/tests/internal/e2elib"
 	"github.com/envoyproxy/ai-gateway/tests/internal/testmcp"
 )
+
+// mcpBackendSelectorJWTKeyID is the "kid" used for the ephemeral RSA key generated in
+// requireCreateMCPBackendSelectorJWTRoute, so the signed test tokens match the JWKS the
+// route trusts.
+const mcpBackendSelectorJWTKeyID = "e2e-backend-selector-jwt"
 
 // mcpTenantRequestHeaderInjector implements [http.RoundTripper] to inject a tenant header
 // that is specified in the MCP route configuration.
@@ -30,6 +41,16 @@ func (h mcpTenantRequestHeaderInjector) RoundTrip(req *http.Request) (*http.Resp
 	return http.DefaultTransport.RoundTrip(req)
 }
 
+type mcpRequestHeaderInjector map[string]string
+
+// RoundTrip implements [http.RoundTripper.RoundTrip].
+func (h mcpRequestHeaderInjector) RoundTrip(req *http.Request) (*http.Response, error) {
+	for key, value := range h {
+		req.Header.Set(key, value)
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+
 func TestMCP(t *testing.T) {
 	const manifest = "testdata/mcp_route.yaml"
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), manifest))
@@ -37,6 +58,7 @@ func TestMCP(t *testing.T) {
 		_ = e2elib.KubectlDeleteManifest(context.Background(), manifest)
 	})
 	manyBackendsRouteToolNames := requireCreateMCPManyBackends(t)
+	backendSelectorJWTRoutePath, backendSelectorJWTKey := requireCreateMCPBackendSelectorJWTRoute(t)
 
 	const egSelector = "gateway.envoyproxy.io/owning-gateway-name=mcp-gateway"
 	e2elib.RequireWaitForGatewayPodReady(t, egSelector)
@@ -76,6 +98,44 @@ func TestMCP(t *testing.T) {
 	t.Run("many backends route", func(t *testing.T) {
 		testMCPRouteTools(t.Context(), t, client, fwd.Address(), "/mcp/many", manyBackendsRouteToolNames,
 			nil, true, true)
+	})
+	t.Run("client cannot override backend fanout when metadata is absent", func(t *testing.T) {
+		testMCPRouteTools(t.Context(), t, client, fwd.Address(), "/mcp/many", manyBackendsRouteToolNames,
+			&http.Client{Transport: mcpRequestHeaderInjector{
+				internalapi.MCPBackendSubsetHeader: "mcp-backend-0",
+			}}, true, true)
+	})
+	t.Run("backendSelector denies fan-out by default when the header is absent", func(t *testing.T) {
+		sess, err := client.Connect(
+			t.Context(),
+			&mcp.StreamableClientTransport{
+				Endpoint: fmt.Sprintf("%s/mcp/backend-selector", fwd.Address()),
+			}, nil)
+		require.Error(t, err)
+		require.Nil(t, sess)
+	})
+	t.Run("backendSelector allows only the backend named in the JWT claim", func(t *testing.T) {
+		token := requireSignMCPBackendSubsetJWT(t, backendSelectorJWTKey, []string{"mcp-backend"})
+		testMCPRouteTools(t.Context(), t, client, fwd.Address(), backendSelectorJWTRoutePath, testMCPServerAllToolNames("mcp-backend__"),
+			&http.Client{Transport: &mcpAuthTransport{token: token, base: http.DefaultTransport}}, true, true)
+	})
+	t.Run("backendSelector allows every backend named in the JWT claim", func(t *testing.T) {
+		expectedTools := append(testMCPServerAllToolNames("mcp-backend__"), testMCPServerAllToolNames("mcp-backend-query-api-key__")...)
+		token := requireSignMCPBackendSubsetJWT(t, backendSelectorJWTKey, []string{"mcp-backend", "mcp-backend-query-api-key"})
+		testMCPRouteTools(t.Context(), t, client, fwd.Address(), backendSelectorJWTRoutePath, expectedTools,
+			&http.Client{Transport: &mcpAuthTransport{token: token, base: http.DefaultTransport}}, true, true)
+	})
+	t.Run("client cannot spoof the header to bypass a default-deny backendSelector", func(t *testing.T) {
+		sess, err := client.Connect(
+			t.Context(),
+			&mcp.StreamableClientTransport{
+				Endpoint: fmt.Sprintf("%s/mcp/backend-selector", fwd.Address()),
+				HTTPClient: &http.Client{Transport: mcpRequestHeaderInjector{
+					internalapi.MCPBackendSubsetHeader: "mcp-backend,mcp-backend-query-api-key",
+				}},
+			}, nil)
+		require.Error(t, err)
+		require.Nil(t, sess)
 	})
 }
 
@@ -162,6 +222,9 @@ func testMCPServerAllToolNames(toolPrefix string) []string {
 		toolPrefix + testmcp.ToolElicitEmail.Tool.Name,
 		toolPrefix + testmcp.ToolCreateMessage.Tool.Name,
 		toolPrefix + testmcp.ToolNotificationCountsName,
+		toolPrefix + testmcp.ToolUIResource.Tool.Name,
+		toolPrefix + testmcp.ToolResourceLink.Tool.Name,
+		toolPrefix + testmcp.ToolEmbeddedResource.Tool.Name,
 	}
 }
 
@@ -224,4 +287,78 @@ spec:
 		_ = e2elib.KubectlDeleteManifest(context.Background(), routeManifest)
 	})
 	return toolNames
+}
+
+func requireCreateMCPBackendSelectorJWTRoute(t *testing.T) (routePath string, priv *rsa.PrivateKey) {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	n := base64.RawURLEncoding.EncodeToString(priv.N.Bytes())
+	jwks := fmt.Sprintf(`{"keys":[{"kty":"RSA","n":"%s","e":"AQAB","alg":"RS256","use":"sig","kid":"%s"}]}`,
+		n, mcpBackendSelectorJWTKeyID)
+	// Marshal the JWKS blob through encoding/json so it comes out as a properly quoted and
+	// escaped YAML/JSON scalar, regardless of the quotes it contains.
+	quotedJWKS, err := json.Marshal(jwks)
+	require.NoError(t, err)
+
+	const routeTemplate = `
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-backend-selector-jwt-route
+  namespace: default
+spec:
+  path: "/mcp/backend-selector-jwt"
+  parentRefs:
+    - name: mcp-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+      namespace: default
+  backendRefs:
+    - name: mcp-backend
+      port: 1063
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+    - name: mcp-backend-query-api-key
+      port: 1063
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+          queryParam: "api_key"
+  securityPolicy:
+    oauth:
+      issuer: "https://example.com"
+      jwks:
+        localJWKS:
+          type: Inline
+          inline: %s
+      protectedResourceMetadata:
+        resource: "https://example.com/mcp/backend-selector-jwt"
+  backendSelector:
+    defaultAction: Deny
+    rules:
+      - cel: 'request.mcp.backend in request.auth.jwt.claims.mcp_backends'
+        action: Allow
+`
+	manifest := fmt.Sprintf(routeTemplate, string(quotedJWKS))
+	require.NoError(t, e2elib.KubectlApplyManifestStdin(t.Context(), manifest))
+	t.Cleanup(func() {
+		_ = e2elib.KubectlDeleteManifest(context.Background(), manifest)
+	})
+
+	return "/mcp/backend-selector-jwt", priv
+}
+
+func requireSignMCPBackendSubsetJWT(t *testing.T, priv *rsa.PrivateKey, backends []string) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+		"mcp_backends": backends,
+		"exp":          time.Now().Add(time.Hour).Unix(),
+	})
+	token.Header["kid"] = mcpBackendSelectorJWTKeyID
+	signed, err := token.SignedString(priv)
+	require.NoError(t, err)
+	return signed
 }

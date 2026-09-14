@@ -855,6 +855,45 @@ func startCompletionsSpan(t *testing.T, tracing tracingapi.Tracing, carrier prop
 	return tracer.StartSpanAndInjectHeaders(t.Context(), nil, carrier, req, nil)
 }
 
+// TestNewTracingFromEnv_everyTracerWired pins that enabling tracing wires every
+// endpoint's tracer under every convention. A missing one is a nil dereference
+// on the first request to that endpoint, which no other test would catch until
+// production traffic hit it.
+func TestNewTracingFromEnv_everyTracerWired(t *testing.T) {
+	for _, sc := range semConvs {
+		t.Run(sc.name, func(t *testing.T) {
+			internaltesting.ClearTestEnv(t)
+			t.Setenv("OTEL_TRACES_EXPORTER", "console")
+			t.Setenv(EnvTracingSemConv, sc.name)
+
+			tracing, err := NewTracingFromEnv(t.Context(), io.Discard, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = tracing.Shutdown(context.Background()) })
+
+			require.NotNil(t, tracing.ChatCompletionTracer(), "ChatCompletionTracer")
+			require.NotNil(t, tracing.CompletionTracer(), "CompletionTracer")
+			require.NotNil(t, tracing.EmbeddingsTracer(), "EmbeddingsTracer")
+			require.NotNil(t, tracing.ImageGenerationTracer(), "ImageGenerationTracer")
+			require.NotNil(t, tracing.ResponsesTracer(), "ResponsesTracer")
+			require.NotNil(t, tracing.SpeechTracer(), "SpeechTracer")
+			require.NotNil(t, tracing.TranscriptionTracer(), "TranscriptionTracer")
+			require.NotNil(t, tracing.TranslationTracer(), "TranslationTracer")
+			require.NotNil(t, tracing.RerankTracer(), "RerankTracer")
+			require.NotNil(t, tracing.MessageTracer(), "MessageTracer")
+			require.NotNil(t, tracing.TokenizeTracer(), "TokenizeTracer")
+			require.NotNil(t, tracing.ResponsesInputTokensTracer(), "ResponsesInputTokensTracer")
+			require.NotNil(t, tracing.CountTokensTracer(), "CountTokensTracer")
+			require.NotNil(t, tracing.MCPTracer(), "MCPTracer")
+		})
+	}
+}
+
+// TestTracingImpl_Shutdown_withoutProvider pins that a tracing graph we did not
+// create is not shut down by us, since the provider belongs to whoever made it.
+func TestTracingImpl_Shutdown_withoutProvider(t *testing.T) {
+	require.NoError(t, (&tracingImpl{}).Shutdown(context.Background()))
+}
+
 func TestTracingImpl_Getters_ImageGenerationAndRerank(t *testing.T) {
 	ig := tracingapi.NoopTracer[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}]{}
 	rr := tracingapi.NoopTracer[cohereschema.RerankV2Request, cohereschema.RerankV2Response, struct{}]{}
