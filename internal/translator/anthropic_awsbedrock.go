@@ -848,7 +848,7 @@ func (a *anthropicToAWSBedrockTranslator) ResponseError(respHeaders map[string]s
 	anthropicError := anthropicschema.ErrorResponse{
 		Type: "error",
 		Error: anthropicschema.ErrorResponseMessage{
-			Type:    a.httpStatusToAnthropicErrorType(statusCode),
+			Type:    httpStatusToAnthropicErrorType(statusCode),
 			Message: errorMessage,
 		},
 	}
@@ -863,7 +863,10 @@ func (a *anthropicToAWSBedrockTranslator) ResponseError(respHeaders map[string]s
 	return
 }
 
-func (a *anthropicToAWSBedrockTranslator) httpStatusToAnthropicErrorType(statusCode string) string {
+// httpStatusToAnthropicErrorType maps an upstream HTTP status code to the
+// corresponding Anthropic error type.
+// https://platform.claude.com/docs/en/api/errors#http-errors
+func httpStatusToAnthropicErrorType(statusCode string) string {
 	switch statusCode {
 	case "400":
 		return "invalid_request_error"
