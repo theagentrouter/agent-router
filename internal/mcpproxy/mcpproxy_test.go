@@ -68,10 +68,12 @@ func (f *fakeSpan) EndSpanOnError(errType string, err error) {
 }
 
 type fakeTracer struct {
-	span *fakeSpan
+	span   *fakeSpan
+	starts int
 }
 
 func (f *fakeTracer) StartSpanAndInjectMeta(context.Context, *jsonrpc.Request, mcp.Params, http.Header) tracingapi.MCPSpan {
+	f.starts++
 	if f.span == nil {
 		f.span = &fakeSpan{}
 	}

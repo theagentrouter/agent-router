@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -372,18 +373,13 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 	req.Header.Set("Accept", "text/event-stream, application/json")
 	req.Header.Set("Accept-Encoding", "gzip, br")
 
-	// Forward route-level headers (e.g., OAuth claimToHeaders) to the backend.
-	for header, value := range s.extraHeaders {
-		req.Header.Del(header)
-		req.Header.Set(header, value)
+	// Forward route-level headers (e.g., OAuth claimToHeaders) and per-backend
+	// headers (from MCPRouteBackendRef.forwardHeaders, with optional renaming).
+	var perBackend map[string]string
+	if s.perBackendExtraHeaders != nil {
+		perBackend = s.perBackendExtraHeaders[backend.Name]
 	}
-	// Forward per-backend headers (from MCPRouteBackendRef.forwardHeaders) with optional renaming.
-	if perBackend, ok := s.perBackendExtraHeaders[backend.Name]; ok {
-		for header, value := range perBackend {
-			req.Header.Del(header)
-			req.Header.Set(header, value)
-		}
-	}
+	applyExtractedForwardHeaders(req, s.extraHeaders, perBackend)
 
 	if lastEventID := cse.lastEventID; lastEventID != "" {
 		req.Header.Set(lastEventIDHeader, lastEventID)
@@ -551,6 +547,12 @@ type (
 		sessionID    gatewayToMCPServerSessionID
 		lastEventID  string
 		capabilities *mcpsdk.ServerCapabilities
+		// protocolVersion is the protocolVersion this backend reported in its
+		// initialize response. It is only populated on freshly created sessions
+		// (newSession) and is NOT encoded in the session ID, so it is empty on
+		// entries reconstructed from a session ID via backendSessionIDs. That is
+		// fine because it is only consumed during initialize (handleInitializeRequest).
+		protocolVersion string
 	}
 )
 
@@ -648,9 +650,45 @@ func decodeCapabilityFlags(hex string) *mcpsdk.ServerCapabilities {
 // If ANY backend supports a capability, the merged result includes it.
 // Sub-fields like ListChanged and Subscribe are OR'd across all backends.
 func (s *session) mergedCapabilities() *mcpsdk.ServerCapabilities {
-	merged := &mcpsdk.ServerCapabilities{}
+	caps := make([]*mcpsdk.ServerCapabilities, 0, len(s.perBackendSessions))
 	for _, entry := range s.perBackendSessions {
-		caps := entry.capabilities
+		caps = append(caps, entry.capabilities)
+	}
+	return unionServerCapabilities(caps)
+}
+
+// mergedProtocolVersion negotiates the protocol version to advertise to the
+// client for this stateful (legacy) session, capped at the client's requested
+// version. It reuses the shared mergedProtocolVersion negotiation so the legacy
+// initialize path and the modern server/discover path stay in lockstep.
+func (s *session) mergedProtocolVersion(clientVersion string) string {
+	backends := make([]backendReportedVersions, 0, len(s.perBackendSessions))
+	for name, entry := range s.perBackendSessions {
+		backends = append(backends, backendReportedVersions{
+			name:     name,
+			versions: []string{entry.protocolVersion},
+		})
+	}
+	// Stable order so warning log fields are deterministic across runs.
+	slices.SortFunc(backends, func(a, b backendReportedVersions) int {
+		return strings.Compare(a.name, b.name)
+	})
+	var l *slog.Logger
+	if s.reqCtx != nil {
+		l = s.reqCtx.l
+	}
+	return mergedProtocolVersion(l, clientVersion, backends)
+}
+
+// unionServerCapabilities computes the union of the given backend capabilities.
+// If ANY backend advertises a capability, the merged result includes it, and
+// sub-fields like ListChanged and Subscribe are OR'd across all backends. Nil
+// entries are ignored. This is the single source of truth for capability
+// aggregation shared by the stateful (initialize) and stateless (server/discover)
+// paths.
+func unionServerCapabilities(all []*mcpsdk.ServerCapabilities) *mcpsdk.ServerCapabilities {
+	merged := &mcpsdk.ServerCapabilities{}
+	for _, caps := range all {
 		if caps == nil {
 			continue
 		}

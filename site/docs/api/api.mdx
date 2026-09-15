@@ -3168,6 +3168,7 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPAuthorizationSource](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpauthorizationsource)
 - [MCPAuthorizationTarget](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpauthorizationtarget)
 - [MCPBackendAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikey)
+- [MCPBackendAPIKeyInjectionPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikeyinjectionpolicy)
 - [MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy)
 - [MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)
 - [MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselectorrule)
@@ -4606,9 +4607,39 @@ When both `header` and `queryParam` are unspecified, the API key will be injecte
   type="string"
   required="false"
   description="QueryParam is the HTTP query parameter to inject the API key into.<br />For example, if QueryParam is set to `api_key`, and the API key is `mysecretkey`, the request URL will be modified to include<br />`?api_key=mysecretkey`.<br />Either one of Header or QueryParam can be specified to inject the API key.<br />Note: Embedding credentials in URLs (including query parameters) is generally not recommended because URLs can be exposed in logs<br />and intermediary systems; prefer header-based injection when possible."
+/><ApiField
+  name="injectionPolicy"
+  type="[MCPBackendAPIKeyInjectionPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikeyinjectionpolicy)"
+  required="false"
+  defaultValue="Always"
+  description="InjectionPolicy controls when the configured API key is written onto the target header.<br />Always (the default) writes the credential, replacing any existing value, including<br />values populated by forwardHeaders.<br />IfNotPresent writes the API key only if the target header is absent, so a<br />caller-supplied token forwarded onto the same header is preserved.<br />InjectionPolicy applies only to header injection. It must not be set to IfNotPresent<br />when queryParam is used, because query-parameter injection always rewrites the backend URL."
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikeyinjectionpolicy">MCPBackendAPIKeyInjectionPolicy</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPBackendAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikey)
+
+MCPBackendAPIKeyInjectionPolicy controls when the configured API key is written onto the request.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="Always"
+  type="enum"
+  required="false"
+  description="MCPBackendAPIKeyInjectionAlways writes the configured key onto the target header,<br />replacing any existing value. This is the default and preserves existing behavior.<br />"
+/><ApiField
+  name="IfNotPresent"
+  type="enum"
+  required="false"
+  description="MCPBackendAPIKeyInjectionIfNotPresent writes the configured key only when the target<br />header is absent, so a value already set (for example by forwardHeaders) is preserved.<br />"
+/>
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy">MCPBackendSecurityPolicy</a>
 
 

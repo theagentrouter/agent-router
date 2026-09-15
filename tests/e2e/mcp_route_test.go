@@ -59,6 +59,7 @@ func TestMCP(t *testing.T) {
 	})
 	manyBackendsRouteToolNames := requireCreateMCPManyBackends(t)
 	backendSelectorJWTRoutePath, backendSelectorJWTKey := requireCreateMCPBackendSelectorJWTRoute(t)
+	requireCreateMCPAPIKeyInjectionPolicyRoutes(t)
 
 	const egSelector = "gateway.envoyproxy.io/owning-gateway-name=mcp-gateway"
 	e2elib.RequireWaitForGatewayPodReady(t, egSelector)
@@ -136,6 +137,28 @@ func TestMCP(t *testing.T) {
 			}, nil)
 		require.Error(t, err)
 		require.Nil(t, sess)
+	})
+	t.Run("api key injectionPolicy IfNotPresent injects when forwarded header is absent", func(t *testing.T) {
+		testMCPRouteTools(t.Context(), t, client, fwd.Address(), "/mcp/api-key-if-not-present", testMCPServerAllToolNames("mcp-backend__"),
+			nil, true, true)
+	})
+	t.Run("api key injectionPolicy IfNotPresent preserves forwarded credential", func(t *testing.T) {
+		sess, err := client.Connect(
+			t.Context(),
+			&mcp.StreamableClientTransport{
+				Endpoint: fmt.Sprintf("%s/mcp/api-key-if-not-present", fwd.Address()),
+				HTTPClient: &http.Client{Transport: mcpRequestHeaderInjector{
+					"X-GitHub-PAT": "Bearer wrong-pat",
+				}},
+			}, nil)
+		require.Error(t, err)
+		require.Nil(t, sess)
+	})
+	t.Run("api key injectionPolicy Always replaces forwarded credential", func(t *testing.T) {
+		testMCPRouteTools(t.Context(), t, client, fwd.Address(), "/mcp/api-key-always", testMCPServerAllToolNames("mcp-backend__"),
+			&http.Client{Transport: mcpRequestHeaderInjector{
+				"X-GitHub-PAT": "Bearer wrong-pat",
+			}}, true, true)
 	})
 }
 
@@ -351,11 +374,67 @@ spec:
 	return "/mcp/backend-selector-jwt", priv
 }
 
+func requireCreateMCPAPIKeyInjectionPolicyRoutes(t *testing.T) {
+	t.Helper()
+	const manifest = `
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-api-key-if-not-present
+  namespace: default
+spec:
+  path: "/mcp/api-key-if-not-present"
+  parentRefs:
+    - name: mcp-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+      namespace: default
+  backendRefs:
+    - name: mcp-backend
+      port: 1063
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+          injectionPolicy: IfNotPresent
+      forwardHeaders:
+        - name: X-GitHub-PAT
+          backendHeader: Authorization
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-api-key-always
+  namespace: default
+spec:
+  path: "/mcp/api-key-always"
+  parentRefs:
+    - name: mcp-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+      namespace: default
+  backendRefs:
+    - name: mcp-backend
+      port: 1063
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+          injectionPolicy: Always
+      forwardHeaders:
+        - name: X-GitHub-PAT
+          backendHeader: Authorization
+`
+	require.NoError(t, e2elib.KubectlApplyManifestStdin(t.Context(), manifest))
+	t.Cleanup(func() {
+		_ = e2elib.KubectlDeleteManifest(context.Background(), manifest)
+	})
+}
+
 func requireSignMCPBackendSubsetJWT(t *testing.T, priv *rsa.PrivateKey, backends []string) string {
 	t.Helper()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"mcp_backends": backends,
 		"exp":          time.Now().Add(time.Hour).Unix(),
+		"iss":          "https://example.com",
 	})
 	token.Header["kid"] = mcpBackendSelectorJWTKeyID
 	signed, err := token.SignedString(priv)

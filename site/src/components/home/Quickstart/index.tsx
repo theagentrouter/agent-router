@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Link from '@docusaurus/Link';
+import useBrokenLinks from '@docusaurus/useBrokenLinks';
 import { quickstart } from '@site/src/data/home';
 import styles from './styles.module.css';
 
@@ -39,6 +40,8 @@ function TerminalLine({ kind, text }: { kind: string; text?: string }): React.Re
 }
 
 export default function Quickstart(): React.ReactElement {
+  // the navbar and hero "Get Started" link to /#quickstart
+  useBrokenLinks().collectAnchor('quickstart');
   const [activeId, setActiveId] = useState(quickstart.tabs[0].id);
   const active = quickstart.tabs.find((t) => t.id === activeId) ?? quickstart.tabs[0];
   return (
@@ -52,6 +55,7 @@ export default function Quickstart(): React.ReactElement {
             <Link className="button button--primary" to={active.cta.to}>
               {active.cta.label}
             </Link>
+            {active.note && <p className={styles.note}>{active.note}</p>}
           </div>
           <div>
             <div className={styles.tabs} role="tablist" aria-label="Where to run Agent Router">

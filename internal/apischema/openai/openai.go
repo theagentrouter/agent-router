@@ -1577,7 +1577,25 @@ type PromptTokensDetails struct {
 	// Cached tokens present in the prompt.
 	CachedTokens int `json:"cached_tokens,omitzero"`
 	// Tokens written to the cache.
+	CacheWriteTokens int `json:"cache_write_tokens,omitzero"`
+	// Deprecated: use CacheWriteTokens. This field will be removed in v1.3.0.
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitzero"`
+}
+
+// CacheWriteTokensValue returns the greatest cache-write token value reported
+// under either the OpenAI or legacy AI Gateway field.
+func (p *PromptTokensDetails) CacheWriteTokensValue() int {
+	return max(p.CacheWriteTokens, p.CacheCreationTokens)
+}
+
+// MarshalJSON emits both cache-write field names with the same value for
+// backwards compatibility. Zero values retain the struct's omission behavior.
+func (p PromptTokensDetails) MarshalJSON() ([]byte, error) {
+	cacheWriteTokens := p.CacheWriteTokensValue()
+	p.CacheWriteTokens = cacheWriteTokens
+	p.CacheCreationTokens = cacheWriteTokens
+	type promptTokensDetails PromptTokensDetails
+	return json.Marshal(promptTokensDetails(p))
 }
 
 // ChatCompletionResponseChunk is described in the OpenAI API documentation:
@@ -7283,7 +7301,25 @@ type ResponseUsageInputTokensDetails struct {
 	CachedTokens int64 `json:"cached_tokens"`
 
 	// The number of tokens that were written to the cache.
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
+	// Deprecated: use CacheWriteTokens. This field will be removed in v1.3.0.
 	CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+}
+
+// CacheWriteTokensValue returns the greatest cache-write token value reported
+// under either the OpenAI or legacy AI Gateway field.
+func (r *ResponseUsageInputTokensDetails) CacheWriteTokensValue() int64 {
+	return max(r.CacheWriteTokens, r.CacheCreationTokens)
+}
+
+// MarshalJSON emits both cache-write field names with the same value for
+// backwards compatibility.
+func (r ResponseUsageInputTokensDetails) MarshalJSON() ([]byte, error) {
+	cacheWriteTokens := r.CacheWriteTokensValue()
+	r.CacheWriteTokens = cacheWriteTokens
+	r.CacheCreationTokens = cacheWriteTokens
+	type responseUsageInputTokensDetails ResponseUsageInputTokensDetails
+	return json.Marshal(responseUsageInputTokensDetails(r))
 }
 
 // A detailed breakdown of the output tokens.
@@ -7297,7 +7333,9 @@ type ResponseTokensDetails struct {
 	// CachedTokens: Number of cached tokens.
 	CachedTokens int `json:"cached_tokens,omitempty"` //nolint:tagliatelle //follow openai api
 
-	// CacheCreationTokens: number of tokens that were written to the cache.
+	// CacheWriteTokens: number of tokens that were written to the cache.
+	CacheWriteTokens int64 `json:"cache_write_tokens"` //nolint:tagliatelle
+	// Deprecated: use CacheWriteTokens. This field will be removed in v1.3.0.
 	CacheCreationTokens int64 `json:"cache_creation_input_tokens"` //nolint:tagliatelle
 
 	// ReasoningTokens: Number of reasoning tokens (for reasoning models).
@@ -7305,6 +7343,22 @@ type ResponseTokensDetails struct {
 
 	// AudioTokens: Number of audio tokens.
 	AudioTokens int `json:"audio_tokens,omitempty"` //nolint:tagliatelle //follow openai api
+}
+
+// CacheWriteTokensValue returns the greatest cache-write token value reported
+// under either the OpenAI or legacy AI Gateway field.
+func (r *ResponseTokensDetails) CacheWriteTokensValue() int64 {
+	return max(r.CacheWriteTokens, r.CacheCreationTokens)
+}
+
+// MarshalJSON emits both cache-write field names with the same value for
+// backwards compatibility.
+func (r ResponseTokensDetails) MarshalJSON() ([]byte, error) {
+	cacheWriteTokens := r.CacheWriteTokensValue()
+	r.CacheWriteTokens = cacheWriteTokens
+	r.CacheCreationTokens = cacheWriteTokens
+	type responseTokensDetails ResponseTokensDetails
+	return json.Marshal(responseTokensDetails(r))
 }
 
 // An error object returned when the model fails to generate a Response.

@@ -991,8 +991,8 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 				CompletionTokens: int(outputTokens),
 				TotalTokens:      int(totalTokens),
 				PromptTokensDetails: &openai.PromptTokensDetails{
-					CachedTokens:        int(cachedTokens),
-					CacheCreationTokens: int(cacheCreationTokens),
+					CachedTokens:     int(cachedTokens),
+					CacheWriteTokens: int(cacheCreationTokens),
 				},
 				CompletionTokensDetails: &openai.CompletionTokensDetails{
 					ReasoningTokens: int(reasoningTokens),
@@ -1318,8 +1318,8 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 		PromptTokens:     int(inputTokens),
 		TotalTokens:      int(totalTokens),
 		PromptTokensDetails: &openai.PromptTokensDetails{
-			CachedTokens:        int(cachedTokens),
-			CacheCreationTokens: int(cacheCreationTokens),
+			CachedTokens:     int(cachedTokens),
+			CacheWriteTokens: int(cacheCreationTokens),
 		},
 		CompletionTokensDetails: &openai.CompletionTokensDetails{
 			ReasoningTokens: int(reasoningTokens),

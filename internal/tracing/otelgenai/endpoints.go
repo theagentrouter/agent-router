@@ -380,7 +380,7 @@ func chatUsageDetailAttrs(u *openai.Usage) []attribute.KeyValue {
 	var cacheRead, cacheCreation, reasoning int
 	if td := u.PromptTokensDetails; td != nil {
 		cacheRead = td.CachedTokens
-		cacheCreation = td.CacheCreationTokens
+		cacheCreation = td.CacheWriteTokensValue()
 	}
 	if td := u.CompletionTokensDetails; td != nil {
 		reasoning = td.ReasoningTokens

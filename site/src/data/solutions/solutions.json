@@ -1,0 +1,18 @@
+[
+  {
+    "name": "Tetrate Agent Router Service",
+    "vendor": "Tetrate",
+    "deployment": "Hosted",
+    "logoUrl": "/img/solutions/tetrate-agent-router-service.svg",
+    "url": "https://router.tetrate.ai/",
+    "description": "Agent Router as a hosted service. Sign up, get an API key, and route to any model or MCP tool with no infrastructure to manage."
+  },
+  {
+    "name": "Tetrate Agent Router Enterprise",
+    "vendor": "Tetrate",
+    "deployment": "Self-managed",
+    "logoUrl": "/img/solutions/tetrate.svg",
+    "url": "https://tetrate.io/agent-router-product",
+    "description": "Agent Router in your own cloud, on-prem, or edge, with cross-team cost attribution, admin controls, runtime guardrails, enterprise SSO, and multi-region deployment."
+  }
+]
