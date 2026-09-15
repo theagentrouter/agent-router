@@ -67,6 +67,9 @@ var (
 	//go:embed testdata/openai-github.yaml
 	openaiGithubYAML string
 
+	//go:embed testdata/composio.yaml
+	composioYAML string
+
 	//go:embed testdata/anthropic.yaml
 	anthropicYAML string
 
@@ -402,6 +405,29 @@ func TestWriteConfig(t *testing.T) {
 				OTELLog: &otelLogConfig{Exporter: "console"},
 			},
 			expected: kiwiYAML,
+		},
+		{
+			name: "Composio MCP server with custom auth header (MCP-only, no OpenAI)",
+			input: ConfigData{
+				Backends: []Backend{
+					{
+						Name:     "composio",
+						Hostname: "mcp.composio.dev",
+						Port:     443,
+						NeedsTLS: true,
+					},
+				},
+				MCPBackendRefs: []MCPBackendRef{
+					{
+						BackendName:  "composio",
+						Path:         "/partner/composio/github",
+						APIKey:       "${COMPOSIO_API_KEY}",
+						APIKeyHeader: "x-consumer-api-key",
+					},
+				},
+				OTELLog: &otelLogConfig{Exporter: "console"},
+			},
+			expected: composioYAML,
 		},
 		{
 			name: "OpenAI with GitHub MCP server",
