@@ -48,12 +48,12 @@ func TestGatewayAPIInferenceExtension(t *testing.T) {
 	defaultTimeoutConfig.HTTPRouteMustHaveCondition = 10 * time.Second
 	defaultTimeoutConfig.HTTPRouteMustNotHaveParents = 10 * time.Second
 	defaultTimeoutConfig.GatewayMustHaveCondition = 10 * time.Second
+	// need this for GatewayWeightedAcrossTwoInferencePools to make sure
+	// the warmup test passed.
+	defaultTimeoutConfig.RequiredConsecutiveSuccesses = 1
 	config.SetupTimeoutConfig(&defaultTimeoutConfig)
 	options.TimeoutConfig = defaultTimeoutConfig
 	options.GatewayClassName = "inference-pool"
-	options.SkipTests = []string{
-		"GatewayWeightedAcrossTwoInferencePools", // TODO: fix me
-	}
 
 	// Setup cleanup to print report even if test fails
 	t.Cleanup(func() {
