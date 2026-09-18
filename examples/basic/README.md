@@ -11,6 +11,7 @@ traffic for various AI providers.
 - `azure_openai.yaml` - Azure OpenAI integration
 - `gcp_vertex.yaml` - GCP Vertex AI integration
 - `tars.yaml` - TARS integration
+- `thegrid.yaml` - The Grid integration
 - `cohere.yaml` - Cohere integration
 
 For AWS Bedrock, we recommend using either `aws-pod-identity.yaml` (EKS 1.24+) or

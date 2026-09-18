@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" role="img" aria-label="The Grid">
+  <rect width="48" height="48" rx="10" fill="#0F172A"/>
+  <path d="M15 15h6v6h-6zM27 15h6v6h-6zM15 27h6v6h-6zM27 27h6v6h-6z" fill="#38BDF8"/>
+  <path d="M21 17.5h6M21 30.5h6M17.5 21v6M30.5 21v6" stroke="#38BDF8" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

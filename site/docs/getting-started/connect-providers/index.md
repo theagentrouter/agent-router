@@ -13,6 +13,7 @@ After setting up the basic AI Gateway with the mock backend, you can configure i
 In this getting started guide you'll find quickstart setups to connect to the following providers:
 
 - [Tetrate Agent Router Service (TARS)](./tars.md) - Connect to Tetrate Agent Router Service's models
+- [The Grid](./thegrid.md) - Connect to The Grid's market instruments
 - [OpenAI](./openai.md) - Connect to OpenAI's GPT models
 - [Anthropic](./anthropic.md) - Connect to Anthropic's Claude models
 - [AWS Bedrock](./aws-bedrock.md) - Access AWS Bedrock's suite of foundation models
@@ -42,6 +43,7 @@ When configuring AI providers, keep these security considerations in mind:
 Choose your provider to get started:
 
 - [Connect Tetrate Agent Router Service (TARS)](./tars.md)
+- [Connect The Grid](./thegrid.md)
 - [Connect OpenAI](./openai.md)
 - [Connect Anthropic](./anthropic.md)
 - [Connect AWS Bedrock](./aws-bedrock.md)
