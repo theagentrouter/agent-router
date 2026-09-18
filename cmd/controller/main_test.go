@@ -16,7 +16,6 @@ import (
 	"go.uber.org/zap/zapcore"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -262,9 +261,7 @@ func Test_maybePatchAdmissionWebhook(t *testing.T) {
 	require.ErrorContains(t, err, `"envoy-ai-gateway-gateway-pod-mutator.envoy-ai-gateway-system" not found`)
 
 	w := &admissionregistrationv1.MutatingWebhookConfiguration{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: mutatingWebhookConfigurationName + "." + ns,
-		},
+		Name:     mutatingWebhookConfigurationName + "." + ns,
 		Webhooks: []admissionregistrationv1.MutatingWebhook{},
 	}
 	err = c.Create(t.Context(), w, &client.CreateOptions{})

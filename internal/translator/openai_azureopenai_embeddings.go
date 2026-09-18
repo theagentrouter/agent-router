@@ -19,10 +19,8 @@ import (
 // for embeddings.
 func NewEmbeddingOpenAIToAzureOpenAITranslator(apiVersion string, modelNameOverride internalapi.ModelNameOverride) OpenAIEmbeddingTranslator {
 	return &openAIToAzureOpenAITranslatorV1Embedding{
-		apiVersion: apiVersion,
-		openAIToOpenAITranslatorV1Embedding: openAIToOpenAITranslatorV1Embedding{
-			modelNameOverride: modelNameOverride,
-		},
+		apiVersion:        apiVersion,
+		modelNameOverride: modelNameOverride,
 	}
 }
 

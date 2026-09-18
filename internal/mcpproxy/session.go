@@ -755,17 +755,17 @@ func (c clientToGatewaySessionID) backendSessionIDs() (map[filterapi.MCPBackendN
 	}
 	backendSessions := id[lastAt+1:]
 	prefix := id[:lastAt] // "{routeName}@{subject}" — subject may itself contain '@'
-	firstAt := strings.Index(prefix, "@")
-	if firstAt < 0 {
+	before, _, ok := strings.Cut(prefix, "@")
+	if !ok {
 		return nil, "", fmt.Errorf("invalid session ID: missing '@' separator")
 	}
-	route := prefix[:firstAt]
+	route := before
 	// The subject (prefix[firstAt+1:]) is retained inside the encrypted session ID for
 	// anti-hijacking purposes but is not needed during parsing.
 
 	// Each backend segment format: {backendName}:{base64(sessionID)}:{capHex}
 	// The capHex field is optional for backward compatibility with old session IDs.
-	for _, part := range strings.Split(backendSessions, ",") {
+	for part := range strings.SplitSeq(backendSessions, ",") {
 		// Split into at most 3 fields: backendName, base64SessionID, capHex.
 		fields := strings.SplitN(part, ":", 3)
 		if len(fields) < 2 {
@@ -825,17 +825,17 @@ func clientToGatewaySessionIDFromEntries(subject string, entries []compositeSess
 
 func (e clientToGatewayEventID) backendEventIDs() map[filterapi.MCPBackendName]string {
 	result := map[filterapi.MCPBackendName]string{}
-	parts := strings.Split(string(e), ",")
-	for _, part := range parts {
-		colon := strings.Index(part, ":")
-		if colon < 0 {
+	parts := strings.SplitSeq(string(e), ",")
+	for part := range parts {
+		before, after, ok := strings.Cut(part, ":")
+		if !ok {
 			continue
 		}
-		backendName := part[:colon]
+		backendName := before
 		if backendName == "" {
 			continue
 		}
-		eventID := part[colon+1:]
+		eventID := after
 		if eventID != "" {
 			decoded, err := base64.StdEncoding.DecodeString(eventID)
 			if err != nil {

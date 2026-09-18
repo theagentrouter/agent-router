@@ -11,7 +11,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -51,7 +50,7 @@ func TestOpenAIToolsToBedrockToolConfig(t *testing.T) {
 				Tools: []*awsbedrock.Tool{
 					{
 						ToolSpec: &awsbedrock.ToolSpecification{
-							Name:        ptr.To("noop"),
+							Name:        new("noop"),
 							Description: nil,
 							InputSchema: &awsbedrock.ToolInputSchema{},
 						},
@@ -69,8 +68,8 @@ func TestOpenAIToolsToBedrockToolConfig(t *testing.T) {
 				Tools: []*awsbedrock.Tool{
 					{
 						ToolSpec: &awsbedrock.ToolSpecification{
-							Name:        ptr.To("get_current_weather"),
-							Description: ptr.To("Get the current weather in a given location"),
+							Name:        new("get_current_weather"),
+							Description: new("Get the current weather in a given location"),
 							InputSchema: &awsbedrock.ToolInputSchema{JSON: map[string]any{"type": "object"}},
 						},
 					},
@@ -88,8 +87,8 @@ func TestOpenAIToolsToBedrockToolConfig(t *testing.T) {
 				Tools: []*awsbedrock.Tool{
 					{
 						ToolSpec: &awsbedrock.ToolSpecification{
-							Name:        ptr.To("get_current_weather"),
-							Description: ptr.To("Get the current weather in a given location"),
+							Name:        new("get_current_weather"),
+							Description: new("Get the current weather in a given location"),
 							InputSchema: &awsbedrock.ToolInputSchema{JSON: map[string]any{"type": "object"}},
 						},
 					},
@@ -108,8 +107,8 @@ func TestOpenAIToolsToBedrockToolConfig(t *testing.T) {
 				Tools: []*awsbedrock.Tool{
 					{
 						ToolSpec: &awsbedrock.ToolSpecification{
-							Name:        ptr.To("get_current_weather"),
-							Description: ptr.To("Get the current weather in a given location"),
+							Name:        new("get_current_weather"),
+							Description: new("Get the current weather in a given location"),
 							InputSchema: &awsbedrock.ToolInputSchema{JSON: map[string]any{"type": "object"}},
 						},
 					},
@@ -128,13 +127,13 @@ func TestOpenAIToolsToBedrockToolConfig(t *testing.T) {
 				Tools: []*awsbedrock.Tool{
 					{
 						ToolSpec: &awsbedrock.ToolSpecification{
-							Name:        ptr.To("get_current_weather"),
-							Description: ptr.To("Get the current weather in a given location"),
+							Name:        new("get_current_weather"),
+							Description: new("Get the current weather in a given location"),
 							InputSchema: &awsbedrock.ToolInputSchema{JSON: map[string]any{"type": "object"}},
 						},
 					},
 				},
-				ToolChoice: &awsbedrock.ToolChoice{Tool: &awsbedrock.SpecificToolChoice{Name: ptr.To("get_current_weather")}},
+				ToolChoice: &awsbedrock.ToolChoice{Tool: &awsbedrock.SpecificToolChoice{Name: new("get_current_weather")}},
 			},
 		},
 		{
@@ -152,13 +151,13 @@ func TestOpenAIToolsToBedrockToolConfig(t *testing.T) {
 				Tools: []*awsbedrock.Tool{
 					{
 						ToolSpec: &awsbedrock.ToolSpecification{
-							Name:        ptr.To("get_current_weather"),
-							Description: ptr.To("Get the current weather in a given location"),
+							Name:        new("get_current_weather"),
+							Description: new("Get the current weather in a given location"),
 							InputSchema: &awsbedrock.ToolInputSchema{JSON: map[string]any{"type": "object"}},
 						},
 					},
 				},
-				ToolChoice: &awsbedrock.ToolChoice{Tool: &awsbedrock.SpecificToolChoice{Name: ptr.To("get_current_weather")}},
+				ToolChoice: &awsbedrock.ToolChoice{Tool: &awsbedrock.SpecificToolChoice{Name: new("get_current_weather")}},
 			},
 		},
 		{
@@ -182,8 +181,8 @@ func TestOpenAIToolsToBedrockToolConfig(t *testing.T) {
 				Tools: []*awsbedrock.Tool{
 					{
 						ToolSpec: &awsbedrock.ToolSpecification{
-							Name:        ptr.To("get_current_weather"),
-							Description: ptr.To("Get the current weather in a given location"),
+							Name:        new("get_current_weather"),
+							Description: new("Get the current weather in a given location"),
 							InputSchema: &awsbedrock.ToolInputSchema{JSON: map[string]any{"type": "object"}},
 						},
 					},
@@ -233,7 +232,7 @@ func TestOpenAIMessageToBedrockMessageRoleUser(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, &awsbedrock.Message{
 			Role:    openai.ChatMessageRoleUser,
-			Content: []*awsbedrock.ContentBlock{{Text: ptr.To("hello")}},
+			Content: []*awsbedrock.ContentBlock{{Text: new("hello")}},
 		}, msg)
 	})
 
@@ -248,7 +247,7 @@ func TestOpenAIMessageToBedrockMessageRoleUser(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, &awsbedrock.Message{
 			Role:    openai.ChatMessageRoleUser,
-			Content: []*awsbedrock.ContentBlock{{Text: ptr.To("hello")}},
+			Content: []*awsbedrock.ContentBlock{{Text: new("hello")}},
 		}, msg)
 	})
 
@@ -349,7 +348,7 @@ func TestOpenAIMessageToBedrockMessageRoleAssistant(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, &awsbedrock.Message{
 			Role:    openai.ChatMessageRoleAssistant,
-			Content: []*awsbedrock.ContentBlock{{Text: ptr.To("hi there")}},
+			Content: []*awsbedrock.ContentBlock{{Text: new("hi there")}},
 		}, msg)
 	})
 
@@ -359,12 +358,12 @@ func TestOpenAIMessageToBedrockMessageRoleAssistant(t *testing.T) {
 				Value: []openai.ChatCompletionAssistantMessageParamContent{
 					{
 						Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-						Text:      ptr.To("reasoning..."),
-						Signature: ptr.To("sig"),
+						Text:      new("reasoning..."),
+						Signature: new("sig"),
 					},
 					{
 						Type:    openai.ChatCompletionAssistantMessageParamContentTypeRefusal,
-						Refusal: ptr.To("I can't help with that"),
+						Refusal: new("I can't help with that"),
 					},
 				},
 			},
@@ -376,7 +375,7 @@ func TestOpenAIMessageToBedrockMessageRoleAssistant(t *testing.T) {
 				{ReasoningContent: &awsbedrock.ReasoningContentBlock{
 					ReasoningText: &awsbedrock.ReasoningTextBlock{Text: "reasoning...", Signature: "sig"},
 				}},
-				{Text: ptr.To("I can't help with that")},
+				{Text: new("I can't help with that")},
 			},
 		}, msg)
 	})
@@ -420,7 +419,7 @@ func TestOpenAIMessageToBedrockMessageRoleAssistant(t *testing.T) {
 		msg, err := openAIMessageToBedrockMessageRoleAssistant(&openai.ChatCompletionAssistantMessageParam{
 			ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 				{
-					ID: ptr.To("call_1"),
+					ID: new("call_1"),
 					Function: openai.ChatCompletionMessageToolCallFunctionParam{
 						Name:      "get_current_weather",
 						Arguments: `{"location":"Queens, NY"}`,
@@ -454,7 +453,7 @@ func TestOpenAIMessageToBedrockMessageRoleAssistant(t *testing.T) {
 	t.Run("tool call with invalid arguments returns an error", func(t *testing.T) {
 		_, err := openAIMessageToBedrockMessageRoleAssistant(&openai.ChatCompletionAssistantMessageParam{
 			ToolCalls: []openai.ChatCompletionMessageToolCallParam{
-				{ID: ptr.To("call_1"), Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_current_weather", Arguments: "not-json"}},
+				{ID: new("call_1"), Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_current_weather", Arguments: "not-json"}},
 			},
 		}, openai.ChatMessageRoleAssistant)
 		require.ErrorContains(t, err, "failed to unmarshal tool call arguments")
@@ -468,7 +467,7 @@ func TestOpenAIMessageToBedrockMessageRoleSystem(t *testing.T) {
 			Content: openai.ContentUnion{Value: "be helpful"},
 		}, &bedrockSystem)
 		require.NoError(t, err)
-		require.Equal(t, []*awsbedrock.SystemContentBlock{{Text: ptr.To("be helpful")}}, bedrockSystem)
+		require.Equal(t, []*awsbedrock.SystemContentBlock{{Text: new("be helpful")}}, bedrockSystem)
 	})
 
 	t.Run("content parts", func(t *testing.T) {
@@ -479,7 +478,7 @@ func TestOpenAIMessageToBedrockMessageRoleSystem(t *testing.T) {
 			},
 		}, &bedrockSystem)
 		require.NoError(t, err)
-		require.Equal(t, []*awsbedrock.SystemContentBlock{{Text: ptr.To("part1")}, {Text: ptr.To("part2")}}, bedrockSystem)
+		require.Equal(t, []*awsbedrock.SystemContentBlock{{Text: new("part1")}, {Text: new("part2")}}, bedrockSystem)
 	})
 
 	t.Run("unexpected content type returns an error", func(t *testing.T) {
@@ -503,8 +502,8 @@ func TestOpenAIMessageToBedrockMessageRoleTool(t *testing.T) {
 			Role: openai.ChatMessageRoleTool,
 			Content: []*awsbedrock.ContentBlock{{
 				ToolResult: &awsbedrock.ToolResultBlock{
-					Content:   []*awsbedrock.ToolResultContentBlock{{Text: ptr.To("70F and clear skies")}},
-					ToolUseID: ptr.To("call_1"),
+					Content:   []*awsbedrock.ToolResultContentBlock{{Text: new("70F and clear skies")}},
+					ToolUseID: new("call_1"),
 				},
 			}},
 		}, msg)
@@ -520,8 +519,8 @@ func TestOpenAIMessageToBedrockMessageRoleTool(t *testing.T) {
 			Role: openai.ChatMessageRoleTool,
 			Content: []*awsbedrock.ContentBlock{{
 				ToolResult: &awsbedrock.ToolResultBlock{
-					Content:   []*awsbedrock.ToolResultContentBlock{{Text: ptr.To("part1")}},
-					ToolUseID: ptr.To("call_1"),
+					Content:   []*awsbedrock.ToolResultContentBlock{{Text: new("part1")}},
+					ToolUseID: new("call_1"),
 				},
 			}},
 		}, msg)

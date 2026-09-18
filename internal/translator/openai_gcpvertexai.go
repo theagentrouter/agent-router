@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/genai"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/gcp"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -233,7 +232,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) handleStreamingResponse(
 		// Extract token usage only in the last chunk.
 		if chunk.UsageMetadata != nil && chunk.UsageMetadata.PromptTokenCount > 0 {
 			// Convert usage to pointer if available.
-			usage := ptr.To(geminiUsageToOpenAIUsage(chunk.UsageMetadata))
+			usage := new(geminiUsageToOpenAIUsage(chunk.UsageMetadata))
 
 			usageChunk := &openai.ChatCompletionResponseChunk{
 				ID:      chunk.ResponseID,

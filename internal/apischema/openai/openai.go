@@ -2236,7 +2236,7 @@ type CompletionRequest struct {
 // - []int64: array of token IDs
 // - [][]int64: batch of token ID arrays
 type PromptUnion struct {
-	Value interface{}
+	Value any
 }
 
 func (p PromptUnion) MarshalJSON() ([]byte, error) {

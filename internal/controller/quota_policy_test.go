@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	fake2 "k8s.io/client-go/kubernetes/fake"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -65,11 +64,11 @@ func TestQuotaPolicyController_Reconcile(t *testing.T) {
 
 	// Create an AIServiceBackend.
 	backend := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "mybackend", Namespace: namespace},
+		Name: "mybackend", Namespace: namespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{
 				Name: "some-service",
-				Port: ptrTo[gwapiv1.PortNumber](8080),
+				Port: new(gwapiv1.PortNumber(8080)),
 			},
 		},
 	}
@@ -77,7 +76,7 @@ func TestQuotaPolicyController_Reconcile(t *testing.T) {
 
 	// Create a QuotaPolicy targeting the backend.
 	qp := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "myquotapolicy", Namespace: namespace},
+		Name: "myquotapolicy", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{
@@ -95,7 +94,7 @@ func TestQuotaPolicyController_Reconcile(t *testing.T) {
 
 	// Reconcile should succeed.
 	res, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: namespace, Name: "myquotapolicy"},
+		Namespace: namespace, Name: "myquotapolicy",
 	})
 	require.NoError(t, err)
 	require.False(t, res.Requeue)
@@ -117,7 +116,7 @@ func TestQuotaPolicyController_Reconcile_NotFound(t *testing.T) {
 	// Reconcile a non-existent QuotaPolicy - this triggers the deletion path
 	// (rebuilds all configs, which should succeed with no policies).
 	res, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: "default", Name: "nonexistent"},
+		Namespace: "default", Name: "nonexistent",
 	})
 	require.NoError(t, err)
 	require.False(t, res.Requeue)
@@ -132,11 +131,11 @@ func TestQuotaPolicyController_Reconcile_SyncError(t *testing.T) {
 
 	// Create an AIServiceBackend.
 	backend := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend-for-error", Namespace: namespace},
+		Name: "backend-for-error", Namespace: namespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{
 				Name: "some-service",
-				Port: ptrTo[gwapiv1.PortNumber](8080),
+				Port: new(gwapiv1.PortNumber(8080)),
 			},
 		},
 	}
@@ -144,7 +143,7 @@ func TestQuotaPolicyController_Reconcile_SyncError(t *testing.T) {
 
 	// Create a QuotaPolicy targeting the backend with valid config.
 	qp := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "qp-sync-error", Namespace: namespace},
+		Name: "qp-sync-error", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{
@@ -162,7 +161,7 @@ func TestQuotaPolicyController_Reconcile_SyncError(t *testing.T) {
 
 	// Reconcile should fail because the runner's cache is not initialized.
 	_, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: namespace, Name: "qp-sync-error"},
+		Namespace: namespace, Name: "qp-sync-error",
 	})
 	require.Error(t, err)
 
@@ -181,11 +180,11 @@ func TestQuotaPolicyController_Reconcile_InvalidDuration(t *testing.T) {
 
 	// Create an AIServiceBackend.
 	backend := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend-invalid-dur", Namespace: namespace},
+		Name: "backend-invalid-dur", Namespace: namespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{
 				Name: "some-service",
-				Port: ptrTo[gwapiv1.PortNumber](8080),
+				Port: new(gwapiv1.PortNumber(8080)),
 			},
 		},
 	}
@@ -193,7 +192,7 @@ func TestQuotaPolicyController_Reconcile_InvalidDuration(t *testing.T) {
 
 	// Create a QuotaPolicy with an invalid duration.
 	qp := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "qp-invalid-duration", Namespace: namespace},
+		Name: "qp-invalid-duration", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{
@@ -211,7 +210,7 @@ func TestQuotaPolicyController_Reconcile_InvalidDuration(t *testing.T) {
 
 	// Reconcile should fail because the duration is invalid.
 	_, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: namespace, Name: "qp-invalid-duration"},
+		Namespace: namespace, Name: "qp-invalid-duration",
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to build rate limit configs")
@@ -231,11 +230,11 @@ func TestQuotaPolicyController_Reconcile_Deletion(t *testing.T) {
 
 	// Create an AIServiceBackend.
 	backend := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend-delete", Namespace: namespace},
+		Name: "backend-delete", Namespace: namespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{
 				Name: "some-service",
-				Port: ptrTo[gwapiv1.PortNumber](8080),
+				Port: new(gwapiv1.PortNumber(8080)),
 			},
 		},
 	}
@@ -243,7 +242,7 @@ func TestQuotaPolicyController_Reconcile_Deletion(t *testing.T) {
 
 	// Create a QuotaPolicy.
 	qp := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "qp-delete", Namespace: namespace},
+		Name: "qp-delete", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{
@@ -261,7 +260,7 @@ func TestQuotaPolicyController_Reconcile_Deletion(t *testing.T) {
 
 	// First reconcile to add finalizer and sync.
 	_, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: namespace, Name: "qp-delete"},
+		Namespace: namespace, Name: "qp-delete",
 	})
 	require.NoError(t, err)
 
@@ -272,12 +271,12 @@ func TestQuotaPolicyController_Reconcile_Deletion(t *testing.T) {
 
 	// Delete the QuotaPolicy.
 	require.NoError(t, fakeClient.Delete(t.Context(), &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "qp-delete", Namespace: namespace},
+		Name: "qp-delete", Namespace: namespace,
 	}))
 
 	// Reconcile after deletion should succeed (handles finalizer cleanup).
 	_, err = c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: namespace, Name: "qp-delete"},
+		Namespace: namespace, Name: "qp-delete",
 	})
 	require.NoError(t, err)
 }
@@ -291,11 +290,11 @@ func TestQuotaPolicyController_Reconcile_MultipleBackends(t *testing.T) {
 	// Create two AIServiceBackends.
 	for _, name := range []string{"backend-1", "backend-2"} {
 		backend := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{
 					Name: gwapiv1.ObjectName(name + "-svc"),
-					Port: ptrTo[gwapiv1.PortNumber](8080),
+					Port: new(gwapiv1.PortNumber(8080)),
 				},
 			},
 		}
@@ -304,7 +303,7 @@ func TestQuotaPolicyController_Reconcile_MultipleBackends(t *testing.T) {
 
 	// Create a QuotaPolicy targeting both backends.
 	qp := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "qp-multi-backend", Namespace: namespace},
+		Name: "qp-multi-backend", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{
@@ -326,7 +325,7 @@ func TestQuotaPolicyController_Reconcile_MultipleBackends(t *testing.T) {
 	require.NoError(t, fakeClient.Create(t.Context(), qp))
 
 	res, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: namespace, Name: "qp-multi-backend"},
+		Namespace: namespace, Name: "qp-multi-backend",
 	})
 	require.NoError(t, err)
 	require.False(t, res.Requeue)
@@ -344,11 +343,11 @@ func TestQuotaPolicyController_Reconcile_PerModelQuotas(t *testing.T) {
 	namespace := "default"
 
 	backend := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend-model", Namespace: namespace},
+		Name: "backend-model", Namespace: namespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{
 				Name: "model-svc",
-				Port: ptrTo[gwapiv1.PortNumber](8080),
+				Port: new(gwapiv1.PortNumber(8080)),
 			},
 		},
 	}
@@ -356,7 +355,7 @@ func TestQuotaPolicyController_Reconcile_PerModelQuotas(t *testing.T) {
 
 	modelName := "gpt-4"
 	qp := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "qp-per-model", Namespace: namespace},
+		Name: "qp-per-model", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{
@@ -379,7 +378,7 @@ func TestQuotaPolicyController_Reconcile_PerModelQuotas(t *testing.T) {
 	require.NoError(t, fakeClient.Create(t.Context(), qp))
 
 	res, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: namespace, Name: "qp-per-model"},
+		Namespace: namespace, Name: "qp-per-model",
 	})
 	require.NoError(t, err)
 	require.False(t, res.Requeue)
@@ -398,7 +397,7 @@ func TestQuotaPolicyController_BackendToQuotaPolicy(t *testing.T) {
 
 	// Create QuotaPolicies targeting different backends.
 	qp1 := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "qp-1", Namespace: namespace},
+		Name: "qp-1", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{
@@ -413,7 +412,7 @@ func TestQuotaPolicyController_BackendToQuotaPolicy(t *testing.T) {
 		},
 	}
 	qp2 := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "qp-2", Namespace: namespace},
+		Name: "qp-2", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{
@@ -428,7 +427,7 @@ func TestQuotaPolicyController_BackendToQuotaPolicy(t *testing.T) {
 		},
 	}
 	qp3 := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "qp-3", Namespace: namespace},
+		Name: "qp-3", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{
@@ -448,7 +447,7 @@ func TestQuotaPolicyController_BackendToQuotaPolicy(t *testing.T) {
 
 	// Simulate an AIServiceBackend "backend-a" change.
 	backendA := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend-a", Namespace: namespace},
+		Name: "backend-a", Namespace: namespace,
 	}
 	requests := c.BackendToQuotaPolicy(t.Context(), backendA)
 
@@ -463,7 +462,7 @@ func TestQuotaPolicyController_BackendToQuotaPolicy(t *testing.T) {
 
 	// Simulate an AIServiceBackend "backend-b" change.
 	backendB := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend-b", Namespace: namespace},
+		Name: "backend-b", Namespace: namespace,
 	}
 	requests = c.BackendToQuotaPolicy(t.Context(), backendB)
 
@@ -473,7 +472,7 @@ func TestQuotaPolicyController_BackendToQuotaPolicy(t *testing.T) {
 
 	// Simulate a backend change for a backend that no QuotaPolicy targets.
 	backendC := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend-c", Namespace: namespace},
+		Name: "backend-c", Namespace: namespace,
 	}
 	requests = c.BackendToQuotaPolicy(t.Context(), backendC)
 	require.Empty(t, requests)
@@ -488,11 +487,11 @@ func TestQuotaPolicyController_Reconcile_MultiplePolicies(t *testing.T) {
 	// Create backends.
 	for _, name := range []string{"be-1", "be-2"} {
 		backend := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Name: name, Namespace: namespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{
 					Name: gwapiv1.ObjectName(name + "-svc"),
-					Port: ptrTo[gwapiv1.PortNumber](8080),
+					Port: new(gwapiv1.PortNumber(8080)),
 				},
 			},
 		}
@@ -501,7 +500,7 @@ func TestQuotaPolicyController_Reconcile_MultiplePolicies(t *testing.T) {
 
 	// Create two QuotaPolicies targeting different backends.
 	qp1 := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "policy-1", Namespace: namespace},
+		Name: "policy-1", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: "be-1"},
@@ -512,7 +511,7 @@ func TestQuotaPolicyController_Reconcile_MultiplePolicies(t *testing.T) {
 		},
 	}
 	qp2 := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "policy-2", Namespace: namespace},
+		Name: "policy-2", Namespace: namespace,
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: "be-2"},
@@ -527,7 +526,7 @@ func TestQuotaPolicyController_Reconcile_MultiplePolicies(t *testing.T) {
 
 	// Reconciling one policy should rebuild all configs (including both policies).
 	res, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Namespace: namespace, Name: "policy-1"},
+		Namespace: namespace, Name: "policy-1",
 	})
 	require.NoError(t, err)
 	require.False(t, res.Requeue)
@@ -543,7 +542,7 @@ func Test_quotaPolicyTargetRefsIndexFunc(t *testing.T) {
 
 	// Create a QuotaPolicy targeting two backends.
 	qp := &aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "indexed-qp", Namespace: "default"},
+		Name: "indexed-qp", Namespace: "default",
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: "target-1"},
@@ -575,6 +574,4 @@ func Test_quotaPolicyTargetRefsIndexFunc(t *testing.T) {
 	require.Empty(t, policies.Items)
 }
 
-func ptrTo[T any](v T) *T {
-	return &v
-}
+//go:fix inline

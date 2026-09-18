@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -39,9 +38,9 @@ func wrapAnthropicSSEInEventStream(sseData string) ([]byte, error) {
 
 	// Parse SSE format to extract individual events
 	// SSE format: "event: TYPE\ndata: JSON\n\n"
-	events := bytes.Split([]byte(sseData), []byte("\n\n"))
+	events := bytes.SplitSeq([]byte(sseData), []byte("\n\n"))
 
-	for _, eventBlock := range events {
+	for eventBlock := range events {
 		if len(bytes.TrimSpace(eventBlock)) == 0 {
 			continue
 		}
@@ -51,10 +50,10 @@ func wrapAnthropicSSEInEventStream(sseData string) ([]byte, error) {
 		var eventType string
 		var jsonData []byte
 		for _, line := range lines {
-			if bytes.HasPrefix(line, []byte("event: ")) {
-				eventType = string(bytes.TrimPrefix(line, []byte("event: ")))
-			} else if bytes.HasPrefix(line, []byte("data: ")) {
-				jsonData = bytes.TrimPrefix(line, []byte("data: "))
+			if after, ok := bytes.CutPrefix(line, []byte("event: ")); ok {
+				eventType = string(after)
+			} else if after, ok := bytes.CutPrefix(line, []byte("data: ")); ok {
+				jsonData = after
 			}
 		}
 
@@ -116,7 +115,7 @@ func TestResponseModel_AWSAnthropic(t *testing.T) {
 	// Initialize translator with the model
 	req := &openai.ChatCompletionRequest{
 		Model:     "claude-sonnet-4",
-		MaxTokens: ptr.To(int64(100)),
+		MaxTokens: new(int64(100)),
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			{
 				OfUser: &openai.ChatCompletionUserMessageParam{
@@ -174,8 +173,8 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 				OfUser: &openai.ChatCompletionUserMessageParam{Content: openai.StringOrUserRoleContentUnion{Value: "Hello!"}, Role: openai.ChatMessageRoleUser},
 			},
 		},
-		MaxTokens:   ptr.To(int64(1024)),
-		Temperature: ptr.To(0.7),
+		MaxTokens:   new(int64(1024)),
+		Temperature: new(0.7),
 	}
 
 	t.Run("AWS Bedrock InvokeModel Values Configured Correctly", func(t *testing.T) {
@@ -237,7 +236,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		streamReq := &openai.ChatCompletionRequest{
 			Model:     "anthropic.claude-3-sonnet-20240229-v1:0",
 			Messages:  []openai.ChatCompletionMessageParamUnion{},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 			Stream:    true,
 		}
 		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
@@ -276,8 +275,8 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		invalidTempReq := &openai.ChatCompletionRequest{
 			Model:       "anthropic.claude-3-opus-20240229-v1:0",
 			Messages:    []openai.ChatCompletionMessageParamUnion{},
-			MaxTokens:   ptr.To(int64(100)),
-			Temperature: ptr.To(2.5),
+			MaxTokens:   new(int64(100)),
+			Temperature: new(2.5),
 		}
 		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
 		_, _, err := translator.RequestBody(nil, invalidTempReq, false)
@@ -339,7 +338,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 				Choices: []openai.ChatCompletionResponseChoice{
 					{
 						Index:        0,
-						Message:      openai.ChatCompletionResponseChoiceMessage{Role: "assistant", Content: ptr.To("Hello there!")},
+						Message:      openai.ChatCompletionResponseChoiceMessage{Role: "assistant", Content: new("Hello there!")},
 						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 					},
 				},
@@ -377,10 +376,10 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 						FinishReason: openai.ChatCompletionChoicesFinishReasonToolCalls,
 						Message: openai.ChatCompletionResponseChoiceMessage{
 							Role:    string(anthropic.MessageParamRoleAssistant),
-							Content: ptr.To("Ok, I will call the tool."),
+							Content: new("Ok, I will call the tool."),
 							ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 								{
-									ID:   ptr.To("toolu_01"),
+									ID:   new("toolu_01"),
 									Type: openai.ChatCompletionMessageToolCallTypeFunction,
 									Function: openai.ChatCompletionMessageToolCallFunctionParam{
 										Name:      "get_weather",
@@ -452,7 +451,7 @@ func TestOpenAIToAWSAnthropicTranslator_ResponseError(t *testing.T) {
 				Type: "error",
 				Error: openai.ErrorType{
 					Type:    awsBedrockBackendError,
-					Code:    ptr.To("503"),
+					Code:    new("503"),
 					Message: "Service Unavailable",
 				},
 			},
@@ -471,7 +470,7 @@ func TestOpenAIToAWSAnthropicTranslator_ResponseError(t *testing.T) {
 				Type: "error",
 				Error: openai.ErrorType{
 					Type:    "ValidationException",
-					Code:    ptr.To("400"),
+					Code:    new("400"),
 					Message: "messages: field is required",
 				},
 			},
@@ -805,7 +804,7 @@ func TestOpenAIToAWSAnthropicTranslator_EdgeCases(t *testing.T) {
 
 		req := &openai.ChatCompletionRequest{
 			Model:     "original-model",
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				{OfUser: &openai.ChatCompletionUserMessageParam{
 					Content: openai.StringOrUserRoleContentUnion{Value: "Test"},
@@ -842,7 +841,7 @@ func TestOpenAIToAWSAnthropicTranslator_EdgeCases(t *testing.T) {
 
 		req := &openai.ChatCompletionRequest{
 			Model:     "original-model",
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				{OfUser: &openai.ChatCompletionUserMessageParam{
 					Content: openai.StringOrUserRoleContentUnion{Value: "Test"},

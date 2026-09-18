@@ -273,16 +273,14 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 	filterConfigBundleVolumeName := filterConfigBundleVolumeName(gatewayName, gatewayNamespace)
 	volumes := []corev1.Volume{
 		{
-			Name: extProcUDSVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
+			Name:     extProcUDSVolumeName,
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
 		},
 	}
 	projections := []corev1.VolumeProjection{
 		{
 			Secret: &corev1.SecretProjection{
-				LocalObjectReference: corev1.LocalObjectReference{Name: bundleConfigIndexSecretName},
+				Name: bundleConfigIndexSecretName,
 				Items: []corev1.KeyToPath{
 					{
 						Key:  FilterConfigBundleIndexKey,
@@ -296,9 +294,7 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 	for i := range maxFilterConfigBundleSlots {
 		projections = append(projections, corev1.VolumeProjection{
 			Secret: &corev1.SecretProjection{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, i),
-				},
+				Name:     filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, i),
 				Optional: &optional,
 				Items: []corev1.KeyToPath{
 					{
@@ -310,10 +306,8 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 		})
 	}
 	volumes = append(volumes, corev1.Volume{
-		Name: filterConfigBundleVolumeName,
-		VolumeSource: corev1.VolumeSource{
-			Projected: &corev1.ProjectedVolumeSource{Sources: projections},
-		},
+		Name:      filterConfigBundleVolumeName,
+		Projected: &corev1.ProjectedVolumeSource{Sources: projections},
 	})
 	podspec.Volumes = append(podspec.Volumes, volumes...)
 

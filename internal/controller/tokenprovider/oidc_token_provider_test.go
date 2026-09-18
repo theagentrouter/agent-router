@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -31,10 +30,8 @@ func TestOidcTokenProvider_GetToken(t *testing.T) {
 	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &corev1.Secret{})
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "clientSecret",
-			Namespace: "default",
-		},
+		Name:      "clientSecret",
+		Namespace: "default",
 		Data: map[string][]byte{
 			"client-secret": []byte("some-client-secret"),
 		},
@@ -104,7 +101,7 @@ func TestOidcTokenProvider_GetToken(t *testing.T) {
 			ctx := oidcv3.InsecureIssuerURLContext(t.Context(), discoveryServer.URL)
 
 			oidcConfig := &egv1a1.OIDC{
-				ClientID: ptr.To("clientID"),
+				ClientID: new("clientID"),
 				ClientSecret: gwapiv1.SecretObjectReference{
 					Name:      "clientSecret",
 					Namespace: ptr.To[gwapiv1.Namespace]("default"),
@@ -133,10 +130,8 @@ func TestOidcTokenProvider_GetToken_Success(t *testing.T) {
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "clientSecret",
-			Namespace: "default",
-		},
+		Name:      "clientSecret",
+		Namespace: "default",
 		Data: map[string][]byte{
 			"client-secret": []byte("some-client-secret"),
 		},
@@ -162,7 +157,7 @@ func TestOidcTokenProvider_GetToken_Success(t *testing.T) {
 		ctx := oidcv3.InsecureIssuerURLContext(t.Context(), discoveryServer.URL)
 
 		oidcConfig := &egv1a1.OIDC{
-			ClientID: ptr.To("clientID"),
+			ClientID: new("clientID"),
 			ClientSecret: gwapiv1.SecretObjectReference{
 				Name:      "clientSecret",
 				Namespace: ptr.To[gwapiv1.Namespace]("default"),

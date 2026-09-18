@@ -141,7 +141,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) RequestBody(_ []byte, ope
 	// Handle thinking config (for Anthropic models)
 	if openAIReq.Thinking != nil {
 		if bedrockReq.AdditionalModelRequestFields == nil {
-			bedrockReq.AdditionalModelRequestFields = make(map[string]interface{})
+			bedrockReq.AdditionalModelRequestFields = make(map[string]any)
 		}
 		bedrockReq.AdditionalModelRequestFields = getAwsBedrockThinkingMap(openAIReq.Thinking)
 	}
@@ -149,7 +149,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) RequestBody(_ []byte, ope
 	// Forward reasoning_effort as reasoning_config (for GLM, Nova, and other models)
 	if openAIReq.ReasoningEffort != "" {
 		if bedrockReq.AdditionalModelRequestFields == nil {
-			bedrockReq.AdditionalModelRequestFields = make(map[string]interface{})
+			bedrockReq.AdditionalModelRequestFields = make(map[string]any)
 		}
 		bedrockReq.AdditionalModelRequestFields["reasoning_config"] = string(openAIReq.ReasoningEffort)
 	}
@@ -683,7 +683,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) convertEvent(event *awsbe
 			Index: 0,
 			Delta: &openai.ChatCompletionResponseChunkChoiceDelta{
 				Role:    o.role,
-				Content: ptr.To(emptyString),
+				Content: new(emptyString),
 			},
 			FinishReason: o.bedrockStopReasonToOpenAIStopReason(event.StopReason),
 		})

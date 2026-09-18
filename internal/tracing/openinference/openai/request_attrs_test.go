@@ -41,7 +41,7 @@ var (
 	// Multimodal request with text and image.
 	multimodalReq = &openai.ChatCompletionRequest{
 		Model:     openai.ModelGPT5Nano,
-		MaxTokens: ptr(int64(100)),
+		MaxTokens: new(int64(100)),
 		Messages: []openai.ChatCompletionMessageParamUnion{{
 			OfUser: &openai.ChatCompletionUserMessageParam{
 				Role: openai.ChatMessageRoleUser,
@@ -189,7 +189,7 @@ var (
 					Role:    openai.ChatMessageRoleAssistant,
 					Content: openai.StringOrAssistantRoleContentUnion{Value: nil},
 					ToolCalls: []openai.ChatCompletionMessageToolCallParam{{
-						ID:   ptr("call_123"),
+						ID:   new("call_123"),
 						Type: "function",
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
@@ -266,8 +266,8 @@ var (
 				Role: openai.ChatMessageRoleAssistant,
 				Content: openai.StringOrAssistantRoleContentUnion{
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
-						{Type: "text", Text: ptr("Part 1")},
-						{Type: "text", Text: ptr("Part 2")},
+						{Type: "text", Text: new("Part 1")},
+						{Type: "text", Text: new("Part 2")},
 					},
 				},
 			},
@@ -908,7 +908,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "tool_call_123",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr("Tool execution result"),
+					OfString: new("Tool execution result"),
 				},
 			},
 			messageIndex: 0,
@@ -924,7 +924,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "tool_call_789",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr("Sensitive output data"),
+					OfString: new("Sensitive output data"),
 				},
 			},
 			messageIndex: 2,
@@ -940,7 +940,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "tool_call_empty",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr(""),
+					OfString: new(""),
 				},
 			},
 			messageIndex: 3,
@@ -956,7 +956,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "tool_call_complex",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr("Status: OK, Result: {\"computed\": true}"),
+					OfString: new("Status: OK, Result: {\"computed\": true}"),
 				},
 			},
 			messageIndex: 4,
@@ -972,7 +972,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "tool_call_10",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr("output at index 10"),
+					OfString: new("output at index 10"),
 				},
 			},
 			messageIndex: 10,
@@ -988,7 +988,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "tool_call_unhidden",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr("visible data"),
+					OfString: new("visible data"),
 				},
 			},
 			messageIndex: 11,
@@ -1004,7 +1004,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "tool_call_long",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr("This is a long output message with special characters like !@#$%^&*()"),
+					OfString: new("This is a long output message with special characters like !@#$%^&*()"),
 				},
 			},
 			messageIndex: 5,
@@ -1020,7 +1020,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "tool_call_secret",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr("This contains sensitive data that should be redacted"),
+					OfString: new("This contains sensitive data that should be redacted"),
 				},
 			},
 			messageIndex: 6,
@@ -1039,7 +1039,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "call_001",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr("result"),
+					OfString: new("result"),
 				},
 			},
 			messageIndex: 0,
@@ -1060,7 +1060,7 @@ func TestSetCustomToolCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseCustomToolCallOutputParam{
 				CallID: "call_002",
 				Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-					OfString: ptr("secret"),
+					OfString: new("secret"),
 				},
 			},
 			messageIndex: 1,
@@ -1746,7 +1746,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_123",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("Function execution result"),
+					OfString: new("Function execution result"),
 				},
 			},
 			messageIndex: 0,
@@ -1762,7 +1762,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_456",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("Sensitive output data"),
+					OfString: new("Sensitive output data"),
 				},
 			},
 			messageIndex: 1,
@@ -1778,7 +1778,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_empty",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr(""),
+					OfString: new(""),
 				},
 			},
 			messageIndex: 2,
@@ -1846,7 +1846,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_unhidden",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("visible data"),
+					OfString: new("visible data"),
 				},
 			},
 			messageIndex: 5,
@@ -1862,7 +1862,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_long",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("This is a long output message with special characters like !@#$%^&*() and unicode ñáéíóú"),
+					OfString: new("This is a long output message with special characters like !@#$%^&*() and unicode ñáéíóú"),
 				},
 			},
 			messageIndex: 6,
@@ -1878,7 +1878,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_secret",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("This contains sensitive data that should be redacted"),
+					OfString: new("This contains sensitive data that should be redacted"),
 				},
 			},
 			messageIndex: 7,
@@ -1897,7 +1897,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "call_001",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("result"),
+					OfString: new("result"),
 				},
 			},
 			messageIndex: 0,
@@ -1918,7 +1918,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "call_002",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("secret"),
+					OfString: new("secret"),
 				},
 			},
 			messageIndex: 1,
@@ -1936,7 +1936,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_10",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("output at index 10"),
+					OfString: new("output at index 10"),
 				},
 			},
 			messageIndex: 10,
@@ -1952,7 +1952,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_number",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("42.5"),
+					OfString: new("42.5"),
 				},
 			},
 			messageIndex: 8,
@@ -1968,7 +1968,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_bool",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr("true"),
+					OfString: new("true"),
 				},
 			},
 			messageIndex: 9,
@@ -1984,7 +1984,7 @@ func TestSetFunctionCallOutputAttrs(t *testing.T) {
 			callOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 				CallID: "tool_call_json_string",
 				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-					OfString: ptr(`{"status":"success","value":42}`),
+					OfString: new(`{"status":"success","value":42}`),
 				},
 			},
 			messageIndex: 11,
@@ -2667,7 +2667,7 @@ func TestSetReasoningAttrs(t *testing.T) {
 				Type: "reasoning",
 				Summary: func() []openai.ResponseReasoningItemSummaryParam {
 					var summaries []openai.ResponseReasoningItemSummaryParam
-					for i := 0; i < 5; i++ {
+					for i := range 5 {
 						summaries = append(summaries, openai.ResponseReasoningItemSummaryParam{
 							Type: "summary_text",
 							Text: fmt.Sprintf("Summary %d", i),
@@ -2682,7 +2682,7 @@ func TestSetReasoningAttrs(t *testing.T) {
 				attrs := []attribute.KeyValue{
 					attribute.String(openinference.InputMessageAttribute(0, openinference.MessageRole), "assistant"),
 				}
-				for i := 0; i < 5; i++ {
+				for i := range 5 {
 					attrs = append(attrs,
 						attribute.String(openinference.InputMessageContentAttribute(0, i, "type"), "text"),
 						attribute.String(openinference.InputMessageContentAttribute(0, i, "text"), fmt.Sprintf("Summary %d", i)),
@@ -3222,7 +3222,7 @@ func TestSetOutputMsgAttrs(t *testing.T) {
 			output: &openai.ResponseOutputMessage{
 				Role: "assistant",
 				Content: openai.ResponseOutputMessageContentUnion{
-					OfString: ptr("This is a response"),
+					OfString: new("This is a response"),
 				},
 			},
 			messageIndex: 0,
@@ -3238,7 +3238,7 @@ func TestSetOutputMsgAttrs(t *testing.T) {
 			output: &openai.ResponseOutputMessage{
 				Role: "assistant",
 				Content: openai.ResponseOutputMessageContentUnion{
-					OfString: ptr("This is a response"),
+					OfString: new("This is a response"),
 				},
 			},
 			messageIndex: 0,
@@ -4215,7 +4215,7 @@ func TestSetInputMsgContentAttrs(t *testing.T) {
 			name: "many content parts (stress test)",
 			content: func() []openai.ResponseInputContentUnionParam {
 				var parts []openai.ResponseInputContentUnionParam
-				for i := 0; i < 5; i++ {
+				for i := range 5 {
 					parts = append(parts, openai.ResponseInputContentUnionParam{
 						OfInputText: &openai.ResponseInputTextParam{
 							Type: "input_text",
@@ -4229,7 +4229,7 @@ func TestSetInputMsgContentAttrs(t *testing.T) {
 			config:       openinference.NewTraceConfig(),
 			expectedAttrs: func() []attribute.KeyValue {
 				var attrs []attribute.KeyValue
-				for i := 0; i < 5; i++ {
+				for i := range 5 {
 					attrs = append(attrs,
 						attribute.String(openinference.InputMessageContentAttribute(0, i, "type"), "text"),
 						attribute.String(openinference.InputMessageContentAttribute(0, i, "text"), fmt.Sprintf("Text part %d", i)),
@@ -4319,7 +4319,7 @@ func TestSetEasyInputMsgAttrs(t *testing.T) {
 			input: &openai.EasyInputMessageParam{
 				Role: "user",
 				Content: openai.EasyInputMessageContentUnionParam{
-					OfString: ptr("Hello world"),
+					OfString: new("Hello world"),
 				},
 			},
 			config: openinference.NewTraceConfig(),
@@ -4334,7 +4334,7 @@ func TestSetEasyInputMsgAttrs(t *testing.T) {
 			input: &openai.EasyInputMessageParam{
 				Role: "assistant",
 				Content: openai.EasyInputMessageContentUnionParam{
-					OfString: ptr("Sensitive response"),
+					OfString: new("Sensitive response"),
 				},
 			},
 			config: &openinference.TraceConfig{HideInputText: true},
@@ -4429,7 +4429,7 @@ func TestSetEasyInputMsgAttrs(t *testing.T) {
 			input: &openai.EasyInputMessageParam{
 				Role: "user",
 				Content: openai.EasyInputMessageContentUnionParam{
-					OfString: ptr("Hello 世界 🌍"),
+					OfString: new("Hello 世界 🌍"),
 				},
 			},
 			config: openinference.NewTraceConfig(),
@@ -4635,7 +4635,7 @@ func TestHandleInputItemUnionAttrs(t *testing.T) {
 				OfMessage: &openai.EasyInputMessageParam{
 					Role: "user",
 					Content: openai.EasyInputMessageContentUnionParam{
-						OfString: ptr("Simple message"),
+						OfString: new("Simple message"),
 					},
 				},
 			},
@@ -4784,7 +4784,7 @@ func TestHandleInputItemUnionAttrs(t *testing.T) {
 				OfFunctionCallOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 					CallID: "call_123",
 					Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: ptr("Weather is sunny"),
+						OfString: new("Weather is sunny"),
 					},
 				},
 			},
@@ -4802,7 +4802,7 @@ func TestHandleInputItemUnionAttrs(t *testing.T) {
 				OfFunctionCallOutput: &openai.ResponseInputItemFunctionCallOutputParam{
 					CallID: "call_456",
 					Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: ptr("Secret result"),
+						OfString: new("Secret result"),
 					},
 				},
 			},
@@ -4878,7 +4878,7 @@ func TestHandleInputItemUnionAttrs(t *testing.T) {
 				OfCustomToolCallOutput: &openai.ResponseCustomToolCallOutputParam{
 					CallID: "custom_123",
 					Output: openai.ResponseCustomToolCallOutputOutputUnionParam{
-						OfString: ptr("Tool result"),
+						OfString: new("Tool result"),
 					},
 				},
 			},
@@ -5487,7 +5487,7 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 			req: &openai.ResponseRequest{
 				Model: "gpt-4o",
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("Hello!"),
+					OfString: new("Hello!"),
 				},
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "input": "Hello!"}),
@@ -5505,7 +5505,7 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 			name: "response request without model",
 			req: &openai.ResponseRequest{
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("Test input"),
+					OfString: new("Test input"),
 				},
 			},
 			body:   mustJSON(map[string]any{"input": "Test input"}),
@@ -5524,7 +5524,7 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 				Model:        "gpt-4o",
 				Instructions: "You are a helpful assistant.",
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("What is AI?"),
+					OfString: new("What is AI?"),
 				},
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "instructions": "You are a helpful assistant.", "input": "What is AI?"}),
@@ -5544,7 +5544,7 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 			req: &openai.ResponseRequest{
 				Model: "gpt-4o",
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("Secret input"),
+					OfString: new("Secret input"),
 				},
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "input": "Secret input"}),
@@ -5559,7 +5559,7 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 			req: &openai.ResponseRequest{
 				Model: "gpt-4o",
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("Private text"),
+					OfString: new("Private text"),
 				},
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "input": "Private text"}),
@@ -5574,7 +5574,7 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 			req: &openai.ResponseRequest{
 				Model: "gpt-4o",
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("Test"),
+					OfString: new("Test"),
 				},
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "input": "Test"}),
@@ -5593,9 +5593,9 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 			req: &openai.ResponseRequest{
 				Model: "gpt-4o",
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("Test"),
+					OfString: new("Test"),
 				},
-				Temperature: ptr(0.7),
+				Temperature: new(0.7),
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "input": "Test", "temperature": 0.7}),
 			config: &openinference.TraceConfig{HideLLMInvocationParameters: true},
@@ -5612,7 +5612,7 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 			req: &openai.ResponseRequest{
 				Model: "gpt-4o",
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr(""),
+					OfString: new(""),
 				},
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "input": ""}),
@@ -5629,7 +5629,7 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 				Model:        "gpt-4o",
 				Instructions: "",
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("Hello"),
+					OfString: new("Hello"),
 				},
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "input": "Hello"}),
@@ -5655,9 +5655,9 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 			name: "with temperature parameter",
 			req: &openai.ResponseRequest{
 				Model:       "gpt-4o",
-				Temperature: ptr(0.8),
+				Temperature: new(0.8),
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("What's the weather?"),
+					OfString: new("What's the weather?"),
 				},
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "temperature": 0.8, "input": "What's the weather?"}),
@@ -5680,9 +5680,9 @@ func TestBuildResponsesRequestAttributes(t *testing.T) {
 			name: "with max_output_tokens parameter",
 			req: &openai.ResponseRequest{
 				Model:           "gpt-4o",
-				MaxOutputTokens: ptr(int64(100)),
+				MaxOutputTokens: new(int64(100)),
 				Input: openai.ResponseNewParamsInputUnion{
-					OfString: ptr("Generate text"),
+					OfString: new("Generate text"),
 				},
 			},
 			body:   mustJSON(map[string]any{"model": "gpt-4o", "max_output_tokens": 100, "input": "Generate text"}),

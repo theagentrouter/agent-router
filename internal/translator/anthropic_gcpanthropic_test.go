@@ -12,7 +12,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -346,7 +345,7 @@ func TestAnthropicToGCPAnthropicTranslator_RequestBody_FieldPassthrough(t *testi
 			}},
 		},
 		ToolChoice: &anthropic.ToolChoice{Auto: &anthropic.ToolChoiceAuto{Type: "auto"}},
-		Metadata:   &anthropic.MessagesMetadata{UserID: ptr.To("test123")},
+		Metadata:   &anthropic.MessagesMetadata{UserID: new("test123")},
 	}
 
 	raw, err := json.Marshal(parsedReq)

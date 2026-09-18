@@ -12,8 +12,6 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/types/known/structpb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 	gwaiev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -23,14 +21,12 @@ import (
 // in portForInferencePool, such as invalid or out-of-range ports.
 func TestPortForInferencePool_EdgeCases(t *testing.T) {
 	pool := &gwaiev1.InferencePool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-pool",
-			Namespace: "my-ns",
-		},
+		Name:      "my-pool",
+		Namespace: "my-ns",
 		Spec: gwaiev1.InferencePoolSpec{
 			EndpointPickerRef: &gwaiev1.EndpointPickerRef{
 				Name: "my-picker",
-				Port: ptr.To(gwaiev1.Port{Number: 8080}),
+				Port: new(gwaiev1.Port{Number: 8080}),
 			},
 		},
 	}
@@ -50,18 +46,16 @@ func TestPortForInferencePool_EdgeCases(t *testing.T) {
 // This serves as an integration check between buildEPPMetadata and getInferencePoolByMetadata.
 func TestBuildAndParseMetadata_RoundTrip(t *testing.T) {
 	pool := &gwaiev1.InferencePool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pool",
-			Namespace: "test-ns",
-			Annotations: map[string]string{
-				processingBodyModeAnnotation: "buffered",
-				allowModeOverrideAnnotation:  "true",
-			},
+		Name:      "test-pool",
+		Namespace: "test-ns",
+		Annotations: map[string]string{
+			processingBodyModeAnnotation: "buffered",
+			allowModeOverrideAnnotation:  "true",
 		},
 		Spec: gwaiev1.InferencePoolSpec{
 			EndpointPickerRef: &gwaiev1.EndpointPickerRef{
 				Name: "test-picker",
-				Port: ptr.To(gwaiev1.Port{Number: 9090}),
+				Port: new(gwaiev1.Port{Number: 9090}),
 			},
 		},
 	}
@@ -136,10 +130,8 @@ func TestGetInferencePoolByMetadata_Malformed(t *testing.T) {
 // TestBuildHTTPFilterForInferencePool_Defaults verifies default behavior separate from annotation parsing.
 func TestBuildHTTPFilterForInferencePool_Defaults(t *testing.T) {
 	pool := &gwaiev1.InferencePool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "defaults-pool",
-			Namespace: "default",
-		},
+		Name:      "defaults-pool",
+		Namespace: "default",
 		Spec: gwaiev1.InferencePoolSpec{
 			EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "default-picker"},
 		},

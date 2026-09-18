@@ -23,9 +23,7 @@ import (
 	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -60,11 +58,9 @@ func createTestAwsSecret(t *testing.T, client client.Client, bspName string, acc
 			profile, accessKey, secretKey, sessionToken, awsRegion),
 	}
 	err := client.Create(t.Context(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      GetBSPSecretName(bspName),
-			Namespace: policyNameSpace,
-		},
-		Data: data,
+		Name:      GetBSPSecretName(bspName),
+		Namespace: policyNameSpace,
+		Data:      data,
 	})
 	require.NoError(t, err)
 }
@@ -87,11 +83,9 @@ func createOidcClientSecret(t *testing.T, client client.Client, name string) {
 		&corev1.Secret{},
 	)
 	err := client.Create(t.Context(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: policyNameSpace,
-		},
-		Data: data,
+		Name:      name,
+		Namespace: policyNameSpace,
+		Data:      data,
 	})
 	require.NoError(t, err)
 }
@@ -129,10 +123,10 @@ func TestAWS_OIDCRotator(t *testing.T) {
 			Issuer:        discoveryServer.URL,
 			TokenEndpoint: &tokenServer.URL,
 		},
-		ClientID: ptr.To("some-client-id"),
+		ClientID: new("some-client-id"),
 		ClientSecret: gwapiv1.SecretObjectReference{
 			Name:      gwapiv1.ObjectName(testClientSecret),
-			Namespace: (*gwapiv1.Namespace)(ptr.To(policyNameSpace)),
+			Namespace: (*gwapiv1.Namespace)(new(policyNameSpace)),
 		},
 	}
 

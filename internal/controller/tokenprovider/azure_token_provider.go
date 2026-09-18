@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 )
@@ -54,9 +53,7 @@ func GetClientAssertionCredentialOptions() *azidentity.ClientAssertionCredential
 			customTransport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 			customHTTPClient := &http.Client{Transport: customTransport}
 			return &azidentity.ClientAssertionCredentialOptions{
-				ClientOptions: azcore.ClientOptions{
-					Transport: customHTTPClient,
-				},
+				Transport: customHTTPClient,
 			}
 		}
 	}

@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	basicInputTokensReq     = &openai.ResponseRequest{Model: openai.ModelGPT5Nano, Input: openai.ResponseNewParamsInputUnion{OfString: ptr("hello")}}
+	basicInputTokensReq     = &openai.ResponseRequest{Model: openai.ModelGPT5Nano, Input: openai.ResponseNewParamsInputUnion{OfString: new("hello")}}
 	basicInputTokensReqBody = mustJSON(basicInputTokensReq)
 )
 

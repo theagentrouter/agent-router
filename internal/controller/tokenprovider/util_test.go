@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -32,10 +31,8 @@ func TestGetClientSecret(t *testing.T) {
 	require.Empty(t, secret)
 
 	err = cl.Create(t.Context(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: secretNamespace,
-		},
+		Name:      secretName,
+		Namespace: secretNamespace,
 		Immutable: nil,
 		Data: map[string][]byte{
 			"client-secret": []byte("client-secret"),

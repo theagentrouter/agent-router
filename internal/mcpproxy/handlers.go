@@ -71,8 +71,7 @@ func (m *mcpRequestContext) servePOST(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			onErrorResponse(w, http.StatusRequestEntityTooLarge, "request body too large")
 			m.recordPOSTCompletion(&postCompletion{
 				ctx:     r.Context(),
@@ -142,8 +141,7 @@ func (m *mcpRequestContext) recordPOSTCompletion(c *postCompletion) {
 
 	if c.err != nil {
 		applicationError := false
-		var errToolCall *errToolCall
-		if errors.As(c.err, &errToolCall) {
+		if _, ok := errors.AsType[*errToolCall](c.err); ok {
 			applicationError = true
 		}
 		endMCPSpan(c.span, c.errType, c.err)
@@ -189,11 +187,11 @@ func downstreamResourceName(name string, backendName string) string {
 // We assume that all tool/resource names are prefixed with the backend name followed by an underscore, so
 // it's an unrecoverable error if the tool/resource name doesn't contain an underscore and that's a client error.
 func upstreamResourceName(fullName string) (backendName, name string, err error) {
-	index := strings.Index(fullName, nameSeparator)
-	if index < 0 {
+	before, after, ok := strings.Cut(fullName, nameSeparator)
+	if !ok {
 		return "", "", fmt.Errorf("invalid resource name: %s", fullName)
 	}
-	return fullName[:index], fullName[index+len(nameSeparator):], nil
+	return before, after, nil
 }
 
 // uiSchemePrefix is the URI scheme the MCP Apps extension mandates for UI resources.

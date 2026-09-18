@@ -33,9 +33,9 @@ func TestAnthropicRequestAttrs(t *testing.T) {
 		{
 			name: "parameters",
 			req: &anthropicschema.MessagesRequest{
-				Temperature:   ptr(0.4),
-				TopP:          ptr(0.8),
-				TopK:          ptr(20),
+				Temperature:   new(0.4),
+				TopP:          new(0.8),
+				TopK:          new(20),
 				MaxTokens:     1024,
 				StopSequences: []string{"STOP"},
 			},

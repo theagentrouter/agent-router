@@ -18,7 +18,6 @@ import (
 	"google.golang.org/api/sts/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
@@ -224,12 +223,10 @@ func (r *gcpOIDCTokenRotator) Rotate(ctx context.Context) (time.Time, error) {
 		if apierrors.IsNotFound(err) {
 			r.logger.Info("creating a new gcp access token into secret", "namespace", r.backendSecurityPolicyNamespace, "name", r.backendSecurityPolicyName)
 			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      secretName,
-					Namespace: r.backendSecurityPolicyNamespace,
-				},
-				Type: corev1.SecretTypeOpaque,
-				Data: make(map[string][]byte),
+				Name:      secretName,
+				Namespace: r.backendSecurityPolicyNamespace,
+				Type:      corev1.SecretTypeOpaque,
+				Data:      make(map[string][]byte),
 			}
 			populateInSecret(secret, filterapi.GCPAuth{
 				AccessToken: gcpAccessToken.Token,

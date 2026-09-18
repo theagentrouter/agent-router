@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 )
@@ -335,7 +334,7 @@ func TestLoadConfig_InvalidBackendSelectorCEL(t *testing.T) {
 					},
 					BackendSelector: &filterapi.MCPRouteAuthorization{
 						Rules: []filterapi.MCPRouteAuthorizationRule{
-							{CEL: ptr.To("request.")}, // Invalid CEL expression.
+							{CEL: new("request.")}, // Invalid CEL expression.
 						},
 					},
 				},
@@ -424,7 +423,7 @@ func TestLoadConfig_ToolSelectorChange(t *testing.T) {
 
 	// Start watcher goroutines to make sure all of them are notified
 	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		wg.Go(func() {
 			select {
 			case <-watcher: // Expected

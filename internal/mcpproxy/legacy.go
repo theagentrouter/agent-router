@@ -440,8 +440,7 @@ func errorType(err error) metrics.MCPErrorType {
 	}
 
 	// Check if error is a jsonrpc.Error and map the code to appropriate MCPErrorType
-	var jsonrpcErr *jsonrpc.Error
-	if errors.As(err, &jsonrpcErr) {
+	if jsonrpcErr, ok := errors.AsType[*jsonrpc.Error](err); ok {
 		switch jsonrpcErr.Code {
 		case jsonrpc.CodeInvalidParams:
 			return metrics.MCPErrorInvalidParam

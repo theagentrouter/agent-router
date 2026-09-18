@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	fake2 "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
@@ -29,7 +28,7 @@ func TestAIServiceBackendController_Reconcile(t *testing.T) {
 	c := NewAIServiceBackendController(fakeClient, fake2.NewClientset(), ctrl.Log, eventChan.Ch)
 	originals := []*aigv1b1.AIGatewayRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+			Name: "myroute", Namespace: "default",
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				ParentRefs: []gwapiv1a2.ParentReference{
 					{
@@ -47,7 +46,7 @@ func TestAIServiceBackendController_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "myroute2", Namespace: "default"},
+			Name: "myroute2", Namespace: "default",
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				ParentRefs: []gwapiv1a2.ParentReference{
 					{
@@ -69,9 +68,9 @@ func TestAIServiceBackendController_Reconcile(t *testing.T) {
 		require.NoError(t, fakeClient.Create(t.Context(), route))
 	}
 
-	err := fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{ObjectMeta: metav1.ObjectMeta{Name: "mybackend", Namespace: "default"}})
+	err := fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{Name: "mybackend", Namespace: "default"})
 	require.NoError(t, err)
-	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "mybackend"}})
+	_, err = c.Reconcile(t.Context(), reconcile.Request{Namespace: "default", Name: "mybackend"})
 	require.NoError(t, err)
 	require.Equal(t, originals, eventChan.RequireItemsEventually(t, 2))
 
@@ -84,9 +83,9 @@ func TestAIServiceBackendController_Reconcile(t *testing.T) {
 	require.Contains(t, backend.Finalizers, aiGatewayControllerFinalizer, "Finalizer should be set")
 
 	// Test the case where the AIServiceBackend is being deleted.
-	err = fakeClient.Delete(t.Context(), &aigv1b1.AIServiceBackend{ObjectMeta: metav1.ObjectMeta{Name: "mybackend", Namespace: "default"}})
+	err = fakeClient.Delete(t.Context(), &aigv1b1.AIServiceBackend{Name: "mybackend", Namespace: "default"})
 	require.NoError(t, err)
-	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "mybackend"}})
+	_, err = c.Reconcile(t.Context(), reconcile.Request{Namespace: "default", Name: "mybackend"})
 	require.NoError(t, err)
 }
 
@@ -99,7 +98,7 @@ func TestAIServiceBackendController_Reconcile_error_with_multiple_bsps(t *testin
 	// Create Multiple Backend Security Policies that target the same backend.
 	for i := range 5 {
 		bsp := &aigv1b1.BackendSecurityPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("bsp-%d", i), Namespace: namespace},
+			Name: fmt.Sprintf("bsp-%d", i), Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: gwapiv1.ObjectName(backendName)}},
 			},
@@ -107,8 +106,8 @@ func TestAIServiceBackendController_Reconcile_error_with_multiple_bsps(t *testin
 		require.NoError(t, fakeClient.Create(t.Context(), bsp))
 	}
 
-	err := fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{ObjectMeta: metav1.ObjectMeta{Name: backendName, Namespace: namespace}})
+	err := fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{Name: backendName, Namespace: namespace})
 	require.NoError(t, err)
-	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: backendName}})
+	_, err = c.Reconcile(t.Context(), reconcile.Request{Namespace: namespace, Name: backendName})
 	require.ErrorContains(t, err, `multiple BackendSecurityPolicies found for AIServiceBackend mybackend: [bsp-0 bsp-1 bsp-2 bsp-3 bsp-4]`)
 }

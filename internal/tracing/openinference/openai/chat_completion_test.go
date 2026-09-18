@@ -188,6 +188,4 @@ func mustJSON(v any) []byte {
 	return data
 }
 
-func ptr[T any](v T) *T {
-	return &v
-}
+//go:fix inline

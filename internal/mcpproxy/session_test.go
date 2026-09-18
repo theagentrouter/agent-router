@@ -728,10 +728,7 @@ func TestHandleNotificationsPerBackend_SSE(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		chunkSize := len(sseBody) / 3
 		for i := 0; i < len(sseBody); i += chunkSize {
-			end := i + chunkSize
-			if end > len(sseBody) {
-				end = len(sseBody)
-			}
+			end := min(i+chunkSize, len(sseBody))
 			_, _ = w.Write([]byte(sseBody[i:end]))
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
@@ -800,10 +797,7 @@ func TestSession_StreamNotifications(t *testing.T) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				chunkSize := len(body) / 3
 				for i := 0; i < len(body); i += chunkSize {
-					end := i + chunkSize
-					if end > len(body) {
-						end = len(body)
-					}
+					end := min(i+chunkSize, len(body))
 					_, _ = w.Write([]byte(body[i:end]))
 					if f, ok := w.(http.Flusher); ok {
 						f.Flush()

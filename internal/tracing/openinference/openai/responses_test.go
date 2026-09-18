@@ -25,7 +25,7 @@ var (
 	basicResponseReq = &openai.ResponseRequest{
 		Model: openai.ModelGPT5Nano,
 		Input: openai.ResponseNewParamsInputUnion{
-			OfString: ptr("Hi"),
+			OfString: new("Hi"),
 		},
 	}
 	basicResponseReqBody = mustJSON(basicResponseReq)
@@ -117,7 +117,7 @@ var (
 	responseReqWithStreaming = &openai.ResponseRequest{
 		Model: openai.ModelGPT5Nano,
 		Input: openai.ResponseNewParamsInputUnion{
-			OfString: ptr("Hi"),
+			OfString: new("Hi"),
 		},
 		Stream: true,
 	}

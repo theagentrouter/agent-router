@@ -37,8 +37,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v1:2"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v1:2"},
-					Input:                openai.EmbeddingRequestInput{Value: "hello world"},
+					Model: "amazon.titan-embed-text-v1:2",
+					Input: openai.EmbeddingRequestInput{Value: "hello world"},
 				},
 			},
 			wantPath:         "/model/amazon.titan-embed-text-v1:2/invoke",
@@ -49,8 +49,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
-					Input:                openai.EmbeddingRequestInput{Value: "hello world"},
+					Model: "amazon.titan-embed-text-v2:0",
+					Input: openai.EmbeddingRequestInput{Value: "hello world"},
 				},
 			},
 			wantPath:         "/model/amazon.titan-embed-text-v2:0/invoke",
@@ -61,8 +61,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
-					Input:                openai.EmbeddingRequestInput{Value: []string{"hello world"}},
+					Model: "amazon.titan-embed-text-v2:0",
+					Input: openai.EmbeddingRequestInput{Value: []string{"hello world"}},
 				},
 			},
 			wantPath:         "/model/amazon.titan-embed-text-v2:0/invoke",
@@ -73,8 +73,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
-					Input:                openai.EmbeddingRequestInput{Value: []string{"first", "second"}},
+					Model: "amazon.titan-embed-text-v2:0",
+					Input: openai.EmbeddingRequestInput{Value: []string{"first", "second"}},
 				},
 			},
 			wantErr: true,
@@ -84,8 +84,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
-					Input:                openai.EmbeddingRequestInput{Value: []string{}},
+					Model: "amazon.titan-embed-text-v2:0",
+					Input: openai.EmbeddingRequestInput{Value: []string{}},
 				},
 			},
 			wantErr: true,
@@ -95,8 +95,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
-					Input:                openai.EmbeddingRequestInput{Value: 42},
+					Model: "amazon.titan-embed-text-v2:0",
+					Input: openai.EmbeddingRequestInput{Value: 42},
 				},
 			},
 			wantErr: true,
@@ -107,8 +107,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v1:2"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v1:2"},
-					Input:                openai.EmbeddingRequestInput{Value: "test"},
+					Model: "amazon.titan-embed-text-v1:2",
+					Input: openai.EmbeddingRequestInput{Value: "test"},
 				},
 			},
 			wantPath:            "/model/amazon.titan-embed-text-v1:2/invoke",
@@ -121,8 +121,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0", Dimensions: &[]int{256}[0]},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0", Dimensions: &[]int{256}[0]},
-					Input:                openai.EmbeddingRequestInput{Value: "test"},
+					Model: "amazon.titan-embed-text-v2:0", Dimensions: &[]int{256}[0],
+					Input: openai.EmbeddingRequestInput{Value: "test"},
 				},
 			},
 			wantPath:         "/model/amazon.titan-embed-text-v2:0/invoke",
@@ -134,8 +134,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
-					Input:                openai.EmbeddingRequestInput{Value: "test"},
+					Model: "amazon.titan-embed-text-v2:0",
+					Input: openai.EmbeddingRequestInput{Value: "test"},
 				},
 			},
 			wantPath:         "/model/amazon.titan-embed-text-v1:2/invoke",
@@ -146,8 +146,8 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "my model v1"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "my model v1"},
-					Input:                openai.EmbeddingRequestInput{Value: "escape test"},
+					Model: "my model v1",
+					Input: openai.EmbeddingRequestInput{Value: "escape test"},
 				},
 			},
 			wantPath:         "/model/my%20model%20v1/invoke",
@@ -193,10 +193,10 @@ func TestEmbeddingOpenAIToAWSBedrockTranslator_RequestBody_MarshalError(t *testi
 
 	translator := NewEmbeddingOpenAIToAWSBedrockTranslator("")
 	req := openai.EmbeddingRequest{
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
+		Model: "amazon.titan-embed-text-v2:0",
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "amazon.titan-embed-text-v2:0"},
-			Input:                openai.EmbeddingRequestInput{Value: "test"},
+			Model: "amazon.titan-embed-text-v2:0",
+			Input: openai.EmbeddingRequestInput{Value: "test"},
 		},
 	}
 	_, _, err := translator.RequestBody(nil, &req, false)

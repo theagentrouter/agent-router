@@ -368,7 +368,7 @@ func inferenceExtensionVersion() string {
 	if err != nil {
 		panic(fmt.Sprintf("failed to read go.mod: %v", err))
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		parts := strings.SplitN(line, " ", 2)
 		if len(parts) == 2 && parts[0] == "sigs.k8s.io/gateway-api-inference-extension" {
@@ -843,7 +843,7 @@ func (f *portForwarder) waitReady(ctx context.Context) error {
 // Returns (restarted=true, err) if this goroutine performed the restart.
 // Returns (restarted=false, err=nil) if another goroutine restarted and this one waited.
 func (f *portForwarder) handleStaleConnection(ctx context.Context) (bool, error) {
-	_, err, shared := f.restartFlight.Do("restart", func() (interface{}, error) {
+	_, err, shared := f.restartFlight.Do("restart", func() (any, error) {
 		return nil, f.restart(ctx)
 	})
 	// shared=false means we performed the restart, shared=true means we waited

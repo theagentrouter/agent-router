@@ -8,6 +8,7 @@ package backendauth
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -434,9 +435,7 @@ func TestAWSCredentialOverrideHandler_FromRequestHeaders(t *testing.T) {
 			h := newAWSOverrideHandler(t, makeHeaderOverride(prefix, true))
 
 			requestHeaders := awsRequestHeaders()
-			for k, v := range tc.headers {
-				requestHeaders[k] = v
-			}
+			maps.Copy(requestHeaders, tc.headers)
 
 			_, err := h.Do(t.Context(), requestHeaders, nil)
 			require.ErrorIs(t, err, ErrIncompleteAWSCredential)

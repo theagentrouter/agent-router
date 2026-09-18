@@ -15,7 +15,7 @@ import (
 // unmarshalJSONNestedUnion is tuned to be faster with substantially reduced
 // allocations vs openai-go which has heavy use of reflection.
 // This is used by completion API prompts and only supports: string, []string, []int64, [][]int64
-func unmarshalJSONNestedUnion(typ string, data []byte) (interface{}, error) {
+func unmarshalJSONNestedUnion(typ string, data []byte) (any, error) {
 	idx, err := skipLeadingWhitespace(typ, data, 0)
 	if err != nil {
 		return nil, err
@@ -68,7 +68,7 @@ func unmarshalJSONNestedUnion(typ string, data []byte) (interface{}, error) {
 
 // unmarshalJSONEmbeddingInput is specialized for embedding API input parsing.
 // It supports: string, []string, EmbeddingInputItem, []EmbeddingInputItem, []int64, [][]int64
-func unmarshalJSONEmbeddingInput(typ string, data []byte) (interface{}, error) {
+func unmarshalJSONEmbeddingInput(typ string, data []byte) (any, error) {
 	idx, err := skipLeadingWhitespace(typ, data, 0)
 	if err != nil {
 		return nil, err

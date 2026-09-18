@@ -14,10 +14,8 @@ import (
 // for /v1/responses/input_tokens.
 func NewResponsesInputTokensOpenAIToAzureOpenAITranslator(apiVersion string, modelNameOverride internalapi.ModelNameOverride) OpenAIResponsesInputTokensTranslator {
 	return &openAIToAzureOpenAITranslatorV1ResponsesInputTokens{
-		apiVersion: apiVersion,
-		responsesInputTokensToOpenAITranslator: responsesInputTokensToOpenAITranslator{
-			modelNameOverride: modelNameOverride,
-		},
+		apiVersion:        apiVersion,
+		modelNameOverride: modelNameOverride,
 	}
 }
 

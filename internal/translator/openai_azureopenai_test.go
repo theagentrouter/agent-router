@@ -38,10 +38,8 @@ func TestOpenAIToAzureOpenAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 		modelName := "gpt-4-turbo-2024-04-09"
 		originalReq := &openai.ChatCompletionRequest{Model: "gpt-4-turbo", Stream: false}
 		o := &openAIToAzureOpenAITranslatorV1ChatCompletion{
-			apiVersion: "some-version",
-			openAIToOpenAITranslatorV1ChatCompletion: openAIToOpenAITranslatorV1ChatCompletion{
-				modelNameOverride: modelName,
-			},
+			apiVersion:        "some-version",
+			modelNameOverride: modelName,
 		}
 		hm, bm, err := o.RequestBody(nil, originalReq, false)
 		require.Nil(t, bm)
@@ -89,9 +87,7 @@ func TestOpenAIToAzureOpenAITranslatorV1Responses_RequestBody(t *testing.T) {
 		originalReq := &openai.ResponseRequest{Model: "gpt-4-turbo", Stream: false}
 		o := &openAIToAzureOpenAITranslatorV1Responses{
 			apiVersion: "some-version",
-			openAIToOpenAITranslatorV1Responses: openAIToOpenAITranslatorV1Responses{
-				path: "/custom/responses?foo=bar",
-			},
+			path:       "/custom/responses?foo=bar",
 		}
 
 		hm, bm, err := o.RequestBody([]byte(`{"model":"gpt-4-turbo","input":"Hi"}`), originalReq, false)

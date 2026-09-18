@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genai"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -60,7 +59,7 @@ func TestOpenAIMessagesToGeminiContents(t *testing.T) {
 						Content: openai.StringOrAssistantRoleContentUnion{Value: "This is a assistant message"},
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID: ptr.To("tool_call_1"),
+								ID: new("tool_call_1"),
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Name:      "example_tool",
 									Arguments: "{\"param1\":\"value1\"}",
@@ -194,7 +193,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type:    openai.ChatCompletionAssistantMessageParamContentTypeRefusal,
-							Refusal: ptr.To("Response was refused"),
+							Refusal: new("Response was refused"),
 						},
 					},
 				},
@@ -210,11 +209,11 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
-							Text: ptr.To("Hello, I'm an AI assistant"),
+							Text: new("Hello, I'm an AI assistant"),
 						},
 						{
 							Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
-							Text: ptr.To("How can I assist you today?"),
+							Text: new("How can I assist you today?"),
 						},
 					},
 				},
@@ -235,7 +234,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 				Role: openai.ChatMessageRoleAssistant,
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 					{
-						ID: ptr.To("call_123"),
+						ID: new("call_123"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"location":"New York","unit":"celsius"}`,
@@ -266,7 +265,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 				Role: openai.ChatMessageRoleAssistant,
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 					{
-						ID: ptr.To("call_789"),
+						ID: new("call_789"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"location":"New York","unit":"celsius"}`,
@@ -274,7 +273,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 						Type: openai.ChatCompletionMessageToolCallTypeFunction,
 					},
 					{
-						ID: ptr.To("call_abc"),
+						ID: new("call_abc"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_time",
 							Arguments: `{"timezone":"EST"}`,
@@ -308,7 +307,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 				Role: openai.ChatMessageRoleAssistant,
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 					{
-						ID: ptr.To("call_def"),
+						ID: new("call_def"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"location":"New York"`, // Invalid JSON.
@@ -334,7 +333,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type: openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-							Text: ptr.To("Let me think step by step..."),
+							Text: new("Let me think step by step..."),
 						},
 					},
 				},
@@ -371,7 +370,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type: openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-							Text: ptr.To(""),
+							Text: new(""),
 						},
 					},
 				},
@@ -387,11 +386,11 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type: openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-							Text: ptr.To("First, I need to analyze this problem..."),
+							Text: new("First, I need to analyze this problem..."),
 						},
 						{
 							Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
-							Text: ptr.To("Based on my analysis, here's the answer."),
+							Text: new("Based on my analysis, here's the answer."),
 						},
 					},
 				},
@@ -413,18 +412,18 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type: openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-							Text: ptr.To("I need to call a function to get the weather"),
+							Text: new("I need to call a function to get the weather"),
 						},
 						{
 							Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
-							Text: ptr.To("Let me get the weather for you"),
+							Text: new("Let me get the weather for you"),
 						},
 					},
 				},
 				Role: openai.ChatMessageRoleAssistant,
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 					{
-						ID: ptr.To("call_weather"),
+						ID: new("call_weather"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"location":"San Francisco"}`,
@@ -458,8 +457,8 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-							Text:      ptr.To("Let me think step by step..."),
-							Signature: ptr.To("dGVzdHNpZ25hdHVyZQ=="), // "testsignature" in base64
+							Text:      new("Let me think step by step..."),
+							Signature: new("dGVzdHNpZ25hdHVyZQ=="), // "testsignature" in base64
 						},
 					},
 				},
@@ -481,15 +480,15 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-							Text:      ptr.To("I need to call a function to get the weather"),
-							Signature: ptr.To("dGVzdHNpZ25hdHVyZQ=="), // "testsignature" in base64
+							Text:      new("I need to call a function to get the weather"),
+							Signature: new("dGVzdHNpZ25hdHVyZQ=="), // "testsignature" in base64
 						},
 					},
 				},
 				Role: openai.ChatMessageRoleAssistant,
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 					{
-						ID: ptr.To("call_weather"),
+						ID: new("call_weather"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"location":"San Francisco"}`,
@@ -497,7 +496,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 						Type: openai.ChatCompletionMessageToolCallTypeFunction,
 					},
 					{
-						ID: ptr.To("call_time"),
+						ID: new("call_time"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_time",
 							Arguments: `{"timezone":"PST"}`,
@@ -539,7 +538,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 				},
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 					{
-						ID: ptr.To("call_weather"),
+						ID: new("call_weather"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"location":"San Francisco"}`,
@@ -547,7 +546,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 						Type: openai.ChatCompletionMessageToolCallTypeFunction,
 					},
 					{
-						ID: ptr.To("call_time"),
+						ID: new("call_time"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_time",
 							Arguments: `{"timezone":"PST"}`,
@@ -582,7 +581,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 				Role: openai.ChatMessageRoleAssistant,
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 					{
-						ID: ptr.To("call_weather"),
+						ID: new("call_weather"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"location":"San Francisco"}`,
@@ -590,7 +589,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 						Type: openai.ChatCompletionMessageToolCallTypeFunction,
 					},
 					{
-						ID: ptr.To("call_time"),
+						ID: new("call_time"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_time",
 							Arguments: `{"timezone":"PST"}`,
@@ -626,8 +625,8 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-							Text:      ptr.To("I need to call a function to get the weather"),
-							Signature: ptr.To("dGVzdHNpZ25hdHVyZQ=="), // "testsignature" in base64
+							Text:      new("I need to call a function to get the weather"),
+							Signature: new("dGVzdHNpZ25hdHVyZQ=="), // "testsignature" in base64
 						},
 					},
 				},
@@ -637,7 +636,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 				},
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 					{
-						ID: ptr.To("call_weather"),
+						ID: new("call_weather"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"location":"San Francisco"}`,
@@ -672,7 +671,7 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 				},
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 					{
-						ID: ptr.To("call_weather"),
+						ID: new("call_weather"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"location":"San Francisco"}`,
@@ -690,8 +689,8 @@ func TestAssistantMsgToGeminiParts(t *testing.T) {
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
 						{
 							Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-							Text:      ptr.To("Let me think..."),
-							Signature: ptr.To("not-valid-base64!!!"),
+							Text:      new("Let me think..."),
+							Signature: new("not-valid-base64!!!"),
 						},
 					},
 				},
@@ -1253,29 +1252,29 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 		{
 			name: "all fields set",
 			input: &openai.ChatCompletionRequest{
-				Temperature:      ptr.To(0.7),
-				TopP:             ptr.To(0.9),
-				Seed:             ptr.To(42),
-				TopLogProbs:      ptr.To(3),
-				LogProbs:         ptr.To(true),
-				N:                ptr.To(2),
-				MaxTokens:        ptr.To(int64(256)),
-				PresencePenalty:  ptr.To(float32(1.1)),
-				FrequencyPenalty: ptr.To(float32(0.5)),
+				Temperature:      new(0.7),
+				TopP:             new(0.9),
+				Seed:             new(42),
+				TopLogProbs:      new(3),
+				LogProbs:         new(true),
+				N:                new(2),
+				MaxTokens:        new(int64(256)),
+				PresencePenalty:  new(float32(1.1)),
+				FrequencyPenalty: new(float32(0.5)),
 				Stop: openaigo.ChatCompletionNewParamsStopUnion{
 					OfStringArray: []string{"stop1", "stop2"},
 				},
 			},
 			expectedGenerationConfig: &genai.GenerationConfig{
-				Temperature:      ptr.To(float32(0.7)),
-				TopP:             ptr.To(float32(0.9)),
-				Seed:             ptr.To(int32(42)),
-				Logprobs:         ptr.To(int32(3)),
+				Temperature:      new(float32(0.7)),
+				TopP:             new(float32(0.9)),
+				Seed:             new(int32(42)),
+				Logprobs:         new(int32(3)),
 				ResponseLogprobs: true,
 				CandidateCount:   2,
 				MaxOutputTokens:  256,
-				PresencePenalty:  ptr.To(float32(1.1)),
-				FrequencyPenalty: ptr.To(float32(0.5)),
+				PresencePenalty:  new(float32(1.1)),
+				FrequencyPenalty: new(float32(0.5)),
 				StopSequences:    []string{"stop1", "stop2"},
 			},
 			expectedResponseMode: responseModeNone,
@@ -1290,7 +1289,7 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 		{
 			name: "only MaxTokens set",
 			input: &openai.ChatCompletionRequest{
-				MaxTokens: ptr.To(int64(100)),
+				MaxTokens: new(int64(100)),
 			},
 			expectedGenerationConfig: &genai.GenerationConfig{
 				MaxOutputTokens: 100,
@@ -1301,7 +1300,7 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 		{
 			name: "only MaxCompletionTokens set",
 			input: &openai.ChatCompletionRequest{
-				MaxCompletionTokens: ptr.To(int64(200)),
+				MaxCompletionTokens: new(int64(200)),
 			},
 			expectedGenerationConfig: &genai.GenerationConfig{
 				MaxOutputTokens: 200,
@@ -1312,8 +1311,8 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 		{
 			name: "both MaxCompletionTokens and MaxTokens set - MaxCompletionTokens takes precedence",
 			input: &openai.ChatCompletionRequest{
-				MaxCompletionTokens: ptr.To(int64(300)),
-				MaxTokens:           ptr.To(int64(100)),
+				MaxCompletionTokens: new(int64(300)),
+				MaxTokens:           new(int64(100)),
 			},
 			expectedGenerationConfig: &genai.GenerationConfig{
 				MaxOutputTokens: 300,
@@ -1324,10 +1323,10 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 		{
 			name: "neither MaxCompletionTokens nor MaxTokens set",
 			input: &openai.ChatCompletionRequest{
-				Temperature: ptr.To(0.5),
+				Temperature: new(0.5),
 			},
 			expectedGenerationConfig: &genai.GenerationConfig{
-				Temperature: ptr.To(float32(0.5)),
+				Temperature: new(float32(0.5)),
 			},
 			expectedResponseMode: responseModeNone,
 			requestModel:         "gemini-2.5-flash",
@@ -2299,7 +2298,7 @@ func TestExtractToolCallsFromGeminiParts(t *testing.T) {
 			},
 			expected: []openai.ChatCompletionMessageToolCallParam{
 				{
-					ID:   ptr.To("0"),
+					ID:   new("0"),
 					Type: openai.ChatCompletionMessageToolCallTypeFunction,
 					Function: openai.ChatCompletionMessageToolCallFunctionParam{
 						Name:      "get_weather",
@@ -2327,7 +2326,7 @@ func TestExtractToolCallsFromGeminiParts(t *testing.T) {
 			},
 			expected: []openai.ChatCompletionMessageToolCallParam{
 				{
-					ID:   ptr.To("0"),
+					ID:   new("0"),
 					Type: openai.ChatCompletionMessageToolCallTypeFunction,
 					Function: openai.ChatCompletionMessageToolCallFunctionParam{
 						Name:      "function1",
@@ -2335,7 +2334,7 @@ func TestExtractToolCallsFromGeminiParts(t *testing.T) {
 					},
 				},
 				{
-					ID:   ptr.To("1"),
+					ID:   new("1"),
 					Type: openai.ChatCompletionMessageToolCallTypeFunction,
 					Function: openai.ChatCompletionMessageToolCallFunctionParam{
 						Name:      "function2",
@@ -2359,7 +2358,7 @@ func TestExtractToolCallsFromGeminiParts(t *testing.T) {
 
 			// Normalize IDs since they're generated.
 			for i := range calls {
-				calls[i].ID = ptr.To(fmt.Sprintf("%d", i))
+				calls[i].ID = new(fmt.Sprintf("%d", i))
 			}
 
 			require.Equal(t, tt.expected, calls)
@@ -2385,7 +2384,7 @@ func TestGeminiFinishReasonToOpenAI(t *testing.T) {
 			input: genai.FinishReasonStop,
 			toolCalls: []openai.ChatCompletionMessageToolCallParam{
 				{
-					ID: ptr.To("tool_call_1"),
+					ID: new("tool_call_1"),
 					Function: openai.ChatCompletionMessageToolCallFunctionParam{
 						Name:      "example_tool",
 						Arguments: "{\"param1\":\"value1\"}",
@@ -2668,7 +2667,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 					Index: 0,
 					Message: openai.ChatCompletionResponseChoiceMessage{
 						Role:    openai.ChatMessageRoleAssistant,
-						Content: ptr.To("hello"),
+						Content: new("hello"),
 					},
 					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 				},
@@ -2695,7 +2694,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						ThinkingBlocks: []openai.ThinkingBlock{
 							{Type: "thinking", Signature: base64.StdEncoding.EncodeToString([]byte("sig-only"))},
 						},
-						Content: ptr.To("just an answer"),
+						Content: new("just an answer"),
 					},
 					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 				},
@@ -2721,7 +2720,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 					Message: openai.ChatCompletionResponseChoiceMessage{
 						Role:             openai.ChatMessageRoleAssistant,
 						ReasoningContent: &openai.ReasoningContentUnion{Value: "Let me reason"},
-						Content:          ptr.To("final answer"),
+						Content:          new("final answer"),
 					},
 					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 				},
@@ -2756,7 +2755,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						},
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID:   ptr.To("id-0"),
+								ID:   new("id-0"),
 								Type: openai.ChatCompletionMessageToolCallTypeFunction,
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Name:      "fn",
@@ -2792,7 +2791,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						ThinkingBlocks: []openai.ThinkingBlock{
 							{Type: "thinking", Thinking: "internal reasoning", Signature: base64.StdEncoding.EncodeToString([]byte("text-sig"))},
 						},
-						Content: ptr.To("visible answer"),
+						Content: new("visible answer"),
 					},
 					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 				},
@@ -2818,7 +2817,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						},
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID:   ptr.To("id-0"),
+								ID:   new("id-0"),
 								Type: openai.ChatCompletionMessageToolCallTypeFunction,
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Name:      "get_weather",
@@ -2855,10 +2854,10 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						ThinkingBlocks: []openai.ThinkingBlock{
 							{Type: "thinking", Thinking: "deep reasoning", Signature: toolSigB64},
 						},
-						Content: ptr.To("visible"),
+						Content: new("visible"),
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID:   ptr.To("id-0"),
+								ID:   new("id-0"),
 								Type: openai.ChatCompletionMessageToolCallTypeFunction,
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Name: "fn", Arguments: `{"a":1}`,
@@ -2892,10 +2891,10 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						ThinkingBlocks: []openai.ThinkingBlock{
 							{Type: "thinking", Signature: toolSigB64},
 						},
-						Content: ptr.To("answer"),
+						Content: new("answer"),
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID:   ptr.To("id-0"),
+								ID:   new("id-0"),
 								Type: openai.ChatCompletionMessageToolCallTypeFunction,
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Name: "fn", Arguments: `{"b":2}`,
@@ -2922,7 +2921,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 			// Tool call IDs are random UUIDs; normalize for comparison.
 			for i := range got {
 				for j := range got[i].Message.ToolCalls {
-					got[i].Message.ToolCalls[j].ID = ptr.To(fmt.Sprintf("id-%d", j))
+					got[i].Message.ToolCalls[j].ID = new(fmt.Sprintf("id-%d", j))
 				}
 			}
 
@@ -3121,7 +3120,7 @@ func TestOpenAIReqToGeminiGenerationConfigWithJsonSchemaToGemini(t *testing.T) {
 							AnyOf: []*genai.Schema{
 								{Type: "string"},
 							},
-							Nullable: ptr.To(true),
+							Nullable: new(true),
 						},
 					},
 				},
