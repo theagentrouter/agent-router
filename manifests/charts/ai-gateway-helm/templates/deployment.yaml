@@ -118,6 +118,12 @@ spec:
             - --mcpFallbackSessionEncryptionSeed={{ .Values.controller.mcp.sessionEncryption.fallback.seed }}
             - --mcpFallbackSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.fallback.iterations }}
             {{- end }}
+          # Allow the default two-minute cache sync timeout plus startup overhead.
+          startupProbe:
+            grpc:
+              port: 1063
+            failureThreshold: 75
+            periodSeconds: 2
           livenessProbe:
             grpc:
               port: 1063
