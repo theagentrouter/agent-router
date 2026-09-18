@@ -29,6 +29,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/endpointspec"
 	"github.com/envoyproxy/ai-gateway/internal/extproc"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/idcodec"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/mcpproxy"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -55,6 +56,10 @@ type extProcFlags struct {
 	mcpFallbackSessionEncryptionSeed       string        // Fallback seed for deriving the key for encrypting MCP sessions.
 	mcpFallbackSessionEncryptionIterations int           // Number of iterations to use for PBKDF2 key derivation for fallback MCP session encryption.
 	mcpWriteTimeout                        time.Duration // the maximum duration before timing out writes of the MCP response.
+	fileIDEncryptionSeed                   string        // Seed for deriving the key for encrypting Files/Batch API ids.
+	fileIDEncryptionIterations             int           // Number of iterations to use for PBKDF2 key derivation for file id encryption.
+	fileIDFallbackEncryptionSeed           string        // Optional fallback seed for file id key rotation.
+	fileIDFallbackEncryptionIterations     int           // Number of iterations to use for PBKDF2 key derivation for fallback file id encryption.
 	// rootPrefix is the root prefix for all the processors.
 	rootPrefix string
 	// maxRecvMsgSize is the maximum message size in bytes that the gRPC server can receive.
@@ -78,6 +83,22 @@ func setOptionalString(dst **string) func(string) error {
 		*dst = &value
 		return nil
 	}
+}
+
+// newFileIDCodec builds the backend id codec used by the Files API processors from the
+// configured encryption seeds, mirroring the MCP session encryption setup (PBKDF2 + AES-GCM
+// with optional fallback seed for key rotation).
+func newFileIDCodec(flags *extProcFlags) idcodec.Codec {
+	crypto := mcpproxy.NewPBKDF2AesGcmSessionCrypto(
+		flags.fileIDEncryptionSeed, flags.fileIDEncryptionIterations)
+	if flags.fileIDFallbackEncryptionSeed != "" {
+		crypto = &mcpproxy.FallbackEnabledSessionCrypto{
+			Primary: crypto,
+			Fallback: mcpproxy.NewPBKDF2AesGcmSessionCrypto(
+				flags.fileIDFallbackEncryptionSeed, flags.fileIDFallbackEncryptionIterations),
+		}
+	}
+	return idcodec.NewAESGCMCodec(crypto, nil)
 }
 
 // parseAndValidateFlags parses and validates the flags passed to the external processor.
@@ -153,6 +174,14 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 		"Number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.")
 	fs.DurationVar(&flags.mcpWriteTimeout, "mcpWriteTimeout", 120*time.Second,
 		"The maximum duration before timing out writes of the MCP response")
+	fs.StringVar(&flags.fileIDEncryptionSeed, "fileIDEncryptionSeed", "default-insecure-seed",
+		"Seed used to derive the Files/Batch API id encryption key. This should be changed and set to a secure value.")
+	fs.IntVar(&flags.fileIDEncryptionIterations, "fileIDEncryptionIterations", 100_000,
+		"Number of iterations to use for PBKDF2 key derivation for Files/Batch API id encryption.")
+	fs.StringVar(&flags.fileIDFallbackEncryptionSeed, "fileIDFallbackEncryptionSeed", "",
+		"Optional fallback seed used for Files/Batch API id key rotation.")
+	fs.IntVar(&flags.fileIDFallbackEncryptionIterations, "fileIDFallbackEncryptionIterations", 100_000,
+		"Number of iterations used in the fallback PBKDF2 key derivation for Files/Batch API id encryption.")
 
 	if err := fs.Parse(args); err != nil {
 		return extProcFlags{}, fmt.Errorf("failed to parse extProcFlags: %w", err)
@@ -344,6 +373,11 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 		tokenizeMetricsFactory, tracing.TokenizeTracer(), endpointspec.TokenizeEndpointSpec{}))
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/messages/count_tokens"), extproc.NewFactory(
 		countTokensMetricsFactory, tracing.CountTokensTracer(), endpointspec.MessagesCountTokensEndpointSpec{}))
+
+	// Register the OpenAI Files API endpoints (/v1/files, /v1/files/{id}, /v1/files/{id}/content)
+	// under a single prefix processor that routes by encoded backend id.
+	server.RegisterPrefix(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/files"),
+		extproc.NewFilesProcessorFactory(newFileIDCodec(&flags)))
 
 	// Create and register gRPC server with ExternalProcessorServer (the service Envoy calls).
 	if err = filterapi.StartConfigBundleWatcher(ctx, flags.configBundlePath, server, l, time.Second*5); err != nil {

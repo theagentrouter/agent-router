@@ -33,6 +33,18 @@ const (
 	InternalMetadataUpstreamHostKey = "upstream_host"
 	// InternalMetadataRouteNameKey is the key used to store the route name.
 	InternalMetadataRouteNameKey = "aigw_route_name"
+	// EnvoyLbMetadataNamespace is the well-known Envoy namespace for load-balancing
+	// subset metadata, used both on endpoints (LbEndpoint.Metadata) and on a route's
+	// RouteAction.MetadataMatch to pin a request to an endpoint subset.
+	EnvoyLbMetadataNamespace = "envoy.lb"
+	// AIGatewaySelectedBackendMetadataKey is the metadata key used for backend-sticky routing.
+	// It appears in three places, all carrying the value SelectedBackendMetadataValue(namespace, name):
+	//   1. As request dynamic metadata under AIGatewayFilterMetadataNamespace, emitted by the
+	//      router-level ext_proc when it decodes a backend from an opaque id.
+	//   2. As endpoint metadata under EnvoyLbMetadataNamespace, tagged on each backend's endpoints.
+	//   3. As a route's MetadataMatch under EnvoyLbMetadataNamespace, on synthesized sticky routes.
+	// The subset load balancer uses (2)+(3) to pin the request to the selected backend's endpoints.
+	AIGatewaySelectedBackendMetadataKey = "selected_backend"
 	// UpstreamHostHeader carries the upstream host resolved at config time from the upstream ext_proc
 	// filter to backend auth handlers. The AWS handler derives its SigV4 signing region from this host,
 	// so there is no separate region header.
@@ -145,6 +157,25 @@ const (
 // route rule in a specific AIGatewayRoute.
 func PerRouteRuleRefBackendName(namespace, name, routeName string, routeRuleIndex, refIndex int) string {
 	return fmt.Sprintf("%s/%s/route/%s/rule/%d/ref/%d", namespace, name, routeName, routeRuleIndex, refIndex)
+}
+
+// NamespaceAndNameFromBackendName parses the AIServiceBackend namespace and name from a
+// composite backend name produced by PerRouteRuleRefBackendName ("<ns>/<name>/route/...").
+// It returns ok=false if the input is not in the expected form.
+func NamespaceAndNameFromBackendName(backendName string) (namespace, name string, ok bool) {
+	parts := strings.SplitN(backendName, "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+// SelectedBackendMetadataValue returns the stable backend identity used as the value of
+// AIGatewaySelectedBackendMetadataKey for backend-sticky routing: "<namespace>.<name>".
+// Kubernetes namespaces and AIServiceBackend names are DNS-1123 labels and cannot contain
+// ".", so the composed value is unambiguous.
+func SelectedBackendMetadataValue(namespace, name string) string {
+	return namespace + "." + name
 }
 
 // awsBedrockHostRE matches an AWS Bedrock runtime host — public, FIPS, PrivateLink (VPCE), or the

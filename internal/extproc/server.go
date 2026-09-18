@@ -58,9 +58,18 @@ type Server struct {
 	enableRedaction               bool
 	config                        *filterapi.RuntimeConfig
 	processorFactories            map[string]ProcessorFactory
+	prefixProcessorFactories      []prefixProcessorFactory
 	routerProcessorsPerReqID      map[string]Processor
 	routerProcessorsPerReqIDMutex sync.RWMutex
 	uuidFn                        func() string
+}
+
+// prefixProcessorFactory associates a path prefix with a processor factory. It is used for
+// endpoints whose paths contain variable segments (e.g. the Files API "/v1/files/{id}"),
+// which cannot be matched by the exact-path map.
+type prefixProcessorFactory struct {
+	prefix  string
+	factory ProcessorFactory
 }
 
 // NewServer creates a new external processor server.
@@ -93,10 +102,20 @@ func (s *Server) Register(path string, newProcessor ProcessorFactory) {
 	s.processorFactories[path] = newProcessor
 }
 
+// RegisterPrefix registers a processor for any request path equal to prefix or nested under
+// it (i.e. starting with prefix+"/"). Exact-path registrations take precedence, and the
+// longest matching prefix wins. This supports endpoints with variable path segments such as
+// the Files API ("/v1/files", "/v1/files/{id}", "/v1/files/{id}/content").
+func (s *Server) RegisterPrefix(prefix string, newProcessor ProcessorFactory) {
+	s.logger.Info("Registering prefix processor", slog.String("prefix", prefix))
+	s.prefixProcessorFactories = append(s.prefixProcessorFactories, prefixProcessorFactory{prefix: prefix, factory: newProcessor})
+}
+
 var errNoProcessor = errors.New("no processor registered for the given path")
 
 // processorForPath returns the processor for the given path.
-// Only exact path matching is supported currently.
+// Exact path matching is tried first; if no exact match exists, the longest registered
+// prefix (see RegisterPrefix) that matches the path on a segment boundary is used.
 func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFilter bool, logger *slog.Logger) (Processor, error) {
 	pathHeader := ":path"
 	if isUpstreamFilter {
@@ -109,11 +128,24 @@ func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFi
 		path = path[:queryIndex]
 	}
 
-	newProcessor, ok := s.processorFactories[path]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", errNoProcessor, path)
+	if newProcessor, ok := s.processorFactories[path]; ok {
+		return newProcessor(s.config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
 	}
-	return newProcessor(s.config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
+
+	// Fall back to the longest matching prefix registration.
+	var best ProcessorFactory
+	bestLen := -1
+	for i := range s.prefixProcessorFactories {
+		pf := &s.prefixProcessorFactories[i]
+		if (path == pf.prefix || strings.HasPrefix(path, pf.prefix+"/")) && len(pf.prefix) > bestLen {
+			best = pf.factory
+			bestLen = len(pf.prefix)
+		}
+	}
+	if best != nil {
+		return best(s.config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
+	}
+	return nil, fmt.Errorf("%w: %s", errNoProcessor, path)
 }
 
 // originalPathHeader is the header used to pass the original path to the processor.
