@@ -3405,7 +3405,7 @@ AIServiceBackendSpec details the AIServiceBackend configuration.
   name="backendRef"
   type="[BackendObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.BackendObjectReference)"
   required="true"
-  description="BackendRef is the reference to the Backend resource that this AIServiceBackend corresponds to.<br />A backend must be a Backend resource of Envoy Gateway. Note that k8s Service will be supported<br />as a backend in the future. See https://github.com/envoyproxy/ai-gateway/issues/902 for more details.<br />This is required to be set."
+  description="BackendRef is the reference to the backend resource that this AIServiceBackend corresponds to.<br />Supported backend kinds:<br />  - Backend (gateway.envoyproxy.io): an Envoy Gateway Backend resource.<br />  - InferencePool (inference.networking.k8s.io): a Gateway API Inference Extension pool,<br />    enabling KV-cache-aware pod selection via the EndpointPicker (EPP) ext_proc sidecar.<br />    When an InferencePool is referenced, Envoy chains the AI Gateway schema-translation<br />    ext_proc with the EPP ext_proc so that Anthropic (or other) requests are translated<br />    before being routed to the best-available vLLM pod.<br />This is required to be set."
 /><ApiField
   name="headerMutation"
   type="[HTTPHeaderMutation](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadermutation)"
