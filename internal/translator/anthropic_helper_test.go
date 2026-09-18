@@ -2040,3 +2040,98 @@ func streamedContent(t *testing.T, body []byte) []string {
 	}
 	return out
 }
+
+func TestAnthropicStreamParser_ErrorEvent(t *testing.T) {
+	const wantErrorEvent = "data: {\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"
+	tests := []struct {
+		name   string
+		stream string
+	}{
+		{
+			name: "error only",
+			stream: `event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`,
+		},
+		{
+			name: "message start followed by error",
+			stream: `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newAnthropicStreamParser("claude-sonnet-4-5")
+			_, body, _, _, err := p.Process(strings.NewReader(tt.stream), false, nil)
+
+			var streamErr *AnthropicStreamError
+			require.ErrorAs(t, err, &streamErr)
+			require.Equal(t, "overloaded_error", streamErr.Type)
+			require.Equal(t, "Overloaded", streamErr.Message)
+			require.Equal(t, wantErrorEvent, string(body))
+		})
+	}
+
+	t.Run("after translated content", func(t *testing.T) {
+		p := newAnthropicStreamParser("claude-sonnet-4-5")
+		const content = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}
+
+`
+		_, body, _, _, err := p.Process(strings.NewReader(content), false, nil)
+		require.NoError(t, err)
+		require.Contains(t, string(body), `"content":"partial"`)
+
+		const overload = `event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`
+		_, body, _, _, err = p.Process(strings.NewReader(overload), false, nil)
+		var streamErr *AnthropicStreamError
+		require.ErrorAs(t, err, &streamErr)
+		require.Equal(t, wantErrorEvent, string(body))
+	})
+
+	t.Run("after translated content in the same callback", func(t *testing.T) {
+		p := newAnthropicStreamParser("claude-sonnet-4-5")
+		const stream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`
+		_, body, _, _, err := p.Process(strings.NewReader(stream), false, nil)
+		var streamErr *AnthropicStreamError
+		require.ErrorAs(t, err, &streamErr)
+		require.Contains(t, string(body), `"content":"partial"`)
+		require.True(t, strings.HasSuffix(string(body), wantErrorEvent))
+		require.NotContains(t, string(body), "[DONE]")
+	})
+
+	t.Run("non-overload error is not serialized", func(t *testing.T) {
+		p := newAnthropicStreamParser("claude-sonnet-4-5")
+		const stream = `event: error
+data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
+
+`
+		_, body, _, _, err := p.Process(strings.NewReader(stream), false, nil)
+		var streamErr *AnthropicStreamError
+		require.ErrorAs(t, err, &streamErr)
+		require.Equal(t, "api_error", streamErr.Type)
+		require.Empty(t, body)
+	})
+}
