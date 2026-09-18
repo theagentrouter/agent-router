@@ -210,6 +210,30 @@ func TestOpenAIToOpenAISpeechTranslator_ResponseBody_RecordsSpan_Streaming(t *te
 	require.Len(t, mockSpan.recordedChunks, 1)
 }
 
+func TestOpenAIToOpenAISpeechTranslator_ResponseBody_RecordsSpan_StreamingCRLF(t *testing.T) {
+	mockSpan := &mockSpeechSpan{}
+	tr := NewSpeechOpenAIToOpenAITranslator("v1", "gpt-4o-mini-tts").(*openAIToOpenAITranslatorV1Speech)
+
+	sseFormat := "sse"
+	req := &openai.SpeechRequest{
+		Model:        "gpt-4o-mini-tts",
+		Input:        "Test",
+		Voice:        "alloy",
+		StreamFormat: &sseFormat,
+	}
+	original, _ := json.Marshal(req)
+	_, _, _ = tr.RequestBody(original, req, false)
+
+	// CRLF line endings and no space after "data:" are both valid SSE.
+	sseData := "data:{\"data\":\"dGVzdA==\"}\r\n\r\ndata: {\"data\":\"dGVzdA==\"}\r\n\r\n"
+
+	_, _, _, _, err := tr.ResponseBody(map[string]string{}, bytes.NewReader([]byte(sseData)), true, mockSpan)
+	require.NoError(t, err)
+	require.Len(t, mockSpan.recordedChunks, 2)
+	require.Equal(t, []byte("test"), mockSpan.recordedChunks[0].Data)
+	require.Empty(t, tr.buffered)
+}
+
 func TestOpenAIToOpenAISpeechTranslator_ResponseBody_RecordsSpan_StreamingSplitEvent(t *testing.T) {
 	mockSpan := &mockSpeechSpan{}
 	tr := NewSpeechOpenAIToOpenAITranslator("v1", "gpt-4o-mini-tts").(*openAIToOpenAITranslatorV1Speech)

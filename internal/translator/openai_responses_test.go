@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"io"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -1022,6 +1023,69 @@ data: [DONE]
 		_, outputSet := tokenUsage.OutputTokens()
 		require.False(t, inputSet)
 		require.False(t, outputSet)
+	})
+}
+
+func TestResponses_ExtractUsageFromBufferEvent_SSEFraming(t *testing.T) {
+	// The upstream may use CRLF line endings and omit the optional space after
+	// "data:"; both are valid SSE and must not hide the events from the gateway.
+	const created = `{"type":"response.created","response":{"model":"gpt-4o-2024-11-20"}}`
+	const completed = `{"type":"response.completed","response":{"id":"resp_1","object":"response","status":"completed","model":"gpt-4o-2024-11-20","output":[],"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":2},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":1},"total_tokens":15}}}`
+
+	for _, tc := range []struct {
+		name   string
+		chunks string
+		// rest is what must remain buffered after parsing.
+		rest string
+	}{
+		{name: "CRLF", chunks: "data: " + created + "\r\n\r\ndata: " + completed + "\r\n\r\ndata: [DONE]\r\n\r\n"},
+		// With CR-only line endings the final CR could be the start of a CRLF, so
+		// the last event stays buffered until more data arrives.
+		{name: "CR", chunks: "data: " + created + "\r\rdata: " + completed + "\r\rdata: [DONE]\r\r", rest: "data: [DONE]\r\r"},
+		{name: "CRLF without space after data:", chunks: "data:" + created + "\r\n\r\ndata:" + completed + "\r\n\r\ndata:[DONE]\r\n\r\n"},
+		{name: "event field with CRLF", chunks: "event: response.created\r\ndata: " + created + "\r\n\r\nevent: response.completed\r\ndata: " + completed + "\r\n\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			translator := NewResponsesOpenAIToOpenAITranslator("v1", "").(*openAIToOpenAITranslatorV1Responses)
+			translator.buffered = []byte(tc.chunks)
+			tokenUsage := translator.extractUsageFromBufferEvent(nil)
+
+			require.Equal(t, "gpt-4o-2024-11-20", translator.streamingResponseModel)
+			inputTokens, ok := tokenUsage.InputTokens()
+			require.True(t, ok)
+			require.Equal(t, uint32(10), inputTokens)
+			outputTokens, ok := tokenUsage.OutputTokens()
+			require.True(t, ok)
+			require.Equal(t, uint32(5), outputTokens)
+			cachedTokens, ok := tokenUsage.CachedInputTokens()
+			require.True(t, ok)
+			require.Equal(t, uint32(2), cachedTokens)
+			reasoningTokens, ok := tokenUsage.ReasoningTokens()
+			require.True(t, ok)
+			require.Equal(t, uint32(1), reasoningTokens)
+			require.Equal(t, tc.rest, string(translator.buffered))
+		})
+	}
+
+	t.Run("CRLF boundary split across response body calls", func(t *testing.T) {
+		translator := NewResponsesOpenAIToOpenAITranslator("v1", "").(*openAIToOpenAITranslatorV1Responses)
+		translator.stream = true
+
+		// First chunk ends with a lone CR: it may be the start of a CRLF, so the
+		// event must stay buffered until the next chunk arrives.
+		first := "data: " + completed + "\r\n\r"
+		_, _, tokenUsage, _, err := translator.ResponseBody(nil, strings.NewReader(first), false, nil)
+		require.NoError(t, err)
+		_, ok := tokenUsage.InputTokens()
+		require.False(t, ok)
+		require.Equal(t, []byte(first), translator.buffered)
+
+		_, _, tokenUsage, _, err = translator.ResponseBody(nil, strings.NewReader("\ndata: [DONE]\r\n\r\n"), true, nil)
+		require.NoError(t, err)
+		inputTokens, ok := tokenUsage.InputTokens()
+		require.True(t, ok)
+		require.Equal(t, uint32(10), inputTokens)
+		require.Empty(t, translator.buffered)
 	})
 }
 
