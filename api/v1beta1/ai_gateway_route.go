@@ -67,7 +67,7 @@ type AIGatewayRouteSpec struct {
 	// Hostnames is a list of hostnames matched against the HTTP Host header to select an AIGatewayRoute
 	// used to process the request. This is equivalent to the Hostnames field in the Gateway API HTTPRouteSpec.
 	// When specified, the generated HTTPRoute will include these hostnames for hostname-based filtering.
-	// See https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPRouteSpec
+	// See https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproutespec
 	// for the details of the Hostnames field in the Gateway API.
 	//
 	// +optional
@@ -75,7 +75,7 @@ type AIGatewayRouteSpec struct {
 	Hostnames []gwapiv1.Hostname `json:"hostnames,omitempty"`
 
 	// Rules is the list of AIGatewayRouteRule that this AIGatewayRoute will match the traffic to.
-	// Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.io/api-types/httproute/).
+	// Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.io/reference/api-types/httproute/).
 	//
 	// AI Gateway controller will generate a HTTPRoute based on the configuration given here with the additional
 	// modifications to achieve the necessary jobs, notably inserting the AI Gateway filter responsible for
@@ -86,7 +86,7 @@ type AIGatewayRouteSpec struct {
 	// from the request content before the routing decision.
 	//
 	// How multiple rules are matched is the same as the Gateway API. See for the details:
-	// https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPRoute
+	// https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproute
 	//
 	// At most 15 rules are allowed per AIGatewayRoute, corresponding to the Gateway API's limit on
 	// HTTPRoute.spec.rules (one slot is reserved for a controller-injected catch-all rule). To
@@ -246,7 +246,7 @@ type AIGatewayRouteRule struct {
 
 	// Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.
 	// This is a subset of the HTTPRouteMatch in the Gateway API. See for the details:
-	// https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPRouteMatch
+	// https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproutematch
 	//
 	// +optional
 	// +kubebuilder:validation:MaxItems=128
@@ -376,7 +376,7 @@ type AIGatewayRouteRuleBackendRef struct {
 
 	// Weight is the weight of the backend. This is exactly the same as the weight in
 	// the BackendRef in the Gateway API. See for the details:
-	// https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.BackendRef
+	// https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendref
 	//
 	// Default is 1.
 	//
@@ -399,7 +399,7 @@ type AIGatewayRouteRuleBackendRef struct {
 
 type AIGatewayRouteRuleMatch struct {
 	// Headers specifies HTTP request header matchers. See HeaderMatch in the Gateway API for the details:
-	// https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPHeaderMatch
+	// https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheadermatch
 	//
 	// +listType=map
 	// +listMapKey=name
