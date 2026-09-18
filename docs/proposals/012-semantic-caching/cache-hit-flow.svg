@@ -1,0 +1,72 @@
+<!--
+  ~ Copyright Envoy AI Gateway Authors
+  ~ SPDX-License-Identifier: Apache-2.0
+  ~ The full text of the Apache license is available in the LICENSE file at
+  ~ the root of the repo.
+-->
+
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="440" viewBox="0 0 920 440" font-family="Helvetica,Arial,sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow2" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#374151"/>
+    </marker>
+    <marker id="arrowg" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#059669"/>
+    </marker>
+    <marker id="arrowb2" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+  <rect width="920" height="440" fill="#ffffff"/>
+  <text x="460" y="28" text-anchor="middle" font-size="16" font-weight="bold" fill="#111827">Cache hit — served from extproc, upstream never contacted</text>
+
+  <!-- main path boxes -->
+  <rect x="20" y="70" width="100" height="56" rx="6" fill="#f9fafb" stroke="#374151"/>
+  <text x="70" y="102" text-anchor="middle" fill="#111827">Client</text>
+
+  <rect x="165" y="70" width="110" height="56" rx="6" fill="#f9fafb" stroke="#374151"/>
+  <text x="220" y="95" text-anchor="middle" fill="#111827">Envoy</text>
+  <text x="220" y="112" text-anchor="middle" fill="#111827">listener</text>
+
+  <rect x="320" y="60" width="200" height="76" rx="6" fill="#ecfdf5" stroke="#059669"/>
+  <text x="420" y="85" text-anchor="middle" font-weight="bold" fill="#065f46">Router filter (extproc)</text>
+  <text x="420" y="103" text-anchor="middle" fill="#065f46">parse body, derive key,</text>
+  <text x="420" y="120" text-anchor="middle" fill="#065f46">partition, lookup</text>
+
+  <!-- greyed upstream -->
+  <rect x="580" y="60" width="150" height="76" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
+  <text x="655" y="90" text-anchor="middle" fill="#9ca3af">Upstream filter</text>
+  <text x="655" y="108" text-anchor="middle" fill="#9ca3af">translate + auth</text>
+
+  <rect x="770" y="70" width="120" height="56" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
+  <text x="830" y="95" text-anchor="middle" fill="#9ca3af">LLM</text>
+  <text x="830" y="112" text-anchor="middle" fill="#9ca3af">provider</text>
+  <text x="735" y="165" text-anchor="middle" fill="#9ca3af" font-size="12">never contacted — zero tokens, zero quota</text>
+
+  <!-- main path arrows -->
+  <line x1="120" y1="98" x2="163" y2="98" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow2)"/>
+  <line x1="275" y1="98" x2="318" y2="98" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow2)"/>
+
+  <!-- embedding backend (loopback) -->
+  <rect x="60" y="290" width="230" height="76" rx="6" fill="#ffffff" stroke="#2563eb" stroke-dasharray="6 4"/>
+  <text x="175" y="315" text-anchor="middle" fill="#1e3a8a">Embeddings backend</text>
+  <text x="175" y="333" text-anchor="middle" fill="#1e3a8a" font-size="12">via gateway's own listener</text>
+  <text x="175" y="350" text-anchor="middle" fill="#1e3a8a" font-size="12">/v1/embeddings + internal marker header</text>
+
+  <path d="M 375 136 L 225 288" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4" fill="none" marker-end="url(#arrowb2)"/>
+  <text x="235" y="205" text-anchor="middle" fill="#2563eb" font-size="12">1. embed prompt</text>
+  <text x="235" y="221" text-anchor="middle" fill="#2563eb" font-size="12">(Semantic mode)</text>
+
+  <!-- cache store -->
+  <rect x="360" y="290" width="240" height="76" rx="6" fill="#ecfdf5" stroke="#059669"/>
+  <text x="480" y="315" text-anchor="middle" font-weight="bold" fill="#065f46">Cache store</text>
+  <text x="480" y="333" text-anchor="middle" fill="#065f46" font-size="12">similarity ≥ threshold, exact params match,</text>
+  <text x="480" y="350" text-anchor="middle" fill="#065f46" font-size="12">same partition (route, model, tenant)</text>
+
+  <line x1="435" y1="136" x2="465" y2="288" stroke="#059669" stroke-width="1.5" marker-end="url(#arrowg)"/>
+  <text x="405" y="220" text-anchor="middle" fill="#059669" font-size="12">2. lookup → hit</text>
+
+  <!-- immediate response back -->
+  <path d="M 420 140 L 420 405 L 70 405 L 70 128" stroke="#059669" stroke-width="2" fill="none" marker-end="url(#arrowg)"/>
+  <text x="425" y="392" text-anchor="middle" fill="#059669" font-size="12" font-weight="bold">3. ImmediateResponse — x-ai-eg-cache: hit (SSE reconstructed for stream:true clients)</text>
+</svg>

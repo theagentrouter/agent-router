@@ -1,0 +1,75 @@
+<!--
+  ~ Copyright Envoy AI Gateway Authors
+  ~ SPDX-License-Identifier: Apache-2.0
+  ~ The full text of the Apache license is available in the LICENSE file at
+  ~ the root of the repo.
+-->
+
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="470" viewBox="0 0 920 470" font-family="Helvetica,Arial,sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#374151"/>
+    </marker>
+    <marker id="arrowb" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+  <rect width="920" height="470" fill="#ffffff"/>
+  <text x="460" y="28" text-anchor="middle" font-size="16" font-weight="bold" fill="#111827">Cache miss — request proceeds to provider, response stored</text>
+
+  <!-- main path boxes -->
+  <rect x="20" y="70" width="100" height="56" rx="6" fill="#f9fafb" stroke="#374151"/>
+  <text x="70" y="102" text-anchor="middle" fill="#111827">Client</text>
+
+  <rect x="165" y="70" width="110" height="56" rx="6" fill="#f9fafb" stroke="#374151"/>
+  <text x="220" y="95" text-anchor="middle" fill="#111827">Envoy</text>
+  <text x="220" y="112" text-anchor="middle" fill="#111827">listener</text>
+
+  <rect x="320" y="60" width="190" height="76" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+  <text x="415" y="85" text-anchor="middle" font-weight="bold" fill="#1e3a8a">Router filter (extproc)</text>
+  <text x="415" y="103" text-anchor="middle" fill="#1e3a8a">parse body, derive key,</text>
+  <text x="415" y="120" text-anchor="middle" fill="#1e3a8a">partition, lookup</text>
+
+  <rect x="560" y="60" width="170" height="76" rx="6" fill="#f9fafb" stroke="#374151"/>
+  <text x="645" y="90" text-anchor="middle" fill="#111827">Upstream filter</text>
+  <text x="645" y="108" text-anchor="middle" fill="#111827">translate + auth</text>
+
+  <rect x="780" y="70" width="120" height="56" rx="6" fill="#f9fafb" stroke="#374151"/>
+  <text x="840" y="95" text-anchor="middle" fill="#111827">LLM</text>
+  <text x="840" y="112" text-anchor="middle" fill="#111827">provider</text>
+
+  <!-- main path arrows -->
+  <line x1="120" y1="98" x2="163" y2="98" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="275" y1="98" x2="318" y2="98" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="510" y1="98" x2="558" y2="98" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="534" y="88" text-anchor="middle" fill="#374151" font-size="12">3. miss</text>
+  <line x1="730" y1="98" x2="778" y2="98" stroke="#374151" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- embedding backend (loopback) -->
+  <rect x="60" y="300" width="230" height="76" rx="6" fill="#ffffff" stroke="#2563eb" stroke-dasharray="6 4"/>
+  <text x="175" y="325" text-anchor="middle" fill="#1e3a8a">Embeddings backend</text>
+  <text x="175" y="343" text-anchor="middle" fill="#1e3a8a" font-size="12">via gateway's own listener</text>
+  <text x="175" y="360" text-anchor="middle" fill="#1e3a8a" font-size="12">/v1/embeddings + internal marker header</text>
+
+  <path d="M 370 136 L 220 298" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4" fill="none" marker-end="url(#arrowb)"/>
+  <text x="230" y="210" text-anchor="middle" fill="#2563eb" font-size="12">1. embed prompt</text>
+  <text x="230" y="226" text-anchor="middle" fill="#2563eb" font-size="12">(Semantic mode)</text>
+
+  <!-- cache store -->
+  <rect x="360" y="300" width="220" height="76" rx="6" fill="#eff6ff" stroke="#2563eb"/>
+  <text x="470" y="330" text-anchor="middle" font-weight="bold" fill="#1e3a8a">Cache store</text>
+  <text x="470" y="350" text-anchor="middle" fill="#1e3a8a" font-size="12">in-memory / Redis vector index</text>
+
+  <line x1="430" y1="136" x2="455" y2="298" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrowb)"/>
+  <text x="395" y="230" text-anchor="middle" fill="#2563eb" font-size="12">2. lookup</text>
+
+  <!-- write path -->
+  <path d="M 645 136 L 645 338 L 582 338" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4" fill="none" marker-end="url(#arrowb)"/>
+  <text x="742" y="250" text-anchor="middle" fill="#2563eb" font-size="12">4. store response (async)</text>
+  <text x="742" y="266" text-anchor="middle" fill="#2563eb" font-size="12">gates: 2xx, finish_reason=stop,</text>
+  <text x="742" y="282" text-anchor="middle" fill="#2563eb" font-size="12">size ≤ maxEntrySize, TTL</text>
+
+  <!-- response back -->
+  <path d="M 840 126 L 840 430 L 70 430 L 70 128" stroke="#6b7280" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="455" y="422" text-anchor="middle" fill="#6b7280" font-size="12">5. response to client — x-ai-eg-cache: miss</text>
+</svg>
