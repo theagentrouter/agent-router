@@ -169,7 +169,7 @@ spec:
 ```
 
 :::note
-The `toolSelector` field requires exactly one of `include` or `includeRegex` to be specified. If not specified, all tools from the MCP server are exposed.
+The `toolSelector` field requires exactly one of `include` or `includeRegex` to be specified. If not specified, all tools from the MCP server are exposed. To filter by argument values on a tool call, use CEL under [Authorization Policies](#authorization-policies).
 :::
 
 ### Server Multiplexing
@@ -409,11 +409,15 @@ The following variables are available in CEL expressions:
 | `request.mcp.tool`    | Target tool name (for tool calls)              |
 | `request.mcp.params`  | Parsed JSON-RPC parameters                     |
 
+:::note
+Tool arguments are under `request.mcp.params.arguments` (for example, `request.mcp.params.arguments.text`). They are available on `tools/call`; methods like `tools/list` typically have no `arguments`. CEL must return a boolean—evaluation errors and non-boolean results are treated as no match, so check for null before reading a field in deny rules (for example, `request.mcp.params.arguments.text != null && ...`).
+:::
+
 #### Examples
 
 **Comprehensive Policy Example**
 
-This example demonstrates various matching strategies including token scopes, claims, tool targeting, and CEL expressions.
+This example demonstrates various matching strategies including token scopes, claims, tool targeting, and CEL expressions. The first rule shows argument filtering via `request.mcp.params.arguments`.
 
 ```yaml
 authorization:
@@ -426,7 +430,7 @@ authorization:
         tools:
           - backend: mcp-backend
             tool: echo
-      cel: request.mcp.params.arguments.text.matches("^Hello, .*!$") && request.headers["x-tenant-id"] == "t-123"
+      cel: request.mcp.params.arguments.text != null && request.mcp.params.arguments.text.matches("^Hello, .*!$") && request.headers["x-tenant-id"] == "t-123"
     - source:
         jwt:
           scopes:
