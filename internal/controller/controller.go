@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -16,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -24,6 +26,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -119,6 +122,7 @@ type Options struct {
 // Note: this is tested with envtest, hence the test exists outside of this package. See /tests/controller_test.go.
 func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Config, logger logr.Logger, options *Options) (err error) {
 	c := mgr.GetClient()
+	apiReader := mgr.GetAPIReader()
 	indexer := mgr.GetFieldIndexer()
 	if err = ApplyIndexing(ctx, indexer.IndexField); err != nil {
 		return fmt.Errorf("failed to apply indexing: %w", err)
@@ -152,6 +156,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	routeC := NewAIGatewayRouteController(c, kubernetes.NewForConfigOrDie(config), logger.WithName("ai-gateway-route"),
 		gatewayEventChan, options.RootPrefix,
 	)
+	routeC.apiReader = apiReader
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.AIGatewayRoute{}).
 		Owns(&gwapiv1.HTTPRoute{}).
 		Owns(&egv1a1.HTTPRouteFilter{}).
@@ -166,6 +171,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	aiServiceBackendEventChan := make(chan event.GenericEvent, 100)
 	backendC := NewAIServiceBackendController(c, kubernetes.NewForConfigOrDie(config), logger.
 		WithName("ai-service-backend"), aiGatewayRouteEventChan)
+	backendC.apiReader = apiReader
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.AIServiceBackend{}).
 		WatchesRawSource(source.Channel(
 			aiServiceBackendEventChan,
@@ -179,6 +185,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	inferencePoolEventChan := make(chan event.GenericEvent, 100)
 	backendSecurityPolicyC := NewBackendSecurityPolicyController(c, kubernetes.NewForConfigOrDie(config), logger.
 		WithName("backend-security-policy"), aiServiceBackendEventChan, inferencePoolEventChan)
+	backendSecurityPolicyC.apiReader = apiReader
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.BackendSecurityPolicy{}).
 		WatchesRawSource(source.Channel(
 			backendSecurityPolicyEventChan,
@@ -231,6 +238,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	mcpRouteC := NewMCPRouteController(c, kubernetes.NewForConfigOrDie(config), logger.WithName("ai-gateway-mcp-route"),
 		gatewayEventChan,
 	)
+	mcpRouteC.apiReader = apiReader
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.MCPRoute{}).
 		Owns(&gwapiv1.HTTPRoute{}).
 		WatchesRawSource(source.Channel(
@@ -251,6 +259,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	// QuotaPolicy controller for backend quota rate limiting.
 	if options.RateLimitRunner != nil {
 		quotaPolicyC := NewQuotaPolicyController(c, kube, logger.WithName("quota-policy"), options.RateLimitRunner, aiGatewayRouteEventChan)
+		quotaPolicyC.apiReader = apiReader
 		if err = TypedControllerBuilderForCRD(mgr, &aigv1a1.QuotaPolicy{}).
 			Watches(&aigv1b1.AIServiceBackend{}, handler.EnqueueRequestsFromMapFunc(quotaPolicyC.BackendToQuotaPolicy)).
 			Complete(quotaPolicyC); err != nil {
@@ -287,8 +296,38 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 func TypedControllerBuilderForCRD(mgr ctrl.Manager, obj client.Object) *ctrl.Builder {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(obj).
-		// We do not need to watch for changes in the status subresource.
-		WithEventFilter(predicate.GenerationChangedPredicate{})
+		// GenerationChangedPredicate drops metadata-only updates, including the
+		// deletionTimestamp write issued by kubectl delete when finalizers are
+		// present (generation does not change). Without the extra predicate,
+		// handleFinalizer never runs and the object stays Terminating.
+		// ResourceVersionChangedPredicate is not used: status writes would
+		// hot-loop every controller.
+		WithEventFilter(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			deletionOrFinalizerChangedPredicate{},
+		))
+}
+
+// deletionOrFinalizerChangedPredicate admits updates that set deletionTimestamp
+// or change finalizers. Create/Delete/Generic are left to GenerationChangedPredicate
+// via predicate.Or (this predicate returns false for those).
+type deletionOrFinalizerChangedPredicate struct{}
+
+func (deletionOrFinalizerChangedPredicate) Create(event.CreateEvent) bool { return false }
+func (deletionOrFinalizerChangedPredicate) Delete(event.DeleteEvent) bool { return false }
+func (deletionOrFinalizerChangedPredicate) Generic(event.GenericEvent) bool {
+	return false
+}
+
+func (deletionOrFinalizerChangedPredicate) Update(e event.UpdateEvent) bool {
+	if e.ObjectOld == nil || e.ObjectNew == nil {
+		return false
+	}
+	deleting := e.ObjectOld.GetDeletionTimestamp().IsZero() &&
+		!e.ObjectNew.GetDeletionTimestamp().IsZero()
+	finalizersChanged := !apiequality.Semantic.DeepEqual(
+		e.ObjectOld.GetFinalizers(), e.ObjectNew.GetFinalizers())
+	return deleting || finalizersChanged
 }
 
 const (
@@ -568,46 +607,139 @@ func newConditions(conditionType, message string) []metav1.Condition {
 // aiGatewayControllerFinalizer is the name of the finalizer added to various AI Gateway resources.
 const aiGatewayControllerFinalizer = "aigateway.envoyproxy.io/finalizer"
 
-// handleFinalizer checks if the object has a deletion timestamp. If it does, it removes the finalizer and
-// calls the onDeletionFn if provided. Otherwise, it adds the finalizer to the object and updates it
-// so that the finalizer is persisted.
+var (
+	errObjectGone  = errors.New("object is gone")
+	errNowDeleting = errors.New("object is now deleting")
+)
+
+// handleFinalizer ensures aiGatewayControllerFinalizer is present on live objects and removed from
+// deleting ones. It returns onDelete=true when the object is gone or terminating, signaling
+// callers to skip normal reconciliation and not recreate children.
 //
-// onDeletionFn can be nil, in which case it will not be called. The function can return an error but should not
-// be a recoverable error. For example, onDeletionFn only propagates the deletion of the object to other resources.
-// See the call sites of this function for examples.
-func handleFinalizer[objType client.Object](
-	ctx context.Context, client client.Client,
-	logger logr.Logger,
-	o objType,
-	onDeletionFn func(ctx context.Context, o objType) error,
-) (onDelete bool) {
-	if o.GetDeletionTimestamp().IsZero() {
-		if !ctrlutil.ContainsFinalizer(o, aiGatewayControllerFinalizer) {
-			ctrlutil.AddFinalizer(o, aiGatewayControllerFinalizer)
-			if err := client.Update(ctx, o); err != nil {
-				// This shouldn't happen in normal operation, but if it does, we log the error.
-				logger.Error(err, "Failed to add finalizer to object",
-					"namespace", o.GetNamespace(), "name", o.GetName())
-			}
+// Branching uses a fresh Get of latest, never the caller's reconcile snapshot: that snapshot
+// can lag a concurrent delete. reader should be mgr.GetAPIReader() so conflict retries observe
+// the apiserver rather than a stale informer. Writes use Update (resourceVersion conflict)
+// rather than a JSON merge patch, which would replace the entire finalizers array.
+//
+// onDeletionFn runs before finalizer removal and outside the retry loop. Errors requeue the
+// object, keeping it Terminating until cleanup succeeds. Because a failed removal requeues,
+// onDeletionFn MUST be idempotent.
+func handleFinalizer[T any, PT interface {
+	*T
+	client.Object
+}](
+	ctx context.Context,
+	writer client.Writer,
+	reader client.Reader,
+	o PT,
+	onDeletionFn func(ctx context.Context, o PT) error,
+) (onDelete bool, err error) {
+	key := client.ObjectKeyFromObject(o)
+	latest := PT(new(T))
+	uid := o.GetUID()
+
+	if gerr := reader.Get(ctx, key, latest); gerr != nil {
+		if apierrors.IsNotFound(gerr) {
+			return true, nil
 		}
-		return false
+		return !o.GetDeletionTimestamp().IsZero(), fmt.Errorf("failed to get %s/%s for finalizer: %w",
+			o.GetNamespace(), o.GetName(), gerr)
 	}
-	if ctrlutil.ContainsFinalizer(o, aiGatewayControllerFinalizer) {
-		ctrlutil.RemoveFinalizer(o, aiGatewayControllerFinalizer)
-		if onDeletionFn != nil {
-			if err := onDeletionFn(ctx, o); err != nil {
-				// onDeletionFn can return an error, but it should not be a recoverable error.
-				logger.Error(err, "Failed to handle finalizer deletion",
-					"namespace", o.GetNamespace(), "name", o.GetName())
+	if uid != "" && latest.GetUID() != uid {
+		return true, nil
+	}
+
+	if latest.GetDeletionTimestamp().IsZero() {
+		err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			if gerr := reader.Get(ctx, key, latest); gerr != nil {
+				if apierrors.IsNotFound(gerr) {
+					return errObjectGone
+				}
+				return gerr
 			}
-		}
-		if err := client.Update(ctx, o); err != nil {
-			// This shouldn't happen in normal operation, but if it does, we log the error.
-			logger.Error(err, "Failed to remove finalizer from object",
-				"namespace", o.GetNamespace(), "name", o.GetName())
+			if !latest.GetDeletionTimestamp().IsZero() {
+				return errNowDeleting
+			}
+			if uid != "" && latest.GetUID() != uid {
+				return errObjectGone
+			}
+			if ctrlutil.ContainsFinalizer(latest, aiGatewayControllerFinalizer) {
+				return nil
+			}
+			ctrlutil.AddFinalizer(latest, aiGatewayControllerFinalizer)
+			return writer.Update(ctx, latest)
+		})
+		switch {
+		case errors.Is(err, errObjectGone):
+			return true, nil
+		case errors.Is(err, errNowDeleting):
+			if gerr := reader.Get(ctx, key, latest); gerr != nil {
+				if apierrors.IsNotFound(gerr) {
+					return true, nil
+				}
+				return true, fmt.Errorf("failed to get %s/%s for finalizer: %w",
+					o.GetNamespace(), o.GetName(), gerr)
+			}
+		case err != nil:
+			return false, fmt.Errorf("failed to add finalizer to %s/%s: %w",
+				o.GetNamespace(), o.GetName(), err)
+		default:
+			syncCallerFromLatest(latest, o)
+			return false, nil
 		}
 	}
-	return true
+
+	if onDeletionFn != nil && ctrlutil.ContainsFinalizer(latest, aiGatewayControllerFinalizer) {
+		if derr := onDeletionFn(ctx, latest); derr != nil {
+			return true, fmt.Errorf("deletion cleanup failed for %s/%s: %w",
+				o.GetNamespace(), o.GetName(), derr)
+		}
+	}
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		if gerr := reader.Get(ctx, key, latest); gerr != nil {
+			if apierrors.IsNotFound(gerr) {
+				return nil
+			}
+			return gerr
+		}
+		if !ctrlutil.ContainsFinalizer(latest, aiGatewayControllerFinalizer) {
+			return nil
+		}
+		ctrlutil.RemoveFinalizer(latest, aiGatewayControllerFinalizer)
+		return writer.Update(ctx, latest)
+	})
+	if err != nil {
+		return true, fmt.Errorf("failed to remove finalizer from %s/%s: %w",
+			o.GetNamespace(), o.GetName(), err)
+	}
+	syncCallerFromLatest(latest, o)
+	return true, nil
+}
+
+func syncCallerFromLatest[T any, PT interface {
+	*T
+	client.Object
+}](latest, o PT) {
+	if latest.GetName() == "" {
+		return
+	}
+	copied := latest.DeepCopyObject().(PT)
+	*o = *copied
+}
+
+// enqueueGenericEvent sends obj on ch without blocking a reconcile. A full channel
+// returns an error so a terminating reconcile can keep the finalizer and retry
+// instead of pinning on a send.
+func enqueueGenericEvent(ch chan event.GenericEvent, obj client.Object) error {
+	if ch == nil {
+		return nil
+	}
+	select {
+	case ch <- event.GenericEvent{Object: obj}:
+		return nil
+	default:
+		return fmt.Errorf("event channel is full")
+	}
 }
 
 // isKubernetes133OrLater returns true if the Kubernetes version is 1.33 or later.
