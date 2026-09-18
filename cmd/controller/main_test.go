@@ -407,3 +407,23 @@ func TestSetupCache(t *testing.T) {
 		}, c.DefaultNamespaces)
 	})
 }
+
+func Test_handleVersion(t *testing.T) {
+	t.Run("version subcommand", func(t *testing.T) {
+		out := &bytes.Buffer{}
+		require.True(t, handleVersion([]string{"version"}, out))
+		require.Equal(t, "Envoy AI Gateway Controller: dev\n", out.String())
+	})
+
+	t.Run("no args", func(t *testing.T) {
+		out := &bytes.Buffer{}
+		require.False(t, handleVersion(nil, out))
+		require.Empty(t, out.String())
+	})
+
+	t.Run("regular flags", func(t *testing.T) {
+		out := &bytes.Buffer{}
+		require.False(t, handleVersion([]string{"--logLevel", "debug"}, out))
+		require.Empty(t, out.String())
+	})
+}
