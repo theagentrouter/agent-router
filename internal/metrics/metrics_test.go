@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"k8s.io/utils/ptr"
 
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 )
@@ -476,4 +477,59 @@ func TestTokenUsage_IsZero(t *testing.T) {
 
 	u.SetOutputTokens(1)
 	require.False(t, u.IsZero())
+}
+
+func TestExtractTokenUsageFromExplicitCachingWithTTL(t *testing.T) {
+	t.Run("splits cache creation by ttl", func(t *testing.T) {
+		usage := ExtractTokenUsageFromExplicitCachingWithTTL(
+			10, 5, ptr.To(int64(20)), ptr.To(int64(30)), ptr.To(int64(12)), ptr.To(int64(18)))
+
+		fiveMinutes, ok := usage.CacheCreation5mInputTokens()
+		require.True(t, ok)
+		require.Equal(t, uint32(12), fiveMinutes)
+
+		oneHour, ok := usage.CacheCreation1hInputTokens()
+		require.True(t, ok)
+		require.Equal(t, uint32(18), oneHour)
+
+		// The breakdown must not disturb the existing totals.
+		creation, ok := usage.CacheCreationInputTokens()
+		require.True(t, ok)
+		require.Equal(t, uint32(30), creation)
+		input, _ := usage.InputTokens()
+		require.Equal(t, uint32(60), input, "input + cache read + cache creation")
+	})
+
+	t.Run("absent breakdown leaves the fields unset", func(t *testing.T) {
+		usage := ExtractTokenUsageFromExplicitCachingWithTTL(
+			10, 5, ptr.To(int64(20)), ptr.To(int64(30)), nil, nil)
+
+		_, ok := usage.CacheCreation5mInputTokens()
+		require.False(t, ok, "backends that do not report the breakdown must not appear to report zero")
+		_, ok = usage.CacheCreation1hInputTokens()
+		require.False(t, ok)
+	})
+
+	t.Run("the existing entry point is unchanged", func(t *testing.T) {
+		usage := ExtractTokenUsageFromExplicitCaching(10, 5, ptr.To(int64(20)), ptr.To(int64(30)))
+		_, ok := usage.CacheCreation5mInputTokens()
+		require.False(t, ok)
+	})
+}
+
+func TestTokenUsageOverrideCarriesCacheTTL(t *testing.T) {
+	var base TokenUsage
+	base.SetCacheCreation1hInputTokens(7)
+
+	var other TokenUsage
+	other.SetCacheCreation5mInputTokens(3)
+	base.Override(other)
+
+	fiveMinutes, ok := base.CacheCreation5mInputTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(3), fiveMinutes)
+
+	oneHour, ok := base.CacheCreation1hInputTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(7), oneHour, "a field absent from the override must survive")
 }

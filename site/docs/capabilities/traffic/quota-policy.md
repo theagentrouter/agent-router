@@ -118,17 +118,34 @@ By default, a request's cost is its `total_tokens`. You can override this with a
 [CEL](https://github.com/google/cel-spec) expression that weights token types differently. The
 following variables are available in a `costExpression`:
 
-| Variable                      | Type   | Description                                      |
-| ----------------------------- | ------ | ------------------------------------------------ |
-| `input_tokens`                | uint   | Prompt / input tokens.                           |
-| `output_tokens`               | uint   | Completion / output tokens.                      |
-| `total_tokens`                | uint   | Total tokens (the default cost).                 |
-| `cached_input_tokens`         | uint   | Input tokens served from the provider's cache.   |
-| `cache_creation_input_tokens` | uint   | Input tokens charged for writing to the cache.   |
-| `reasoning_tokens`            | uint   | Reasoning tokens (for reasoning-capable models). |
-| `model`                       | string | The resolved model name.                         |
-| `backend`                     | string | The serving backend name.                        |
-| `route_name`                  | string | The route name.                                  |
+| Variable                         | Type   | Description                                      |
+| -------------------------------- | ------ | ------------------------------------------------ |
+| `input_tokens`                   | uint   | Prompt / input tokens.                           |
+| `output_tokens`                  | uint   | Completion / output tokens.                      |
+| `total_tokens`                   | uint   | Total tokens (the default cost).                 |
+| `cached_input_tokens`            | uint   | Input tokens served from the provider's cache.   |
+| `cache_creation_input_tokens`    | uint   | Input tokens charged for writing to the cache.   |
+| `cache_creation_5m_input_tokens` | uint   | Of the above, those written with a 5 minute TTL. |
+| `cache_creation_1h_input_tokens` | uint   | Of the above, those written with a 1 hour TTL.   |
+| `reasoning_tokens`               | uint   | Reasoning tokens (for reasoning-capable models). |
+| `model`                          | string | The resolved model name.                         |
+| `backend`                        | string | The serving backend name.                        |
+| `route_name`                     | string | The route name.                                  |
+
+:::note Cache writes are not all priced the same
+Providers charge more to create a longer-lived cache entry: Anthropic bills a
+1 hour cache write at 2x the base input rate against 1.25x for 5 minutes. A
+`costExpression` using only `cache_creation_input_tokens` therefore under-charges
+long-lived cache writes, which for cache-heavy clients can be a large share of a
+bill. Use the two TTL variables to price them apart:
+
+```
+cache_creation_5m_input_tokens * 275u + cache_creation_1h_input_tokens * 440u
+```
+
+Both are `0` on backends that do not report the breakdown, so an existing
+expression keeps working unchanged.
+:::
 
 ```yaml
 perModelQuotas:

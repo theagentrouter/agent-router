@@ -485,7 +485,7 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 
 		catProg, err := llmcostcel.NewProgram(wantLLMRequestCosts[6].CEL)
 		require.NoError(t, err)
-		catVal, err := llmcostcel.EvaluateProgram(catProg, "model", "foo.default", "ns/route2", 3, 0, 0, 4, 7, 0)
+		catVal, err := llmcostcel.EvaluateProgram(catProg, "model", "foo.default", "ns/route2", 3, 0, 0, 0, 0, 4, 7, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(7), catVal)
 
@@ -729,12 +729,12 @@ func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostA
 
 	freeProg, err := llmcostcel.NewProgram(wantLLMRequestCosts[0].CEL)
 	require.NoError(t, err)
-	val, err := llmcostcel.EvaluateProgram(freeProg, "model", "free-backend", "ns/free-model-route", 10, 0, 0, 5, 15, 0)
+	val, err := llmcostcel.EvaluateProgram(freeProg, "model", "free-backend", "ns/free-model-route", 10, 0, 0, 0, 0, 5, 15, 0)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), val)
 	paidProg, err := llmcostcel.NewProgram(wantLLMRequestCosts[1].CEL)
 	require.NoError(t, err)
-	val, err = llmcostcel.EvaluateProgram(paidProg, "model", "paid-backend", "ns/paid-model-route", 10, 0, 0, 5, 15, 0)
+	val, err = llmcostcel.EvaluateProgram(paidProg, "model", "paid-backend", "ns/paid-model-route", 10, 0, 0, 0, 0, 5, 15, 0)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), val)
 }

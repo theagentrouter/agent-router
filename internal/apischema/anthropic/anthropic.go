@@ -1602,12 +1602,28 @@ const (
 type Usage struct {
 	// The number of input tokens used to create the cache entry.
 	CacheCreationInputTokens float64 `json:"cache_creation_input_tokens"`
+	// The breakdown of cached tokens by the cache entry's time-to-live.
+	// Optional: absent on backends that do not support the extended TTL.
+	CacheCreation *CacheCreation `json:"cache_creation,omitempty"`
 	// The number of input tokens read from the cache.
 	CacheReadInputTokens float64 `json:"cache_read_input_tokens"`
 	// The number of input tokens which were used.
 	InputTokens float64 `json:"input_tokens"`
 	// The number of output tokens which were used.
 	OutputTokens float64 `json:"output_tokens"`
+}
+
+// CacheCreation breaks CacheCreationInputTokens down by cache time-to-live.
+// https://docs.claude.com/en/docs/build-with-claude/prompt-caching
+//
+// The two are priced differently -- a 1 hour cache write costs 2x the base
+// input rate against 1.25x for 5 minutes -- so a cost expression that sees only
+// the combined CacheCreationInputTokens cannot price a request correctly.
+type CacheCreation struct {
+	// The number of input tokens written to a cache entry with a 5 minute TTL.
+	Ephemeral5mInputTokens float64 `json:"ephemeral_5m_input_tokens"`
+	// The number of input tokens written to a cache entry with a 1 hour TTL.
+	Ephemeral1hInputTokens float64 `json:"ephemeral_1h_input_tokens"`
 }
 
 // MessagesStreamChunk represents a single event in the streaming response from the Anthropic Messages API.

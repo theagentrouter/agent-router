@@ -886,6 +886,8 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 		in, _ := costs.InputTokens()
 		cachedIn, _ := costs.CachedInputTokens()
 		cacheCreation, _ := costs.CacheCreationInputTokens()
+		cacheCreation5m, _ := costs.CacheCreation5mInputTokens()
+		cacheCreation1h, _ := costs.CacheCreation1hInputTokens()
 		out, _ := costs.OutputTokens()
 		total, _ := costs.TotalTokens()
 		reasoning, _ := costs.ReasoningTokens()
@@ -897,6 +899,8 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 			in,
 			cachedIn,
 			cacheCreation,
+			cacheCreation5m,
+			cacheCreation1h,
 			out,
 			total,
 			reasoning,
