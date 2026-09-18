@@ -33,6 +33,10 @@ func (c *FakeAigatewayV1beta1) GatewayConfigs(namespace string) v1beta1.GatewayC
 	return newFakeGatewayConfigs(c, namespace)
 }
 
+func (c *FakeAigatewayV1beta1) GuardrailPolicies(namespace string) v1beta1.GuardrailPolicyInterface {
+	return newFakeGuardrailPolicies(c, namespace)
+}
+
 func (c *FakeAigatewayV1beta1) MCPRoutes(namespace string) v1beta1.MCPRouteInterface {
 	return newFakeMCPRoutes(c, namespace)
 }

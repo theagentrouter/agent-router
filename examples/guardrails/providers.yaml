@@ -1,0 +1,58 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: guardrail-provider-keys
+type: Opaque
+stringData:
+  apiKey: replace-me
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GuardrailPolicy
+metadata:
+  name: external-content-guardrails
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: openai
+  rules:
+    - name: detect-pii-with-presidio
+      phase: Request
+      provider:
+        type: Presidio
+        timeoutSeconds: 5
+        failureMode: FailClosed
+        message: Request contains personally identifiable information
+        presidio:
+          endpoint: http://presidio-analyzer.presidio.svc.cluster.local:3000
+          language: en
+          scoreThresholdPercent: 70
+    - name: apply-bedrock-guardrail
+      phase: Response
+      provider:
+        type: Bedrock
+        timeoutSeconds: 10
+        failureMode: FailClosed
+        message: Response was rejected by the configured Bedrock guardrail
+        bedrock:
+          region: us-east-1
+          guardrailIdentifier: replace-me
+          guardrailVersion: "1"
+    - name: analyze-with-azure-content-safety
+      phase: Response
+      provider:
+        type: AzureContentSafety
+        timeoutSeconds: 10
+        failureMode: FailOpen
+        message: Response violates the configured content-safety threshold
+        azureContentSafety:
+          endpoint: https://replace-me.cognitiveservices.azure.com
+          apiVersion: "2024-09-01"
+          severityThreshold: 4
+          apiKeySecretRef:
+            name: guardrail-provider-keys

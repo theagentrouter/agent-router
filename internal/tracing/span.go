@@ -6,6 +6,7 @@
 package tracing
 
 import (
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
@@ -19,6 +20,15 @@ type span[RespT, ChunkT any] struct {
 	span     trace.Span
 	recorder tracingapi.SpanResponseRecorder[RespT, ChunkT]
 	chunks   []*ChunkT
+}
+
+// RecordGuardrail records a guardrail evaluation event without payload content.
+func (s *span[RespT, ChunkT]) RecordGuardrail(name, phase, result string) {
+	s.span.AddEvent("guardrail.evaluation", trace.WithAttributes(
+		attribute.String("aigateway.guardrail.name", name),
+		attribute.String("aigateway.guardrail.phase", phase),
+		attribute.String("aigateway.guardrail.result", result),
+	))
 }
 
 // RecordResponseChunk implements [tracingapi.Span.RecordResponseChunk]

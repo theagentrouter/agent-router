@@ -40,3 +40,7 @@ Shows how to use prompt caching with Claude models to reduce costs and improve p
 ### [Monitoring](./monitoring/)
 
 Example setup for comprehensive monitoring and observability with Prometheus and Grafana.
+
+### [Guardrails](./guardrails/)
+
+Shows how to enforce request and response content policies with regex, Presidio, AWS Bedrock Guardrails, and Azure AI Content Safety.

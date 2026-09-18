@@ -102,6 +102,10 @@ type (
 )
 
 type (
+	// GuardrailSpan optionally records guardrail evaluations on a request span.
+	GuardrailSpan interface {
+		RecordGuardrail(name, phase, result string)
+	}
 	// Span standardizes span interfaces, supporting both streaming and non-streaming endpoints.
 	Span[RespT any, RespChunkT any] interface {
 		// RecordResponseChunk records streaming response chunks. Implementations that do not support streaming should provide a no-op implementation.
