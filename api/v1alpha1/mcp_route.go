@@ -356,6 +356,24 @@ type MCPRouteOAuth struct {
 	// +optional
 	JWKS *JWKS `json:"jwks,omitempty"`
 
+	// AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization
+	// Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known
+	// URIs derived from Issuer.
+	//
+	// Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer
+	// of "https://example.com/api/idp/authn" whose document is served only at
+	// "https://example.com/api/idp/v4/authn/.well-known/openid-configuration".
+	//
+	// Issuer is unaffected by this field. It continues to identify the authorization server in the
+	// protected resource metadata the gateway publishes, and to derive the well-known URIs when this
+	// field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Format=uri
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	AuthorizationServerMetadataURL *string `json:"authorizationServerMetadataUrl,omitempty"`
+
 	// ProtectedResourceMetadata defines the OAuth 2.0 Resource Server Metadata as per RFC 8414.
 	// This is used to expose the metadata endpoint for mcp clients to discover the authorization servers,
 	// supported scopes, and JWKS URI.
