@@ -6065,6 +6065,11 @@ spec:
                               Resource is the identifier of the protected resource.
                               This should match the MCPRoute's URL. For example, if the MCPRoute's URL is
                               "https://api.example.com/mcp", the Resource should be "https://api.example.com/mcp".
+
+                              When omitted, the gateway derives the resource identifier per request from the
+                              scheme, authority and path the client actually used to reach the MCP endpoint.
+                              Leave it unset unless the gateway is fronted by something that rewrites the
+                              externally visible URL in a way the forwarded headers do not reflect.
                             format: uri
                             type: string
                           resourceDocumentation:
@@ -6104,8 +6109,6 @@ spec:
                               type: string
                             maxItems: 32
                             type: array
-                        required:
-                        - resource
                         type: object
                     required:
                     - issuer
@@ -12323,6 +12326,11 @@ spec:
                               Resource is the identifier of the protected resource.
                               This should match the MCPRoute's URL. For example, if the MCPRoute's URL is
                               "https://api.example.com/mcp", the Resource should be "https://api.example.com/mcp".
+
+                              When omitted, the gateway derives the resource identifier per request from the
+                              scheme, authority and path the client actually used to reach the MCP endpoint.
+                              Leave it unset unless the gateway is fronted by something that rewrites the
+                              externally visible URL in a way the forwarded headers do not reflect.
                             format: uri
                             type: string
                           resourceDocumentation:
@@ -12362,8 +12370,6 @@ spec:
                               type: string
                             maxItems: 32
                             type: array
-                        required:
-                        - resource
                         type: object
                     required:
                     - issuer

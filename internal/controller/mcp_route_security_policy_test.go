@@ -481,15 +481,22 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 				require.Error(t, btpErr, "BackendTrafficPolicy should not exist")
 			}
 
-			httpRouteFilterName := internalapi.MCPGeneratedResourceCommonPrefix + tt.mcpRoute.Name + oauthProtectedResourceMetadataSuffix
+			httpRouteFilterName := internalapi.MCPGeneratedResourceCommonPrefix + tt.mcpRoute.Name + oauthAuthServerMetadataSuffix
 			var httpRouteFilter egv1a1.HTTPRouteFilter
 			filterErr := fakeClient.Get(t.Context(), client.ObjectKey{Name: httpRouteFilterName, Namespace: tt.mcpRoute.Namespace}, &httpRouteFilter)
 
 			if tt.wantFilter {
-				require.NoError(t, filterErr, "HTTPRouteFilter should exist")
+				require.NoError(t, filterErr, "authorization server HTTPRouteFilter should exist")
 			} else {
-				require.Error(t, filterErr, "HTTPRouteFilter should not exist")
+				require.Error(t, filterErr, "authorization server HTTPRouteFilter should not exist")
 			}
+
+			// The protected resource metadata document is served by the MCP proxy, so no
+			// HTTPRouteFilter is generated for it regardless of the OAuth configuration.
+			prmFilterName := internalapi.MCPGeneratedResourceCommonPrefix + tt.mcpRoute.Name + oauthProtectedResourceMetadataSuffix
+			require.Error(t, fakeClient.Get(t.Context(),
+				client.ObjectKey{Name: prmFilterName, Namespace: tt.mcpRoute.Namespace}, &egv1a1.HTTPRouteFilter{}),
+				"protected resource metadata HTTPRouteFilter should not exist")
 		})
 	}
 }
@@ -543,7 +550,7 @@ func TestMCPRouteControllerCleanupSecurityPolicyResources(t *testing.T) {
 
 	var protecedResourceMetadataFilter egv1a1.HTTPRouteFilter
 	err = fakeClient.Get(t.Context(), client.ObjectKey{Name: protecedResourceMetadataFilterName, Namespace: mcpRoute.Namespace}, &protecedResourceMetadataFilter)
-	require.NoError(t, err, "Protected Resource Metadata HTTPRouteFilter should exist before cleanup")
+	require.Error(t, err, "Protected Resource Metadata HTTPRouteFilter is served by the MCP proxy, not generated")
 
 	var authServerMetadataFilter egv1a1.HTTPRouteFilter
 	err = fakeClient.Get(t.Context(), client.ObjectKey{Name: authServerMetadataFilterName, Namespace: mcpRoute.Namespace}, &authServerMetadataFilter)
@@ -615,7 +622,7 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy_DisableOAuthKeepsAPIKey(t
 	require.NotNil(t, sp.Spec.APIKeyAuth)
 
 	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: backendTrafficPolicyName, Namespace: mcpRoute.Namespace}, &egv1a1.BackendTrafficPolicy{}))
-	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: protectedResourceMetadataFilterName, Namespace: mcpRoute.Namespace}, &egv1a1.HTTPRouteFilter{}))
+	require.Error(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: protectedResourceMetadataFilterName, Namespace: mcpRoute.Namespace}, &egv1a1.HTTPRouteFilter{}))
 	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: authServerMetadataFilterName, Namespace: mcpRoute.Namespace}, &egv1a1.HTTPRouteFilter{}))
 
 	// Remove OAuth configuration and reconcile again.
@@ -695,27 +702,6 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy_ClaimToHeaders(t *testing
 	require.Equal(t, egv1a1.ClaimToHeader{Claim: "sub", Header: "X-User-Id"}, provider.ClaimToHeaders[1])
 	require.Equal(t, egv1a1.ClaimToHeader{Claim: "email", Header: "X-User-Email"}, provider.ClaimToHeaders[2])
 	require.Equal(t, egv1a1.ClaimToHeader{Claim: "realm_access.roles", Header: "X-User-Roles"}, provider.ClaimToHeaders[3])
-}
-
-func Test_buildOAuthProtectedResourceMetadataJSON(t *testing.T) {
-	auth := &aigv1b1.MCPRouteOAuth{
-		Issuer: "https://auth.example.com",
-		ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
-			Resource:        "https://api.example.com/mcp",
-			ScopesSupported: []string{"read", "write", "admin"},
-		},
-	}
-
-	result := buildOAuthProtectedResourceMetadataJSON(auth)
-
-	var jsonResponse map[string]interface{}
-	err := json.Unmarshal([]byte(result), &jsonResponse)
-	require.NoError(t, err)
-
-	require.Equal(t, "https://api.example.com/mcp", jsonResponse["resource"])
-	require.Equal(t, []interface{}{"https://auth.example.com"}, jsonResponse["authorization_servers"])
-	require.Equal(t, []interface{}{"header"}, jsonResponse["bearer_methods_supported"])
-	require.Equal(t, []interface{}{"read", "write", "admin"}, jsonResponse["scopes_supported"])
 }
 
 func Test_buildWWWAuthenticateHeaderValue(t *testing.T) {
@@ -815,10 +801,28 @@ func Test_buildWWWAuthenticateHeaderValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildWWWAuthenticateHeaderValue(tt.metadata)
+			result := buildWWWAuthenticateHeaderValue(tt.metadata, "/mcp")
 			require.Equal(t, tt.expected, result)
 		})
 	}
+
+	// When resource is omitted the URL is left for Envoy to expand per response, since the 401
+	// is produced by the JWT filter before the request reaches the MCP proxy.
+	t.Run("resource omitted defers to Envoy substitution", func(t *testing.T) {
+		require.Equal(t,
+			`Bearer error="invalid_token", error_description="The access token is missing or invalid", `+
+				`resource_metadata="%REQ(X-FORWARDED-PROTO)%://%REQ(:AUTHORITY)%/.well-known/oauth-protected-resource/mcp"`,
+			buildWWWAuthenticateHeaderValue(&aigv1b1.ProtectedResourceMetadata{}, "/mcp"))
+	})
+
+	t.Run("resource omitted with custom path", func(t *testing.T) {
+		require.Equal(t,
+			`Bearer error="invalid_token", error_description="The access token is missing or invalid", `+
+				`resource_metadata="%REQ(X-FORWARDED-PROTO)%://%REQ(:AUTHORITY)%/.well-known/oauth-protected-resource/tenant/mcp", scope="read"`,
+			buildWWWAuthenticateHeaderValue(&aigv1b1.ProtectedResourceMetadata{
+				ScopesSupported: []string{"read"},
+			}, "/tenant/mcp"))
+	})
 }
 
 func Test_fetchOAuthServerMetadata(t *testing.T) {
@@ -1054,4 +1058,44 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "http://"+addr+issuerPath, metadata.Issuer)
 	})
+}
+
+// TestMCPRouteController_deletesSupersededProtectedResourceMetadataHRF covers the upgrade path:
+// a cluster reconciled by an older controller has an HTTPRouteFilter serving the protected
+// resource metadata as a static direct response. The document is now served by the MCP proxy, so
+// the stale filter must be removed rather than left dangling behind a route rule that no longer
+// references it.
+func TestMCPRouteController_deletesSupersededProtectedResourceMetadataHRF(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewMCPRouteController(fakeClient, nil, logr.Discard(), eventCh.Ch)
+
+	mcpRoute := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+		Spec: aigv1b1.MCPRouteSpec{
+			SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+				OAuth: &aigv1b1.MCPRouteOAuth{
+					Issuer: "https://auth.example.com",
+					JWKS: &aigv1b1.JWKS{
+						RemoteJWKS: &egv1a1.RemoteJWKS{URI: "https://auth.example.com/.well-known/jwks.json"},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), mcpRoute))
+
+	// Simulate what an older controller version left behind.
+	staleName := oauthProtectedResourceMetadataName(mcpRoute.Name)
+	require.NoError(t, fakeClient.Create(t.Context(), &egv1a1.HTTPRouteFilter{
+		ObjectMeta: metav1.ObjectMeta{Name: staleName, Namespace: mcpRoute.Namespace},
+	}))
+
+	require.NoError(t, c.syncMCPRouteSecurityPolicy(t.Context(), mcpRoute, "httproute-test-route"))
+
+	err := fakeClient.Get(t.Context(), client.ObjectKey{Name: staleName, Namespace: mcpRoute.Namespace}, &egv1a1.HTTPRouteFilter{})
+	require.True(t, apierrors.IsNotFound(err), "superseded HTTPRouteFilter should be deleted, got %v", err)
+
+	// Reconciling again when nothing is left behind is a no-op.
+	require.NoError(t, c.syncMCPRouteSecurityPolicy(t.Context(), mcpRoute, "httproute-test-route"))
 }

@@ -207,7 +207,12 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, wwwAuthHeader, "Bearer", "WWW-Authenticate header should contain Bearer scheme")
 
 		// Validate WWW-Authenticate header contains resource_metadata parameter.
-		require.Contains(t, wwwAuthHeader, `resource_metadata="https://foo.bar.com/.well-known/oauth-protected-resource/mcp"`,
+		// The identifier is derived from the request, so it names the port-forward address the
+		// client actually used rather than a statically configured hostname. On the 401 path the
+		// substitution is performed by Envoy, since the JWT filter rejects the request before it
+		// ever reaches the MCP proxy.
+		require.Contains(t, wwwAuthHeader,
+			fmt.Sprintf(`resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`, fwd.Address()),
 			"WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 
@@ -248,8 +253,10 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, metadata, "bearer_methods_supported", "Metadata should contain bearer_methods_supported field")
 		require.Contains(t, metadata, "scopes_supported", "Metadata should contain scopes_supported field")
 
-		// Validate field values match expected configuration.
-		require.Equal(t, "https://foo.bar.com/mcp", metadata["resource"], "Resource should match configured value")
+		// Validate field values match expected configuration. resource is omitted from the
+		// MCPRoute, so it must name the address this request was made against.
+		require.Equal(t, fwd.Address()+"/mcp", metadata["resource"],
+			"Resource should be derived from the request")
 
 		authServers, ok := metadata["authorization_servers"].([]interface{})
 		require.True(t, ok, "authorization_servers should be an array")
@@ -382,7 +389,12 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, wwwAuthHeader, "Bearer", "WWW-Authenticate header should contain Bearer scheme")
 
 		// Validate WWW-Authenticate header contains resource_metadata parameter.
-		require.Contains(t, wwwAuthHeader, `resource_metadata="https://foo.bar.com/.well-known/oauth-protected-resource/mcp"`,
+		// The identifier is derived from the request, so it names the port-forward address the
+		// client actually used rather than a statically configured hostname. On the 401 path the
+		// substitution is performed by Envoy, since the JWT filter rejects the request before it
+		// ever reaches the MCP proxy.
+		require.Contains(t, wwwAuthHeader,
+			fmt.Sprintf(`resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`, fwd.Address()),
 			"WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 

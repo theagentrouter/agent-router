@@ -648,14 +648,16 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			mcpRoute.Backends = append(
 				mcpRoute.Backends, mcpBackend)
 		}
+		// Add the OAuth protected resource metadata for the route. This is independent of the
+		// authorization rules below: the MCP proxy serves the metadata document, and advertises
+		// it in WWW-Authenticate challenges, whenever OAuth is configured at all.
+		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.OAuth != nil {
+			mcpRoute.OAuth = mcpRouteOAuth(route.Spec.SecurityPolicy.OAuth)
+		}
 		// Add authorization configuration for the route.
 		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.Authorization != nil {
 			authorization := route.Spec.SecurityPolicy.Authorization
 			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{}
-
-			if route.Spec.SecurityPolicy.OAuth != nil {
-				mcpRoute.Authorization.ResourceMetadataURL = buildResourceMetadataURL(&route.Spec.SecurityPolicy.OAuth.ProtectedResourceMetadata)
-			}
 
 			defaultAction := ptr.Deref(authorization.DefaultAction, egv1a1.AuthorizationActionDeny)
 			mcpRoute.Authorization.DefaultAction = filterapi.AuthorizationAction(defaultAction)

@@ -333,13 +333,16 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 
 	// Add OAuth metadata endpoints if authentication is configured.
 	if mcpRoute.Spec.SecurityPolicy != nil && mcpRoute.Spec.SecurityPolicy.OAuth != nil {
-		// OAuth 2.0 Protected Resource Metadata (RFC 9728) - serve in both root and suffix paths because different clients
-		// may expect either.
+		// OAuth 2.0 Protected Resource Metadata (RFC 9728).
 		// TODO: only one MCPRoute targeting the same listener can be configured with OAuth due to the fixed well-known path.
-		httpRouteFilterName := oauthProtectedResourceMetadataName(mcpRoute.Name)
-
+		//
+		// This is routed to the MCP proxy rather than answered by a static direct response,
+		// because the document's "resource" identifier must name the scheme, authority and path
+		// the client actually used to reach the gateway. None of that is knowable when the
+		// HTTPRoute is generated, and a direct response body cannot be templated.
+		//
 		// Suffix path: /.well-known/oauth-protected-resource{pathPrefix} (if pathPrefix exists).
-		protectedResourceSuffixPath := fmt.Sprintf("/.well-known/oauth-protected-resource%s", strings.TrimSuffix(servingPath, "/"))
+		protectedResourceSuffixPath := fmt.Sprintf("%s%s", oauthWellKnownProtectedResourceMetadataPath, strings.TrimSuffix(servingPath, "/"))
 		protectedResourceSuffixRule := gwapiv1.HTTPRouteRule{
 			Name: ptr.To(gwapiv1.SectionName("oauth-protected-resource-metadata")),
 			Matches: []gwapiv1.HTTPRouteMatch{
@@ -351,13 +354,31 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 					Headers: mcpRoute.Spec.Headers,
 				},
 			},
+			BackendRefs: []gwapiv1.HTTPBackendRef{
+				{
+					BackendRef: gwapiv1.BackendRef{
+						BackendObjectReference: gwapiv1.BackendObjectReference{
+							Group:     ptr.To(gwapiv1.Group("gateway.envoyproxy.io")),
+							Kind:      ptr.To(gwapiv1.Kind("Backend")),
+							Name:      gwapiv1.ObjectName(backendName),
+							Namespace: ptr.To(gwapiv1.Namespace(mcpRoute.Namespace)),
+							Port:      ptr.To(gwapiv1.PortNumber(internalapi.MCPProxyPort)),
+						},
+					},
+				},
+			},
+			// The MCP proxy resolves which MCPRoute's OAuth configuration to serve from this
+			// header, exactly as it does for MCP traffic on the main rule.
 			Filters: []gwapiv1.HTTPRouteFilter{
 				{
-					Type: gwapiv1.HTTPRouteFilterExtensionRef,
-					ExtensionRef: &gwapiv1.LocalObjectReference{
-						Group: gwapiv1.Group("gateway.envoyproxy.io"),
-						Kind:  gwapiv1.Kind("HTTPRouteFilter"),
-						Name:  gwapiv1.ObjectName(httpRouteFilterName),
+					Type: gwapiv1.HTTPRouteFilterRequestHeaderModifier,
+					RequestHeaderModifier: &gwapiv1.HTTPHeaderFilter{
+						Set: []gwapiv1.HTTPHeader{
+							{
+								Name:  internalapi.MCPRouteHeader,
+								Value: mcpRouteHeaderValue(mcpRoute),
+							},
+						},
 					},
 				},
 			},

@@ -45,6 +45,11 @@ type MCPRoute struct {
 	// Authorization is the authorization configuration for this route.
 	Authorization *MCPRouteAuthorization `json:"authorization,omitempty"`
 
+	// OAuth is the OAuth protected resource metadata (RFC 9728) served for this route.
+	// When set, the MCP proxy serves the protected resource metadata document and includes
+	// a resource_metadata challenge in WWW-Authenticate headers it emits.
+	OAuth *MCPRouteOAuth `json:"oauth,omitempty"`
+
 	// BackendSelector restricts which of this route's backends a request may fan out to.
 	// It reuses the same MCPRouteAuthorization shape and CEL engine as Authorization above,
 	// but is evaluated once per candidate backend at session-initialize time.
@@ -160,10 +165,41 @@ type MCPRouteAuthorization struct {
 	// Requests that do not match any rule or fail to satisfy the matched rule's conditions will be denied.
 	// If no rules are defined, all requests will be denied.
 	Rules []MCPRouteAuthorizationRule `json:"rules,omitempty"`
+}
 
-	// ResourceMetadataURL is the URI of the OAuth Protected Resource Metadata document for this route.
-	// This is used to populate the WWW-Authenticate header when scope-based authorization fails.
-	ResourceMetadataURL string `json:"resourceMetadataURL,omitempty"`
+// MCPRouteOAuth is the OAuth protected resource metadata the gateway advertises for a route.
+//
+// The resource identifier itself is deliberately not part of this configuration unless the
+// operator overrides it: it is computed per request from the scheme, authority and path the
+// client actually used, so a single configuration stays correct behind any hostname, port or
+// TLS termination point. See RFC 9728 and the MCP authorization spec:
+// * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
+// * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization
+type MCPRouteOAuth struct {
+	// Issuer is the OAuth authorization server issuer URL. It is advertised as the single
+	// entry of the metadata document's authorization_servers.
+	Issuer string `json:"issuer"`
+
+	// Resource, when non-empty, pins the resource identifier instead of deriving it from the
+	// request. Set it only when the externally visible URL cannot be recovered from the
+	// request, e.g. behind a proxy that rewrites the authority without forwarding headers.
+	Resource string `json:"resource,omitempty"`
+
+	// ResourceName is a human-readable name for the protected resource.
+	ResourceName string `json:"resourceName,omitempty"`
+
+	// ScopesSupported is the list of scopes the resource advertises support for. It is also
+	// used to build the scope challenge in WWW-Authenticate headers.
+	ScopesSupported []string `json:"scopesSupported,omitempty"`
+
+	// ResourceSigningAlgValuesSupported is the list of JWS signing algorithms supported.
+	ResourceSigningAlgValuesSupported []string `json:"resourceSigningAlgValuesSupported,omitempty"`
+
+	// ResourceDocumentation is a URL to human-readable documentation for the resource.
+	ResourceDocumentation string `json:"resourceDocumentation,omitempty"`
+
+	// ResourcePolicyURI is a URL to the resource's data usage policy.
+	ResourcePolicyURI string `json:"resourcePolicyURI,omitempty"`
 }
 
 type AuthorizationAction string

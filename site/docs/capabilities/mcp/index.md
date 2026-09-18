@@ -318,11 +318,35 @@ spec:
       audiences:
         - "https://api.example.com/mcp"
       protectedResourceMetadata:
-        resource: "https://api.example.com/mcp"
         scopesSupported:
           - "profile"
           - "email"
 ```
+
+#### The resource identifier
+
+RFC 9728 requires the gateway to advertise a `resource` identifier — the canonical URL of the
+protected MCP endpoint — both in the Protected Resource Metadata document and in the
+`WWW-Authenticate` challenges it returns. Clients compare that value against the URL they used,
+so it has to match exactly, down to the scheme and port.
+
+By default the gateway derives it per request, from the scheme (the forwarded protocol), the
+authority (host and port) and the path the client actually used. One MCPRoute therefore serves
+the correct identifier on every hostname and port it is reachable on, with nothing to configure
+and nothing to keep in sync when the gateway moves.
+
+Set `protectedResourceMetadata.resource` explicitly only when the externally visible URL cannot
+be recovered from the request — for example behind a CDN or reverse proxy that rewrites the
+authority without setting the forwarded headers. An explicit value always wins:
+
+```yaml
+protectedResourceMetadata:
+  resource: "https://api.example.com/mcp"
+```
+
+Because the identifier is resolved per request, the gateway trusts the `Host` and
+`X-Forwarded-Proto` headers it receives. Envoy sanitizes these by default; if you have
+configured the listener to trust downstream forwarded headers, make sure that is intentional.
 
 The OAuth flow follows the MCP specification's authorization code flow with PKCE:
 

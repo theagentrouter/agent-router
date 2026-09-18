@@ -2371,8 +2371,8 @@ References:
 <ApiField
   name="resource"
   type="string"
-  required="true"
-  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`."
+  required="false"
+  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Leave it unset unless the gateway is fronted by something that rewrites the<br />externally visible URL in a way the forwarded headers do not reflect."
 /><ApiField
   name="resourceName"
   type="string"
@@ -5198,8 +5198,8 @@ References:
 <ApiField
   name="resource"
   type="string"
-  required="true"
-  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`."
+  required="false"
+  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Leave it unset unless the gateway is fronted by something that rewrites the<br />externally visible URL in a way the forwarded headers do not reflect."
 /><ApiField
   name="resourceName"
   type="string"

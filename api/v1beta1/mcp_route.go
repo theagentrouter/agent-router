@@ -710,9 +710,15 @@ type ProtectedResourceMetadata struct {
 	// Resource is the identifier of the protected resource.
 	// This should match the MCPRoute's URL. For example, if the MCPRoute's URL is
 	// "https://api.example.com/mcp", the Resource should be "https://api.example.com/mcp".
-	// +kubebuilder:validation:Required
+	//
+	// When omitted, the gateway derives the resource identifier per request from the
+	// scheme, authority and path the client actually used to reach the MCP endpoint.
+	// Leave it unset unless the gateway is fronted by something that rewrites the
+	// externally visible URL in a way the forwarded headers do not reflect.
+	//
 	// +kubebuilder:validation:Format=uri
-	Resource string `json:"resource"`
+	// +optional
+	Resource string `json:"resource,omitempty"`
 
 	// ResourceName is a human-readable name for the protected resource.
 	// +kubebuilder:validation:Optional
