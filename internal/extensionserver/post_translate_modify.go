@@ -911,8 +911,10 @@ func (s *Server) insertRouterLevelAIGatewayExtProc(listener *listenerv3.Listener
 	// Go over all of the chains, and add the endpoint picker external processor filters.
 	for _, currChain := range filterChains {
 		httpConManager, hcmIndex, err := findHCM(currChain)
-		if err != nil {
-			return fmt.Errorf("failed to find HCM in filter chain: %w", err)
+		if hcmIndex == -1 {
+			// Chains without an HCM (e.g. TCP/UDP routes) cannot host the ext_proc filter.
+			s.log.Error(err, "skipping filter chain without an HTTP connection manager", "listener", listener.Name)
+			continue
 		}
 		// Check if the extproc filter is already present.
 		if !shouldAIGatewayExtProcBeInserted(httpConManager.HttpFilters) {
