@@ -644,6 +644,7 @@ type openAIStreamToAnthropicState struct {
 	messageStarted   bool // flag indicating emitted message_start
 	hasOpenBlock     bool // flag indicating emitted content_block_start but not content_block_stop
 	hasThinkingBlock bool // flag indicating the open block is a thinking block
+	hasToolBlock     bool // flag indicating the open block is a tool_use block
 	closingEmitted   bool // flag indicating emitted content_block_stop + message_delta + message_stop
 	messageID        string
 	model            string
@@ -785,11 +786,18 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 
 		// Handle text content.
 		if delta.Content != nil && *delta.Content != "" {
-			// Close any open thinking block before starting a text block.
+			// Close any open non-text block before starting a text block.
 			if s.hasThinkingBlock {
 				if err := s.closeThinkingBlock(out); err != nil {
 					return err
 				}
+			} else if s.hasToolBlock {
+				if err := s.emitContentBlockStop(out); err != nil {
+					return err
+				}
+				s.hasOpenBlock = false
+				s.hasToolBlock = false
+				s.blockIndex++
 			}
 			// Emit textblockstart if not started
 			if !s.hasOpenBlock {
@@ -891,6 +899,7 @@ func (s *openAIStreamToAnthropicState) handleReasoningDelta(rc *openai.StreamRea
 			return err
 		}
 		s.hasOpenBlock = false
+		s.hasToolBlock = false
 		s.blockIndex++
 	}
 	// Ensure the thinking block is open before emitting any delta.
@@ -968,6 +977,7 @@ func (s *openAIStreamToAnthropicState) closeThinkingBlock(out *[]byte) error {
 	}
 	s.hasOpenBlock = false
 	s.hasThinkingBlock = false
+	s.hasToolBlock = false
 	s.blockIndex++
 	return nil
 }
@@ -982,6 +992,7 @@ func (s *openAIStreamToAnthropicState) handleToolCallDelta(tc *openai.ChatComple
 				return err
 			}
 			s.hasThinkingBlock = false
+			s.hasToolBlock = false
 			s.blockIndex++
 		}
 
@@ -996,6 +1007,7 @@ func (s *openAIStreamToAnthropicState) handleToolCallDelta(tc *openai.ChatComple
 		}
 		s.activeTools[tc.Index] = tool
 		s.hasOpenBlock = true
+		s.hasToolBlock = true
 
 		// Emit content_block_start for the new tool_use block.
 		payload := sseContentBlockStartTool{
