@@ -673,6 +673,11 @@ AIGatewayRouteRule is a rule that defines the routing behavior of the AIGatewayR
   type="[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#time-v1-meta)"
   required="false"
   description="ModelsCreatedAt represents the creation timestamp of the running models serving by the backends,<br />which will be exported as the field of `Created` in openai-compatible API `/models`.<br />It follows the format of RFC 3339, for example `2024-05-21T10:00:00Z`.<br />This is used only when this rule contains `x-ai-eg-model` in its header matching<br />where the header value will be recognized as a `model` in `/models` endpoint.<br />All the matched models will share the same creation time.<br />Default to the creation timestamp of the AIGatewayRoute if not set."
+/><ApiField
+  name="excludeFromModelsEndpoint"
+  type="boolean"
+  required="false"
+  description="ExcludeFromModelsEndpoint prevents models matched by this rule from being returned by the<br />OpenAI-compatible `/models` endpoint. Requests still match this rule and apply its<br />configured transformations, including model name overrides.<br />This is useful for internal or backwards-compatible aliases, as well as duplicate model<br />definitions with different schemas."
 />
 
 
@@ -3238,6 +3243,11 @@ AIGatewayRouteRule is a rule that defines the routing behavior of the AIGatewayR
   type="[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#time-v1-meta)"
   required="false"
   description="ModelsCreatedAt represents the creation timestamp of the running models serving by the backends,<br />which will be exported as the field of `Created` in openai-compatible API `/models`.<br />It follows the format of RFC 3339, for example `2024-05-21T10:00:00Z`.<br />This is used only when this rule contains `x-ai-eg-model` in its header matching<br />where the header value will be recognized as a `model` in `/models` endpoint.<br />All the matched models will share the same creation time.<br />Default to the creation timestamp of the AIGatewayRoute if not set."
+/><ApiField
+  name="excludeFromModelsEndpoint"
+  type="boolean"
+  required="false"
+  description="ExcludeFromModelsEndpoint prevents models matched by this rule from being returned by the<br />OpenAI-compatible `/models` endpoint. Requests still match this rule and apply its<br />configured transformations, including model name overrides.<br />This is useful for internal or backwards-compatible aliases, as well as duplicate model<br />definitions with different schemas."
 />
 
 

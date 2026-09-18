@@ -433,6 +433,10 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 		injectedQuotaCosts := make(map[string]struct{})
 		for ruleIndex := range spec.Rules {
 			rule := &spec.Rules[ruleIndex]
+			if rule.ExcludeFromModelsEndpoint {
+				continue
+			}
+
 			for _, m := range rule.Matches {
 				for _, h := range m.Headers {
 					// If explicitly set to something that is not an exact match, skip.
@@ -463,6 +467,11 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 					}
 				}
 			}
+		}
+		// Second pass: backends are collected for every rule, including rules excluded from
+		// /v1/models — those rules still route traffic and need their backends in the config.
+		for ruleIndex := range spec.Rules {
+			rule := &spec.Rules[ruleIndex]
 			for backendRefIndex := range rule.BackendRefs {
 				backendRef := &rule.BackendRefs[backendRefIndex]
 				b := filterapi.Backend{}
