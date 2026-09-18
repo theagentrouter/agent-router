@@ -293,7 +293,7 @@ func NewRerankRecorder(config *Config) tracingapi.RerankRecorder {
 // Anthropic messages are chat completions, so they report the chat operation.
 // Note that metrics report this endpoint as "messages".
 func NewMessageRecorder(config *Config) tracingapi.MessageRecorder {
-	return &recorder[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]{
+	base := &recorder[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]{
 		operation:          OperationChat,
 		config:             configOrEnv(config),
 		requestModel:       func(r *anthropicschema.MessagesRequest) string { return r.Model },
@@ -305,6 +305,10 @@ func NewMessageRecorder(config *Config) tracingapi.MessageRecorder {
 		toolDefinitions:    anthropicToolDefinitions,
 		foldChunks:         anthropicschema.MessagesResponseFromStream,
 	}
+	if base.config.CaptureMessageContent {
+		return base
+	}
+	return &anthropicMetadataRecorder{recorder: base}
 }
 
 // NewTokenizeRecorder creates a tracingapi.TokenizeRecorder.
