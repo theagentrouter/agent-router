@@ -512,6 +512,7 @@ func main() {
 		MCPFallbackSessionEncryptionSeed:       parsedFlags.mcpFallbackSessionEncryptionSeed,
 		MCPFallbackSessionEncryptionIterations: parsedFlags.mcpFallbackSessionEncryptionIterations,
 		RateLimitRunner:                        rlRunner,
+		ExtensionServerInvoked:                 extSrv.PostTranslateModifyInvoked,
 	}); err != nil {
 		setupLog.Error(err, "failed to start controller")
 	}

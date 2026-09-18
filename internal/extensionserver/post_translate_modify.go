@@ -111,6 +111,8 @@ func hasAIGatewayClusterName(cluster *clusterv3.Cluster) bool {
 // For InferencePool support, this method creates additional STRICT_DNS clusters that
 // connect to the endpoint picker services specified in InferencePool resources.
 func (s *Server) PostTranslateModify(ctx context.Context, req *egextension.PostTranslateModifyRequest) (*egextension.PostTranslateModifyResponse, error) {
+	s.postTranslateModifyInvoked.Store(true)
+
 	var extProcUDSExist bool
 
 	// Resolved once per snapshot: the namespaces are the Gateway's and apply to every AI cluster.
