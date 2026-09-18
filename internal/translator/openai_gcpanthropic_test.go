@@ -24,7 +24,6 @@ import (
 	openaigo "github.com/openai/openai-go/v3"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -47,7 +46,7 @@ func TestResponseModel_GCPAnthropic(t *testing.T) {
 	// Initialize translator with the model
 	req := &openai.ChatCompletionRequest{
 		Model:     "claude-sonnet-4",
-		MaxTokens: ptr.To(int64(100)),
+		MaxTokens: new(int64(100)),
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			{
 				OfUser: &openai.ChatCompletionUserMessageParam{
@@ -105,8 +104,8 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 				OfUser: &openai.ChatCompletionUserMessageParam{Content: openai.StringOrUserRoleContentUnion{Value: "Hello!"}, Role: openai.ChatMessageRoleUser},
 			},
 		},
-		MaxTokens:   ptr.To(int64(1024)),
-		Temperature: ptr.To(0.7),
+		MaxTokens:   new(int64(1024)),
+		Temperature: new(0.7),
 	}
 	t.Run("Vertex Values Configured Correctly", func(t *testing.T) {
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -149,7 +148,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 
 	t.Run("Image Content Request", func(t *testing.T) {
 		imageReq := &openai.ChatCompletionRequest{
-			MaxCompletionTokens: ptr.To(int64(200)),
+			MaxCompletionTokens: new(int64(200)),
 			Model:               "claude-3-opus-20240229",
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				{
@@ -191,7 +190,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 				{OfDeveloper: &openai.ChatCompletionDeveloperMessageParam{Content: openai.ContentUnion{Value: secondMsg}, Role: openai.ChatMessageRoleDeveloper}},
 				{OfUser: &openai.ChatCompletionUserMessageParam{Content: openai.StringOrUserRoleContentUnion{Value: thirdMsg}, Role: openai.ChatMessageRoleUser}},
 			},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
 		_, body, err := translator.RequestBody(nil, multiSystemReq, false)
@@ -206,7 +205,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		streamReq := &openai.ChatCompletionRequest{
 			Model:     claudeTestModel,
 			Messages:  []openai.ChatCompletionMessageParamUnion{},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 			Stream:    true,
 		}
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -227,9 +226,9 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		openaiRequest := &openai.ChatCompletionRequest{
 			Model:       claudeTestModel,
 			Messages:    []openai.ChatCompletionMessageParamUnion{},
-			Temperature: ptr.To(0.1),
-			MaxTokens:   ptr.To(int64(100)),
-			TopP:        ptr.To(0.1),
+			Temperature: new(0.1),
+			MaxTokens:   new(int64(100)),
+			TopP:        new(0.1),
 			Stop: openaigo.ChatCompletionNewParamsStopUnion{
 				OfStringArray: []string{"stop1", "stop2"},
 			},
@@ -246,9 +245,9 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		openaiRequest := &openai.ChatCompletionRequest{
 			Model:       claudeTestModel,
 			Messages:    []openai.ChatCompletionMessageParamUnion{},
-			Temperature: ptr.To(0.1),
-			MaxTokens:   ptr.To(int64(100)),
-			TopP:        ptr.To(0.1),
+			Temperature: new(0.1),
+			MaxTokens:   new(int64(100)),
+			TopP:        new(0.1),
 			Stop: openaigo.ChatCompletionNewParamsStopUnion{
 				OfString: openaigo.Opt[string]("stop1"),
 			},
@@ -265,8 +264,8 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		invalidTempReq := &openai.ChatCompletionRequest{
 			Model:       claudeTestModel,
 			Messages:    []openai.ChatCompletionMessageParamUnion{},
-			MaxTokens:   ptr.To(int64(100)),
-			Temperature: ptr.To(2.5),
+			MaxTokens:   new(int64(100)),
+			Temperature: new(2.5),
 		}
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
 		_, _, err := translator.RequestBody(nil, invalidTempReq, false)
@@ -277,8 +276,8 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		invalidTempReq := &openai.ChatCompletionRequest{
 			Model:       claudeTestModel,
 			Messages:    []openai.ChatCompletionMessageParamUnion{},
-			MaxTokens:   ptr.To(int64(100)),
-			Temperature: ptr.To(-2.5),
+			MaxTokens:   new(int64(100)),
+			Temperature: new(-2.5),
 		}
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
 		_, _, err := translator.RequestBody(nil, invalidTempReq, false)
@@ -313,7 +312,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		thinkingReq := &openai.ChatCompletionRequest{
 			Model:     claudeTestModel,
 			Messages:  []openai.ChatCompletionMessageParamUnion{},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 			Thinking: &openai.ThinkingUnion{
 				OfEnabled: &openai.ThinkingEnabled{
 					BudgetTokens:    100,
@@ -338,7 +337,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		thinkingReq := &openai.ChatCompletionRequest{
 			Model:     claudeTestModel,
 			Messages:  []openai.ChatCompletionMessageParamUnion{},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 			Thinking: &openai.ThinkingUnion{
 				OfDisabled: &openai.ThinkingDisabled{
 					Type: "disabled",
@@ -361,7 +360,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		thinkingReq := &openai.ChatCompletionRequest{
 			Model:     claudeTestModel,
 			Messages:  []openai.ChatCompletionMessageParamUnion{},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 			Thinking: &openai.ThinkingUnion{
 				OfEnabled: &openai.ThinkingEnabled{
 					BudgetTokens: 100,
@@ -385,7 +384,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		thinkingReq := &openai.ChatCompletionRequest{
 			Model:     claudeTestModel,
 			Messages:  []openai.ChatCompletionMessageParamUnion{},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 			Thinking: &openai.ThinkingUnion{
 				OfAdaptive: &openai.ThinkingAdaptive{
 					Type:    "adaptive",
@@ -450,7 +449,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 				Choices: []openai.ChatCompletionResponseChoice{
 					{
 						Index:        0,
-						Message:      openai.ChatCompletionResponseChoiceMessage{Role: "assistant", Content: ptr.To("Hello there!")},
+						Message:      openai.ChatCompletionResponseChoiceMessage{Role: "assistant", Content: new("Hello there!")},
 						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 					},
 				},
@@ -490,10 +489,10 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 						FinishReason: openai.ChatCompletionChoicesFinishReasonToolCalls,
 						Message: openai.ChatCompletionResponseChoiceMessage{
 							Role:    string(anthropic.MessageParamRoleAssistant),
-							Content: ptr.To("Ok, I will call the tool."),
+							Content: new("Ok, I will call the tool."),
 							ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 								{
-									ID:   ptr.To("toolu_01"),
+									ID:   new("toolu_01"),
 									Type: openai.ChatCompletionMessageToolCallTypeFunction,
 									Function: openai.ChatCompletionMessageToolCallFunctionParam{
 										Name:      "get_weather",
@@ -534,7 +533,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 				Choices: []openai.ChatCompletionResponseChoice{
 					{
 						Index:        0,
-						Message:      openai.ChatCompletionResponseChoiceMessage{Role: "assistant", Content: ptr.To("Model field test response.")},
+						Message:      openai.ChatCompletionResponseChoiceMessage{Role: "assistant", Content: new("Model field test response.")},
 						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 					},
 				},
@@ -703,7 +702,7 @@ func TestMessageTranslation(t *testing.T) {
 					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID:       ptr.To(testTool),
+								ID:       new(testTool),
 								Type:     openai.ChatCompletionMessageToolCallTypeFunction,
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_weather", Arguments: `{"location":"NYC"}`},
 							},
@@ -736,7 +735,7 @@ func TestMessageTranslation(t *testing.T) {
 						Content: openai.StringOrAssistantRoleContentUnion{
 							Value: openai.ChatCompletionAssistantMessageParamContent{
 								Type:    openai.ChatCompletionAssistantMessageParamContentTypeRefusal,
-								Refusal: ptr.To("I cannot answer that."),
+								Refusal: new("I cannot answer that."),
 							},
 						},
 						Role: openai.ChatMessageRoleAssistant,
@@ -824,7 +823,7 @@ func TestMessageTranslation(t *testing.T) {
 					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID:       ptr.To(testTool),
+								ID:       new(testTool),
 								Type:     openai.ChatCompletionMessageToolCallTypeFunction,
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_weather", Arguments: `{"location":`},
 							},
@@ -943,8 +942,8 @@ func TestMessageTranslation(t *testing.T) {
 							Value: []openai.ChatCompletionAssistantMessageParamContent{
 								{
 									Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-									Text:      ptr.To("Let me think about this step by step..."),
-									Signature: ptr.To("signature-123"),
+									Text:      new("Let me think about this step by step..."),
+									Signature: new("signature-123"),
 								},
 							},
 						},
@@ -970,7 +969,7 @@ func TestMessageTranslation(t *testing.T) {
 							Value: []openai.ChatCompletionAssistantMessageParamContent{
 								{
 									Type: openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-									Text: ptr.To("Let me think about this step by step..."),
+									Text: new("Let me think about this step by step..."),
 									// Missing signature - should not create thinking block
 								},
 							},
@@ -995,7 +994,7 @@ func TestMessageTranslation(t *testing.T) {
 							Value: []openai.ChatCompletionAssistantMessageParamContent{
 								{
 									Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-									Signature: ptr.To("signature-123"),
+									Signature: new("signature-123"),
 									// Missing text - should not create thinking block
 								},
 							},
@@ -1207,7 +1206,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseError(t *testing
 				Type: "error",
 				Error: openai.ErrorType{
 					Type:    gcpBackendError,
-					Code:    ptr.To("503"),
+					Code:    new("503"),
 					Message: "Service Unavailable",
 				},
 			},
@@ -1229,7 +1228,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseError(t *testing
 				Type: "error",
 				Error: openai.ErrorType{
 					Type:    "invalid_request_error",
-					Code:    ptr.To("400"),
+					Code:    new("400"),
 					Message: "Your max_tokens is too high.",
 				},
 			},
@@ -1306,7 +1305,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					Content: openai.StringOrAssistantRoleContentUnion{Value: "I'll check the weather for you."},
 					ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 						{
-							ID: ptr.To("call_789"),
+							ID: new("call_789"),
 							Function: openai.ChatCompletionMessageToolCallFunctionParam{
 								Name:      "get_weather",
 								Arguments: `{"location": "New York"}`,
@@ -1338,7 +1337,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					Content: openai.StringOrUserRoleContentUnion{Value: "Thanks! What about tomorrow?"},
 				}},
 			},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1435,7 +1434,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 							Content: openai.StringOrUserRoleContentUnion{Value: tc.content},
 						}},
 					},
-					MaxTokens: ptr.To(int64(10)),
+					MaxTokens: new(int64(10)),
 				}
 
 				translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1481,7 +1480,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					},
 				}},
 			},
-			MaxTokens: ptr.To(int64(50)),
+			MaxTokens: new(int64(50)),
 		}
 
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1525,7 +1524,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					},
 				}},
 			},
-			MaxTokens: ptr.To(int64(50)),
+			MaxTokens: new(int64(50)),
 		}
 
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1559,7 +1558,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					}},
 				}},
 			},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1599,7 +1598,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					Content: openai.StringOrUserRoleContentUnion{Value: "What's the weather in New York?"},
 				}},
 			},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1622,8 +1621,8 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 			eager    *bool
 			expected string
 		}{
-			{name: "true is forwarded", eager: ptr.To(true), expected: "true"},
-			{name: "false is forwarded, not dropped", eager: ptr.To(false), expected: "false"},
+			{name: "true is forwarded", eager: new(true), expected: "true"},
+			{name: "false is forwarded, not dropped", eager: new(false), expected: "false"},
 			{name: "omitted stays absent", eager: nil, expected: ""},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -1644,7 +1643,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 							Content: openai.StringOrUserRoleContentUnion{Value: "What's the weather in New York?"},
 						}},
 					},
-					MaxTokens: ptr.To(int64(100)),
+					MaxTokens: new(int64(100)),
 				}
 
 				translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1688,7 +1687,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					}},
 				}},
 			},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1717,7 +1716,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					Content: openai.StringOrAssistantRoleContentUnion{Value: "OK, I'll use the tool."},
 					ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 						{
-							ID:   ptr.To("call_789"),
+							ID:   new("call_789"),
 							Type: openai.ChatCompletionMessageToolCallTypeFunction,
 							Function: openai.ChatCompletionMessageToolCallFunctionParam{
 								Name:      "get_weather",
@@ -1730,7 +1729,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					},
 				}},
 			},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1759,7 +1758,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					Content: openai.StringOrAssistantRoleContentUnion{
 						Value: openai.ChatCompletionAssistantMessageParamContent{
 							Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
-							Text: ptr.To("This is a cached assistant text response."),
+							Text: new("This is a cached assistant text response."),
 							AnthropicContentFields: &openai.AnthropicContentFields{
 								CacheControl: anthropic.CacheControlEphemeralParam{Type: constant.ValueOf[constant.Ephemeral]()},
 							},
@@ -1767,7 +1766,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					},
 				}},
 			},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1821,7 +1820,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 					}},
 				}},
 			},
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
@@ -1867,7 +1866,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RedactBody(t *testing.T)
 			Choices: []openai.ChatCompletionResponseChoice{
 				{
 					Index:   0,
-					Message: openai.ChatCompletionResponseChoiceMessage{Role: "assistant", Content: ptr.To("sensitive content")},
+					Message: openai.ChatCompletionResponseChoiceMessage{Role: "assistant", Content: new("sensitive content")},
 				},
 			},
 		}
@@ -1892,7 +1891,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RedactBody(t *testing.T)
 						Role: "assistant",
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID:   ptr.To("tool-1"),
+								ID:   new("tool-1"),
 								Type: openai.ChatCompletionMessageToolCallTypeFunction,
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Name:      "get_secret",
@@ -1989,7 +1988,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseHeaders(t *testi
 		openAIReq := &openai.ChatCompletionRequest{
 			Stream:    true,
 			Model:     "test-model",
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "").(*openAIToGCPAnthropicTranslatorV1ChatCompletion)
 
@@ -2009,7 +2008,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseHeaders(t *testi
 		openAIReq := &openai.ChatCompletionRequest{
 			Stream:    false,
 			Model:     "test-model",
-			MaxTokens: ptr.To(int64(100)),
+			MaxTokens: new(int64(100)),
 		}
 		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "").(*openAIToGCPAnthropicTranslatorV1ChatCompletion)
 
@@ -2035,7 +2034,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody_WithDebugLo
 	// Initialize translator with the model
 	req := &openai.ChatCompletionRequest{
 		Model:     "claude-3",
-		MaxTokens: ptr.To(int64(100)),
+		MaxTokens: new(int64(100)),
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			{
 				OfUser: &openai.ChatCompletionUserMessageParam{
@@ -2096,7 +2095,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody_WithSpanRec
 	// Initialize translator with the model
 	req := &openai.ChatCompletionRequest{
 		Model:     "claude-3",
-		MaxTokens: ptr.To(int64(100)),
+		MaxTokens: new(int64(100)),
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			{
 				OfUser: &openai.ChatCompletionUserMessageParam{

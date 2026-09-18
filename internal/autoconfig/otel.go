@@ -205,7 +205,7 @@ func parseOTELResourceAttributes(value string, serviceName string) []otelResourc
 	resources := make(map[string]string)
 
 	if raw != "" {
-		for _, part := range strings.Split(raw, ",") {
+		for part := range strings.SplitSeq(raw, ",") {
 			if strings.TrimSpace(part) == "" {
 				continue
 			}

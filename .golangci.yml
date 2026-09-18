@@ -9,6 +9,7 @@ linters:
     - gosec
     - importas
     - misspell
+    - modernize
     - revive
     - staticcheck
     - testifylint
@@ -89,6 +90,9 @@ linters:
           alias: httpconnectionmanagerv3
       no-unaliased: true
       no-extra-aliases: false
+    modernize:
+      disable:
+        - omitzero
     testifylint:
       enable:
         - bool-compare

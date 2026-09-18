@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 )
 
 func TestResolveAll(t *testing.T) {
@@ -31,7 +30,7 @@ func TestResolveAll(t *testing.T) {
 		},
 		{
 			name:            "base merges into metrics and span/log",
-			base:            ptr.To("x-tenant-id:tenant.id"),
+			base:            new("x-tenant-id:tenant.id"),
 			expectedMetrics: map[string]string{"x-tenant-id": "tenant.id"},
 			expectedSpan: map[string]string{
 				"agent-session-id": "session.id",
@@ -44,38 +43,38 @@ func TestResolveAll(t *testing.T) {
 		},
 		{
 			name:            "explicit empty span/log clears default but keeps base",
-			base:            ptr.To("x-tenant-id:tenant.id"),
-			span:            ptr.To(""),
-			log:             ptr.To(""),
+			base:            new("x-tenant-id:tenant.id"),
+			span:            new(""),
+			log:             new(""),
 			expectedMetrics: map[string]string{"x-tenant-id": "tenant.id"},
 			expectedSpan:    map[string]string{"x-tenant-id": "tenant.id"},
 			expectedLog:     map[string]string{"x-tenant-id": "tenant.id"},
 		},
 		{
 			name:         "explicit span/log override replaces default",
-			span:         ptr.To("x-forwarded-proto:url.scheme"),
-			log:          ptr.To("x-forwarded-proto:url.scheme"),
+			span:         new("x-forwarded-proto:url.scheme"),
+			log:          new("x-forwarded-proto:url.scheme"),
 			expectedSpan: map[string]string{"x-forwarded-proto": "url.scheme"},
 			expectedLog:  map[string]string{"x-forwarded-proto": "url.scheme"},
 		},
 		{
 			name:        "invalid base returns error",
-			base:        ptr.To("invalid"),
+			base:        new("invalid"),
 			expectedErr: "invalid request header attributes: invalid",
 		},
 		{
 			name:        "invalid span returns error",
-			span:        ptr.To("invalid"),
+			span:        new("invalid"),
 			expectedErr: "invalid span request header attributes: invalid",
 		},
 		{
 			name:        "invalid metrics returns error",
-			metrics:     ptr.To("invalid"),
+			metrics:     new("invalid"),
 			expectedErr: "invalid metrics request header attributes: invalid",
 		},
 		{
 			name:        "invalid log returns error",
-			log:         ptr.To("invalid"),
+			log:         new("invalid"),
 			expectedErr: "invalid log request header attributes: invalid",
 		},
 	}
@@ -106,7 +105,7 @@ func TestResolveLog(t *testing.T) {
 	}{
 		{
 			name: "base merges into defaults",
-			base: ptr.To("x-tenant-id:tenant.id"),
+			base: new("x-tenant-id:tenant.id"),
 			expected: map[string]string{
 				"agent-session-id": "session.id",
 				"x-tenant-id":      "tenant.id",
@@ -114,16 +113,16 @@ func TestResolveLog(t *testing.T) {
 		},
 		{
 			name: "explicit empty clears default",
-			log:  ptr.To(""),
+			log:  new(""),
 		},
 		{
 			name:        "invalid base returns error",
-			base:        ptr.To("invalid"),
+			base:        new("invalid"),
 			expectedErr: "invalid request header attributes: invalid",
 		},
 		{
 			name:        "invalid log returns error",
-			log:         ptr.To("invalid"),
+			log:         new("invalid"),
 			expectedErr: "invalid log request header attributes: invalid",
 		},
 	}

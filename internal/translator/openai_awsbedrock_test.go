@@ -118,12 +118,12 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 							Content: openai.StringOrAssistantRoleContentUnion{
 								Value: openai.ChatCompletionAssistantMessageParamContent{
 									Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
-									Text: ptr.To("I dunno"),
+									Text: new("I dunno"),
 								},
 							},
 							ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 								{
-									ID: ptr.To("call_6g7a"),
+									ID: new("call_6g7a"),
 									Function: openai.ChatCompletionMessageToolCallFunctionParam{
 										Arguments: "{\"code_block\":\"from playwright.sync_api import sync_playwright\\n\"}",
 										Name:      "exec_python_code",
@@ -156,10 +156,10 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				System: []*awsbedrock.SystemContentBlock{
 					{
-						Text: ptr.To("from-system"),
+						Text: new("from-system"),
 					},
 					{
-						Text: ptr.To("from-developer"),
+						Text: new("from-developer"),
 					},
 				},
 				Messages: []*awsbedrock.Message{
@@ -167,7 +167,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -175,7 +175,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("part1"),
+								Text: new("part1"),
 							},
 						},
 					},
@@ -183,7 +183,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("part2"),
+								Text: new("part2"),
 							},
 						},
 					},
@@ -192,10 +192,10 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Content: []*awsbedrock.ContentBlock{
 							{
 								ToolResult: &awsbedrock.ToolResultBlock{
-									ToolUseID: ptr.To("call_6g7a"),
+									ToolUseID: new("call_6g7a"),
 									Content: []*awsbedrock.ToolResultContentBlock{
 										{
-											Text: ptr.To("Weather in Queens, NY is 70F and clear skies."),
+											Text: new("Weather in Queens, NY is 70F and clear skies."),
 										},
 									},
 								},
@@ -206,7 +206,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleAssistant,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("I dunno"),
+								Text: new("I dunno"),
 							},
 							{
 								ToolUse: &awsbedrock.ToolUseBlock{
@@ -221,7 +221,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleAssistant,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("I also dunno"),
+								Text: new("I also dunno"),
 							},
 						},
 					},
@@ -290,10 +290,10 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				System: []*awsbedrock.SystemContentBlock{
 					{
-						Text: ptr.To("from-system"),
+						Text: new("from-system"),
 					},
 					{
-						Text: ptr.To("from-developer"),
+						Text: new("from-developer"),
 					},
 				},
 				Messages: []*awsbedrock.Message{
@@ -301,7 +301,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -309,7 +309,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("user1"),
+								Text: new("user1"),
 							},
 						},
 					},
@@ -317,7 +317,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("user2"),
+								Text: new("user2"),
 							},
 						},
 					},
@@ -360,7 +360,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				System: []*awsbedrock.SystemContentBlock{
 					{
-						Text: ptr.To("from-system"),
+						Text: new("from-system"),
 					},
 				},
 				Messages: []*awsbedrock.Message{
@@ -385,9 +385,9 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 			input: openai.ChatCompletionRequest{
 				Stream:      false,
 				Model:       "gpt-4o",
-				MaxTokens:   ptr.To(int64(10)),
-				TopP:        ptr.To(float64(1)),
-				Temperature: ptr.To(0.7),
+				MaxTokens:   new(int64(10)),
+				TopP:        new(float64(1)),
+				Temperature: new(0.7),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{
 						OfUser: &openai.ChatCompletionUserMessageParam{
@@ -401,16 +401,16 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 			},
 			output: awsbedrock.ConverseInput{
 				InferenceConfig: &awsbedrock.InferenceConfiguration{
-					MaxTokens:   ptr.To(int64(10)),
-					TopP:        ptr.To(float64(1)),
-					Temperature: ptr.To(0.7),
+					MaxTokens:   new(int64(10)),
+					TopP:        new(float64(1)),
+					Temperature: new(0.7),
 				},
 				Messages: []*awsbedrock.Message{
 					{
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -422,10 +422,10 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 			input: openai.ChatCompletionRequest{
 				Stream:      false,
 				Model:       "gpt-4o",
-				MaxTokens:   ptr.To(int64(10)),
-				TopP:        ptr.To(float64(1)),
+				MaxTokens:   new(int64(10)),
+				TopP:        new(float64(1)),
 				ServiceTier: "reserved",
-				Temperature: ptr.To(0.7),
+				Temperature: new(0.7),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{
 						OfUser: &openai.ChatCompletionUserMessageParam{
@@ -462,9 +462,9 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 			},
 			output: awsbedrock.ConverseInput{
 				InferenceConfig: &awsbedrock.InferenceConfiguration{
-					MaxTokens:   ptr.To(int64(10)),
-					TopP:        ptr.To(float64(1)),
-					Temperature: ptr.To(0.7),
+					MaxTokens:   new(int64(10)),
+					TopP:        new(float64(1)),
+					Temperature: new(0.7),
 				},
 				ServiceTier: &awsbedrock.ServiceTier{Type: "reserved"},
 				Messages: []*awsbedrock.Message{
@@ -472,7 +472,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -481,8 +481,8 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 					Tools: []*awsbedrock.Tool{
 						{
 							ToolSpec: &awsbedrock.ToolSpecification{
-								Name:        ptr.To("get_current_weather"),
-								Description: ptr.To("Get the current weather in a given location"),
+								Name:        new("get_current_weather"),
+								Description: new("Get the current weather in a given location"),
 								InputSchema: &awsbedrock.ToolInputSchema{
 									JSON: map[string]any{
 										"type": "object",
@@ -539,7 +539,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -548,8 +548,8 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 					Tools: []*awsbedrock.Tool{
 						{
 							ToolSpec: &awsbedrock.ToolSpecification{
-								Name:        ptr.To("get_current_weather"),
-								Description: ptr.To("Get the current weather in a given location"),
+								Name:        new("get_current_weather"),
+								Description: new("Get the current weather in a given location"),
 								InputSchema: &awsbedrock.ToolInputSchema{},
 							},
 						},
@@ -590,7 +590,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -599,8 +599,8 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 					Tools: []*awsbedrock.Tool{
 						{
 							ToolSpec: &awsbedrock.ToolSpecification{
-								Name:        ptr.To("get_current_weather"),
-								Description: ptr.To("Get the current weather in a given location"),
+								Name:        new("get_current_weather"),
+								Description: new("Get the current weather in a given location"),
 								InputSchema: &awsbedrock.ToolInputSchema{},
 							},
 						},
@@ -641,7 +641,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -650,15 +650,15 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 					Tools: []*awsbedrock.Tool{
 						{
 							ToolSpec: &awsbedrock.ToolSpecification{
-								Name:        ptr.To("get_current_weather"),
-								Description: ptr.To("Get the current weather in a given location"),
+								Name:        new("get_current_weather"),
+								Description: new("Get the current weather in a given location"),
 								InputSchema: &awsbedrock.ToolInputSchema{},
 							},
 						},
 					},
 					ToolChoice: &awsbedrock.ToolChoice{
 						Tool: &awsbedrock.SpecificToolChoice{
-							Name: ptr.To("some-tools"),
+							Name: new("some-tools"),
 						},
 					},
 				},
@@ -703,7 +703,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -712,15 +712,15 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 					Tools: []*awsbedrock.Tool{
 						{
 							ToolSpec: &awsbedrock.ToolSpecification{
-								Name:        ptr.To("get_current_weather"),
-								Description: ptr.To("Get the current weather in a given location"),
+								Name:        new("get_current_weather"),
+								Description: new("Get the current weather in a given location"),
 								InputSchema: &awsbedrock.ToolInputSchema{},
 							},
 						},
 					},
 					ToolChoice: &awsbedrock.ToolChoice{
 						Tool: &awsbedrock.SpecificToolChoice{
-							Name: ptr.To("my_function"),
+							Name: new("my_function"),
 						},
 					},
 				},
@@ -753,7 +753,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -787,7 +787,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("from-user"),
+								Text: new("from-user"),
 							},
 						},
 					},
@@ -812,7 +812,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 							Role: openai.ChatMessageRoleAssistant,
 							ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 								{
-									ID: ptr.To("tool-1"),
+									ID: new("tool-1"),
 									Function: openai.ChatCompletionMessageToolCallFunctionParam{
 										Name:      "get_current_weather",
 										Arguments: "{\"city\": \"Dallas\", \"state\": \"TX\", \"unit\": \"fahrenheit\"}",
@@ -820,7 +820,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 									Type: openai.ChatCompletionMessageToolCallType(openai.ToolTypeFunction),
 								},
 								{
-									ID: ptr.To("tool-2"),
+									ID: new("tool-2"),
 									Function: openai.ChatCompletionMessageToolCallFunctionParam{
 										Name:      "get_current_weather",
 										Arguments: "{\"city\": \"Orlando\", \"state\": \"FL\", \"unit\": \"fahrenheit\"}",
@@ -857,7 +857,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("What is the weather in Dallas, Texas and Orlando, Florida in Fahrenheit?"),
+								Text: new("What is the weather in Dallas, Texas and Orlando, Florida in Fahrenheit?"),
 							},
 						},
 					},
@@ -886,17 +886,17 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 							{
 								ToolResult: &awsbedrock.ToolResultBlock{
 									Content: []*awsbedrock.ToolResultContentBlock{
-										{Text: ptr.To("The weather in Dallas TX is 98 degrees fahrenheit with mostly cloudy skies and a change of rain in the evening.")},
+										{Text: new("The weather in Dallas TX is 98 degrees fahrenheit with mostly cloudy skies and a change of rain in the evening.")},
 									},
-									ToolUseID: ptr.To("tool-1"),
+									ToolUseID: new("tool-1"),
 								},
 							},
 							{
 								ToolResult: &awsbedrock.ToolResultBlock{
 									Content: []*awsbedrock.ToolResultContentBlock{
-										{Text: ptr.To("The weather in Orlando FL is 78 degrees fahrenheit with clear skies.")},
+										{Text: new("The weather in Orlando FL is 78 degrees fahrenheit with clear skies.")},
 									},
-									ToolUseID: ptr.To("tool-2"),
+									ToolUseID: new("tool-2"),
 								},
 							},
 						},
@@ -926,8 +926,8 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				},
 			},
 			output: awsbedrock.ConverseInput{
-				AdditionalModelRequestFields: map[string]interface{}{
-					"thinking": map[string]interface{}{"type": "enabled", "budget_tokens": float64(1024)},
+				AdditionalModelRequestFields: map[string]any{
+					"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(1024)},
 				},
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				Messages: []*awsbedrock.Message{
@@ -935,7 +935,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleUser,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("Hello"),
+								Text: new("Hello"),
 							},
 						},
 					},
@@ -960,7 +960,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 								Value: []openai.ChatCompletionAssistantMessageParamContent{
 									{
 										Type: openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-										Text: ptr.To("Let me think"),
+										Text: new("Let me think"),
 									},
 								},
 							},
@@ -973,7 +973,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("How do I list prime numbers?")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("How do I list prime numbers?")}},
 					},
 					{
 						Role: openai.ChatMessageRoleAssistant,
@@ -1021,7 +1021,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("How do I list prime numbers?")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("How do I list prime numbers?")}},
 					},
 					{
 						Role: openai.ChatMessageRoleAssistant,
@@ -1052,7 +1052,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 							Role: openai.ChatMessageRoleAssistant,
 							ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 								{
-									ID:   ptr.To("tool_call_123"),
+									ID:   new("tool_call_123"),
 									Type: openai.ChatCompletionMessageToolCallTypeFunction,
 									Function: openai.ChatCompletionMessageToolCallFunctionParam{
 										Name:      "get_weather",
@@ -1064,8 +1064,8 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 								Value: []openai.ChatCompletionAssistantMessageParamContent{
 									{
 										Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-										Text:      ptr.To("I need to call the get_weather tool for Paris."),
-										Signature: ptr.To("sig_12345"),
+										Text:      new("I need to call the get_weather tool for Paris."),
+										Signature: new("sig_12345"),
 									},
 								},
 							},
@@ -1085,7 +1085,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("What's the weather in Paris?")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("What's the weather in Paris?")}},
 					},
 					{
 						Role: openai.ChatMessageRoleAssistant,
@@ -1112,9 +1112,9 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Content: []*awsbedrock.ContentBlock{
 							{
 								ToolResult: &awsbedrock.ToolResultBlock{
-									ToolUseID: ptr.To("tool_call_123"),
+									ToolUseID: new("tool_call_123"),
 									Content: []*awsbedrock.ToolResultContentBlock{
-										{Text: ptr.To("{\"temperature\": 88}")},
+										{Text: new("{\"temperature\": 88}")},
 									},
 								},
 							},
@@ -1143,14 +1143,14 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				},
 			},
 			output: awsbedrock.ConverseInput{
-				AdditionalModelRequestFields: map[string]interface{}{
-					"thinking": map[string]interface{}{"type": "enabled", "budget_tokens": float64(1024)},
+				AdditionalModelRequestFields: map[string]any{
+					"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(1024)},
 				},
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("Hello")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("Hello")}},
 					},
 				},
 			},
@@ -1176,14 +1176,14 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				},
 			},
 			output: awsbedrock.ConverseInput{
-				AdditionalModelRequestFields: map[string]interface{}{
-					"thinking": map[string]interface{}{"type": "enabled", "budget_tokens": float64(1024), "display": "omitted"},
+				AdditionalModelRequestFields: map[string]any{
+					"thinking": map[string]any{"type": "enabled", "budget_tokens": float64(1024), "display": "omitted"},
 				},
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("Hello")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("Hello")}},
 					},
 				},
 			},
@@ -1208,14 +1208,14 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				},
 			},
 			output: awsbedrock.ConverseInput{
-				AdditionalModelRequestFields: map[string]interface{}{
-					"thinking": map[string]interface{}{"type": "adaptive", "display": "summarized"},
+				AdditionalModelRequestFields: map[string]any{
+					"thinking": map[string]any{"type": "adaptive", "display": "summarized"},
 				},
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("Hello")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("Hello")}},
 					},
 				},
 			},
@@ -1239,14 +1239,14 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				},
 			},
 			output: awsbedrock.ConverseInput{
-				AdditionalModelRequestFields: map[string]interface{}{
-					"thinking": map[string]interface{}{"type": "disabled"},
+				AdditionalModelRequestFields: map[string]any{
+					"thinking": map[string]any{"type": "disabled"},
 				},
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("Hello")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("Hello")}},
 					},
 				},
 			},
@@ -1263,11 +1263,11 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 								Value: []openai.ChatCompletionAssistantMessageParamContent{
 									{
 										Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
-										Text: ptr.To("This is a standard text part."),
+										Text: new("This is a standard text part."),
 									},
 									{
 										Type: openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-										Text: ptr.To("This is a thinking part."),
+										Text: new("This is a thinking part."),
 									},
 								},
 							},
@@ -1282,7 +1282,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 						Role: openai.ChatMessageRoleAssistant,
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("This is a standard text part."),
+								Text: new("This is a standard text part."),
 							},
 							{
 								ReasoningContent: &awsbedrock.ReasoningContentBlock{
@@ -1311,14 +1311,14 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				ReasoningEffort: "high",
 			},
 			output: awsbedrock.ConverseInput{
-				AdditionalModelRequestFields: map[string]interface{}{
+				AdditionalModelRequestFields: map[string]any{
 					"reasoning_config": "high",
 				},
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("Hello")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("Hello")}},
 					},
 				},
 			},
@@ -1344,15 +1344,15 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				ReasoningEffort: "medium",
 			},
 			output: awsbedrock.ConverseInput{
-				AdditionalModelRequestFields: map[string]interface{}{
-					"thinking":         map[string]interface{}{"type": "enabled", "budget_tokens": float64(2048)},
+				AdditionalModelRequestFields: map[string]any{
+					"thinking":         map[string]any{"type": "enabled", "budget_tokens": float64(2048)},
 					"reasoning_config": "medium",
 				},
 				InferenceConfig: &awsbedrock.InferenceConfiguration{},
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("Hello")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("Hello")}},
 					},
 				},
 			},
@@ -1375,7 +1375,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 				Messages: []*awsbedrock.Message{
 					{
 						Role:    openai.ChatMessageRoleUser,
-						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("Hello")}},
+						Content: []*awsbedrock.ContentBlock{{Text: new("Hello")}},
 					},
 				},
 			},
@@ -1553,7 +1553,7 @@ func TestOpenAIToAWSBedrockTranslator_ResponseError(t *testing.T) {
 				Type: "error",
 				Error: openai.ErrorType{
 					Type:    awsBedrockBackendError,
-					Code:    ptr.To("503"),
+					Code:    new("503"),
 					Message: "service not available",
 				},
 			},
@@ -1570,7 +1570,7 @@ func TestOpenAIToAWSBedrockTranslator_ResponseError(t *testing.T) {
 				Type: "error",
 				Error: openai.ErrorType{
 					Type:    "ThrottledException",
-					Code:    ptr.To("429"),
+					Code:    new("429"),
 					Message: "aws bedrock rate limit exceeded",
 				},
 			},
@@ -1628,9 +1628,9 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 					Message: awsbedrock.Message{
 						Role: "assistant",
 						Content: []*awsbedrock.ContentBlock{
-							{Text: ptr.To("response")},
-							{Text: ptr.To("from")},
-							{Text: ptr.To("assistant")},
+							{Text: new("response")},
+							{Text: new("from")},
+							{Text: new("assistant")},
 						},
 					},
 				},
@@ -1655,7 +1655,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 					{
 						Index: 0,
 						Message: openai.ChatCompletionResponseChoiceMessage{
-							Content: ptr.To("response"),
+							Content: new("response"),
 							Role:    awsbedrock.ConversationRoleAssistant,
 						},
 						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
@@ -1672,12 +1672,12 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 					TotalTokens:  30,
 				},
 				ServiceTier: &awsbedrock.ServiceTier{Type: "reserved"},
-				StopReason:  ptr.To("stop_sequence"),
+				StopReason:  new("stop_sequence"),
 				Output: &awsbedrock.ConverseOutput{
 					Message: awsbedrock.Message{
 						Role: awsbedrock.ConversationRoleAssistant,
 						Content: []*awsbedrock.ContentBlock{
-							{Text: ptr.To("response")},
+							{Text: new("response")},
 						},
 					},
 				},
@@ -1698,7 +1698,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 						Index:        0,
 						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 						Message: openai.ChatCompletionResponseChoiceMessage{
-							Content: ptr.To("response"),
+							Content: new("response"),
 							Role:    awsbedrock.ConversationRoleAssistant,
 						},
 					},
@@ -1715,7 +1715,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 						// Text and ToolUse are sent in two different content blocks for AWS Bedrock, OpenAI merges them in one message.
 						Content: []*awsbedrock.ContentBlock{
 							{
-								Text: ptr.To("response"),
+								Text: new("response"),
 							},
 							{
 								ToolUse: &awsbedrock.ToolUseBlock{
@@ -1738,11 +1738,11 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 						Index:        0,
 						FinishReason: openai.ChatCompletionChoicesFinishReasonToolCalls,
 						Message: openai.ChatCompletionResponseChoiceMessage{
-							Content: ptr.To("response"),
+							Content: new("response"),
 							Role:    awsbedrock.ConversationRoleAssistant,
 							ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 								{
-									ID: ptr.To("call_6g7a"),
+									ID: new("call_6g7a"),
 									Function: openai.ChatCompletionMessageToolCallFunctionParam{
 										Name:      "exec_python_code",
 										Arguments: "{\"code_block\":\"from playwright.sync_api import sync_playwright\\n\"}",
@@ -1767,7 +1767,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 					Message: awsbedrock.Message{
 						Role: awsbedrock.ConversationRoleAssistant,
 						Content: []*awsbedrock.ContentBlock{
-							{Text: ptr.To("response")},
+							{Text: new("response")},
 							{ToolUse: &awsbedrock.ToolUseBlock{
 								Name:      "exec_python_code",
 								ToolUseID: "call_6g7a",
@@ -1791,11 +1791,11 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 					{
 						Index: 0,
 						Message: openai.ChatCompletionResponseChoiceMessage{
-							Content: ptr.To("response"),
+							Content: new("response"),
 							Role:    awsbedrock.ConversationRoleAssistant,
 							ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 								{
-									ID: ptr.To("call_6g7a"),
+									ID: new("call_6g7a"),
 									Function: openai.ChatCompletionMessageToolCallFunctionParam{
 										Name:      "exec_python_code",
 										Arguments: "{\"code_block\":\"from playwright.sync_api import sync_playwright\\n\"}",
@@ -1825,7 +1825,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 								},
 							},
 							{
-								Text: ptr.To("This is the final answer."),
+								Text: new("This is the final answer."),
 							},
 						},
 					},
@@ -1842,7 +1842,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 						Message: openai.ChatCompletionResponseChoiceMessage{
 							Role:             awsbedrock.ConversationRoleAssistant,
-							Content:          ptr.To("This is the final answer."),
+							Content:          new("This is the final answer."),
 							ReasoningContent: &openai.ReasoningContentUnion{Value: "This is the model's thought process."},
 							ThinkingBlocks: []openai.ThinkingBlock{
 								{Type: "thinking", Thinking: "This is the model's thought process."},
@@ -2004,9 +2004,9 @@ func TestOpenAIToAWSBedrockTranslatorExtractAmazonEventStreamEvents(t *testing.T
 	e := eventstream.NewEncoder()
 	var offsets []int
 	for _, data := range []awsbedrock.ConverseStreamEvent{
-		{Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{Text: ptr.To("1")}},
-		{Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{Text: ptr.To("2")}},
-		{Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{Text: ptr.To("3")}},
+		{Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{Text: new("1")}},
+		{Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{Text: new("2")}},
+		{Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{Text: new("3")}},
 	} {
 		offsets = append(offsets, buf.Len())
 		eventPayload, err := json.Marshal(data)
@@ -2136,7 +2136,7 @@ func TestOpenAIToAWSBedrockTranslator_convertEvent(t *testing.T) {
 			name: "delta",
 			in: awsbedrock.ConverseStreamEvent{
 				EventType: awsbedrock.ConverseStreamEventTypeContentBlockDelta.String(),
-				Delta:     &awsbedrock.ConverseStreamEventContentBlockDelta{Text: ptr.To("response")},
+				Delta:     &awsbedrock.ConverseStreamEventContentBlockDelta{Text: new("response")},
 			},
 			out: &openai.ChatCompletionResponseChunk{
 				ID:      "123",
@@ -2220,14 +2220,14 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_WithReasoning(t 
 			ContentBlockIndex: 0,
 			EventType:         awsbedrock.ConverseStreamEventTypeContentBlockDelta.String(),
 			Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{
-				Text: ptr.To("The result of 27 multiplied by 453 is "),
+				Text: new("The result of 27 multiplied by 453 is "),
 			},
 		},
 		{
 			ContentBlockIndex: 0,
 			EventType:         awsbedrock.ConverseStreamEventTypeContentBlockDelta.String(),
 			Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{
-				Text: ptr.To("12231."),
+				Text: new("12231."),
 			},
 		},
 		{StopReason: ptr.To(awsbedrock.StopReasonEndTurn)},
@@ -2261,8 +2261,8 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_WithReasoning(t 
 	var reasoningChunks []string
 
 	for _, line := range lines {
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
+		if after, ok := strings.CutPrefix(line, "data: "); ok {
+			data := after
 			if strings.Contains(data, "[DONE]") {
 				continue
 			}
@@ -2280,13 +2280,13 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_WithReasoning(t 
 					if delta.ReasoningContent != nil && delta.ReasoningContent.Text != "" {
 						reasoningChunks = append(reasoningChunks, delta.ReasoningContent.Text)
 
-						var untypedChunk map[string]interface{}
+						var untypedChunk map[string]any
 						err = json.Unmarshal([]byte(data), &untypedChunk)
 						require.NoError(t, err)
 
-						choices, _ := untypedChunk["choices"].([]interface{})
-						choice, _ := choices[0].(map[string]interface{})
-						deltaMap, _ := choice["delta"].(map[string]interface{})
+						choices, _ := untypedChunk["choices"].([]any)
+						choice, _ := choices[0].(map[string]any)
+						deltaMap, _ := choice["delta"].(map[string]any)
 						reasoningContent, ok := deltaMap["reasoning_content"].(string)
 						require.True(t, ok, "Delta should have a 'reasoning_content' string")
 						require.NotEmpty(t, reasoningContent)
@@ -2322,7 +2322,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_WithReasoning
 						},
 					},
 					{
-						Text: ptr.To("9.11 is greater than 9.8."),
+						Text: new("9.11 is greater than 9.8."),
 					},
 				},
 			},
@@ -2359,19 +2359,19 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_WithReasoning
 	require.Equal(t, "thinking", message.ThinkingBlocks[0].Type)
 	require.Equal(t, reasoningText, message.ThinkingBlocks[0].Thinking)
 
-	var untypedResponse map[string]interface{}
+	var untypedResponse map[string]any
 	err = json.Unmarshal(outputBody, &untypedResponse)
 	require.NoError(t, err)
 
 	// Verify reasoning_content is serialized as a plain string on the wire.
-	choices, ok := untypedResponse["choices"].([]interface{})
+	choices, ok := untypedResponse["choices"].([]any)
 	require.True(t, ok, "JSON should have a 'choices' array")
 	require.Len(t, choices, 1)
 
-	choice, ok := choices[0].(map[string]interface{})
+	choice, ok := choices[0].(map[string]any)
 	require.True(t, ok, "Choice item should be a map")
 
-	messageMap, ok := choice["message"].(map[string]interface{})
+	messageMap, ok := choice["message"].(map[string]any)
 	require.True(t, ok, "Choice should have a 'message' map")
 	reasoningContent, ok := messageMap["reasoning_content"].(string)
 	require.True(t, ok, "Message should have a 'reasoning_content' string")
@@ -2401,7 +2401,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_WithReasoning
 						},
 					},
 					{
-						Text: ptr.To("The answer is 42."),
+						Text: new("The answer is 42."),
 					},
 				},
 			},
@@ -2453,7 +2453,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_WithReasoning
 						},
 					},
 					{
-						Text: ptr.To("The answer is 42."),
+						Text: new("The answer is 42."),
 					},
 				},
 			},
@@ -2481,10 +2481,10 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_WithReasoning
 	require.Equal(t, "sig_only", message.ThinkingBlocks[0].Signature)
 
 	// reasoning_content must not appear on the wire at all.
-	var untypedResponse map[string]interface{}
+	var untypedResponse map[string]any
 	require.NoError(t, json.Unmarshal(outputBody, &untypedResponse))
-	choices := untypedResponse["choices"].([]interface{})
-	messageMap := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	choices := untypedResponse["choices"].([]any)
+	messageMap := choices[0].(map[string]any)["message"].(map[string]any)
 	_, hasReasoning := messageMap["reasoning_content"]
 	require.False(t, hasReasoning, "reasoning_content key must be omitted for a signature-only block")
 }
@@ -2507,7 +2507,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_WithRedactedCont
 		{
 			EventType: awsbedrock.ConverseStreamEventTypeContentBlockDelta.String(),
 			Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{
-				Text: ptr.To("This is the final answer."),
+				Text: new("This is the final answer."),
 			},
 		},
 		{
@@ -2535,8 +2535,8 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_WithRedactedCont
 	lines := strings.Split(string(outputBody), "\n")
 	var foundReasoningChunk bool
 	for _, line := range lines {
-		if strings.HasPrefix(line, "data: ") {
-			data := strings.TrimPrefix(line, "data: ")
+		if after, ok := strings.CutPrefix(line, "data: "); ok {
+			data := after
 			if strings.Contains(data, "[DONE]") {
 				continue
 			}
@@ -2680,7 +2680,7 @@ func TestOpenAIToAWSBedrockTranslator_CacheControl(t *testing.T) {
 						Function: &openai.FunctionDefinition{
 							Name:        "get_weather",
 							Description: "Get weather information",
-							Parameters:  map[string]interface{}{"type": "object"},
+							Parameters:  map[string]any{"type": "object"},
 							AnthropicContentFields: &openai.AnthropicContentFields{
 								CacheControl: anthropic.CacheControlEphemeralParam{
 									Type: constant.ValueOf[constant.Ephemeral](),
@@ -2800,7 +2800,7 @@ func TestOpenAIToAWSBedrockTranslator_EmptyContentMessages(t *testing.T) {
 				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
 					Role: openai.ChatMessageRoleAssistant,
 					ToolCalls: []openai.ChatCompletionMessageToolCallParam{
-						{ID: ptr.To("call_abc123"), Type: openai.ChatCompletionMessageToolCallTypeFunction, Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_weather", Arguments: `{"location":"NYC"}`}},
+						{ID: new("call_abc123"), Type: openai.ChatCompletionMessageToolCallTypeFunction, Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_weather", Arguments: `{"location":"NYC"}`}},
 					},
 				}},
 				{OfTool: &openai.ChatCompletionToolMessageParam{Role: openai.ChatMessageRoleTool, ToolCallID: "call_abc123", Content: openai.ContentUnion{Value: `{"temp":72}`}}},
@@ -2877,7 +2877,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_ResponseBody_Mar
 			ContentBlockIndex: 0,
 			EventType:         awsbedrock.ConverseStreamEventTypeContentBlockDelta.String(),
 			Delta: &awsbedrock.ConverseStreamEventContentBlockDelta{
-				Text: ptr.To("hello"),
+				Text: new("hello"),
 			},
 		},
 		{StopReason: ptr.To(awsbedrock.StopReasonEndTurn)},
@@ -2900,7 +2900,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_ResponseBody_Mar
 	// Override json.Marshal to force a failure during serializeOpenAIChatCompletionChunk.
 	orig := json.Marshal
 	t.Cleanup(func() { json.Marshal = orig })
-	json.Marshal = func(v interface{}) ([]byte, error) {
+	json.Marshal = func(v any) ([]byte, error) {
 		// Allow the eventstream decoding (internal json.Unmarshal) to succeed
 		// by only failing on ChatCompletionResponseChunk marshaling.
 		if _, ok := v.(*openai.ChatCompletionResponseChunk); ok {

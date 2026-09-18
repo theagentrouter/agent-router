@@ -574,7 +574,7 @@ func newChatCompletionsLargeFakeResponse(count int) []byte {
 }`
 	// Generate a large content string of approximately 3MB.
 	var largeContent bytes.Buffer
-	for i := 0; i < count; i++ {
+	for range count {
 		largeContent.WriteString("This is a line in the large fake response content. ")
 	}
 	return []byte(fmt.Sprintf(template, largeContent.String()))
@@ -583,7 +583,7 @@ func newChatCompletionsLargeFakeResponse(count int) []byte {
 func newAWSBedrockBenchmarkResponse(numBytes int) []byte {
 	const template = `{"output": {"message": {"content": [%s], "role": "assistant"}}, "stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 2, "totalTokens": 3}}`
 	var contentParts []string
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		contentParts = append(contentParts, fmt.Sprintf(`{"text": "%s"}`, strings.Repeat("A", numBytes)))
 	}
 	return []byte(fmt.Sprintf(template, strings.Join(contentParts, ", ")))
@@ -592,7 +592,7 @@ func newAWSBedrockBenchmarkResponse(numBytes int) []byte {
 func newGCPVertexAIBenchmarkResponse(numBytes int) []byte {
 	const template = `{"candidates": [{"content": {"parts": [%s], "role": "model"}, "finishReason": "STOP"}], "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2, "totalTokenCount": 3}}`
 	var contentParts []string
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		contentParts = append(contentParts, fmt.Sprintf(`{"type": "text", "text": "%s"}`, strings.Repeat("B", numBytes)))
 	}
 	return []byte(fmt.Sprintf(template, strings.Join(contentParts, ", ")))
@@ -601,7 +601,7 @@ func newGCPVertexAIBenchmarkResponse(numBytes int) []byte {
 func newGCPAnthropicAIBenchmarkResponse(numBytes int) []byte {
 	const template = `{"id": "msg_benchmark", "type": "message", "role": "assistant", "stop_reason": "end_turn", "content": [%s], "usage": {"input_tokens": 1, "output_tokens": 2}}`
 	var contentParts []string
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		contentParts = append(contentParts, fmt.Sprintf(`{"type": "text", "text": "%s"}`, strings.Repeat("C", numBytes)))
 	}
 	return []byte(fmt.Sprintf(template, strings.Join(contentParts, ", ")))

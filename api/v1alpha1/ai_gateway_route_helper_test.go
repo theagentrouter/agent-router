@@ -128,8 +128,8 @@ func TestAIGatewayRouteRuleBackendRef_IsInferencePool(t *testing.T) {
 			name: "InferencePool reference",
 			ref: &AIGatewayRouteRuleBackendRef{
 				Name:  "test-pool",
-				Group: ptr.To(inferencePoolGroup),
-				Kind:  ptr.To(inferencePoolKind),
+				Group: new(inferencePoolGroup),
+				Kind:  new(inferencePoolKind),
 			},
 			expected: true,
 		},
@@ -137,8 +137,8 @@ func TestAIGatewayRouteRuleBackendRef_IsInferencePool(t *testing.T) {
 			name: "Other resource reference",
 			ref: &AIGatewayRouteRuleBackendRef{
 				Name:  "test-other",
-				Group: ptr.To("other.group"),
-				Kind:  ptr.To("OtherKind"),
+				Group: new("other.group"),
+				Kind:  new("OtherKind"),
 			},
 			expected: false,
 		},
@@ -146,7 +146,7 @@ func TestAIGatewayRouteRuleBackendRef_IsInferencePool(t *testing.T) {
 			name: "Partial reference (only group)",
 			ref: &AIGatewayRouteRuleBackendRef{
 				Name:  "test-partial",
-				Group: ptr.To(inferencePoolGroup),
+				Group: new(inferencePoolGroup),
 			},
 			expected: false,
 		},
@@ -177,8 +177,8 @@ func TestAIGatewayRouteRuleBackendRef_IsAIServiceBackend(t *testing.T) {
 			name: "InferencePool reference",
 			ref: &AIGatewayRouteRuleBackendRef{
 				Name:  "test-pool",
-				Group: ptr.To(inferencePoolGroup),
-				Kind:  ptr.To(inferencePoolKind),
+				Group: new(inferencePoolGroup),
+				Kind:  new(inferencePoolKind),
 			},
 			expected: false,
 		},
@@ -226,8 +226,8 @@ func TestAIGatewayRouteRule_HasInferencePoolBackends(t *testing.T) {
 				BackendRefs: []AIGatewayRouteRuleBackendRef{
 					{
 						Name:  "pool1",
-						Group: ptr.To(inferencePoolGroup),
-						Kind:  ptr.To(inferencePoolKind),
+						Group: new(inferencePoolGroup),
+						Kind:  new(inferencePoolKind),
 					},
 				},
 			},
@@ -240,8 +240,8 @@ func TestAIGatewayRouteRule_HasInferencePoolBackends(t *testing.T) {
 					{Name: "backend1"},
 					{
 						Name:  "pool1",
-						Group: ptr.To(inferencePoolGroup),
-						Kind:  ptr.To(inferencePoolKind),
+						Group: new(inferencePoolGroup),
+						Kind:  new(inferencePoolKind),
 					},
 				},
 			},
@@ -291,8 +291,8 @@ func TestAIGatewayRouteRule_HasAIServiceBackends(t *testing.T) {
 				BackendRefs: []AIGatewayRouteRuleBackendRef{
 					{
 						Name:  "pool1",
-						Group: ptr.To(inferencePoolGroup),
-						Kind:  ptr.To(inferencePoolKind),
+						Group: new(inferencePoolGroup),
+						Kind:  new(inferencePoolKind),
 					},
 				},
 			},

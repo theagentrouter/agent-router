@@ -11,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -30,10 +29,8 @@ func TestLookupSecret(t *testing.T) {
 	require.Nil(t, secret)
 
 	require.NoError(t, cl.Create(t.Context(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: secretNamespace,
-		},
+		Name:      secretName,
+		Namespace: secretNamespace,
 	}))
 
 	secret, err = LookupSecret(t.Context(), cl, secretNamespace, secretName)
@@ -45,10 +42,8 @@ func TestLookupSecret(t *testing.T) {
 
 func TestUpdateExpirationSecretAnnotation(t *testing.T) {
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "test-namespace",
-		},
+		Name:      "test",
+		Namespace: "test-namespace",
 	}
 	timeNow := time.Now()
 	updateExpirationSecretAnnotation(secret, timeNow)
@@ -60,10 +55,8 @@ func TestUpdateExpirationSecretAnnotation(t *testing.T) {
 
 func TestGetExpirationSecretAnnotation(t *testing.T) {
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: "test-namespace",
-		},
+		Name:      "test",
+		Namespace: "test-namespace",
 	}
 
 	_, err := GetExpirationSecretAnnotation(secret)

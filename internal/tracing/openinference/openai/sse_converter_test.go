@@ -19,8 +19,8 @@ import (
 func parseSSEToChunks(t *testing.T, sseData string) []*openai.ChatCompletionResponseChunk {
 	var chunks []*openai.ChatCompletionResponseChunk
 
-	lines := strings.Split(sseData, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(sseData, "\n")
+	for line := range lines {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data: ") || line == "data: [DONE]" {
 			continue
@@ -156,7 +156,7 @@ data: [DONE]
 				resultJSON, err := json.Marshal(result)
 				require.NoError(t, err)
 
-				var expectedObj, resultObj interface{}
+				var expectedObj, resultObj any
 				err = json.Unmarshal([]byte(tt.expected), &expectedObj)
 				require.NoError(t, err)
 				err = json.Unmarshal(resultJSON, &resultObj)

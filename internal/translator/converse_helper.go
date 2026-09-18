@@ -16,8 +16,6 @@ import (
 	"strconv"
 	"strings"
 
-	"k8s.io/utils/ptr"
-
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -102,7 +100,7 @@ func openAIMessageToBedrockMessageRoleUser(
 		return &awsbedrock.Message{
 			Role: role,
 			Content: []*awsbedrock.ContentBlock{
-				{Text: ptr.To(v)},
+				{Text: new(v)},
 			},
 		}, nil
 	} else if contents, ok := openAiMessage.Content.Value.([]openai.ChatCompletionContentPartUserUnionParam); ok {

@@ -20,10 +20,8 @@ import (
 // are identical to NewChatCompletionOpenAIToOpenAITranslator's interface implementations.
 func NewChatCompletionOpenAIToAzureOpenAITranslator(apiVersion string, modelNameOverride internalapi.ModelNameOverride) OpenAIChatCompletionTranslator {
 	return &openAIToAzureOpenAITranslatorV1ChatCompletion{
-		apiVersion: apiVersion,
-		openAIToOpenAITranslatorV1ChatCompletion: openAIToOpenAITranslatorV1ChatCompletion{
-			modelNameOverride: modelNameOverride,
-		},
+		apiVersion:        apiVersion,
+		modelNameOverride: modelNameOverride,
 	}
 }
 
@@ -31,10 +29,8 @@ func NewChatCompletionOpenAIToAzureOpenAITranslator(apiVersion string, modelName
 // for responses.
 func NewResponsesOpenAIToAzureOpenAITranslator(apiVersion string, modelNameOverride internalapi.ModelNameOverride) OpenAIResponsesTranslator {
 	return &openAIToAzureOpenAITranslatorV1Responses{
-		apiVersion: apiVersion,
-		openAIToOpenAITranslatorV1Responses: openAIToOpenAITranslatorV1Responses{
-			modelNameOverride: modelNameOverride,
-		},
+		apiVersion:        apiVersion,
+		modelNameOverride: modelNameOverride,
 	}
 }
 

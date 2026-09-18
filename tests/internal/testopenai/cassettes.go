@@ -266,7 +266,7 @@ func ResponseBody(cassette Cassette) string {
 // cassettes contains an ordered slice the request keys.
 func cassettes[R any](requests map[Cassette]*R) []Cassette {
 	result := make([]Cassette, 0, int(_cassetteNameEnd))
-	for c := Cassette(0); c < _cassetteNameEnd; c++ {
+	for c := range _cassetteNameEnd {
 		if _, ok := requests[c]; ok {
 			result = append(result, c)
 		}

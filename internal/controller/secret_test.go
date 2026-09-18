@@ -12,8 +12,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	fake2 "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,7 +29,7 @@ func TestSecretController_Reconcile(t *testing.T) {
 	c := NewSecretController(fakeClient, fake2.NewClientset(), ctrl.Log, bspCh.Ch, mcpRouteCh.Ch)
 
 	err := fakeClient.Create(t.Context(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "mysecret", Namespace: "default"},
+		Name: "mysecret", Namespace: "default",
 		StringData: map[string]string{"key": "value"},
 	})
 	require.NoError(t, err)
@@ -39,14 +37,14 @@ func TestSecretController_Reconcile(t *testing.T) {
 	// Create a bsp that references the secret.
 	bsps := []*aigv1b1.BackendSecurityPolicy{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+			Name: "foo", Namespace: "default",
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type:   aigv1b1.BackendSecurityPolicyTypeAPIKey,
 				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{SecretRef: &gwapiv1.SecretObjectReference{Name: "mysecret"}},
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "default"},
+			Name: "bar", Namespace: "default",
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 				AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -62,7 +60,7 @@ func TestSecretController_Reconcile(t *testing.T) {
 
 	// Create a MCPRoute that references the secret via API Key secret ref.
 	mcp := &aigv1b1.MCPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+		Name: "test-route", Namespace: "default",
 		Spec: aigv1b1.MCPRouteSpec{
 			BackendRefs: []aigv1b1.MCPRouteBackendRef{{
 				SecurityPolicy: &aigv1b1.MCPBackendSecurityPolicy{APIKey: &aigv1b1.MCPBackendAPIKey{
@@ -73,9 +71,9 @@ func TestSecretController_Reconcile(t *testing.T) {
 	}
 	require.NoError(t, fakeClient.Create(t.Context(), mcp))
 
-	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{
+	_, err = c.Reconcile(t.Context(), reconcile.Request{
 		Namespace: "default", Name: "mysecret",
-	}})
+	})
 	require.NoError(t, err)
 
 	// Verify that both BSP and MCPRoute events are triggered.
@@ -93,11 +91,11 @@ func TestSecretController_Reconcile(t *testing.T) {
 
 	// Test the case where the Secret is being deleted.
 	err = fakeClient.Delete(t.Context(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "mysecret", Namespace: "default"},
+		Name: "mysecret", Namespace: "default",
 	})
 	require.NoError(t, err)
-	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{
+	_, err = c.Reconcile(t.Context(), reconcile.Request{
 		Namespace: "default", Name: "mysecret",
-	}})
+	})
 	require.NoError(t, err)
 }

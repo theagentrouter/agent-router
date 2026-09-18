@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"strings"
 
-	"k8s.io/utils/ptr"
-
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -745,8 +743,8 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 		s.tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
 			int64(s.inputTokens),
 			int64(s.outputTokens),
-			ptr.To(int64(0)),
-			ptr.To(int64(0)),
+			new(int64(0)),
+			new(int64(0)),
 		)
 		return s.emitClosingEvents(out)
 	}

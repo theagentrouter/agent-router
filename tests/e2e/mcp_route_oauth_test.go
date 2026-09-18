@@ -238,7 +238,7 @@ func TestMCPRouteOAuth(t *testing.T) {
 		body, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
 
-		var metadata map[string]interface{}
+		var metadata map[string]any
 		err = json.Unmarshal(body, &metadata)
 		require.NoError(t, err)
 
@@ -251,16 +251,16 @@ func TestMCPRouteOAuth(t *testing.T) {
 		// Validate field values match expected configuration.
 		require.Equal(t, "https://foo.bar.com/mcp", metadata["resource"], "Resource should match configured value")
 
-		authServers, ok := metadata["authorization_servers"].([]interface{})
+		authServers, ok := metadata["authorization_servers"].([]any)
 		require.True(t, ok, "authorization_servers should be an array")
 		require.Len(t, authServers, 1, "Should have one authorization server")
 		require.Equal(t, "https://auth-server.example.com", authServers[0], "Authorization server should match configured value")
 
-		bearerMethods, ok := metadata["bearer_methods_supported"].([]interface{})
+		bearerMethods, ok := metadata["bearer_methods_supported"].([]any)
 		require.True(t, ok, "bearer_methods_supported should be an array")
 		require.Contains(t, bearerMethods, "header", "Should support header bearer method")
 
-		scopes, ok := metadata["scopes_supported"].([]interface{})
+		scopes, ok := metadata["scopes_supported"].([]any)
 		require.True(t, ok, "scopes_supported should be an array")
 		expectedScopes := []string{"echo", "sum", "countdown"}
 		for _, expectedScope := range expectedScopes {
@@ -314,7 +314,7 @@ func TestMCPRouteOAuth(t *testing.T) {
 				body, err := io.ReadAll(resp.Body)
 				require.NoError(t, err)
 
-				var authServerMetadata map[string]interface{}
+				var authServerMetadata map[string]any
 				err = json.Unmarshal(body, &authServerMetadata)
 				require.NoError(t, err)
 
@@ -335,19 +335,19 @@ func TestMCPRouteOAuth(t *testing.T) {
 				require.Contains(t, authServerMetadata["jwks_uri"], "https://auth-server.example.com", "JWKS URI should be correctly constructed")
 
 				// Validate supported features for OAuth 2.1/PKCE.
-				responseTypes, ok := authServerMetadata["response_types_supported"].([]interface{})
+				responseTypes, ok := authServerMetadata["response_types_supported"].([]any)
 				require.True(t, ok, "response_types_supported should be an array")
 				require.Contains(t, responseTypes, "code", "Should support authorization code flow")
 
-				grantTypes, ok := authServerMetadata["grant_types_supported"].([]interface{})
+				grantTypes, ok := authServerMetadata["grant_types_supported"].([]any)
 				require.True(t, ok, "grant_types_supported should be an array")
 				require.Contains(t, grantTypes, "authorization_code", "Should support authorization_code grant type")
 
-				codeChallengeMethods, ok := authServerMetadata["code_challenge_methods_supported"].([]interface{})
+				codeChallengeMethods, ok := authServerMetadata["code_challenge_methods_supported"].([]any)
 				require.True(t, ok, "code_challenge_methods_supported should be an array")
 				require.Contains(t, codeChallengeMethods, "S256", "Should support S256 PKCE method")
 
-				scopes, ok := authServerMetadata["scopes_supported"].([]interface{})
+				scopes, ok := authServerMetadata["scopes_supported"].([]any)
 				require.True(t, ok, "scopes_supported should be an array")
 				expectedScopes := []string{"echo", "sum", "countdown"}
 				for _, expectedScope := range expectedScopes {

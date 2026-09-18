@@ -19,7 +19,7 @@ func TestUnmarshalJSONNestedUnion(t *testing.T) {
 	additionalSuccessCases := []struct {
 		name     string
 		data     []byte
-		expected interface{}
+		expected any
 	}{
 		{
 			name:     "string with escaped path", // Tests json.Unmarshal fallback when strconv.Unquote fails
@@ -172,7 +172,7 @@ func TestUnmarshalJSONEmbeddingInput(t *testing.T) {
 	successCases := []struct {
 		name     string
 		data     []byte
-		expected interface{}
+		expected any
 	}{
 		{
 			name:     "simple string",

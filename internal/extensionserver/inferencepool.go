@@ -25,10 +25,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	gwaiev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -112,18 +110,16 @@ func getInferencePoolByMetadata(meta *corev3.Metadata) *gwaiev1.InferencePool {
 	processingBodyMode := result[4]
 	allowModeOverride := result[5]
 	return &gwaiev1.InferencePool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: ns,
-			Annotations: map[string]string{
-				processingBodyModeAnnotation: processingBodyMode,
-				allowModeOverrideAnnotation:  allowModeOverride,
-			},
+		Name:      name,
+		Namespace: ns,
+		Annotations: map[string]string{
+			processingBodyModeAnnotation: processingBodyMode,
+			allowModeOverrideAnnotation:  allowModeOverride,
 		},
 		Spec: gwaiev1.InferencePoolSpec{
 			EndpointPickerRef: &gwaiev1.EndpointPickerRef{
 				Name: gwaiev1.ObjectName(serviceName),
-				Port: ptr.To(gwaiev1.Port{Number: gwaiev1.PortNumber(port)}),
+				Port: new(gwaiev1.Port{Number: gwaiev1.PortNumber(port)}),
 			},
 		},
 	}

@@ -19,7 +19,6 @@ import (
 	anthropicParam "github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	openAIconstant "github.com/openai/openai-go/shared/constant"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -828,7 +827,7 @@ func anthropicToolUseToOpenAICalls(block *anthropic.ContentBlockUnion) ([]openai
 var (
 	sseEventPrefixSpace = []byte("event: ")
 	sseEventPrefix      = []byte("event:")
-	emptyStrPtr         = ptr.To("")
+	emptyStrPtr         = new("")
 )
 
 // streamingToolCall holds the state for a single tool call that is being streamed.

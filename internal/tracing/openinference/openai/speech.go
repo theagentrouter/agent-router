@@ -93,7 +93,7 @@ func buildSpeechRequestAttributes(req *openai.SpeechRequest, body string, config
 		attrs = append(attrs, attribute.String(openinference.InputValue, openinference.RedactedValue))
 	} else {
 		// For speech, we want to record the text input and other parameters
-		inputJSON, err := json.Marshal(map[string]interface{}{
+		inputJSON, err := json.Marshal(map[string]any{
 			"input":           req.Input,
 			"voice":           req.Voice,
 			"response_format": req.ResponseFormat,

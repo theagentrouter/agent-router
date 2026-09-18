@@ -16,7 +16,7 @@ import (
 // RequireEventuallyNoError repeatedly calls condition until it returns nil or times out.
 // The last error is included in the failure message along with msgAndArgs.
 func RequireEventuallyNoError(t testing.TB, condition func() error,
-	waitFor time.Duration, tick time.Duration, msgAndArgs ...interface{},
+	waitFor time.Duration, tick time.Duration, msgAndArgs ...any,
 ) {
 	t.Helper()
 

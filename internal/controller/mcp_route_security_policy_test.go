@@ -17,7 +17,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -32,7 +31,7 @@ func setupOAuthTestServer() *httptest.Server {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
-		metadata := map[string]interface{}{
+		metadata := map[string]any{
 			"issuer":                 r.URL.Scheme + "://" + r.Host,
 			"authorization_endpoint": r.URL.Scheme + "://" + r.Host + "/auth",
 			"token_endpoint":         r.URL.Scheme + "://" + r.Host + "/token",
@@ -72,7 +71,7 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 		{
 			name: "no authentication configured",
 			mcpRoute: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+				Name: "test-route", Namespace: "default",
 				Spec: aigv1b1.MCPRouteSpec{
 					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{},
 				},
@@ -86,7 +85,7 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 		{
 			name: "authentication configured",
 			mcpRoute: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+				Name: "test-route", Namespace: "default",
 				Spec: aigv1b1.MCPRouteSpec{
 					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
 						OAuth: &aigv1b1.MCPRouteOAuth{
@@ -100,10 +99,10 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 							ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
 								Resource:                          "https://api.example.com/mcp",
 								ScopesSupported:                   []string{"read", "write"},
-								ResourceName:                      ptr.To("my cool mcp tools"),
+								ResourceName:                      new("my cool mcp tools"),
 								ResourceSigningAlgValuesSupported: []string{"RS256", "ES256"},
-								ResourceDocumentation:             ptr.To("https://api.example.com/docs"),
-								ResourcePolicyURI:                 ptr.To("https://api.example.com/policy"),
+								ResourceDocumentation:             new("https://api.example.com/docs"),
+								ResourcePolicyURI:                 new("https://api.example.com/policy"),
 							},
 						},
 					},
@@ -121,7 +120,7 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 		{
 			name: "authentication configured without jwks - auto discovery",
 			mcpRoute: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+				Name: "test-route", Namespace: "default",
 				Spec: aigv1b1.MCPRouteSpec{
 					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
 						OAuth: &aigv1b1.MCPRouteOAuth{
@@ -137,31 +136,27 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 			},
 			extraObjs: []client.Object{
 				&gwapiv1.BackendTLSPolicy{
-					ObjectMeta: metav1.ObjectMeta{Name: "non-matching-backend-tls", Namespace: "default"},
+					Name: "non-matching-backend-tls", Namespace: "default",
 					Spec: gwapiv1.BackendTLSPolicySpec{
 						Validation: gwapiv1.BackendTLSPolicyValidation{Hostname: gwapiv1.PreciseHostname("example.com")},
 						TargetRefs: []gwapiv1.LocalPolicyTargetReferenceWithSectionName{
 							{
-								LocalPolicyTargetReference: gwapiv1.LocalPolicyTargetReference{
-									Group: "gateway.envoyproxy.io/v1alpha1",
-									Kind:  "Backend",
-									Name:  "non-matching-backend",
-								},
+								Group: "gateway.envoyproxy.io/v1alpha1",
+								Kind:  "Backend",
+								Name:  "non-matching-backend",
 							},
 						},
 					},
 				},
 				&gwapiv1.BackendTLSPolicy{
-					ObjectMeta: metav1.ObjectMeta{Name: "jwks-backend-tls", Namespace: "default"},
+					Name: "jwks-backend-tls", Namespace: "default",
 					Spec: gwapiv1.BackendTLSPolicySpec{
 						Validation: gwapiv1.BackendTLSPolicyValidation{Hostname: gwapiv1.PreciseHostname(serverURL.Hostname())},
 						TargetRefs: []gwapiv1.LocalPolicyTargetReferenceWithSectionName{
 							{
-								LocalPolicyTargetReference: gwapiv1.LocalPolicyTargetReference{
-									Group: "gateway.envoyproxy.io/v1alpha1",
-									Kind:  "Backend",
-									Name:  "jwks-backend",
-								},
+								Group: "gateway.envoyproxy.io/v1alpha1",
+								Kind:  "Backend",
+								Name:  "jwks-backend",
 							},
 						},
 					},
@@ -175,15 +170,11 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 			// For HTTPS JWKS we need a cluster with TLS config.
 			wantJWKS: &egv1a1.RemoteJWKS{
 				URI: fmt.Sprintf("https://%s/.well-known/jwks.json", serverURL.Host),
-				BackendCluster: egv1a1.BackendCluster{
-					BackendRefs: []egv1a1.BackendRef{
-						{
-							BackendObjectReference: gwapiv1.BackendObjectReference{
-								Group: ptr.To(gwapiv1.Group("gateway.envoyproxy.io/v1alpha1")),
-								Kind:  ptr.To(gwapiv1.Kind("Backend")),
-								Name:  "jwks-backend",
-							},
-						},
+				BackendRefs: []egv1a1.BackendRef{
+					{
+						Group: ptr.To(gwapiv1.Group("gateway.envoyproxy.io/v1alpha1")),
+						Kind:  ptr.To(gwapiv1.Kind("Backend")),
+						Name:  "jwks-backend",
 					},
 				},
 			},
@@ -192,7 +183,7 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 		{
 			name: "api key authentication configured",
 			mcpRoute: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+				Name: "test-route", Namespace: "default",
 				Spec: aigv1b1.MCPRouteSpec{
 					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
 						APIKeyAuth: &egv1a1.APIKeyAuth{
@@ -202,8 +193,8 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 							ExtractFrom: []*egv1a1.ExtractFrom{
 								{Headers: []string{"x-api-key"}},
 							},
-							ForwardClientIDHeader: ptr.To("x-client-id"),
-							Sanitize:              ptr.To(true),
+							ForwardClientIDHeader: new("x-client-id"),
+							Sanitize:              new(true),
 						},
 					},
 				},
@@ -217,8 +208,8 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 				ExtractFrom: []*egv1a1.ExtractFrom{
 					{Headers: []string{"x-api-key"}},
 				},
-				ForwardClientIDHeader: ptr.To("x-client-id"),
-				Sanitize:              ptr.To(true),
+				ForwardClientIDHeader: new("x-client-id"),
+				Sanitize:              new(true),
 			},
 			wantBTP:    false,
 			wantFilter: false,
@@ -228,19 +219,15 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 		{
 			name: "ext auth configured",
 			mcpRoute: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+				Name: "test-route", Namespace: "default",
 				Spec: aigv1b1.MCPRouteSpec{
 					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
 						ExtAuth: &egv1a1.ExtAuth{
 							GRPC: &egv1a1.GRPCExtAuthService{
-								BackendCluster: egv1a1.BackendCluster{
-									BackendRefs: []egv1a1.BackendRef{
-										{
-											BackendObjectReference: gwapiv1.BackendObjectReference{
-												Name: "grpc-service",
-												Port: ptr.To(gwapiv1.PortNumber(1073)),
-											},
-										},
+								BackendRefs: []egv1a1.BackendRef{
+									{
+										Name: "grpc-service",
+										Port: ptr.To(gwapiv1.PortNumber(1073)),
 									},
 								},
 							},
@@ -252,14 +239,10 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 			wantJWT:    false,
 			wantExtAuth: &egv1a1.ExtAuth{
 				GRPC: &egv1a1.GRPCExtAuthService{
-					BackendCluster: egv1a1.BackendCluster{
-						BackendRefs: []egv1a1.BackendRef{
-							{
-								BackendObjectReference: gwapiv1.BackendObjectReference{
-									Name: "grpc-service",
-									Port: ptr.To(gwapiv1.PortNumber(1073)),
-								},
-							},
+					BackendRefs: []egv1a1.BackendRef{
+						{
+							Name: "grpc-service",
+							Port: ptr.To(gwapiv1.PortNumber(1073)),
 						},
 					},
 				},
@@ -272,7 +255,7 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 		{
 			name: "api key authentication and ext auth configured",
 			mcpRoute: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+				Name: "test-route", Namespace: "default",
 				Spec: aigv1b1.MCPRouteSpec{
 					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
 						APIKeyAuth: &egv1a1.APIKeyAuth{
@@ -282,19 +265,15 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 							ExtractFrom: []*egv1a1.ExtractFrom{
 								{Headers: []string{"x-api-key"}},
 							},
-							ForwardClientIDHeader: ptr.To("x-client-id"),
-							Sanitize:              ptr.To(true),
+							ForwardClientIDHeader: new("x-client-id"),
+							Sanitize:              new(true),
 						},
 						ExtAuth: &egv1a1.ExtAuth{
 							GRPC: &egv1a1.GRPCExtAuthService{
-								BackendCluster: egv1a1.BackendCluster{
-									BackendRefs: []egv1a1.BackendRef{
-										{
-											BackendObjectReference: gwapiv1.BackendObjectReference{
-												Name: "grpc-service",
-												Port: ptr.To(gwapiv1.PortNumber(1073)),
-											},
-										},
+								BackendRefs: []egv1a1.BackendRef{
+									{
+										Name: "grpc-service",
+										Port: ptr.To(gwapiv1.PortNumber(1073)),
 									},
 								},
 							},
@@ -311,19 +290,15 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 				ExtractFrom: []*egv1a1.ExtractFrom{
 					{Headers: []string{"x-api-key"}},
 				},
-				ForwardClientIDHeader: ptr.To("x-client-id"),
-				Sanitize:              ptr.To(true),
+				ForwardClientIDHeader: new("x-client-id"),
+				Sanitize:              new(true),
 			},
 			wantExtAuth: &egv1a1.ExtAuth{
 				GRPC: &egv1a1.GRPCExtAuthService{
-					BackendCluster: egv1a1.BackendCluster{
-						BackendRefs: []egv1a1.BackendRef{
-							{
-								BackendObjectReference: gwapiv1.BackendObjectReference{
-									Name: "grpc-service",
-									Port: ptr.To(gwapiv1.PortNumber(1073)),
-								},
-							},
+					BackendRefs: []egv1a1.BackendRef{
+						{
+							Name: "grpc-service",
+							Port: ptr.To(gwapiv1.PortNumber(1073)),
 						},
 					},
 				},
@@ -336,7 +311,7 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 		{
 			name: "oauth configured with mergeType on SecurityPolicy and BackendTrafficPolicy",
 			mcpRoute: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+				Name: "test-route", Namespace: "default",
 				Spec: aigv1b1.MCPRouteSpec{
 					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
 						MergeType: ptr.To(egv1a1.StrategicMerge),
@@ -372,7 +347,7 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 		{
 			name: "api key authentication configured with mergeType on SecurityPolicy only",
 			mcpRoute: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+				Name: "test-route", Namespace: "default",
 				Spec: aigv1b1.MCPRouteSpec{
 					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
 						MergeType: ptr.To(egv1a1.StrategicMerge),
@@ -500,7 +475,7 @@ func TestMCPRouteControllerCleanupSecurityPolicyResources(t *testing.T) {
 	c := NewMCPRouteController(fakeClient, nil, logr.Discard(), eventCh.Ch)
 
 	mcpRoute := &aigv1b1.MCPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+		Name: "test-route", Namespace: "default",
 		Spec: aigv1b1.MCPRouteSpec{
 			SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
 				OAuth: &aigv1b1.MCPRouteOAuth{
@@ -594,8 +569,8 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy_DisableOAuthKeepsAPIKey(t
 	}
 
 	mcpRoute := &aigv1b1.MCPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
-		Spec:       aigv1b1.MCPRouteSpec{SecurityPolicy: securityPolicy.DeepCopy()},
+		Name: "test-route", Namespace: "default",
+		Spec: aigv1b1.MCPRouteSpec{SecurityPolicy: securityPolicy.DeepCopy()},
 	}
 
 	require.NoError(t, fakeClient.Create(t.Context(), mcpRoute))
@@ -650,7 +625,7 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy_ClaimToHeaders(t *testing
 	c := NewMCPRouteController(fakeClient, nil, logr.Discard(), eventCh.Ch)
 
 	mcpRoute := &aigv1b1.MCPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+		Name: "test-route", Namespace: "default",
 		Spec: aigv1b1.MCPRouteSpec{
 			SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
 				OAuth: &aigv1b1.MCPRouteOAuth{
@@ -708,14 +683,14 @@ func Test_buildOAuthProtectedResourceMetadataJSON(t *testing.T) {
 
 	result := buildOAuthProtectedResourceMetadataJSON(auth)
 
-	var jsonResponse map[string]interface{}
+	var jsonResponse map[string]any
 	err := json.Unmarshal([]byte(result), &jsonResponse)
 	require.NoError(t, err)
 
 	require.Equal(t, "https://api.example.com/mcp", jsonResponse["resource"])
-	require.Equal(t, []interface{}{"https://auth.example.com"}, jsonResponse["authorization_servers"])
-	require.Equal(t, []interface{}{"header"}, jsonResponse["bearer_methods_supported"])
-	require.Equal(t, []interface{}{"read", "write", "admin"}, jsonResponse["scopes_supported"])
+	require.Equal(t, []any{"https://auth.example.com"}, jsonResponse["authorization_servers"])
+	require.Equal(t, []any{"header"}, jsonResponse["bearer_methods_supported"])
+	require.Equal(t, []any{"read", "write", "admin"}, jsonResponse["scopes_supported"])
 }
 
 func Test_buildWWWAuthenticateHeaderValue(t *testing.T) {
@@ -904,7 +879,7 @@ func Test_fetchOAuthServerMetadata(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			w.Header().Set("Content-Type", "application/json")
-			metadata := map[string]interface{}{
+			metadata := map[string]any{
 				"issuer":                 "http://" + r.Host,
 				"authorization_endpoint": "http://" + r.Host + "/auth",
 				"token_endpoint":         "http://" + r.Host + "/token",
@@ -956,7 +931,7 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		lastVariant  = issuerPath + "/.well-known/openid-configuration"
 	)
 
-	writeJSON := func(body map[string]interface{}) http.HandlerFunc {
+	writeJSON := func(body map[string]any) http.HandlerFunc {
 		return func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -965,7 +940,7 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 	}
 
 	completeDocument := func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(map[string]interface{}{
+		writeJSON(map[string]any{
 			"issuer":                 "http://" + r.Host + issuerPath,
 			"authorization_endpoint": "http://" + r.Host + "/auth",
 			"token_endpoint":         "http://" + r.Host + "/token",
@@ -974,7 +949,7 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 
 	t.Run("falls through an empty document to a later variant", func(t *testing.T) {
 		mux := http.NewServeMux()
-		mux.HandleFunc(firstVariant, writeJSON(map[string]interface{}{}))
+		mux.HandleFunc(firstVariant, writeJSON(map[string]any{}))
 		mux.HandleFunc(lastVariant, completeDocument)
 
 		server := httptest.NewServer(mux)
@@ -991,7 +966,7 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 	t.Run("does not leak fields from an incomplete document", func(t *testing.T) {
 		mux := http.NewServeMux()
 		// Valid JSON, but without the members needed to drive an authorization flow.
-		mux.HandleFunc(firstVariant, writeJSON(map[string]interface{}{
+		mux.HandleFunc(firstVariant, writeJSON(map[string]any{
 			"jwks_uri": "https://leaked.example.com/keys",
 		}))
 		mux.HandleFunc(lastVariant, completeDocument)
@@ -1006,7 +981,7 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 
 	t.Run("fails when no variant yields a usable document", func(t *testing.T) {
 		mux := http.NewServeMux()
-		mux.HandleFunc(lastVariant, writeJSON(map[string]interface{}{}))
+		mux.HandleFunc(lastVariant, writeJSON(map[string]any{}))
 
 		server := httptest.NewServer(mux)
 		t.Cleanup(server.Close)
@@ -1022,8 +997,8 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 	// must still reach that caller rather than being rejected by the fetcher.
 	t.Run("accepts a document without the authorization flow endpoints", func(t *testing.T) {
 		mux := http.NewServeMux()
-		mux.HandleFunc(firstVariant, writeJSON(map[string]interface{}{}))
-		mux.HandleFunc(lastVariant, writeJSON(map[string]interface{}{
+		mux.HandleFunc(firstVariant, writeJSON(map[string]any{}))
+		mux.HandleFunc(lastVariant, writeJSON(map[string]any{
 			"issuer":   "https://idp.example.com",
 			"jwks_uri": "https://idp.example.com/keys",
 		}))

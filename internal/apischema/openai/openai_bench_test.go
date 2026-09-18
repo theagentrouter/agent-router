@@ -59,7 +59,7 @@ var (
 	promptUnionBenchmarkCases = []struct {
 		name     string
 		data     []byte
-		expected interface{}
+		expected any
 	}{
 		{
 			name:     "string", // From testopenai.CassetteCompletionBasic
@@ -97,7 +97,7 @@ var (
 	contentUnionBenchmarkCases = []struct {
 		name     string
 		data     []byte
-		expected interface{}
+		expected any
 	}{
 		{
 			name:     "string",
@@ -137,7 +137,7 @@ var (
 	embeddingRequestInputBenchmarkCases = []struct {
 		name     string
 		data     []byte
-		expected interface{}
+		expected any
 	}{
 		{
 			name:     "string", // From testopenai.CassetteEmbeddingsBasic
@@ -222,7 +222,7 @@ func BenchmarkUnmarshalPromptUnion(b *testing.B) {
 	}
 }
 
-func unmarshalJSONPromptUnionNaive(data []byte) (interface{}, error) {
+func unmarshalJSONPromptUnionNaive(data []byte) (any, error) {
 	// Try string first
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {
@@ -314,7 +314,7 @@ func BenchmarkUnmarshalContentUnion(b *testing.B) {
 	}
 }
 
-func unmarshalJSONContentUnionNaive(data []byte) (interface{}, error) {
+func unmarshalJSONContentUnionNaive(data []byte) (any, error) {
 	var str string
 	err := json.Unmarshal(data, &str)
 	if err == nil {
@@ -382,7 +382,7 @@ func BenchmarkUnmarshalEmbeddingRequestInput(b *testing.B) {
 	}
 }
 
-func unmarshalJSONEmbeddingRequestInputNaive(data []byte) (interface{}, error) {
+func unmarshalJSONEmbeddingRequestInputNaive(data []byte) (any, error) {
 	// Try string first
 	var s string
 	if err := json.Unmarshal(data, &s); err == nil {

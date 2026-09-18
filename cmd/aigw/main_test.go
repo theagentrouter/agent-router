@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 )
@@ -65,7 +64,7 @@ Commands:
 
 Run "aigw <command> --help" for more information on a command.
 `,
-			expPanicCode: ptr.To(0),
+			expPanicCode: new(0),
 		},
 		{
 			name:   "version",
@@ -75,7 +74,7 @@ Run "aigw <command> --help" for more information on a command.
 		{
 			name:         "version help",
 			args:         []string{"version", "--help"},
-			expPanicCode: ptr.To(0),
+			expPanicCode: new(0),
 			expOut: `Usage: aigw version [flags]
 
 Show version.
@@ -96,7 +95,7 @@ Flags:
 			name:         "run no arg",
 			args:         []string{"run"},
 			rf:           func(context.Context, *cmdRun, *runOpts, io.Writer, io.Writer) error { return nil },
-			expPanicCode: ptr.To(80),
+			expPanicCode: new(80),
 		},
 		{
 			name: "run with OpenAI env",
@@ -148,7 +147,7 @@ Flags:
                               Number of iterations for MCP session encryption
                               key derivation.
 `,
-			expPanicCode: ptr.To(0),
+			expPanicCode: new(0),
 		},
 		{
 			name: "run with path",
@@ -172,7 +171,7 @@ Flags:
 		{
 			name:         "download-envoy help",
 			args:         []string{"download-envoy", "--help"},
-			expPanicCode: ptr.To(0),
+			expPanicCode: new(0),
 			expOut: `Usage: aigw download-envoy [flags]
 
 Download Envoy binary for the Envoy Gateway default version.

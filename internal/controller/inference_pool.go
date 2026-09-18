@@ -341,10 +341,8 @@ func (c *InferencePoolController) gatewayEventHandler(ctx context.Context, obj c
 		// Check if this Gateway references the InferencePool.
 		if c.gatewayReferencesInferencePool(ctx, gateway, pool.Name, pool.Namespace) {
 			requests = append(requests, reconcile.Request{
-				NamespacedName: client.ObjectKey{
-					Name:      pool.Name,
-					Namespace: pool.Namespace,
-				},
+				Name:      pool.Name,
+				Namespace: pool.Namespace,
 			})
 		}
 	}
@@ -365,10 +363,8 @@ func (c *InferencePoolController) aiGatewayRouteEventHandler(_ context.Context, 
 		for _, backendRef := range rule.BackendRefs {
 			if backendRef.IsInferencePool() {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: client.ObjectKey{
-						Name:      backendRef.Name,
-						Namespace: route.Namespace,
-					},
+					Name:      backendRef.Name,
+					Namespace: route.Namespace,
 				})
 			}
 		}
@@ -391,10 +387,8 @@ func (c *InferencePoolController) httpRouteEventHandler(_ context.Context, obj c
 			if backendRef.Group != nil && string(*backendRef.Group) == "inference.networking.k8s.io" &&
 				backendRef.Kind != nil && string(*backendRef.Kind) == "InferencePool" {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: client.ObjectKey{
-						Name:      string(backendRef.Name),
-						Namespace: route.Namespace,
-					},
+					Name:      string(backendRef.Name),
+					Namespace: route.Namespace,
 				})
 			}
 		}

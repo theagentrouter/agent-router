@@ -31,7 +31,7 @@ func TestBodyMutator_Mutate_Set(t *testing.T) {
 	mutatedBody, err := mutator.Mutate(requestBody)
 	require.NoError(t, err)
 
-	var result map[string]interface{}
+	var result map[string]any
 	err = json.Unmarshal(mutatedBody, &result)
 	require.NoError(t, err)
 
@@ -54,7 +54,7 @@ func TestBodyMutator_Mutate_Remove(t *testing.T) {
 	mutatedBody, err := mutator.Mutate(requestBody)
 	require.NoError(t, err)
 
-	var result map[string]interface{}
+	var result map[string]any
 	err = json.Unmarshal(mutatedBody, &result)
 	require.NoError(t, err)
 
@@ -81,7 +81,7 @@ func TestBodyMutator_Mutate_SetAndRemove(t *testing.T) {
 	mutatedBody, err := mutator.Mutate(requestBody)
 	require.NoError(t, err)
 
-	var result map[string]interface{}
+	var result map[string]any
 	err = json.Unmarshal(mutatedBody, &result)
 	require.NoError(t, err)
 
@@ -109,22 +109,22 @@ func TestBodyMutator_Mutate_ComplexValues(t *testing.T) {
 	mutatedBody, err := mutator.Mutate(requestBody)
 	require.NoError(t, err)
 
-	var result map[string]interface{}
+	var result map[string]any
 	err = json.Unmarshal(mutatedBody, &result)
 	require.NoError(t, err)
 
 	require.Equal(t, "gpt-4", result["model"])
 
 	// Check object field
-	objectField, ok := result["object_field"].(map[string]interface{})
+	objectField, ok := result["object_field"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "value", objectField["nested"])
 	require.Equal(t, float64(42), objectField["number"])
 
 	// Check array field
-	arrayField, ok := result["array_field"].([]interface{})
+	arrayField, ok := result["array_field"].([]any)
 	require.True(t, ok)
-	require.Equal(t, []interface{}{float64(1), float64(2), float64(3)}, arrayField)
+	require.Equal(t, []any{float64(1), float64(2), float64(3)}, arrayField)
 
 	// Check null field
 	require.Nil(t, result["null_field"])
@@ -182,7 +182,7 @@ func TestBodyMutator_Mutate_InvalidJSONValue(t *testing.T) {
 	mutatedBody, err := mutator.Mutate(requestBody)
 	require.NoError(t, err)
 
-	var result map[string]interface{}
+	var result map[string]any
 	err = json.Unmarshal(mutatedBody, &result)
 	require.NoError(t, err)
 

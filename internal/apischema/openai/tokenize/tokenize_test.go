@@ -36,8 +36,8 @@ func TestCompletionRequest_JSON(t *testing.T) {
 			expected: CompletionRequest{
 				Prompt:           "Hello",
 				Model:            "gpt-4",
-				AddSpecialTokens: boolPtr(true),
-				ReturnTokenStrs:  boolPtr(true),
+				AddSpecialTokens: new(true),
+				ReturnTokenStrs:  new(true),
 			},
 		},
 		{
@@ -152,7 +152,7 @@ func TestChatRequest_Validate(t *testing.T) {
 		{
 			name: "valid request",
 			request: ChatRequest{
-				AddGenerationPrompt:  boolPtr(true),
+				AddGenerationPrompt:  new(true),
 				ContinueFinalMessage: false,
 			},
 			wantErr: false,
@@ -160,7 +160,7 @@ func TestChatRequest_Validate(t *testing.T) {
 		{
 			name: "conflicting flags",
 			request: ChatRequest{
-				AddGenerationPrompt:  boolPtr(true),
+				AddGenerationPrompt:  new(true),
 				ContinueFinalMessage: true,
 			},
 			wantErr: true,
@@ -169,7 +169,7 @@ func TestChatRequest_Validate(t *testing.T) {
 		{
 			name: "continue final message only",
 			request: ChatRequest{
-				AddGenerationPrompt:  boolPtr(false),
+				AddGenerationPrompt:  new(false),
 				ContinueFinalMessage: true,
 			},
 			wantErr: false,
@@ -385,6 +385,5 @@ func TestRequestUnion_Validate(t *testing.T) {
 }
 
 // Helper functions
-func boolPtr(b bool) *bool {
-	return &b
-}
+//
+//go:fix inline

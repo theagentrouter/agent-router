@@ -34,10 +34,7 @@ func splitBytes(raw []byte, chunkSize int) [][]byte {
 	}
 	chunks := make([][]byte, 0, (len(raw)+chunkSize-1)/chunkSize)
 	for start := 0; start < len(raw); start += chunkSize {
-		end := start + chunkSize
-		if end > len(raw) {
-			end = len(raw)
-		}
+		end := min(start+chunkSize, len(raw))
 		chunks = append(chunks, raw[start:end])
 	}
 	return chunks
@@ -82,8 +79,8 @@ func (c *GatewayController) writeFilterConfigBundle(ctx context.Context, gateway
 			return fmt.Errorf("failed to get filter config part secret %s: %w", partName, err)
 		case err != nil && apierrors.IsNotFound(err): // not found
 			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: partName, Namespace: configSecretNamespace},
-				Data:       partData,
+				Name: partName, Namespace: configSecretNamespace,
+				Data: partData,
 			}
 			if _, err = c.kube.CoreV1().Secrets(configSecretNamespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
 				return fmt.Errorf("failed to create filter config part secret %s: %w", partName, err)
@@ -109,7 +106,7 @@ func (c *GatewayController) writeFilterConfigBundle(ctx context.Context, gateway
 		return fmt.Errorf("failed to get filter config index secret %s: %w", indexSecretName, err)
 	case err != nil && apierrors.IsNotFound(err): // not found
 		indexSecret = &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: indexSecretName, Namespace: configSecretNamespace},
+			Name: indexSecretName, Namespace: configSecretNamespace,
 			StringData: indexStringData,
 		}
 		if _, err = c.kube.CoreV1().Secrets(configSecretNamespace).Create(ctx, indexSecret, metav1.CreateOptions{}); err != nil {

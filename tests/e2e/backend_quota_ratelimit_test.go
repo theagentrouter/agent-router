@@ -116,7 +116,7 @@ func flushQuotaKeys(t *testing.T) {
 	if keys == "" {
 		return
 	}
-	for _, key := range strings.Split(keys, "\n") {
+	for key := range strings.SplitSeq(keys, "\n") {
 		key = strings.TrimSpace(key)
 		if key != "" {
 			redisExec(t, "DEL", key)
@@ -134,7 +134,7 @@ func getQuotaUsage(t *testing.T, modelName string) (int, bool) {
 		return 0, false
 	}
 	// Use the first matching key (there should be exactly one per model per time window).
-	key := strings.Split(keys, "\n")[0]
+	key, _, _ := strings.Cut(keys, "\n")
 	key = strings.TrimSpace(key)
 	val := redisExec(t, "GET", key)
 	if val == "" {

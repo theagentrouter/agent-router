@@ -32,13 +32,13 @@ func TestChatRequestAttrs(t *testing.T) {
 		{
 			name: "all parameters",
 			req: &openai.ChatCompletionRequest{
-				Temperature:      ptr(0.7),
-				TopP:             ptr(0.9),
-				FrequencyPenalty: ptr(float32(0.5)),
-				PresencePenalty:  ptr(float32(0.25)),
-				Seed:             ptr(42),
-				N:                ptr(2),
-				MaxTokens:        ptr(int64(256)),
+				Temperature:      new(0.7),
+				TopP:             new(0.9),
+				FrequencyPenalty: new(float32(0.5)),
+				PresencePenalty:  new(float32(0.25)),
+				Seed:             new(42),
+				N:                new(2),
+				MaxTokens:        new(int64(256)),
 			},
 			expected: []attribute.KeyValue{
 				attribute.Float64(RequestTemperature, 0.7),
@@ -54,7 +54,7 @@ func TestChatRequestAttrs(t *testing.T) {
 			// Zero is a meaningful temperature, so it must be recorded rather
 			// than treated as absent.
 			name: "zero temperature is recorded",
-			req:  &openai.ChatCompletionRequest{Temperature: ptr(0.0)},
+			req:  &openai.ChatCompletionRequest{Temperature: new(0.0)},
 			expected: []attribute.KeyValue{
 				attribute.Float64(RequestTemperature, 0),
 			},
@@ -62,8 +62,8 @@ func TestChatRequestAttrs(t *testing.T) {
 		{
 			name: "max_completion_tokens supersedes max_tokens",
 			req: &openai.ChatCompletionRequest{
-				MaxTokens:           ptr(int64(100)),
-				MaxCompletionTokens: ptr(int64(200)),
+				MaxTokens:           new(int64(100)),
+				MaxCompletionTokens: new(int64(200)),
 			},
 			expected: []attribute.KeyValue{
 				attribute.Int64(RequestMaxTokens, 200),
@@ -71,7 +71,7 @@ func TestChatRequestAttrs(t *testing.T) {
 		},
 		{
 			name: "max_tokens used when max_completion_tokens absent",
-			req:  &openai.ChatCompletionRequest{MaxTokens: ptr(int64(100))},
+			req:  &openai.ChatCompletionRequest{MaxTokens: new(int64(100))},
 			expected: []attribute.KeyValue{
 				attribute.Int64(RequestMaxTokens, 100),
 			},
@@ -113,9 +113,9 @@ func TestCompletionRequestAttrs(t *testing.T) {
 		{
 			name: "parameters",
 			req: &openai.CompletionRequest{
-				Temperature: ptr(0.3),
-				MaxTokens:   ptr(64),
-				Seed:        ptr(int64(7)),
+				Temperature: new(0.3),
+				MaxTokens:   new(64),
+				Seed:        new(int64(7)),
 			},
 			expected: []attribute.KeyValue{
 				attribute.Float64(RequestTemperature, 0.3),
@@ -201,7 +201,7 @@ func TestChatCompletionRecorder_paramsRecordedWithoutContent(t *testing.T) {
 	span := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
 		r.RecordRequest(span, &openai.ChatCompletionRequest{
 			Model:       "gpt-5-nano",
-			Temperature: ptr(0.7),
+			Temperature: new(0.7),
 			Messages:    []openai.ChatCompletionMessageParamUnion{userMessage("secret")},
 		}, nil)
 		return false

@@ -130,8 +130,8 @@ func TestGatewayController_Reconcile(t *testing.T) {
 	// Create a Gateway with attached AIGatewayRoutes.
 	const okGwName = "ok-gw"
 	err := fakeClient.Create(t.Context(), &gwapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{Name: okGwName, Namespace: namespace},
-		Spec:       gwapiv1.GatewaySpec{},
+		Name: okGwName, Namespace: namespace,
+		Spec: gwapiv1.GatewaySpec{},
 	})
 	require.NoError(t, err)
 	targets := []gwapiv1a2.ParentReference{
@@ -143,7 +143,7 @@ func TestGatewayController_Reconcile(t *testing.T) {
 	}
 	for _, aigwRoute := range []*aigv1b1.AIGatewayRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: namespace},
+			Name: "route1", Namespace: namespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				ParentRefs: targets,
 				Rules: []aigv1b1.AIGatewayRouteRule{
@@ -152,7 +152,7 @@ func TestGatewayController_Reconcile(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route2", Namespace: namespace},
+			Name: "route2", Namespace: namespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				ParentRefs: targets,
 				Rules: []aigv1b1.AIGatewayRouteRule{
@@ -167,13 +167,13 @@ func TestGatewayController_Reconcile(t *testing.T) {
 	// We also need to create corresponding AIServiceBackends.
 	for _, aigwRoute := range []*aigv1b1.AIServiceBackend{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: namespace},
+			Name: "apple", Namespace: namespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](namespace)},
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "orange", Namespace: namespace},
+			Name: "orange", Namespace: namespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](namespace)},
 			},
@@ -184,19 +184,17 @@ func TestGatewayController_Reconcile(t *testing.T) {
 	}
 
 	// At this point, no Gateway Pods are created, so this should be requeued.
-	res, err := c.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKey{Name: okGwName, Namespace: namespace}})
+	res, err := c.Reconcile(t.Context(), ctrl.Request{Name: okGwName, Namespace: namespace})
 	require.NoError(t, err)
 	require.Equal(t, ctrl.Result{RequeueAfter: 5 * time.Second}, res)
 
 	// Create a Gateway Pod and deployment.
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "gw-pod",
-			Namespace: namespace,
-			Labels: map[string]string{
-				egOwningGatewayNameLabel:      okGwName,
-				egOwningGatewayNamespaceLabel: namespace,
-			},
+		Name:      "gw-pod",
+		Namespace: namespace,
+		Labels: map[string]string{
+			egOwningGatewayNameLabel:      okGwName,
+			egOwningGatewayNamespaceLabel: namespace,
 		},
 		Spec: corev1.PodSpec{},
 	}
@@ -204,16 +202,14 @@ func TestGatewayController_Reconcile(t *testing.T) {
 	require.NoError(t, err)
 
 	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "gw-deployment",
-			Namespace: namespace,
-			Labels: map[string]string{
-				egOwningGatewayNameLabel:      okGwName,
-				egOwningGatewayNamespaceLabel: namespace,
-			},
+		Name:      "gw-deployment",
+		Namespace: namespace,
+		Labels: map[string]string{
+			egOwningGatewayNameLabel:      okGwName,
+			egOwningGatewayNamespaceLabel: namespace,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
+			Replicas: new(int32(1)),
 			Template: corev1.PodTemplateSpec{},
 		},
 		Status: appsv1.DeploymentStatus{
@@ -227,7 +223,7 @@ func TestGatewayController_Reconcile(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now, the reconcile should succeed and create the filter config secret.
-	res, err = c.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKey{Name: okGwName, Namespace: namespace}})
+	res, err = c.Reconcile(t.Context(), ctrl.Request{Name: okGwName, Namespace: namespace})
 	require.NoError(t, err)
 	require.Equal(t, ctrl.Result{}, res)
 	secret, err := fakeKube.CoreV1().Secrets(namespace).
@@ -255,18 +251,16 @@ func TestGatewayController_Reconcile_GatewayConfigImageOverrideNoWorkloadPatch(t
 	require.NoError(t, fakeClient.Create(t.Context(), gatewayConfig))
 
 	require.NoError(t, fakeClient.Create(t.Context(), &gwapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      gwName,
-			Namespace: namespace,
-			Annotations: map[string]string{
-				GatewayConfigAnnotationKey: gatewayConfig.Name,
-			},
+		Name:      gwName,
+		Namespace: namespace,
+		Annotations: map[string]string{
+			GatewayConfigAnnotationKey: gatewayConfig.Name,
 		},
 	}))
 
 	parentRefs := []gwapiv1a2.ParentReference{{Name: gwName}}
 	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: namespace},
+		Name: "route", Namespace: namespace,
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			ParentRefs: parentRefs,
 			Rules: []aigv1b1.AIGatewayRouteRule{
@@ -275,7 +269,7 @@ func TestGatewayController_Reconcile_GatewayConfigImageOverrideNoWorkloadPatch(t
 		},
 	}))
 	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: namespace},
+		Name: "backend", Namespace: namespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{Name: "service", Namespace: ptr.To[gwapiv1.Namespace](namespace)},
 		},
@@ -289,16 +283,16 @@ func TestGatewayController_Reconcile_GatewayConfigImageOverrideNoWorkloadPatch(t
 		egOwningGatewayNamespaceLabel: namespace,
 	}
 	_, err := fakeKube.CoreV1().Pods(egNamespace).Create(t.Context(), &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "gw-pod", Namespace: egNamespace, Labels: labels},
+		Name: "gw-pod", Namespace: egNamespace, Labels: labels,
 		Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 			{Name: extProcContainerName, Image: desiredImage, Args: []string{"-logLevel", "info"}},
 		}},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	_, err = fakeKube.AppsV1().Deployments(egNamespace).Create(t.Context(), &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "gw-deployment", Namespace: egNamespace, Labels: labels},
+		Name: "gw-deployment", Namespace: egNamespace, Labels: labels,
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
+			Replicas: new(int32(1)),
 			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{
 				Annotations: map[string]string{extProcConfigHashAnnotationKey: desiredHash},
 			}},
@@ -314,7 +308,7 @@ func TestGatewayController_Reconcile_GatewayConfigImageOverrideNoWorkloadPatch(t
 	require.NoError(t, err)
 
 	beforeActions := len(fakeKube.Actions())
-	res, err := c.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKey{Name: gwName, Namespace: namespace}})
+	res, err := c.Reconcile(t.Context(), ctrl.Request{Name: gwName, Namespace: namespace})
 	require.NoError(t, err)
 	require.Equal(t, ctrl.Result{}, res)
 
@@ -339,7 +333,7 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 	const gwNamespace = "ns"
 	routes := []aigv1b1.AIGatewayRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: gwNamespace},
+			Name: "route1", Namespace: gwNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{
@@ -370,14 +364,14 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route2", Namespace: gwNamespace},
+			Name: "route2", Namespace: gwNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "orange"}}},
 				},
 				LLMRequestCosts: []aigv1b1.LLMRequestCost{
 					{MetadataKey: "foo", Type: aigv1b1.LLMRequestCostTypeInputToken}, // Same metadataKey as route1; scoped to this route in filter config.
-					{MetadataKey: "cat", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: ptr.To(`backend == 'foo.default' ?  input_tokens + output_tokens : total_tokens`)},
+					{MetadataKey: "cat", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: new(`backend == 'foo.default' ?  input_tokens + output_tokens : total_tokens`)},
 				},
 			},
 		},
@@ -385,7 +379,7 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 	// We also need to create corresponding AIServiceBackends.
 	for _, aigwRoute := range []*aigv1b1.AIServiceBackend{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+			Name: "apple", Namespace: gwNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 				HeaderMutation: &aigv1b1.HTTPHeaderMutation{Set: []gwapiv1.HTTPHeader{
@@ -395,13 +389,13 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "orange", Namespace: gwNamespace},
+			Name: "orange", Namespace: gwNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "invalid-bsp-backend", Namespace: gwNamespace},
+			Name: "invalid-bsp-backend", Namespace: gwNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 			},
@@ -413,7 +407,7 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 
 	// Create a BackendSecurityPolicy that is invalid (missing secret ref).
 	err := fakeClient.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "invalid-bsp", Namespace: gwNamespace},
+		Name: "invalid-bsp", Namespace: gwNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
@@ -516,7 +510,7 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 	const gwNamespace = "ns"
 	routes := []aigv1b1.AIGatewayRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "scoped-route", Namespace: gwNamespace},
+			Name: "scoped-route", Namespace: gwNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Hostnames: []gwapiv1.Hostname{"api.example.com"},
 				Rules: []aigv1b1.AIGatewayRouteRule{
@@ -532,7 +526,7 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "unscoped-route", Namespace: gwNamespace},
+			Name: "unscoped-route", Namespace: gwNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				// No Hostnames -> "unscoped": its models apply to every host.
 				Rules: []aigv1b1.AIGatewayRouteRule{
@@ -550,13 +544,13 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 	}
 	for _, b := range []*aigv1b1.AIServiceBackend{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+			Name: "apple", Namespace: gwNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "orange", Namespace: gwNamespace},
+			Name: "orange", Namespace: gwNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 			},
@@ -606,7 +600,7 @@ func TestGatewayController_reconcileFilterConfigSecret_AllUnscopedRoutesLeaveUns
 	const gwNamespace = "ns"
 	routes := []aigv1b1.AIGatewayRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route-only-unscoped", Namespace: gwNamespace},
+			Name: "route-only-unscoped", Namespace: gwNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				// No Hostnames — and no other route adds Hostnames either.
 				Rules: []aigv1b1.AIGatewayRouteRule{
@@ -623,7 +617,7 @@ func TestGatewayController_reconcileFilterConfigSecret_AllUnscopedRoutesLeaveUns
 		},
 	}
 	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+		Name: "apple", Namespace: gwNamespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 		},
@@ -658,26 +652,26 @@ func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostA
 	// This is the core scenario of Issue #1688.
 	routes := []aigv1b1.AIGatewayRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "free-model-route", Namespace: gwNamespace},
+			Name: "free-model-route", Namespace: gwNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "free-backend"}}},
 				},
 				LLMRequestCosts: []aigv1b1.LLMRequestCost{
 					// Free model: cost is always 0
-					{MetadataKey: "billing_charges", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: ptr.To("0")},
+					{MetadataKey: "billing_charges", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: new("0")},
 				},
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "paid-model-route", Namespace: gwNamespace},
+			Name: "paid-model-route", Namespace: gwNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "paid-backend"}}},
 				},
 				LLMRequestCosts: []aigv1b1.LLMRequestCost{
 					// Paid model: cost calculation based on tokens
-					{MetadataKey: "billing_charges", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: ptr.To("input_tokens + output_tokens")},
+					{MetadataKey: "billing_charges", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: new("input_tokens + output_tokens")},
 				},
 			},
 		},
@@ -686,13 +680,13 @@ func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostA
 	// Create corresponding AIServiceBackends.
 	for _, backend := range []*aigv1b1.AIServiceBackend{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "free-backend", Namespace: gwNamespace},
+			Name: "free-backend", Namespace: gwNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "paid-backend", Namespace: gwNamespace},
+			Name: "paid-backend", Namespace: gwNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 			},
@@ -751,7 +745,7 @@ func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostA
 	const gwNamespace = "ns"
 	routes := []aigv1b1.AIGatewayRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route-with-duplicate-metadata", Namespace: gwNamespace},
+			Name: "route-with-duplicate-metadata", Namespace: gwNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "test-backend"}}},
@@ -765,7 +759,7 @@ func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostA
 	}
 
 	err := fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-backend", Namespace: gwNamespace},
+		Name: "test-backend", Namespace: gwNamespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 		},
@@ -801,14 +795,14 @@ func TestGatewayController_reconcileFilterConfigSecret_InvalidCELExpression(t *t
 	const gwNamespace = "ns"
 	routes := []aigv1b1.AIGatewayRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route-with-invalid-cel", Namespace: gwNamespace},
+			Name: "route-with-invalid-cel", Namespace: gwNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "test-backend"}}},
 				},
 				LLMRequestCosts: []aigv1b1.LLMRequestCost{
 					// Invalid CEL expression - syntax error
-					{MetadataKey: "cost", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: ptr.To("invalid syntax (((")},
+					{MetadataKey: "cost", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: new("invalid syntax (((")},
 				},
 			},
 		},
@@ -816,7 +810,7 @@ func TestGatewayController_reconcileFilterConfigSecret_InvalidCELExpression(t *t
 
 	// Create the backend
 	err := fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-backend", Namespace: gwNamespace},
+		Name: "test-backend", Namespace: gwNamespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 		},
@@ -898,13 +892,13 @@ func TestGatewayController_reconcileFilterConfigSecret_SkipsDeletedRoutes(t *tes
 	// Create AIServiceBackends for both routes.
 	for _, backend := range []*aigv1b1.AIServiceBackend{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+			Name: "apple", Namespace: gwNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "orange", Namespace: gwNamespace},
+			Name: "orange", Namespace: gwNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend2", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 			},
@@ -972,7 +966,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 	const namespace = "ns"
 	for _, bsp := range []*aigv1b1.BackendSecurityPolicy{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "bsp-apikey", Namespace: namespace},
+			Name: "bsp-apikey", Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
@@ -981,7 +975,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "aws-credentials-file", Namespace: namespace},
+			Name: "aws-credentials-file", Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 				AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -992,7 +986,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "aws-oidc", Namespace: namespace},
+			Name: "aws-oidc", Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 				AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -1001,7 +995,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "aws-default-chain", Namespace: namespace},
+			Name: "aws-default-chain", Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 				AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -1011,14 +1005,14 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "azure-oidc", Namespace: namespace},
+			Name: "azure-oidc", Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type:             aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 				AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{},
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "gcp-sa-key-file", Namespace: namespace},
+			Name: "gcp-sa-key-file", Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 				GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -1029,7 +1023,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "gcp-wif", Namespace: namespace},
+			Name: "gcp-wif", Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 				GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -1040,7 +1034,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "gcp-adc", Namespace: namespace},
+			Name: "gcp-adc", Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 				GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -1050,7 +1044,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "bsp-anthropic-apikey", Namespace: namespace},
+			Name: "bsp-anthropic-apikey", Namespace: namespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey,
 				AnthropicAPIKey: &aigv1b1.BackendSecurityPolicyAnthropicAPIKey{
@@ -1063,27 +1057,27 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 	}
 	for _, s := range []*corev1.Secret{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "api-key-secret", Namespace: namespace},
+			Name: "api-key-secret", Namespace: namespace,
 			StringData: map[string]string{apiKeyInSecret: "thisisapikey"},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "aws-credentials-file-secret", Namespace: namespace},
+			Name: "aws-credentials-file-secret", Namespace: namespace,
 			StringData: map[string]string{rotators.AwsCredentialsKey: "thisisawscredentials"},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: rotators.GetBSPSecretName("aws-oidc"), Namespace: namespace},
+			Name: rotators.GetBSPSecretName("aws-oidc"), Namespace: namespace,
 			StringData: map[string]string{rotators.AwsCredentialsKey: "thisisawscredentials"},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: rotators.GetBSPSecretName("azure-oidc"), Namespace: namespace},
+			Name: rotators.GetBSPSecretName("azure-oidc"), Namespace: namespace,
 			StringData: map[string]string{rotators.AzureAccessTokenKey: "thisisazurecredentials"},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "gcp-sa-key-file", Namespace: namespace},
+			Name: "gcp-sa-key-file", Namespace: namespace,
 			StringData: map[string]string{rotators.GCPServiceAccountJSON: "{}"},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: rotators.GetBSPSecretName("gcp-wif"), Namespace: namespace},
+			Name: rotators.GetBSPSecretName("gcp-wif"), Namespace: namespace,
 			StringData: map[string]string{rotators.GCPAccessTokenKey: "thisisgcpcredentials"},
 		},
 	} {
@@ -1182,7 +1176,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 			name:    "api key type with missing secret",
 			bspName: "api-key-bsp",
 			bsp: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "api-key-bsp", Namespace: namespace},
+				Name: "api-key-bsp", Namespace: namespace,
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 					APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
@@ -1198,7 +1192,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 			name:    "aws credentials with credentials file missing secret",
 			bspName: "aws-creds-file-bsp",
 			bsp: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "aws-creds-file-bsp", Namespace: namespace},
+				Name: "aws-creds-file-bsp", Namespace: namespace,
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 					AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -1226,8 +1220,8 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 }
 
 func TestResolveCredentialOverride(t *testing.T) {
-	truePtr := ptr.To(true)
-	falsePtr := ptr.To(false)
+	truePtr := new(true)
+	falsePtr := new(false)
 
 	t.Run("nil override returns nil", func(t *testing.T) {
 		result, err := resolveCredentialOverride(aigv1b1.BackendSecurityPolicyTypeAPIKey, nil, true)
@@ -1398,7 +1392,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth_WithOverride(t *testing.T) 
 	const namespace = "ns"
 
 	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "bsp-with-override", Namespace: namespace},
+		Name: "bsp-with-override", Namespace: namespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
@@ -1410,7 +1404,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth_WithOverride(t *testing.T) 
 		},
 	}))
 	_, err := kube.CoreV1().Secrets(namespace).Create(t.Context(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "api-key-secret", Namespace: namespace},
+		Name: "api-key-secret", Namespace: namespace,
 		StringData: map[string]string{apiKeyInSecret: "thisisapikey"},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
@@ -1516,7 +1510,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth_AWSWithOverride(t *testing.
 	// IRSA shape, with no Secret for the controller to read, so it also covers fallbackToConfigured
 	// defaulting to true without one.
 	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "aws-irsa-with-override", Namespace: namespace},
+		Name: "aws-irsa-with-override", Namespace: namespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type:           aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{Region: "us-east-1"},
@@ -1579,13 +1573,13 @@ func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextCanceled(t 
 		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
 
 	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+		Name: "apple", Namespace: gwNamespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 		},
 	}))
 	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: gwNamespace},
+		Name: "bsp", Namespace: gwNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type:   aigv1b1.BackendSecurityPolicyTypeAPIKey,
 			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{SecretRef: &gwapiv1.SecretObjectReference{Name: "api-key"}},
@@ -1596,7 +1590,7 @@ func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextCanceled(t 
 	}))
 
 	routes := []aigv1b1.AIGatewayRoute{{
-		ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: gwNamespace},
+		Name: "route1", Namespace: gwNamespace,
 		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{
 			{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}}},
 		}},
@@ -1631,14 +1625,14 @@ func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextDeadlineRea
 		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
 
 	require.NoError(t, inner.Create(t.Context(), &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+		Name: "apple", Namespace: gwNamespace,
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 		},
 	}))
 
 	routes := []aigv1b1.AIGatewayRoute{{
-		ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: gwNamespace},
+		Name: "route1", Namespace: gwNamespace,
 		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{
 			{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}}},
 		}},
@@ -1669,11 +1663,9 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 		v2Container, logLevel, false, nil, true)
 	t.Run("pod with extproc", func(t *testing.T) {
 		pod, err := kube.CoreV1().Pods(egNamespace).Create(t.Context(), &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod1",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod1",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 				{Name: extProcContainerName, Image: c.image},
 			}},
@@ -1690,13 +1682,11 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 
 		// We also need to create a parent deployment for the pod.
 		deployment, err := kube.AppsV1().Deployments(egNamespace).Create(t.Context(), &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "foo-dep",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "foo-dep",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To(int32(1)),
+				Replicas: new(int32(1)),
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}},
 			},
 			Status: appsv1.DeploymentStatus{
@@ -1722,24 +1712,20 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 
 	t.Run("pod without extproc", func(t *testing.T) {
 		pod, err := kube.CoreV1().Pods(egNamespace).Create(t.Context(), &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod2",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "foo"}}},
+			Name:      "pod2",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      corev1.PodSpec{Containers: []corev1.Container{{Name: "foo"}}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 
 		// We also need to create a parent deployment for the pod.
 		deployment, err := kube.AppsV1().Deployments(egNamespace).Create(t.Context(), &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment1",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "deployment1",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To(int32(1)),
+				Replicas: new(int32(1)),
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}},
 			},
 			Status: appsv1.DeploymentStatus{
@@ -1775,11 +1761,9 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 
 	t.Run("pod with extproc but old version", func(t *testing.T) {
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod3",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod3",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{Containers: []corev1.Container{
 				// The old v1 container image is used here to simulate the pod without extproc.
 				{Name: extProcContainerName, Image: "ai-gateway-extproc:v1"},
@@ -1790,13 +1774,11 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 
 		// We also need to create a parent deployment for the pod.
 		deployment, err := kube.AppsV1().Deployments(egNamespace).Create(t.Context(), &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment2",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "deployment2",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To(int32(1)),
+				Replicas: new(int32(1)),
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}},
 			},
 			Status: appsv1.DeploymentStatus{
@@ -1834,11 +1816,9 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 
 	t.Run("pod with extproc but different log level", func(t *testing.T) {
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod4",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod4",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{Containers: []corev1.Container{
 				// The old v1 container image is used here to simulate the pod without extproc.
 				{Name: extProcContainerName, Image: v2Container, Args: []string{"-log-level", "debug"}},
@@ -1849,13 +1829,11 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 
 		// We also need to create a parent deployment for the pod.
 		deployment, err := kube.AppsV1().Deployments(egNamespace).Create(t.Context(), &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment3",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "deployment3",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To(int32(1)),
+				Replicas: new(int32(1)),
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}},
 			},
 			Status: appsv1.DeploymentStatus{
@@ -1893,11 +1871,9 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 
 	t.Run("pod with extproc but missing mcpAddr", func(t *testing.T) {
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod5",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod5",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 				{Name: extProcContainerName, Image: v2Container, Args: []string{"-logLevel", logLevel, "-adminPort", "1064"}},
 			}},
@@ -1906,13 +1882,11 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 		require.NoError(t, err)
 
 		deployment, err := kube.AppsV1().Deployments(egNamespace).Create(t.Context(), &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment4",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "deployment4",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To(int32(1)),
+				Replicas: new(int32(1)),
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}},
 			},
 			Status: appsv1.DeploymentStatus{
@@ -1953,11 +1927,9 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 	t.Run("deployment rollout in progress should requeue", func(t *testing.T) {
 		// Create pod with sidecar
 		podWithSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-with-sidecar",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod-with-sidecar",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 				{Name: extProcContainerName, Image: v2Container, Args: []string{"-logLevel", logLevel}},
 			}},
@@ -1967,24 +1939,20 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 
 		// Create pod without sidecar
 		podWithoutSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-without-sidecar",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
+			Name:      "pod-without-sidecar",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
 		}
 		_, err = kube.CoreV1().Pods(egNamespace).Create(t.Context(), podWithoutSidecar, metav1.CreateOptions{})
 		require.NoError(t, err)
 
 		deployment, err := kube.AppsV1().Deployments(egNamespace).Create(t.Context(), &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment-inconsistent",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "deployment-inconsistent",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To(int32(1)),
+				Replicas: new(int32(1)),
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}},
 			},
 			Status: appsv1.DeploymentStatus{
@@ -2020,11 +1988,9 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 
 	t.Run("inconsistent pods without rollout should force rollout", func(t *testing.T) {
 		podWithSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-with-sidecar-force",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod-with-sidecar-force",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 				{Name: extProcContainerName, Image: v2Container, Args: []string{"-logLevel", logLevel}},
 			}},
@@ -2033,24 +1999,20 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 		require.NoError(t, err)
 
 		podWithoutSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-without-sidecar-force",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
+			Name:      "pod-without-sidecar-force",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
 		}
 		_, err = kube.CoreV1().Pods(egNamespace).Create(t.Context(), podWithoutSidecar, metav1.CreateOptions{})
 		require.NoError(t, err)
 
 		deployment, err := kube.AppsV1().Deployments(egNamespace).Create(t.Context(), &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment-force-rollout",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "deployment-force-rollout",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To(int32(1)),
+				Replicas: new(int32(1)),
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}},
 			},
 			Status: appsv1.DeploymentStatus{
@@ -2081,12 +2043,10 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 	t.Run("terminating pods are ignored for consistency and annotation", func(t *testing.T) {
 		now := metav1.Now()
 		terminatingPodWithSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:              "pod-terminating-sidecar",
-				Namespace:         egNamespace,
-				Labels:            labels,
-				DeletionTimestamp: &now,
-			},
+			Name:              "pod-terminating-sidecar",
+			Namespace:         egNamespace,
+			Labels:            labels,
+			DeletionTimestamp: &now,
 			Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 				{Name: extProcContainerName, Image: v2Container, Args: []string{"-logLevel", logLevel}},
 			}},
@@ -2095,24 +2055,20 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 		require.NoError(t, err)
 
 		activePodWithoutSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-active-without-sidecar",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
+			Name:      "pod-active-without-sidecar",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
 		}
 		_, err = kube.CoreV1().Pods(egNamespace).Create(t.Context(), activePodWithoutSidecar, metav1.CreateOptions{})
 		require.NoError(t, err)
 
 		deployment, err := kube.AppsV1().Deployments(egNamespace).Create(t.Context(), &appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment-ignore-terminating",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "deployment-ignore-terminating",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr.To(int32(1)),
+				Replicas: new(int32(1)),
 				Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}},
 			},
 			Status: appsv1.DeploymentStatus{
@@ -2160,8 +2116,8 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 				name: "observed generation behind generation requeues",
 				deployments: []appsv1.Deployment{
 					{
-						ObjectMeta: metav1.ObjectMeta{Name: "dep", Generation: 2},
-						Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(1))},
+						Name: "dep", Generation: 2,
+						Spec: appsv1.DeploymentSpec{Replicas: new(int32(1))},
 						Status: appsv1.DeploymentStatus{
 							ObservedGeneration: 1,
 							UpdatedReplicas:    1,
@@ -2176,8 +2132,8 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 				name: "old-template pods still present requeues",
 				deployments: []appsv1.Deployment{
 					{
-						ObjectMeta: metav1.ObjectMeta{Name: "dep", Generation: 1},
-						Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(2))},
+						Name: "dep", Generation: 1,
+						Spec: appsv1.DeploymentSpec{Replicas: new(int32(2))},
 						Status: appsv1.DeploymentStatus{
 							ObservedGeneration: 1,
 							Replicas:           3,
@@ -2193,8 +2149,8 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 				name: "fully ready deployment does not requeue",
 				deployments: []appsv1.Deployment{
 					{
-						ObjectMeta: metav1.ObjectMeta{Name: "dep", Generation: 1},
-						Spec:       appsv1.DeploymentSpec{Replicas: ptr.To(int32(2))},
+						Name: "dep", Generation: 1,
+						Spec: appsv1.DeploymentSpec{Replicas: new(int32(2))},
 						Status: appsv1.DeploymentStatus{
 							ObservedGeneration: 1,
 							UpdatedReplicas:    2,
@@ -2314,9 +2270,7 @@ func TestGatewayController_annotateGatewayPods_ConfigHashDrift(t *testing.T) {
 	baseHash := baseBuilder.extProcContainerHash(extProcContainerInput{})
 
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "pod-current", Namespace: egNamespace, Labels: labels,
-		},
+		Name: "pod-current", Namespace: egNamespace, Labels: labels,
 		Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 			{Name: extProcContainerName, Image: image, Args: []string{"-logLevel", "info"}},
 		}},
@@ -2325,9 +2279,9 @@ func TestGatewayController_annotateGatewayPods_ConfigHashDrift(t *testing.T) {
 	require.NoError(t, err)
 
 	deployment := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "dep-current", Namespace: egNamespace, Labels: labels},
+		Name: "dep-current", Namespace: egNamespace, Labels: labels,
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
+			Replicas: new(int32(1)),
 			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}},
 		},
 		Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1, Replicas: 1},
@@ -2375,15 +2329,15 @@ func TestGatewayController_annotateGatewayPods_ConfigHashDrift(t *testing.T) {
 	require.False(t, rolled, "hash drift is handled by the template hash, not the UUID rollout trigger")
 
 	podWithoutSidecar := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "pod-no-sidecar", Namespace: egNamespace, Labels: labels},
-		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy", Image: "envoyproxy/envoy"}}},
+		Name: "pod-no-sidecar", Namespace: egNamespace, Labels: labels,
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy", Image: "envoyproxy/envoy"}}},
 	}
 	_, err = kube.CoreV1().Pods(egNamespace).Create(t.Context(), podWithoutSidecar, metav1.CreateOptions{})
 	require.NoError(t, err)
 	deployment3 := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "dep-mixed-drift", Namespace: egNamespace, Labels: labels},
+		Name: "dep-mixed-drift", Namespace: egNamespace, Labels: labels,
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr.To(int32(1)),
+			Replicas: new(int32(1)),
 			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{
 				Annotations: map[string]string{extProcConfigHashAnnotationKey: baseHash},
 			}},
@@ -2448,23 +2402,19 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 
 	t.Run("pod without extproc", func(t *testing.T) {
 		pod, err := kube.CoreV1().Pods(egNamespace).Create(t.Context(), &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod2",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "foo"}}},
+			Name:      "pod2",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      corev1.PodSpec{Containers: []corev1.Container{{Name: "foo"}}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 
 		// We also need to create a parent deployment for the pod.
 		dss, err := kube.AppsV1().DaemonSets(egNamespace).Create(t.Context(), &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment1",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
+			Name:      "deployment1",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 
@@ -2480,11 +2430,9 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 
 	t.Run("current sidecar with desired hash patches daemonset template hash only", func(t *testing.T) {
 		pod, err := kube.CoreV1().Pods(egNamespace).Create(t.Context(), &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-ds-current-hash",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod-ds-current-hash",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 				{Name: extProcContainerName, Image: c.image, Args: []string{"-logLevel", logLevel}},
 			}},
@@ -2492,12 +2440,10 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 		require.NoError(t, err)
 
 		dss, err := kube.AppsV1().DaemonSets(egNamespace).Create(t.Context(), &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "daemonset-current-hash",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
+			Name:      "daemonset-current-hash",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
 			Status: appsv1.DaemonSetStatus{
 				ObservedGeneration:     1,
 				CurrentNumberScheduled: 1,
@@ -2520,11 +2466,9 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 
 	t.Run("pod with extproc but old version", func(t *testing.T) {
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod3",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod3",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{Containers: []corev1.Container{
 				// The old v1 container image is used here to simulate the pod without extproc.
 				{Name: extProcContainerName, Image: "ai-gateway-extproc:v1"},
@@ -2535,12 +2479,10 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 
 		// We also need to create a parent DaemonSet for the pod.
 		dss, err := kube.AppsV1().DaemonSets(egNamespace).Create(t.Context(), &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment2",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
+			Name:      "deployment2",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 
@@ -2570,11 +2512,9 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 
 	t.Run("pod with extproc but different log level", func(t *testing.T) {
 		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod4",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod4",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{Containers: []corev1.Container{
 				// The old v1 container image is used here to simulate the pod without extproc.
 				{Name: extProcContainerName, Image: v2Container, Args: []string{"-log-level", "debug"}},
@@ -2585,12 +2525,10 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 
 		// We also need to create a parent DaemonSet for the pod.
 		dss, err := kube.AppsV1().DaemonSets(egNamespace).Create(t.Context(), &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "deployment3",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
+			Name:      "deployment3",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 
@@ -2620,11 +2558,9 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 
 	t.Run("daemonset rollout in progress should requeue", func(t *testing.T) {
 		podWithSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-ds-sidecar-requeue",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod-ds-sidecar-requeue",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 				{Name: extProcContainerName, Image: v2Container, Args: []string{"-logLevel", logLevel}},
 			}},
@@ -2633,24 +2569,20 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 		require.NoError(t, err)
 
 		podWithoutSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-ds-no-sidecar-requeue",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
+			Name:      "pod-ds-no-sidecar-requeue",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
 		}
 		_, err = kube.CoreV1().Pods(egNamespace).Create(t.Context(), podWithoutSidecar, metav1.CreateOptions{})
 		require.NoError(t, err)
 
 		dss, err := kube.AppsV1().DaemonSets(egNamespace).Create(t.Context(), &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:       "ds-inconsistent-requeue",
-				Namespace:  egNamespace,
-				Labels:     labels,
-				Generation: 2,
-			},
-			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
+			Name:       "ds-inconsistent-requeue",
+			Namespace:  egNamespace,
+			Labels:     labels,
+			Generation: 2,
+			Spec:       appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
 			Status: appsv1.DaemonSetStatus{
 				ObservedGeneration: 1,
 			},
@@ -2671,11 +2603,9 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 
 	t.Run("inconsistent pods without rollout should force rollout daemonset", func(t *testing.T) {
 		podWithSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-ds-sidecar-force",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
+			Name:      "pod-ds-sidecar-force",
+			Namespace: egNamespace,
+			Labels:    labels,
 			Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 				{Name: extProcContainerName, Image: v2Container, Args: []string{"-logLevel", logLevel}},
 			}},
@@ -2684,23 +2614,19 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 		require.NoError(t, err)
 
 		podWithoutSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-ds-no-sidecar-force",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
+			Name:      "pod-ds-no-sidecar-force",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
 		}
 		_, err = kube.CoreV1().Pods(egNamespace).Create(t.Context(), podWithoutSidecar, metav1.CreateOptions{})
 		require.NoError(t, err)
 
 		dss, err := kube.AppsV1().DaemonSets(egNamespace).Create(t.Context(), &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "ds-force-rollout",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
+			Name:      "ds-force-rollout",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 
@@ -2723,12 +2649,10 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 	t.Run("terminating pods are ignored for consistency and annotation daemonset", func(t *testing.T) {
 		now := metav1.Now()
 		terminatingPodWithSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:              "pod-ds-terminating-sidecar",
-				Namespace:         egNamespace,
-				Labels:            labels,
-				DeletionTimestamp: &now,
-			},
+			Name:              "pod-ds-terminating-sidecar",
+			Namespace:         egNamespace,
+			Labels:            labels,
+			DeletionTimestamp: &now,
 			Spec: corev1.PodSpec{InitContainers: []corev1.Container{
 				{Name: extProcContainerName, Image: v2Container, Args: []string{"-logLevel", logLevel}},
 			}},
@@ -2737,23 +2661,19 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 		require.NoError(t, err)
 
 		activePodWithoutSidecar := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "pod-ds-active-no-sidecar",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
+			Name:      "pod-ds-active-no-sidecar",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
 		}
 		_, err = kube.CoreV1().Pods(egNamespace).Create(t.Context(), activePodWithoutSidecar, metav1.CreateOptions{})
 		require.NoError(t, err)
 
 		dss, err := kube.AppsV1().DaemonSets(egNamespace).Create(t.Context(), &appsv1.DaemonSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "ds-ignore-terminating",
-				Namespace: egNamespace,
-				Labels:    labels,
-			},
-			Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
+			Name:      "ds-ignore-terminating",
+			Namespace: egNamespace,
+			Labels:    labels,
+			Spec:      appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{}}},
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 
@@ -2789,7 +2709,7 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 				name: "observed generation zero is ignored",
 				daemonSets: []appsv1.DaemonSet{
 					{
-						ObjectMeta: metav1.ObjectMeta{Name: "ds", Generation: 2},
+						Name: "ds", Generation: 2,
 						Status: appsv1.DaemonSetStatus{
 							ObservedGeneration:     0,
 							DesiredNumberScheduled: 1,
@@ -2805,7 +2725,7 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 				name: "observed generation behind generation requeues",
 				daemonSets: []appsv1.DaemonSet{
 					{
-						ObjectMeta: metav1.ObjectMeta{Name: "ds", Generation: 2},
+						Name: "ds", Generation: 2,
 						Status: appsv1.DaemonSetStatus{
 							ObservedGeneration:     1,
 							DesiredNumberScheduled: 1,
@@ -2821,7 +2741,7 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 				name: "old-template daemonset pods still present requeues",
 				daemonSets: []appsv1.DaemonSet{
 					{
-						ObjectMeta: metav1.ObjectMeta{Name: "ds", Generation: 1},
+						Name: "ds", Generation: 1,
 						Status: appsv1.DaemonSetStatus{
 							ObservedGeneration:     1,
 							DesiredNumberScheduled: 2,
@@ -2838,7 +2758,7 @@ func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 				name: "fully ready daemonset does not requeue",
 				daemonSets: []appsv1.DaemonSet{
 					{
-						ObjectMeta: metav1.ObjectMeta{Name: "ds", Generation: 1},
+						Name: "ds", Generation: 1,
 						Status: appsv1.DaemonSetStatus{
 							ObservedGeneration:     1,
 							DesiredNumberScheduled: 2,
@@ -2871,7 +2791,7 @@ func Test_schemaToFilterAPI(t *testing.T) {
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "v1"},
 		},
 		{
-			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaOpenAI, Prefix: ptr.To("v1/foo")},
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaOpenAI, Prefix: new("v1/foo")},
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "v1/foo"},
 		},
 		{
@@ -2885,7 +2805,7 @@ func Test_schemaToFilterAPI(t *testing.T) {
 		{
 			in: aigv1b1.VersionedAPISchema{
 				Name:   aigv1b1.APISchemaAWSOpenAI,
-				Prefix: ptr.To("custom/v1"),
+				Prefix: new("custom/v1"),
 			},
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI, Prefix: "custom/v1"},
 		},
@@ -2894,7 +2814,7 @@ func Test_schemaToFilterAPI(t *testing.T) {
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAnthropic, Prefix: "v1"},
 		},
 		{
-			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaAnthropic, Prefix: ptr.To("gateway/v1")},
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaAnthropic, Prefix: new("gateway/v1")},
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAnthropic, Prefix: "gateway/v1"},
 		},
 	} {
@@ -3005,8 +2925,8 @@ func TestGatewayController_backendWithMaybeBSP(t *testing.T) {
 
 	// Create AIServiceBackend without BSP.
 	backend := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "foo"},
-		Spec:       aigv1b1.AIServiceBackendSpec{},
+		Name: "bar", Namespace: "foo",
+		Spec: aigv1b1.AIServiceBackendSpec{},
 	}
 	require.NoError(t, fakeClient.Create(t.Context(), backend))
 
@@ -3018,7 +2938,7 @@ func TestGatewayController_backendWithMaybeBSP(t *testing.T) {
 	// Create a new BSP for the existing backend, referencing the backend by name.
 	const bspName = "bsp-bar"
 	bspObj := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: backend.Namespace},
+		Name: bspName, Namespace: backend.Namespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{Name: gwapiv1.ObjectName(backend.Name), Kind: aiServiceBackendKind, Group: aiServiceBackendGroup},
@@ -3037,7 +2957,7 @@ func TestGatewayController_backendWithMaybeBSP(t *testing.T) {
 
 	// Create a new BSP that has the same target ref, and one that does not exist.
 	bspWithTargetRefs := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "bsp-bar-target-refs", Namespace: backend.Namespace},
+		Name: "bsp-bar-target-refs", Namespace: backend.Namespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 				{Name: gwapiv1.ObjectName(backend.Name), Kind: aiServiceBackendKind, Group: aiServiceBackendGroup},
@@ -3064,12 +2984,10 @@ func TestGatewayController_reconcileFilterMCPConfigSecret(t *testing.T) {
 	// Two routes with different CreationTimestamp for deterministic order.
 	mcpRoutes := []aigv1b1.MCPRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "mcp-route-old", Namespace: gwNamespace, CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Hour))},
+			Name: "mcp-route-old", Namespace: gwNamespace, CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Hour)),
 			Spec: aigv1b1.MCPRouteSpec{
 				BackendRefs: []aigv1b1.MCPRouteBackendRef{{
-					BackendObjectReference: gwapiv1.BackendObjectReference{
-						Name: gwapiv1.ObjectName("backendA"),
-					},
+					Name: gwapiv1.ObjectName("backendA"),
 					ToolSelector: &aigv1b1.MCPToolFilter{
 						Include: []string{"toolA"},
 					},
@@ -3077,12 +2995,10 @@ func TestGatewayController_reconcileFilterMCPConfigSecret(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "mcp-route-new", Namespace: gwNamespace, CreationTimestamp: metav1.NewTime(time.Now().Add(-1 * time.Hour))},
+			Name: "mcp-route-new", Namespace: gwNamespace, CreationTimestamp: metav1.NewTime(time.Now().Add(-1 * time.Hour)),
 			Spec: aigv1b1.MCPRouteSpec{
 				BackendRefs: []aigv1b1.MCPRouteBackendRef{{
-					BackendObjectReference: gwapiv1.BackendObjectReference{
-						Name: gwapiv1.ObjectName("backendB"),
-					},
+					Name: gwapiv1.ObjectName("backendB"),
 					ToolSelector: &aigv1b1.MCPToolFilter{
 						Include: []string{"toolB"},
 					},
@@ -3197,12 +3113,10 @@ func TestGatewayController_writeFilterConfigBundleShards_Overflow(t *testing.T) 
 func Test_mcpConfig_ToolSelectorExclude(t *testing.T) {
 	mcpRoutes := []aigv1b1.MCPRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+			Name: "route", Namespace: "ns",
 			Spec: aigv1b1.MCPRouteSpec{
 				BackendRefs: []aigv1b1.MCPRouteBackendRef{{
-					BackendObjectReference: gwapiv1.BackendObjectReference{
-						Name: gwapiv1.ObjectName("backend"),
-					},
+					Name: gwapiv1.ObjectName("backend"),
 					ToolSelector: &aigv1b1.MCPToolFilter{
 						Include:      []string{"toolA"},
 						Exclude:      []string{"toolB"},
@@ -3228,12 +3142,10 @@ func Test_mcpConfig_ToolSelectorExclude(t *testing.T) {
 func Test_mcpConfig_PromptSelector(t *testing.T) {
 	mcpRoutes := []aigv1b1.MCPRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+			Name: "route", Namespace: "ns",
 			Spec: aigv1b1.MCPRouteSpec{
 				BackendRefs: []aigv1b1.MCPRouteBackendRef{{
-					BackendObjectReference: gwapiv1.BackendObjectReference{
-						Name: gwapiv1.ObjectName("backend"),
-					},
+					Name: gwapiv1.ObjectName("backend"),
 					PromptSelector: &aigv1b1.MCPPromptFilter{
 						Include:      []string{"greeting"},
 						Exclude:      []string{"farewell"},
@@ -3260,22 +3172,18 @@ func Test_mcpConfig_ForwardHeaders(t *testing.T) {
 	renamed := "X-Backend-Auth"
 	mcpRoutes := []aigv1b1.MCPRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+			Name: "route", Namespace: "ns",
 			Spec: aigv1b1.MCPRouteSpec{
 				BackendRefs: []aigv1b1.MCPRouteBackendRef{
 					{
-						BackendObjectReference: gwapiv1.BackendObjectReference{
-							Name: gwapiv1.ObjectName("backendA"),
-						},
+						Name: gwapiv1.ObjectName("backendA"),
 						ForwardHeaders: []aigv1b1.MCPHeaderForward{
 							{Name: "X-Api-Key"},
 							{Name: "Authorization", BackendHeader: &renamed},
 						},
 					},
 					{
-						BackendObjectReference: gwapiv1.BackendObjectReference{
-							Name: gwapiv1.ObjectName("backendB"),
-						},
+						Name: gwapiv1.ObjectName("backendB"),
 					},
 				},
 			},
@@ -3303,10 +3211,10 @@ func Test_mcpConfig_BackendSelector(t *testing.T) {
 	t.Run("unset means no selector", func(t *testing.T) {
 		mcpRoutes := []aigv1b1.MCPRoute{
 			{
-				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Name: "route", Namespace: "ns",
 				Spec: aigv1b1.MCPRouteSpec{
 					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
-						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+						Name: gwapiv1.ObjectName("backend"),
 					}},
 				},
 			},
@@ -3320,15 +3228,15 @@ func Test_mcpConfig_BackendSelector(t *testing.T) {
 	t.Run("rules and default action are translated", func(t *testing.T) {
 		mcpRoutes := []aigv1b1.MCPRoute{
 			{
-				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Name: "route", Namespace: "ns",
 				Spec: aigv1b1.MCPRouteSpec{
 					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
-						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+						Name: gwapiv1.ObjectName("backend"),
 					}},
 					BackendSelector: &aigv1b1.MCPBackendSelector{
 						DefaultAction: ptr.To(egv1a1.AuthorizationActionDeny),
 						Rules: []aigv1b1.MCPBackendSelectorRule{
-							{CEL: ptr.To(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`)},
+							{CEL: new(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`)},
 						},
 					},
 				},
@@ -3348,10 +3256,10 @@ func Test_mcpConfig_BackendSelector(t *testing.T) {
 	t.Run("defaultAction defaults to deny when unset", func(t *testing.T) {
 		mcpRoutes := []aigv1b1.MCPRoute{
 			{
-				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Name: "route", Namespace: "ns",
 				Spec: aigv1b1.MCPRouteSpec{
 					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
-						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+						Name: gwapiv1.ObjectName("backend"),
 					}},
 					BackendSelector: &aigv1b1.MCPBackendSelector{},
 				},
@@ -3368,11 +3276,11 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 	newRoute := func(sp *aigv1b1.MCPRouteSecurityPolicy) []aigv1b1.MCPRoute {
 		return []aigv1b1.MCPRoute{
 			{
-				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Name: "route", Namespace: "ns",
 				Spec: aigv1b1.MCPRouteSpec{
 					SecurityPolicy: sp,
 					BackendRefs: []aigv1b1.MCPRouteBackendRef{
-						{BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backendA")}},
+						{Name: gwapiv1.ObjectName("backendA")},
 					},
 				},
 			},
@@ -3381,7 +3289,7 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 
 	t.Run("forwards the api-key client-id header to backends", func(t *testing.T) {
 		mc, effective := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
-			APIKeyAuth: &egv1a1.APIKeyAuth{ForwardClientIDHeader: ptr.To("x-mcp-client-id")},
+			APIKeyAuth: &egv1a1.APIKeyAuth{ForwardClientIDHeader: new("x-mcp-client-id")},
 		}))
 		require.True(t, effective)
 		require.Len(t, mc.Routes, 1)
@@ -3401,7 +3309,7 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 
 	t.Run("empty client-id header is ignored", func(t *testing.T) {
 		mc, effective := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
-			APIKeyAuth: &egv1a1.APIKeyAuth{ForwardClientIDHeader: ptr.To("")},
+			APIKeyAuth: &egv1a1.APIKeyAuth{ForwardClientIDHeader: new("")},
 		}))
 		require.True(t, effective)
 		require.Len(t, mc.Routes, 1)
@@ -3422,7 +3330,7 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 					{Claim: "sub", Header: "x-mcp-client-id"},
 				},
 			},
-			APIKeyAuth: &egv1a1.APIKeyAuth{ForwardClientIDHeader: ptr.To("x-mcp-client-id")},
+			APIKeyAuth: &egv1a1.APIKeyAuth{ForwardClientIDHeader: new("x-mcp-client-id")},
 		}))
 		require.True(t, effective)
 		require.Len(t, mc.Routes, 1)
@@ -3709,7 +3617,7 @@ func TestGatewayController_reconcileFilterConfigSecret_GlobalDefaults(t *testing
 			},
 			routes: []aigv1b1.AIGatewayRoute{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: "ns"},
+					Name: "route1", Namespace: "ns",
 					Spec: aigv1b1.AIGatewayRouteSpec{
 						Rules: []aigv1b1.AIGatewayRouteRule{
 							{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "backend1"}}},
@@ -3730,7 +3638,7 @@ func TestGatewayController_reconcileFilterConfigSecret_GlobalDefaults(t *testing
 			},
 			routes: []aigv1b1.AIGatewayRoute{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "premium-route", Namespace: "ns"},
+					Name: "premium-route", Namespace: "ns",
 					Spec: aigv1b1.AIGatewayRouteSpec{
 						Rules: []aigv1b1.AIGatewayRouteRule{
 							{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "backend1"}}},
@@ -3756,18 +3664,18 @@ func TestGatewayController_reconcileFilterConfigSecret_GlobalDefaults(t *testing
 			},
 			routes: []aigv1b1.AIGatewayRoute{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "free-route", Namespace: "ns"},
+					Name: "free-route", Namespace: "ns",
 					Spec: aigv1b1.AIGatewayRouteSpec{
 						Rules: []aigv1b1.AIGatewayRouteRule{
 							{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "backend1"}}},
 						},
 						LLMRequestCosts: []aigv1b1.LLMRequestCost{
-							{MetadataKey: "billing_charges", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: ptr.To("0")}, // Free
+							{MetadataKey: "billing_charges", Type: aigv1b1.LLMRequestCostTypeCEL, CEL: new("0")}, // Free
 						},
 					},
 				},
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "standard-route", Namespace: "ns"},
+					Name: "standard-route", Namespace: "ns",
 					Spec: aigv1b1.AIGatewayRouteSpec{
 						Rules: []aigv1b1.AIGatewayRouteRule{
 							{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "backend1"}}},
@@ -3797,7 +3705,7 @@ func TestGatewayController_reconcileFilterConfigSecret_GlobalDefaults(t *testing
 
 			// Create AIServiceBackend
 			backend := &aigv1b1.AIServiceBackend{
-				ObjectMeta: metav1.ObjectMeta{Name: "backend1", Namespace: gwNamespace},
+				Name: "backend1", Namespace: gwNamespace,
 				Spec: aigv1b1.AIServiceBackendSpec{
 					BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
 				},
@@ -4003,7 +3911,7 @@ func TestGatewayController_getObjectsForGatewayNamespaceInconsistency(t *testing
 		egOwningGatewayNameLabel:      gwName,
 		egOwningGatewayNamespaceLabel: gwNamespace,
 	}
-	gw := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNamespace}}
+	gw := &gwapiv1.Gateway{Name: gwName, Namespace: gwNamespace}
 
 	kube := fake2.NewClientset()
 	c := newTestGatewayController(requireNewFakeClientWithIndexes(t), kube, ctrl.Log, egNamespace,
@@ -4013,7 +3921,7 @@ func TestGatewayController_getObjectsForGatewayNamespaceInconsistency(t *testing
 	// objects are found in two distinct namespaces, which should trigger the error.
 	for _, ns := range []string{gwNamespace, egNamespace} {
 		_, err := kube.CoreV1().Pods(ns).Create(t.Context(), &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "pod-" + ns, Namespace: ns, Labels: labels},
+			Name: "pod-" + ns, Namespace: ns, Labels: labels,
 		}, metav1.CreateOptions{})
 		require.NoError(t, err)
 	}
@@ -4029,18 +3937,18 @@ func TestGatewayController_getObjectsForGatewaySameNamespace(t *testing.T) {
 		egOwningGatewayNameLabel:      gwName,
 		egOwningGatewayNamespaceLabel: ns,
 	}
-	gw := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: ns}}
+	gw := &gwapiv1.Gateway{Name: gwName, Namespace: ns}
 
 	kube := fake2.NewClientset()
 	c := newTestGatewayController(requireNewFakeClientWithIndexes(t), kube, ctrl.Log, ns,
 		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
 
 	_, err := kube.CoreV1().Pods(ns).Create(t.Context(), &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "pod-1", Namespace: ns, Labels: labels},
+		Name: "pod-1", Namespace: ns, Labels: labels,
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
 	_, err = kube.AppsV1().Deployments(ns).Create(t.Context(), &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "dep-1", Namespace: ns, Labels: labels},
+		Name: "dep-1", Namespace: ns, Labels: labels,
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
 
@@ -4054,11 +3962,11 @@ func TestGatewayController_getObjectsForGatewaySameNamespace(t *testing.T) {
 func TestGatewayController_stampGatewayConfigHash(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexes(t)
 	c := newTestGatewayController(fakeClient, fake2.NewClientset(), logr.Discard(), "ns", "img", "info", false, nil, true)
-	gw := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
+	gw := &gwapiv1.Gateway{Name: "gw", Namespace: "ns"}
 	require.NoError(t, fakeClient.Create(t.Context(), gw))
 
 	gwConfig := &aigv1b1.GatewayConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "gwconfig", Namespace: "ns"},
+		Name: "gwconfig", Namespace: "ns",
 		Spec: aigv1b1.GatewayConfigSpec{
 			ExtProc: &aigv1b1.GatewayConfigExtProc{
 				MetadataForwardingNamespaces: []string{"envoy.filters.http.ext_authz"},

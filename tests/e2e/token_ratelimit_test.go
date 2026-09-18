@@ -20,7 +20,6 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/tests/internal/e2elib"
@@ -137,9 +136,9 @@ func Test_Examples_TokenRateLimit(t *testing.T) {
 	// Test the cached input token limit.
 	userID = strconv.Itoa(baseID + 3)
 	// This cached input number exceeds the input limit, but should still be allowed.
-	makeRequest(userID, 0, 0, 0, ptr.To(20), 200)
+	makeRequest(userID, 0, 0, 0, new(20), 200)
 	// This output number exceeds the output limit.
-	makeRequest(userID, 0, 0, 0, ptr.To(10000), 200)
+	makeRequest(userID, 0, 0, 0, new(10000), 200)
 	// Any request with the same user ID should be rejected.
 	makeRequest(userID, 0, 0, 0, nil, 429)
 

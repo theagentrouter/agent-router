@@ -23,7 +23,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -203,12 +202,12 @@ func TestInjectQuotaRateLimitFilterIntoListeners(t *testing.T) {
 func TestEnableQuotaRateLimitOnRoute(t *testing.T) {
 	testPolicies := []aigv1a1.QuotaPolicy{
 		{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+			Namespace: "default",
 			Spec: aigv1a1.QuotaPolicySpec{
 				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "be"}},
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("gpt-4"),
+						ModelName: new("gpt-4"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
 						},
@@ -373,14 +372,14 @@ func TestEnableQuotaRateLimitOnRoute_DescriptorChain(t *testing.T) {
 	route := &routev3.Route{Name: "test-route"}
 	policies := []aigv1a1.QuotaPolicy{
 		{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+			Namespace: "default",
 			Spec: aigv1a1.QuotaPolicySpec{
 				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 					{Name: "test-backend"},
 				},
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("gpt-4"),
+						ModelName: new("gpt-4"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
 						},
@@ -432,14 +431,14 @@ func TestEnableQuotaRateLimitOnRoute_HitsAddend(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 						{Name: "test-backend"},
 					},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"}},
@@ -460,7 +459,7 @@ func TestEnableQuotaRateLimitOnRoute_HitsAddend(t *testing.T) {
 		// 1 bucket req-time + 1 default req-time + 2 stream-done at end = 4 entries.
 		require.Len(t, perRoute.RateLimits, 4)
 		// First 2 entries are request-time without HitsAddend.
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			rl := perRoute.RateLimits[i]
 			require.Nil(t, rl.HitsAddend, "RateLimit entry %d should not have HitsAddend", i)
 			require.False(t, rl.ApplyOnStreamDone, "RateLimit entry %d should not have ApplyOnStreamDone", i)
@@ -534,12 +533,12 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
@@ -549,7 +548,7 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 													{
 														Name:  "x-api-key",
 														Type:  ptr.To(egv1a1.HeaderMatchExact),
-														Value: ptr.To("premium"),
+														Value: new("premium"),
 													},
 												},
 											},
@@ -599,12 +598,12 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
@@ -650,12 +649,12 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("claude"),
+							ModelName: new("claude"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
@@ -665,8 +664,8 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 													{
 														Name:   "x-tier",
 														Type:   ptr.To(egv1a1.HeaderMatchRegularExpression),
-														Value:  ptr.To("premium|enterprise"),
-														Invert: ptr.To(true),
+														Value:  new("premium|enterprise"),
+														Invert: new(true),
 													},
 												},
 											},
@@ -698,12 +697,12 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
@@ -733,24 +732,24 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
 										ClientSelectors: []egv1a1.RateLimitSelectCondition{
 											{
 												Headers: []egv1a1.HeaderMatch{
-													{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("premium")},
+													{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("premium")},
 												},
 											},
 											{
 												Headers: []egv1a1.HeaderMatch{
-													{Name: "x-org", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("acme")},
+													{Name: "x-org", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("acme")},
 												},
 											},
 										},
@@ -788,12 +787,12 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
 							},
@@ -816,12 +815,12 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
@@ -835,12 +834,12 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 				},
 			},
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("claude"),
+							ModelName: new("claude"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
@@ -868,7 +867,7 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
@@ -891,18 +890,18 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "test-backend"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
 										ClientSelectors: []egv1a1.RateLimitSelectCondition{
 											{Headers: []egv1a1.HeaderMatch{
-												{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("premium")},
+												{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("premium")},
 											}},
 										},
 										Quota: aigv1a1.QuotaValue{Limit: 200, Duration: "1m"},
@@ -910,7 +909,7 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 									{
 										ClientSelectors: []egv1a1.RateLimitSelectCondition{
 											{Headers: []egv1a1.HeaderMatch{
-												{Name: "x-tier", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("free")},
+												{Name: "x-tier", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("free")},
 											}},
 										},
 										Quota: aigv1a1.QuotaValue{Limit: 10, Duration: "1m"},
@@ -988,18 +987,18 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "gateway", UID: "uid-1"},
+				Namespace: "gateway", UID: "uid-1",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "backend-a"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
 										ClientSelectors: []egv1a1.RateLimitSelectCondition{
 											{Headers: []egv1a1.HeaderMatch{
-												{Name: "foo", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("bar")},
+												{Name: "foo", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("bar")},
 											}},
 										},
 										Quota: aigv1a1.QuotaValue{Limit: 200, Duration: "1m"},
@@ -1012,18 +1011,18 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 				},
 			},
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "gateway", UID: "uid-2"},
+				Namespace: "gateway", UID: "uid-2",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "backend-b"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
 										ClientSelectors: []egv1a1.RateLimitSelectCondition{
 											{Headers: []egv1a1.HeaderMatch{
-												{Name: "foo2", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("bar")},
+												{Name: "foo2", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("bar")},
 											}},
 										},
 										Quota: aigv1a1.QuotaValue{Limit: 300, Duration: "1m"},
@@ -1076,18 +1075,18 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		route := &routev3.Route{Name: "test-route"}
 		policies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "gateway", UID: "uid-1"},
+				Namespace: "gateway", UID: "uid-1",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "backend-a"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
 										ClientSelectors: []egv1a1.RateLimitSelectCondition{
 											{Headers: []egv1a1.HeaderMatch{
-												{Name: "foo", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("bar")},
+												{Name: "foo", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("bar")},
 											}},
 										},
 										Quota: aigv1a1.QuotaValue{Limit: 200, Duration: "1m"},
@@ -1100,18 +1099,18 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 				},
 			},
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "gateway", UID: "uid-2"},
+				Namespace: "gateway", UID: "uid-2",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "backend-b"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4"),
+							ModelName: new("gpt-4"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
 										ClientSelectors: []egv1a1.RateLimitSelectCondition{
 											{Headers: []egv1a1.HeaderMatch{
-												{Name: "foo", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("bar")},
+												{Name: "foo", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("bar")},
 											}},
 										},
 										Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
@@ -1155,7 +1154,7 @@ func TestBuildStringMatcher(t *testing.T) {
 		header := egv1a1.HeaderMatch{
 			Name:  "x-api-key",
 			Type:  ptr.To(egv1a1.HeaderMatchExact),
-			Value: ptr.To("premium"),
+			Value: new("premium"),
 		}
 		sm := buildStringMatcher(header)
 		require.Equal(t, "premium", sm.GetExact())
@@ -1165,7 +1164,7 @@ func TestBuildStringMatcher(t *testing.T) {
 		header := egv1a1.HeaderMatch{
 			Name:  "x-tier",
 			Type:  ptr.To(egv1a1.HeaderMatchRegularExpression),
-			Value: ptr.To("premium|enterprise"),
+			Value: new("premium|enterprise"),
 		}
 		sm := buildStringMatcher(header)
 		require.Equal(t, "premium|enterprise", sm.GetSafeRegex().Regex)
@@ -1175,7 +1174,7 @@ func TestBuildStringMatcher(t *testing.T) {
 		header := egv1a1.HeaderMatch{
 			Name:  "x-key",
 			Type:  nil,
-			Value: ptr.To("value"),
+			Value: new("value"),
 		}
 		sm := buildStringMatcher(header)
 		require.Equal(t, "value", sm.GetExact())
@@ -1276,7 +1275,7 @@ func TestBuildBucketRuleLimitEntries(t *testing.T) {
 					ClientSelectors: []egv1a1.RateLimitSelectCondition{
 						{
 							Headers: []egv1a1.HeaderMatch{
-								{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("premium")},
+								{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("premium")},
 							},
 						},
 					},
@@ -1314,20 +1313,20 @@ func TestEnableQuotaRateLimitOnRoute_MultiplePerModelQuotas(t *testing.T) {
 	route := &routev3.Route{Name: "test-route"}
 	policies := []aigv1a1.QuotaPolicy{
 		{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "gateway"},
+			Namespace: "gateway",
 			Spec: aigv1a1.QuotaPolicySpec{
 				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 					{Name: "bedrock-backend"},
 				},
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("claude-sonnet-4-6"),
+						ModelName: new("claude-sonnet-4-6"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 200, Duration: "1m"},
 						},
 					},
 					{
-						ModelName: ptr.To("claude-haiku-4-5"),
+						ModelName: new("claude-haiku-4-5"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 500, Duration: "1m"},
 						},
@@ -1366,7 +1365,7 @@ func TestEnableQuotaRateLimitOnRoute_MultiplePerModelQuotas(t *testing.T) {
 		route3 := &routev3.Route{Name: "test-route-3"}
 		mixedPolicies := []aigv1a1.QuotaPolicy{
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "gateway"},
+				Namespace: "gateway",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 						{Name: "bedrock-backend"},
@@ -1374,13 +1373,13 @@ func TestEnableQuotaRateLimitOnRoute_MultiplePerModelQuotas(t *testing.T) {
 					},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("claude-sonnet-4-6"),
+							ModelName: new("claude-sonnet-4-6"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{
 										ClientSelectors: []egv1a1.RateLimitSelectCondition{
 											{Headers: []egv1a1.HeaderMatch{
-												{Name: "x-tier", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("premium")},
+												{Name: "x-tier", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("premium")},
 											}},
 										},
 										Quota: aigv1a1.QuotaValue{Limit: 1000, Duration: "1m"},
@@ -1390,7 +1389,7 @@ func TestEnableQuotaRateLimitOnRoute_MultiplePerModelQuotas(t *testing.T) {
 							},
 						},
 						{
-							ModelName: ptr.To("claude-haiku-4-5"),
+							ModelName: new("claude-haiku-4-5"),
 							Quota: aigv1a1.QuotaDefinition{
 								DefaultBucket: aigv1a1.QuotaValue{Limit: 500, Duration: "1m"},
 							},
@@ -1459,7 +1458,7 @@ func TestBuildClientSelectorActions(t *testing.T) {
 		selectors := []egv1a1.RateLimitSelectCondition{
 			{
 				Headers: []egv1a1.HeaderMatch{
-					{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("premium")},
+					{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("premium")},
 				},
 			},
 		}
@@ -1490,12 +1489,12 @@ func TestBuildClientSelectorActions(t *testing.T) {
 		selectors := []egv1a1.RateLimitSelectCondition{
 			{
 				Headers: []egv1a1.HeaderMatch{
-					{Name: "h1", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("v1")},
+					{Name: "h1", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("v1")},
 				},
 			},
 			{
 				Headers: []egv1a1.HeaderMatch{
-					{Name: "h2", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("v2")},
+					{Name: "h2", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("v2")},
 					{Name: "h3", Type: ptr.To(egv1a1.HeaderMatchDistinct)},
 				},
 			},
@@ -1522,7 +1521,7 @@ func TestBuildHeaderMatchAction(t *testing.T) {
 		header := egv1a1.HeaderMatch{
 			Name:  "x-api-key",
 			Type:  ptr.To(egv1a1.HeaderMatchExact),
-			Value: ptr.To("premium"),
+			Value: new("premium"),
 		}
 		action := buildHeaderMatchAction(0, 0, header)
 		hvm := action.GetHeaderValueMatch()
@@ -1539,7 +1538,7 @@ func TestBuildHeaderMatchAction(t *testing.T) {
 		header := egv1a1.HeaderMatch{
 			Name:  "x-tier",
 			Type:  ptr.To(egv1a1.HeaderMatchRegularExpression),
-			Value: ptr.To("premium|enterprise"),
+			Value: new("premium|enterprise"),
 		}
 		action := buildHeaderMatchAction(0, 0, header)
 		hvm := action.GetHeaderValueMatch()
@@ -1564,8 +1563,8 @@ func TestBuildHeaderMatchAction(t *testing.T) {
 		header := egv1a1.HeaderMatch{
 			Name:   "x-tier",
 			Type:   ptr.To(egv1a1.HeaderMatchExact),
-			Value:  ptr.To("internal"),
-			Invert: ptr.To(true),
+			Value:  new("internal"),
+			Invert: new(true),
 		}
 		action := buildHeaderMatchAction(0, 0, header)
 		hvm := action.GetHeaderValueMatch()
@@ -1577,8 +1576,8 @@ func TestBuildHeaderMatchAction(t *testing.T) {
 		header := egv1a1.HeaderMatch{
 			Name:   "x-tier",
 			Type:   ptr.To(egv1a1.HeaderMatchExact),
-			Value:  ptr.To("external"),
-			Invert: ptr.To(false),
+			Value:  new("external"),
+			Invert: new(false),
 		}
 		action := buildHeaderMatchAction(0, 0, header)
 		hvm := action.GetHeaderValueMatch()
@@ -1590,7 +1589,7 @@ func TestBuildHeaderMatchAction(t *testing.T) {
 		header := egv1a1.HeaderMatch{
 			Name:  "x-tier",
 			Type:  ptr.To(egv1a1.HeaderMatchExact),
-			Value: ptr.To("standard"),
+			Value: new("standard"),
 		}
 		action := buildHeaderMatchAction(0, 0, header)
 		hvm := action.GetHeaderValueMatch()
@@ -1602,7 +1601,7 @@ func TestBuildHeaderMatchAction(t *testing.T) {
 		header := egv1a1.HeaderMatch{
 			Name:  "h1",
 			Type:  ptr.To(egv1a1.HeaderMatchExact),
-			Value: ptr.To("v"),
+			Value: new("v"),
 		}
 		action := buildHeaderMatchAction(3, 2, header)
 		hvm := action.GetHeaderValueMatch()
@@ -1657,7 +1656,7 @@ func newTestServerWithRoute(t *testing.T, route *aigv1b1.AIGatewayRoute, policie
 
 func TestBackendKeysForCluster(t *testing.T) {
 	route := &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+		Name: "myroute", Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			Rules: []aigv1b1.AIGatewayRouteRule{
 				{
@@ -1714,7 +1713,7 @@ func TestBackendKeysForCluster(t *testing.T) {
 
 func TestClusterHasQuotaBackend(t *testing.T) {
 	route := &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+		Name: "myroute", Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			Rules: []aigv1b1.AIGatewayRouteRule{
 				{
@@ -1768,7 +1767,7 @@ func TestClusterHasQuotaBackend(t *testing.T) {
 
 func TestRouteHasQuotaBackend(t *testing.T) {
 	aigwRoute := &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+		Name: "myroute", Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			Rules: []aigv1b1.AIGatewayRouteRule{
 				{
@@ -1863,7 +1862,7 @@ func TestRouteHasQuotaBackend(t *testing.T) {
 
 func TestPoliciesForRoute(t *testing.T) {
 	aigwRoute := &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+		Name: "myroute", Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			Rules: []aigv1b1.AIGatewayRouteRule{
 				{
@@ -1882,12 +1881,12 @@ func TestPoliciesForRoute(t *testing.T) {
 	s := newTestServerWithRoute(t, aigwRoute)
 
 	policyA := aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{UID: types.UID("uid-a")},
-		Spec:       aigv1a1.QuotaPolicySpec{},
+		UID:  types.UID("uid-a"),
+		Spec: aigv1a1.QuotaPolicySpec{},
 	}
 	policyB := aigv1a1.QuotaPolicy{
-		ObjectMeta: metav1.ObjectMeta{UID: types.UID("uid-b")},
-		Spec:       aigv1a1.QuotaPolicySpec{},
+		UID:  types.UID("uid-b"),
+		Spec: aigv1a1.QuotaPolicySpec{},
 	}
 	quotaBackendPolicies := map[string][]aigv1a1.QuotaPolicy{
 		"default/backend-a": {policyA},
@@ -1980,7 +1979,7 @@ func TestPoliciesForRoute(t *testing.T) {
 
 func TestPatchRoutesWithQuotaRateLimits(t *testing.T) {
 	aigwRoute := &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "gpt-4", Namespace: "default"},
+		Name: "gpt-4", Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			Rules: []aigv1b1.AIGatewayRouteRule{
 				{
@@ -1996,12 +1995,12 @@ func TestPatchRoutesWithQuotaRateLimits(t *testing.T) {
 	quotaBackendPolicies := map[string][]aigv1a1.QuotaPolicy{
 		"default/backend-a": {
 			{
-				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Namespace: "default",
 				Spec: aigv1a1.QuotaPolicySpec{
 					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "backend-a"}},
 					PerModelQuotas: []aigv1a1.PerModelQuota{
 						{
-							ModelName: ptr.To("gpt-4-turbo"),
+							ModelName: new("gpt-4-turbo"),
 							Quota: aigv1a1.QuotaDefinition{
 								BucketRules: []aigv1a1.QuotaRule{
 									{Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"}},
@@ -2205,8 +2204,8 @@ func TestMaybeInjectQuotaRateLimiting(t *testing.T) {
 
 	t.Run("quota policies without matching targets returns clusters unchanged", func(t *testing.T) {
 		qp := aigv1a1.QuotaPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: "qp1", Namespace: "default"},
-			Spec:       aigv1a1.QuotaPolicySpec{
+			Name: "qp1", Namespace: "default",
+			Spec: aigv1a1.QuotaPolicySpec{
 				// No targetRefs -> buildQuotaBackendPolicies returns empty map.
 			},
 		}
@@ -2220,7 +2219,7 @@ func TestMaybeInjectQuotaRateLimiting(t *testing.T) {
 
 	t.Run("adds rate limit cluster and injects filter into listener", func(t *testing.T) {
 		aigwRoute := &aigv1b1.AIGatewayRoute{
-			ObjectMeta: metav1.ObjectMeta{Name: "gpt-4", Namespace: "default"},
+			Name: "gpt-4", Namespace: "default",
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{
@@ -2232,14 +2231,14 @@ func TestMaybeInjectQuotaRateLimiting(t *testing.T) {
 			},
 		}
 		qp := aigv1a1.QuotaPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: "qp1", Namespace: "default"},
+			Name: "qp1", Namespace: "default",
 			Spec: aigv1a1.QuotaPolicySpec{
 				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 					{Name: "backend-a"},
 				},
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("gpt-4-turbo"),
+						ModelName: new("gpt-4-turbo"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
 						},
@@ -2300,7 +2299,7 @@ func TestMaybeInjectQuotaRateLimiting(t *testing.T) {
 
 	t.Run("does not inject filter into listener without quota routes", func(t *testing.T) {
 		aigwRoute := &aigv1b1.AIGatewayRoute{
-			ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+			Name: "myroute", Namespace: "default",
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{
@@ -2312,7 +2311,7 @@ func TestMaybeInjectQuotaRateLimiting(t *testing.T) {
 			},
 		}
 		qp := aigv1a1.QuotaPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: "qp1", Namespace: "default"},
+			Name: "qp1", Namespace: "default",
 			Spec: aigv1a1.QuotaPolicySpec{
 				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 					{Name: "backend-a"},
@@ -2355,7 +2354,7 @@ func TestMaybeInjectQuotaRateLimiting(t *testing.T) {
 
 	t.Run("does not duplicate rate limit cluster", func(t *testing.T) {
 		aigwRoute := &aigv1b1.AIGatewayRoute{
-			ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+			Name: "myroute", Namespace: "default",
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{
@@ -2367,7 +2366,7 @@ func TestMaybeInjectQuotaRateLimiting(t *testing.T) {
 			},
 		}
 		qp := aigv1a1.QuotaPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: "qp1", Namespace: "default"},
+			Name: "qp1", Namespace: "default",
 			Spec: aigv1a1.QuotaPolicySpec{
 				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 					{Name: "backend-a"},
@@ -2402,7 +2401,7 @@ func TestListQuotaPolicies(t *testing.T) {
 
 	t.Run("returns all policies across namespaces", func(t *testing.T) {
 		qp1 := aigv1a1.QuotaPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: "qp1", Namespace: "ns1"},
+			Name: "qp1", Namespace: "ns1",
 			Spec: aigv1a1.QuotaPolicySpec{
 				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 					{Name: "backend-a"},
@@ -2410,7 +2409,7 @@ func TestListQuotaPolicies(t *testing.T) {
 			},
 		}
 		qp2 := aigv1a1.QuotaPolicy{
-			ObjectMeta: metav1.ObjectMeta{Name: "qp2", Namespace: "ns2"},
+			Name: "qp2", Namespace: "ns2",
 			Spec: aigv1a1.QuotaPolicySpec{
 				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
 					{Name: "backend-b"},
