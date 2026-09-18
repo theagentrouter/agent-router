@@ -243,17 +243,18 @@ func buildPerModelDescriptorKeyed(descriptorModelName string, quota *aigv1a1.Quo
 
 		// Build comparable keys using semantic header names/values.
 		headers := flattenAndSortHeaders(rule.ClientSelectors)
-		leafKey := modelPrefix
+		var leafKey strings.Builder
+		leafKey.WriteString(modelPrefix)
 		if len(headers) == 0 {
-			leafKey += "/" + ComparableKeySegment("__catch_all", 2, "")
+			leafKey.WriteString("/" + ComparableKeySegment("__catch_all", 2, ""))
 		} else {
 			for depth, header := range headers {
-				leafKey += "/" + ComparableKeySegment(header.Name, depth+2, headerComparableValue(header))
+				leafKey.WriteString("/" + ComparableKeySegment(header.Name, depth+2, headerComparableValue(header)))
 			}
 		}
 		for _, rd := range ruleDescs {
 			keyed = append(keyed, KeyedDescriptor{
-				ComparableKey: leafKey,
+				ComparableKey: leafKey.String(),
 				Descriptor:    findLeafDescriptor(rd),
 			})
 		}

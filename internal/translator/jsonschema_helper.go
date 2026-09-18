@@ -7,6 +7,8 @@ package translator
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"google.golang.org/genai"
@@ -168,13 +170,7 @@ func jsonSchemaDereferenceHelper(
 
 		for k, v := range dict {
 			// Check if key should be skipped
-			shouldSkip := false
-			for _, skipKey := range skipKeys {
-				if k == skipKey {
-					shouldSkip = true
-					break
-				}
-			}
+			shouldSkip := slices.Contains(skipKeys, k)
 			if shouldSkip {
 				objOut[k] = v
 				continue
@@ -404,9 +400,7 @@ func jsonSchemaToGapic(schema map[string]any, allowedSchemaFieldsSet map[string]
 				return nil, err
 			}
 			// Merge the converted type result into the schema
-			for k, v := range convertedType {
-				convertedSchema[k] = v
-			}
+			maps.Copy(convertedSchema, convertedType)
 
 		case "allOf":
 			convertedAllOf, err := processJSONSchemaAllOfField(value, allowedSchemaFieldsSet)
@@ -421,9 +415,7 @@ func jsonSchemaToGapic(schema map[string]any, allowedSchemaFieldsSet map[string]
 				return nil, err
 			}
 			// Merge the anyOf result
-			for k, v := range convertedAnyOf {
-				convertedSchema[k] = v
-			}
+			maps.Copy(convertedSchema, convertedAnyOf)
 
 		default:
 			// Check if the key is in the allowed set

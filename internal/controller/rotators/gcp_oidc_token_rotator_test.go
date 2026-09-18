@@ -26,7 +26,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -64,12 +63,10 @@ func TestGCPOIDCTokenRotator_Rotate(t *testing.T) {
 	twoHourAfterNow := now.Add(2 * time.Hour)
 
 	oldSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      GetBSPSecretName("test-policy"),
-			Namespace: "default",
-			Annotations: map[string]string{
-				ExpirationTimeAnnotationKey: oneHourBeforeNow.Format(time.RFC3339),
-			},
+		Name:      GetBSPSecretName("test-policy"),
+		Namespace: "default",
+		Annotations: map[string]string{
+			ExpirationTimeAnnotationKey: oneHourBeforeNow.Format(time.RFC3339),
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
@@ -80,12 +77,10 @@ func TestGCPOIDCTokenRotator_Rotate(t *testing.T) {
 	}
 
 	renewedSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      GetBSPSecretName("test-policy"),
-			Namespace: "default",
-			Annotations: map[string]string{
-				ExpirationTimeAnnotationKey: twoHourAfterNow.Format(time.RFC3339),
-			},
+		Name:      GetBSPSecretName("test-policy"),
+		Namespace: "default",
+		Annotations: map[string]string{
+			ExpirationTimeAnnotationKey: twoHourAfterNow.Format(time.RFC3339),
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
@@ -299,10 +294,8 @@ func TestGCPOIDCTokenRotator_GetPreRotationTime(t *testing.T) {
 		{
 			name: "secret annotation missing",
 			secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      GetBSPSecretName("test-policy"),
-					Namespace: "default",
-				},
+				Name:      GetBSPSecretName("test-policy"),
+				Namespace: "default",
 				Data: map[string][]byte{
 					GCPProjectNameKey: []byte(dummyProjectName),
 					GCPRegionKey:      []byte(dummyProjectRegion),
@@ -315,12 +308,10 @@ func TestGCPOIDCTokenRotator_GetPreRotationTime(t *testing.T) {
 		{
 			name: "rotation time before expiration time",
 			secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      GetBSPSecretName("test-policy"),
-					Namespace: "default",
-					Annotations: map[string]string{
-						ExpirationTimeAnnotationKey: now.Add(2 * time.Hour).Format(time.RFC3339),
-					},
+				Name:      GetBSPSecretName("test-policy"),
+				Namespace: "default",
+				Annotations: map[string]string{
+					ExpirationTimeAnnotationKey: now.Add(2 * time.Hour).Format(time.RFC3339),
 				},
 				Data: map[string][]byte{
 					GCPProjectNameKey: []byte(dummyProjectName),
@@ -687,7 +678,7 @@ func TestNewGCPOIDCTokenRotator(t *testing.T) {
 	// Define OIDC values based on the real Envoy Gateway API types.
 	validOIDCConfig := aigv1b1.BackendSecurityPolicyOIDC{
 		OIDC: egv1a1.OIDC{
-			ClientID: ptr.To("client-id"),
+			ClientID: new("client-id"),
 			Scopes:   []string{"scope1", "scope2"},
 		},
 	}
@@ -803,7 +794,7 @@ func TestNewGCPOIDCTokenRotatorInvalidProxyURL(t *testing.T) {
 	t.Setenv("AI_GATEWAY_GCP_AUTH_PROXY_URL", "://invalid-proxy-url")
 
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-policy", Namespace: "default"},
+		Name: "test-policy", Namespace: "default",
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{},
 		},

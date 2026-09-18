@@ -8,8 +8,6 @@ package testopenai
 import (
 	"bytes"
 
-	"k8s.io/utils/ptr"
-
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 )
 
@@ -19,10 +17,10 @@ func EmbeddingsCassettes() []Cassette {
 }
 
 var cassetteEmbeddingsBasic = &openai.EmbeddingRequest{
-	EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("float")},
+	Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("float"),
 	OfCompletion: &openai.EmbeddingCompletionRequest{
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("float")},
-		Input:                openai.EmbeddingRequestInput{Value: "How do I reset my password?"},
+		Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("float"),
+		Input: openai.EmbeddingRequestInput{Value: "How do I reset my password?"},
 	},
 }
 
@@ -30,50 +28,50 @@ var cassetteEmbeddingsBasic = &openai.EmbeddingRequest{
 var embeddingsRequests = map[Cassette]*openai.EmbeddingRequest{
 	CassetteEmbeddingsBasic: cassetteEmbeddingsBasic,
 	CassetteEmbeddingsBase64: {
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64")},
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
-			Input:                openai.EmbeddingRequestInput{Value: "How do I reset my password?"},
+			Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64"),
+			Input: openai.EmbeddingRequestInput{Value: "How do I reset my password?"},
 		},
 	},
 	CassetteEmbeddingsTokens: {
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64")},
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
-			Input:                openai.EmbeddingRequestInput{Value: []int64{4438, 656, 358, 7738, 856, 3636, 30}},
+			Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64"),
+			Input: openai.EmbeddingRequestInput{Value: []int64{4438, 656, 358, 7738, 856, 3636, 30}},
 		},
 	},
 	CassetteEmbeddingsLargeText: {
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64")},
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+			Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64"),
 			Input: openai.EmbeddingRequestInput{
 				Value: "The quick brown fox jumps over the lazy dog. This pangram sentence contains every letter of the English alphabet at least once. It has been used since at least the late 19th century to test typewriters and computer keyboards, display examples of fonts, and other applications involving text where the use of all letters in the alphabet is desired. The phrase is commonly used for touch-typing practice, testing typewriters and computer keyboards, and displaying examples of fonts. It is also used in other applications involving all the letters in the English alphabet.",
 			},
 		},
 	},
 	CassetteEmbeddingsUnknownModel: {
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-4-ultra", EncodingFormat: ptr.To("base64")},
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-4-ultra", EncodingFormat: new("base64")},
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-4-ultra", EncodingFormat: ptr.To("base64")}, // Non-existent model.
+			Model: "text-embedding-4-ultra", EncodingFormat: new("base64"), // Non-existent model.
 			Input: openai.EmbeddingRequestInput{
 				Value: "Test with unknown model",
 			},
 		},
 	},
 	CassetteEmbeddingsDimensions: {
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, Dimensions: ptr.To(256), EncodingFormat: ptr.To("base64")},
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, Dimensions: new(256), EncodingFormat: new("base64")},
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, Dimensions: ptr.To(256), EncodingFormat: ptr.To("base64")},
+			Model: openai.ModelTextEmbedding3Small, Dimensions: new(256), EncodingFormat: new("base64"),
 			Input: openai.EmbeddingRequestInput{
 				Value: "Generate embeddings with specific dimensions",
 			},
 		},
 	},
 	CassetteEmbeddingsMaxTokens: {
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64")},
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+			Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64"),
 			Input: openai.EmbeddingRequestInput{
 				// Near 8191 token limit for openai embeddings models.
 				Value: generateLongText(7500),
@@ -81,9 +79,9 @@ var embeddingsRequests = map[Cassette]*openai.EmbeddingRequest{
 		},
 	},
 	CassetteEmbeddingsMixedBatch: {
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64")},
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+			Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64"),
 			Input: openai.EmbeddingRequestInput{
 				Value: []string{
 					"Hello 世界! 🌍",    // Mixed scripts and emoji.
@@ -96,9 +94,9 @@ var embeddingsRequests = map[Cassette]*openai.EmbeddingRequest{
 		},
 	},
 	CassetteEmbeddingsWhitespace: {
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64")},
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("base64")},
+			Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("base64"),
 			Input: openai.EmbeddingRequestInput{
 				Value: []string{
 					"   Leading spaces",
@@ -111,9 +109,9 @@ var embeddingsRequests = map[Cassette]*openai.EmbeddingRequest{
 		},
 	},
 	CassetteEmbeddingsBadRequest: {
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("invalid_format"), Dimensions: ptr.To(-1)},
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("invalid_format"), Dimensions: new(-1)},
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: openai.ModelTextEmbedding3Small, EncodingFormat: ptr.To("invalid_format"), Dimensions: ptr.To(-1)},
+			Model: openai.ModelTextEmbedding3Small, EncodingFormat: new("invalid_format"), Dimensions: new(-1),
 			Input: openai.EmbeddingRequestInput{
 				// Above maximum value 100257 (inclusive).
 				Value: []int64{102257},

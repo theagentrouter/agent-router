@@ -9,13 +9,13 @@ import (
 	"cmp"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"reflect"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 )
@@ -23,9 +23,7 @@ import (
 func TestAuthorizeRequest(t *testing.T) {
 	makeTokenWithClaims := func(extraClaims jwt.MapClaims, scopes ...string) string {
 		claims := jwt.MapClaims{}
-		for k, v := range extraClaims {
-			claims[k] = v
-		}
+		maps.Copy(claims, extraClaims)
 		if len(scopes) > 0 {
 			claims["scope"] = scopes
 		}
@@ -61,7 +59,7 @@ func TestAuthorizeRequest(t *testing.T) {
 				Rules: []filterapi.MCPRouteAuthorizationRule{
 					{
 						Action: "Allow",
-						CEL:    ptr.To(`request.host.startsWith("api.") && request.mcp.backend == "backend1" && request.mcp.params.arguments.mode == "fast" && request.headers["x-tenant-id"] == "t-123"`),
+						CEL:    new(`request.host.startsWith("api.") && request.mcp.backend == "backend1" && request.mcp.params.arguments.mode == "fast" && request.headers["x-tenant-id"] == "t-123"`),
 					},
 				},
 			},
@@ -79,7 +77,7 @@ func TestAuthorizeRequest(t *testing.T) {
 				Rules: []filterapi.MCPRouteAuthorizationRule{
 					{
 						Action: "Allow",
-						CEL:    ptr.To(`request.host.startsWith("api.") && request.mcp.backend == "backend1" && request.mcp.params.arguments.mode == "fast" && request.headers["x-tenant-id"] == "t-123"`),
+						CEL:    new(`request.host.startsWith("api.") && request.mcp.backend == "backend1" && request.mcp.params.arguments.mode == "fast" && request.headers["x-tenant-id"] == "t-123"`),
 					},
 				},
 			},
@@ -97,7 +95,7 @@ func TestAuthorizeRequest(t *testing.T) {
 				Rules: []filterapi.MCPRouteAuthorizationRule{
 					{
 						Action: "Allow",
-						CEL:    ptr.To(`10`),
+						CEL:    new(`10`),
 					},
 				},
 			},
@@ -121,7 +119,7 @@ func TestAuthorizeRequest(t *testing.T) {
 								Tool:    "tool1",
 							}},
 						},
-						CEL: ptr.To(`invalid syntax here`),
+						CEL: new(`invalid syntax here`),
 					},
 				},
 			},
@@ -154,7 +152,7 @@ func TestAuthorizeRequest(t *testing.T) {
 								Tool:    "tool1",
 							}},
 						},
-						CEL: ptr.To(`request.method == "POST" && request.mcp.backend == "backend1" && request.mcp.tool == "tool1" && request.headers["x-tenant-id"] == "t-123" && request.mcp.params.arguments["flag"] == true`),
+						CEL: new(`request.method == "POST" && request.mcp.backend == "backend1" && request.mcp.tool == "tool1" && request.headers["x-tenant-id"] == "t-123" && request.mcp.params.arguments["flag"] == true`),
 					},
 				},
 			},
@@ -185,7 +183,7 @@ func TestAuthorizeRequest(t *testing.T) {
 								Tool:    "tool1",
 							}},
 						},
-						CEL: ptr.To(`request.method == "GET"`),
+						CEL: new(`request.method == "GET"`),
 					},
 				},
 			},
@@ -210,7 +208,7 @@ func TestAuthorizeRequest(t *testing.T) {
 								Tool:    "tool2",
 							}},
 						},
-						CEL: ptr.To(`request.method == "POST"`),
+						CEL: new(`request.method == "POST"`),
 					},
 				},
 			},
@@ -257,7 +255,7 @@ func TestAuthorizeRequest(t *testing.T) {
 								Tool:    "tool1",
 							}},
 						},
-						CEL: ptr.To(`int(request.mcp.params.arguments["count"]) >= 40 && int(request.mcp.params.arguments["count"]) < 50`),
+						CEL: new(`int(request.mcp.params.arguments["count"]) >= 40 && int(request.mcp.params.arguments["count"]) < 50`),
 					},
 				},
 			},
@@ -289,7 +287,7 @@ func TestAuthorizeRequest(t *testing.T) {
 								Tool:    "tool1",
 							}},
 						},
-						CEL: ptr.To(`request.mcp.params.arguments["payload"] != null && request.mcp.params.arguments["payload"]["kind"] == "test" && request.mcp.params.arguments["payload"]["value"] == 123`),
+						CEL: new(`request.mcp.params.arguments["payload"] != null && request.mcp.params.arguments["payload"]["kind"] == "test" && request.mcp.params.arguments["payload"]["value"] == 123`),
 					},
 				},
 			},
@@ -346,7 +344,7 @@ func TestAuthorizeRequest(t *testing.T) {
 								Tool:    "tool1",
 							}},
 						},
-						CEL: ptr.To(`request.mcp.params.arguments["mode"] == "fast"`),
+						CEL: new(`request.mcp.params.arguments["mode"] == "fast"`),
 					},
 				},
 			},
@@ -480,7 +478,7 @@ func TestAuthorizeRequest(t *testing.T) {
 								Tool:    "listFiles",
 							}},
 						},
-						CEL: ptr.To(`request.mcp.params.arguments["folder"] == "restricted"`),
+						CEL: new(`request.mcp.params.arguments["folder"] == "restricted"`),
 					},
 					{
 						Action: "Allow",
@@ -521,7 +519,7 @@ func TestAuthorizeRequest(t *testing.T) {
 								Tool:    "listFiles",
 							}},
 						},
-						CEL: ptr.To(`request.mcp.params.arguments["folder"] == "restricted"`),
+						CEL: new(`request.mcp.params.arguments["folder"] == "restricted"`),
 					},
 					{
 						Action: "Allow",
@@ -832,7 +830,7 @@ func TestAuthorizeRequest(t *testing.T) {
 				Rules: []filterapi.MCPRouteAuthorizationRule{
 					{
 						Action: "Allow",
-						CEL:    ptr.To(`request.auth.jwt.claims["org"]["departments"].exists(d, d == "security")`),
+						CEL:    new(`request.auth.jwt.claims["org"]["departments"].exists(d, d == "security")`),
 						Target: &filterapi.MCPAuthorizationTarget{
 							Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "tool1"}},
 						},
@@ -1011,7 +1009,7 @@ func TestCompileAuthorizationInvalidRuleCEL(t *testing.T) {
 	_, err := compileAuthorization(&filterapi.MCPRouteAuthorization{
 		Rules: []filterapi.MCPRouteAuthorizationRule{
 			{
-				CEL: ptr.To("request."),
+				CEL: new("request."),
 			},
 		},
 	})

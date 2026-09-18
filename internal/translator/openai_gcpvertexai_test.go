@@ -20,7 +20,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genai"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -372,8 +371,8 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			input: openai.ChatCompletionRequest{
 				Stream:      false,
 				Model:       "gemini-pro",
-				Temperature: ptr.To(0.1),
-				MaxTokens:   ptr.To(int64(100)),
+				Temperature: new(0.1),
+				MaxTokens:   new(int64(100)),
 				Stop: openaigo.ChatCompletionNewParamsStopUnion{
 					OfStringArray: []string{"stop1", "stop2"},
 				},
@@ -409,8 +408,8 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			input: openai.ChatCompletionRequest{
 				Stream:      true,
 				Model:       "gemini-pro",
-				Temperature: ptr.To(0.1),
-				MaxTokens:   ptr.To(int64(100)),
+				Temperature: new(0.1),
+				MaxTokens:   new(int64(100)),
 				Stop: openaigo.ChatCompletionNewParamsStopUnion{
 					OfStringArray: []string{"stop1", "stop2"},
 				},
@@ -447,8 +446,8 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			input: openai.ChatCompletionRequest{
 				Stream:      false,
 				Model:       "gemini-pro",
-				Temperature: ptr.To(0.1),
-				MaxTokens:   ptr.To(int64(100)),
+				Temperature: new(0.1),
+				MaxTokens:   new(int64(100)),
 				Stop: openaigo.ChatCompletionNewParamsStopUnion{
 					OfStringArray: []string{"stop1", "stop2"},
 				},
@@ -537,8 +536,8 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			name: "Request with gcp thinking fields",
 			input: openai.ChatCompletionRequest{
 				Model:       "gemini-1.5-pro",
-				Temperature: ptr.To(0.7),
-				MaxTokens:   ptr.To(int64(1024)),
+				Temperature: new(0.7),
+				MaxTokens:   new(int64(1024)),
 				Stop: openaigo.ChatCompletionNewParamsStopUnion{
 					OfString: openaigo.Opt[string]("stop"),
 				},
@@ -586,8 +585,8 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			name: "Request with gcp safety setting fields",
 			input: openai.ChatCompletionRequest{
 				Model:       "gemini-1.5-pro",
-				Temperature: ptr.To(0.7),
-				MaxTokens:   ptr.To(int64(1024)),
+				Temperature: new(0.7),
+				MaxTokens:   new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{
 						OfUser: &openai.ChatCompletionUserMessageParam{
@@ -602,10 +601,10 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 						Function: &openai.FunctionDefinition{
 							Name:        "test_function",
 							Description: "A test function",
-							Parameters: map[string]interface{}{
+							Parameters: map[string]any{
 								"type": "object",
-								"properties": map[string]interface{}{
-									"param1": map[string]interface{}{
+								"properties": map[string]any{
+									"param1": map[string]any{
 										"type": "string",
 									},
 								},
@@ -633,8 +632,8 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			name: "Request with media resolution fields",
 			input: openai.ChatCompletionRequest{
 				Model:       "gemini-3-pro",
-				Temperature: ptr.To(0.7),
-				MaxTokens:   ptr.To(int64(1024)),
+				Temperature: new(0.7),
+				MaxTokens:   new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{
 						OfUser: &openai.ChatCompletionUserMessageParam{
@@ -649,10 +648,10 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 						Function: &openai.FunctionDefinition{
 							Name:        "test_function",
 							Description: "A test function",
-							Parameters: map[string]interface{}{
+							Parameters: map[string]any{
 								"type": "object",
-								"properties": map[string]interface{}{
-									"param1": map[string]interface{}{
+								"properties": map[string]any{
+									"param1": map[string]any{
 										"type": "string",
 									},
 								},
@@ -677,8 +676,8 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			name: "Request with guided choice fields",
 			input: openai.ChatCompletionRequest{
 				Model:       "gemini-1.5-pro",
-				Temperature: ptr.To(0.7),
-				MaxTokens:   ptr.To(int64(1024)),
+				Temperature: new(0.7),
+				MaxTokens:   new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{
 						OfUser: &openai.ChatCompletionUserMessageParam{
@@ -693,10 +692,10 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 						Function: &openai.FunctionDefinition{
 							Name:        "test_function",
 							Description: "A test function",
-							Parameters: map[string]interface{}{
+							Parameters: map[string]any{
 								"type": "object",
-								"properties": map[string]interface{}{
-									"param1": map[string]interface{}{
+								"properties": map[string]any{
+									"param1": map[string]any{
 										"type": "string",
 									},
 								},
@@ -717,8 +716,8 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			name: "Request with guided regex fields",
 			input: openai.ChatCompletionRequest{
 				Model:       "gemini-1.5-pro",
-				Temperature: ptr.To(0.7),
-				MaxTokens:   ptr.To(int64(1024)),
+				Temperature: new(0.7),
+				MaxTokens:   new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{
 						OfUser: &openai.ChatCompletionUserMessageParam{
@@ -733,10 +732,10 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 						Function: &openai.FunctionDefinition{
 							Name:        "test_function",
 							Description: "A test function",
-							Parameters: map[string]interface{}{
+							Parameters: map[string]any{
 								"type": "object",
-								"properties": map[string]interface{}{
-									"param1": map[string]interface{}{
+								"properties": map[string]any{
+									"param1": map[string]any{
 										"type": "string",
 									},
 								},
@@ -757,8 +756,8 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			name: "Request with gcp web grounding for enterprise",
 			input: openai.ChatCompletionRequest{
 				Model:       "gemini-1.5-pro",
-				Temperature: ptr.To(0.7),
-				MaxTokens:   ptr.To(int64(1024)),
+				Temperature: new(0.7),
+				MaxTokens:   new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{
 						OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1834,7 +1833,7 @@ data: {"candidates": [
 						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
 							{
 								Index: int64(0),
-								ID:    ptr.To("123"),
+								ID:    new("123"),
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Arguments: `{"location":"New York City"}`,
 									Name:      "get_weather",
@@ -1856,7 +1855,7 @@ data: {"candidates": [
 						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
 							{
 								Index: int64(1),
-								ID:    ptr.To("123"),
+								ID:    new("123"),
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Arguments: `{"location":"Shang Hai"}`,
 									Name:      "get_weather",
@@ -1885,7 +1884,7 @@ data: {"candidates": [
 	require.Len(t, chatCompletionChunks, 2)
 
 	for idx, chunk := range chatCompletionChunks {
-		chunk.Choices[0].Delta.ToolCalls[0].ID = ptr.To("123")
+		chunk.Choices[0].Delta.ToolCalls[0].ID = new("123")
 		require.Equal(t, chunk, expectedChatCompletionChunks[idx])
 	}
 }
@@ -2438,7 +2437,7 @@ Details: [
         ]
       }
     ]`,
-					Code: ptr.To("400"),
+					Code: new("400"),
 				},
 			},
 		},
@@ -2453,7 +2452,7 @@ Details: [
 				Error: openai.ErrorType{
 					Type:    gcpVertexAIBackendError,
 					Message: "Service temporarily unavailable",
-					Code:    ptr.To("503"),
+					Code:    new("503"),
 				},
 			},
 		},
@@ -2468,7 +2467,7 @@ Details: [
 				Error: openai.ErrorType{
 					Type:    gcpVertexAIBackendError,
 					Message: `{"error": invalid json}`,
-					Code:    ptr.To("400"),
+					Code:    new("400"),
 				},
 			},
 		},
@@ -2484,7 +2483,7 @@ Details: [
 				Error: openai.ErrorType{
 					Type:    gcpVertexAIBackendError,
 					Message: "",
-					Code:    ptr.To("500"),
+					Code:    new("500"),
 				},
 			},
 		},
@@ -2644,7 +2643,7 @@ func TestGCPVertexAIRedactBody(t *testing.T) {
 						Role: "assistant",
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID:   ptr.To("call_gcp_123"),
+								ID:   new("call_gcp_123"),
 								Type: "function",
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Name:      "search_web",

@@ -108,7 +108,7 @@ func NewServer(opts *Options) (*http.Server, *mcp.Server) {
 	expectedClaimHeaders := os.Getenv("TEST_EXPECTED_CLAIM_HEADERS")
 	if expectedClaimHeaders != "" {
 		expected := map[string]string{}
-		for _, pair := range strings.Split(expectedClaimHeaders, ",") {
+		for pair := range strings.SplitSeq(expectedClaimHeaders, ",") {
 			k, v, ok := strings.Cut(pair, "=")
 			if ok {
 				expected[k] = v

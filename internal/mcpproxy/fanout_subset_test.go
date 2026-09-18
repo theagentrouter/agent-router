@@ -15,7 +15,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -76,7 +75,7 @@ func TestNewSession_BackendSelector(t *testing.T) {
 				Rules: []filterapi.MCPRouteAuthorizationRule{
 					{
 						Action: filterapi.AuthorizationActionAllow,
-						CEL:    ptr.To(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`),
+						CEL:    new(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`),
 					},
 				},
 			},
@@ -94,7 +93,7 @@ func TestNewSession_BackendSelector(t *testing.T) {
 				Rules: []filterapi.MCPRouteAuthorizationRule{
 					{
 						Action: filterapi.AuthorizationActionAllow,
-						CEL:    ptr.To(`("," + request.headers["x-ai-eg-mcp-backend-subset"] + ",").contains("," + request.mcp.backend + ",")`),
+						CEL:    new(`("," + request.headers["x-ai-eg-mcp-backend-subset"] + ",").contains("," + request.mcp.backend + ",")`),
 					},
 				},
 			},
@@ -156,7 +155,7 @@ func TestSelectBackends(t *testing.T) {
 		Rules: []filterapi.MCPRouteAuthorizationRule{
 			{
 				Action: filterapi.AuthorizationActionAllow,
-				CEL:    ptr.To(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`),
+				CEL:    new(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`),
 			},
 		},
 	})

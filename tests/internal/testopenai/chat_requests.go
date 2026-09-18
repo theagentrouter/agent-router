@@ -130,7 +130,7 @@ var chatRequests = map[Cassette]*openai.ChatCompletionRequest{
 				},
 			},
 		},
-		Temperature: ptr.To(1.0),
+		Temperature: new(1.0),
 	},
 	CassetteChatJSONMode: {
 		Model: openai.ModelGPT5Nano,
@@ -190,7 +190,7 @@ var chatRequests = map[Cassette]*openai.ChatCompletionRequest{
 			},
 		},
 		ToolChoice:        &openai.ChatCompletionToolChoiceUnion{Value: "auto"},
-		ParallelToolCalls: ptr.To(true),
+		ParallelToolCalls: new(true),
 	},
 	CassetteChatBadRequest: {
 		Model: openai.ModelGPT5Nano,
@@ -204,7 +204,7 @@ var chatRequests = map[Cassette]*openai.ChatCompletionRequest{
 				},
 			},
 		},
-		Temperature: ptr.To(-0.5),
+		Temperature: new(-0.5),
 		MaxTokens:   ptr.To[int64](0),
 	},
 	CassetteChatImageToText: {
@@ -462,7 +462,7 @@ var (
 				},
 			},
 		},
-		Temperature:         ptr.To(1.0),
+		Temperature:         new(1.0),
 		MaxCompletionTokens: ptr.To[int64](100),
 	}
 	cassetteChatWebSearch = &openai.ChatCompletionRequest{

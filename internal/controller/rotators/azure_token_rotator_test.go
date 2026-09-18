@@ -13,7 +13,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -32,12 +31,10 @@ func TestAzureTokenRotator_Rotate(t *testing.T) {
 		mockProvider := tokenprovider.NewMockTokenProvider("fake-token", twoHourAfterNow, fmt.Errorf("failed to get azure access token"))
 
 		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      GetBSPSecretName("test-policy"),
-				Namespace: "default",
-				Annotations: map[string]string{
-					ExpirationTimeAnnotationKey: oneHourBeforeNow.Format(time.RFC3339),
-				},
+			Name:      GetBSPSecretName("test-policy"),
+			Namespace: "default",
+			Annotations: map[string]string{
+				ExpirationTimeAnnotationKey: oneHourBeforeNow.Format(time.RFC3339),
 			},
 			Data: map[string][]byte{
 				AzureAccessTokenKey: []byte("some-azure-access-token"),
@@ -89,12 +86,10 @@ func TestAzureTokenRotator_Rotate(t *testing.T) {
 		mockProvider := tokenprovider.NewMockTokenProvider("fake-token", twoHourAfterNow, nil)
 
 		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      GetBSPSecretName("test-policy"),
-				Namespace: "default",
-				Annotations: map[string]string{
-					ExpirationTimeAnnotationKey: oneHourBeforeNow.Format(time.RFC3339),
-				},
+			Name:      GetBSPSecretName("test-policy"),
+			Namespace: "default",
+			Annotations: map[string]string{
+				ExpirationTimeAnnotationKey: oneHourBeforeNow.Format(time.RFC3339),
 			},
 			Data: map[string][]byte{
 				AzureAccessTokenKey: []byte("some-azure-access-token"),
@@ -143,10 +138,8 @@ func TestAzureTokenRotator_GetPreRotationTime(t *testing.T) {
 		{
 			name: "secret annotation missing",
 			secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      GetBSPSecretName("test-policy"),
-					Namespace: "default",
-				},
+				Name:      GetBSPSecretName("test-policy"),
+				Namespace: "default",
 				Data: map[string][]byte{
 					AzureAccessTokenKey: []byte("some-azure-access-token"),
 				},
@@ -157,12 +150,10 @@ func TestAzureTokenRotator_GetPreRotationTime(t *testing.T) {
 		{
 			name: "rotation time before expiration time",
 			secret: &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      GetBSPSecretName("test-policy"),
-					Namespace: "default",
-					Annotations: map[string]string{
-						ExpirationTimeAnnotationKey: now.Add(2 * time.Hour).Format(time.RFC3339),
-					},
+				Name:      GetBSPSecretName("test-policy"),
+				Namespace: "default",
+				Annotations: map[string]string{
+					ExpirationTimeAnnotationKey: now.Add(2 * time.Hour).Format(time.RFC3339),
 				},
 				Data: map[string][]byte{
 					AzureAccessTokenKey: []byte("some-azure-access-token"),

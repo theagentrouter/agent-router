@@ -36,7 +36,7 @@ func TestChatStreamingMatchesUnary(t *testing.T) {
 			FinishReason: "stop",
 			Message: openai.ChatCompletionResponseChoiceMessage{
 				Role:    openai.ChatMessageRoleAssistant,
-				Content: ptr("hello world"),
+				Content: new("hello world"),
 			},
 		}},
 	}
@@ -44,10 +44,10 @@ func TestChatStreamingMatchesUnary(t *testing.T) {
 	finish := openai.ChatCompletionChoicesFinishReason("stop")
 	streamed := []*openai.ChatCompletionResponseChunk{
 		{ID: "chatcmpl-1", Model: "gpt-5-nano", Choices: []openai.ChatCompletionResponseChunkChoice{{
-			Delta: &openai.ChatCompletionResponseChunkChoiceDelta{Role: openai.ChatMessageRoleAssistant, Content: ptr("hello ")},
+			Delta: &openai.ChatCompletionResponseChunkChoiceDelta{Role: openai.ChatMessageRoleAssistant, Content: new("hello ")},
 		}}},
 		{ID: "chatcmpl-1", Model: "gpt-5-nano", Choices: []openai.ChatCompletionResponseChunkChoice{{
-			Delta: &openai.ChatCompletionResponseChunkChoiceDelta{Content: ptr("world")},
+			Delta: &openai.ChatCompletionResponseChunkChoiceDelta{Content: new("world")},
 		}}},
 		{ID: "chatcmpl-1", Model: "gpt-5-nano", Choices: []openai.ChatCompletionResponseChunkChoice{{
 			FinishReason: finish,
@@ -80,7 +80,7 @@ func TestChatCompletionChunkMessages_toolCallFragments(t *testing.T) {
 				Role: openai.ChatMessageRoleAssistant,
 				ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{{
 					Index:    0,
-					ID:       ptr("call_1"),
+					ID:       new("call_1"),
 					Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_weather", Arguments: `{"ci`},
 				}},
 			},
@@ -111,7 +111,7 @@ func TestChatCompletionChunkMessages_finishReason(t *testing.T) {
 		{Choices: []openai.ChatCompletionResponseChunkChoice{{
 			Delta: &openai.ChatCompletionResponseChunkChoiceDelta{
 				Role:    openai.ChatMessageRoleAssistant,
-				Content: ptr("hi there"),
+				Content: new("hi there"),
 			},
 		}}},
 		{Choices: []openai.ChatCompletionResponseChunkChoice{{
@@ -141,12 +141,12 @@ func TestChatCompletionChunkMessages_toolCallFragmentsOutOfOrder(t *testing.T) {
 				ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
 					{
 						Index:    0,
-						ID:       ptr("call_weather"),
+						ID:       new("call_weather"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_weather", Arguments: `{"city":`},
 					},
 					{
 						Index:    1,
-						ID:       ptr("call_time"),
+						ID:       new("call_time"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_time", Arguments: `{"tz":`},
 					},
 				},
@@ -190,8 +190,8 @@ func TestChatCompletionChunkMessages_toolCallFragmentsOutOfOrder(t *testing.T) {
 func TestChatCompletionChunkMessages_multipleChoices(t *testing.T) {
 	chunks := []*openai.ChatCompletionResponseChunk{
 		{Choices: []openai.ChatCompletionResponseChunkChoice{
-			{Index: 1, Delta: &openai.ChatCompletionResponseChunkChoiceDelta{Content: ptr("second")}},
-			{Index: 0, Delta: &openai.ChatCompletionResponseChunkChoiceDelta{Content: ptr("first")}},
+			{Index: 1, Delta: &openai.ChatCompletionResponseChunkChoiceDelta{Content: new("second")}},
+			{Index: 0, Delta: &openai.ChatCompletionResponseChunkChoiceDelta{Content: new("first")}},
 		}},
 	}
 

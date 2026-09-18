@@ -120,7 +120,7 @@ func BenchmarkChatCompletions(b *testing.B) {
 // Total size = numMessages * (numBytes + 55) + 60
 func createChatCompletionRequest(numMessages, numBytes int) string {
 	var messages []string
-	for i := 0; i < numMessages; i++ {
+	for range numMessages {
 		content := strings.Repeat("A", numBytes)
 		messages = append(messages, fmt.Sprintf(`{"role": "user", "content": "This is message number %s."}`, content))
 	}

@@ -1961,7 +1961,7 @@ func requestCompletionCount(t *testing.T, adminPort int, backend string) int {
 	require.NotEmpty(t, provider, "unmapped backend %q", backend)
 
 	total := 0
-	for _, line := range strings.Split(string(body), "\n") {
+	for line := range strings.SplitSeq(string(body), "\n") {
 		if !strings.HasPrefix(line, "gen_ai_server_request_duration_seconds_count") {
 			continue
 		}

@@ -11,7 +11,6 @@ import (
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	rlsconfv3 "github.com/envoyproxy/go-control-plane/ratelimit/config/ratelimit/v3"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
@@ -337,7 +336,7 @@ func TestBuildBucketRuleDescriptors(t *testing.T) {
 	t.Run("shadow mode enabled", func(t *testing.T) {
 		rule := &aigv1a1.QuotaRule{
 			Quota:      aigv1a1.QuotaValue{Limit: 50, Duration: "1m"},
-			ShadowMode: ptr.To(true),
+			ShadowMode: new(true),
 		}
 		descs, err := buildBucketRuleDescriptors(0, rule)
 		require.NoError(t, err)
@@ -348,7 +347,7 @@ func TestBuildBucketRuleDescriptors(t *testing.T) {
 	t.Run("shadow mode disabled", func(t *testing.T) {
 		rule := &aigv1a1.QuotaRule{
 			Quota:      aigv1a1.QuotaValue{Limit: 50, Duration: "1m"},
-			ShadowMode: ptr.To(false),
+			ShadowMode: new(false),
 		}
 		descs, err := buildBucketRuleDescriptors(0, rule)
 		require.NoError(t, err)
@@ -372,7 +371,7 @@ func TestBuildBucketRuleDescriptors(t *testing.T) {
 				{Headers: []egv1a1.HeaderMatch{{Name: "h1"}, {Name: "h2"}}},
 			},
 			Quota:      aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
-			ShadowMode: ptr.To(true),
+			ShadowMode: new(true),
 		}
 		descs, err := buildBucketRuleDescriptors(0, rule)
 		require.NoError(t, err)
@@ -408,7 +407,7 @@ func TestBuildBucketRuleDescriptors(t *testing.T) {
 		rule := &aigv1a1.QuotaRule{
 			ClientSelectors: []egv1a1.RateLimitSelectCondition{
 				{Headers: []egv1a1.HeaderMatch{
-					{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("premium")},
+					{Name: "x-api-key", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("premium")},
 				}},
 			},
 			Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
@@ -426,7 +425,7 @@ func TestBuildBucketRuleDescriptors(t *testing.T) {
 			ClientSelectors: []egv1a1.RateLimitSelectCondition{
 				{Headers: []egv1a1.HeaderMatch{
 					{Name: "x-user-id", Type: ptr.To(egv1a1.HeaderMatchDistinct)},
-					{Name: "x-tier", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("premium")},
+					{Name: "x-tier", Type: ptr.To(egv1a1.HeaderMatchExact), Value: new("premium")},
 				}},
 			},
 			Quota: aigv1a1.QuotaValue{Limit: 75, Duration: "1h"},
@@ -508,7 +507,7 @@ func TestBuildBackendDescriptor(t *testing.T) {
 			Spec: aigv1a1.QuotaPolicySpec{
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("gpt-4"),
+						ModelName: new("gpt-4"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
 						},
@@ -555,13 +554,13 @@ func TestBuildBackendDescriptor(t *testing.T) {
 			Spec: aigv1a1.QuotaPolicySpec{
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("gpt-4"),
+						ModelName: new("gpt-4"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
 						},
 					},
 					{
-						ModelName: ptr.To("claude"),
+						ModelName: new("claude"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 200, Duration: "1m"},
 						},
@@ -608,7 +607,7 @@ func TestBuildBackendDescriptor(t *testing.T) {
 			Spec: aigv1a1.QuotaPolicySpec{
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("bad-model"),
+						ModelName: new("bad-model"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "xyz"},
 						},
@@ -663,7 +662,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			Spec: aigv1a1.QuotaPolicySpec{},
 		}
 		backend := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: "b1", Namespace: "default"},
+			Name: "b1", Namespace: "default",
 		}
 
 		configs, err := BuildRateLimitConfigs(policy, []*aigv1b1.AIServiceBackend{backend})
@@ -676,7 +675,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			Spec: aigv1a1.QuotaPolicySpec{
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("gpt-4"),
+						ModelName: new("gpt-4"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
 						},
@@ -685,7 +684,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			},
 		}
 		backend := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: "openai", Namespace: "default"},
+			Name: "openai", Namespace: "default",
 		}
 
 		configs, err := BuildRateLimitConfigs(policy, []*aigv1b1.AIServiceBackend{backend})
@@ -703,7 +702,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			Spec: aigv1a1.QuotaPolicySpec{
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("gpt-4"),
+						ModelName: new("gpt-4"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
 						},
@@ -712,10 +711,10 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			},
 		}
 		b1 := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: "openai", Namespace: "ns1"},
+			Name: "openai", Namespace: "ns1",
 		}
 		b2 := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: "azure", Namespace: "ns2"},
+			Name: "azure", Namespace: "ns2",
 		}
 
 		configs, err := BuildRateLimitConfigs(policy, []*aigv1b1.AIServiceBackend{b1, b2})
@@ -731,7 +730,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			Spec: aigv1a1.QuotaPolicySpec{
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("gpt-4"),
+						ModelName: new("gpt-4"),
 						Quota: aigv1a1.QuotaDefinition{
 							DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "bad"},
 						},
@@ -740,7 +739,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			},
 		}
 		backend := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns"},
+			Name: "b", Namespace: "ns",
 		}
 
 		_, err := BuildRateLimitConfigs(policy, []*aigv1b1.AIServiceBackend{backend})
@@ -753,12 +752,12 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			Spec: aigv1a1.QuotaPolicySpec{
 				PerModelQuotas: []aigv1a1.PerModelQuota{
 					{
-						ModelName: ptr.To("gpt-4"),
+						ModelName: new("gpt-4"),
 						Quota: aigv1a1.QuotaDefinition{
 							BucketRules: []aigv1a1.QuotaRule{
 								{
 									Quota:      aigv1a1.QuotaValue{Limit: 200, Duration: "1m"},
-									ShadowMode: ptr.To(true),
+									ShadowMode: new(true),
 								},
 								{
 									Quota: aigv1a1.QuotaValue{Limit: 50, Duration: "1m"},
@@ -774,7 +773,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			},
 		}
 		backend := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: "openai", Namespace: "default"},
+			Name: "openai", Namespace: "default",
 		}
 
 		configs, err := BuildRateLimitConfigs(policy, []*aigv1b1.AIServiceBackend{backend})
@@ -814,7 +813,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			},
 		}
 		backend := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns"},
+			Name: "b", Namespace: "ns",
 		}
 
 		configs, err := BuildRateLimitConfigs(policy, []*aigv1b1.AIServiceBackend{backend})
@@ -831,7 +830,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 			},
 		}
 		backend := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "prod"},
+			Name: "svc", Namespace: "prod",
 		}
 
 		configs, err := BuildRateLimitConfigs(policy, []*aigv1b1.AIServiceBackend{backend})

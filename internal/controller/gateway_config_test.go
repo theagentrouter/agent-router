@@ -54,10 +54,8 @@ func TestGatewayConfigController_Reconcile(t *testing.T) {
 
 	// Create a GatewayConfig.
 	gatewayConfig := &aigv1b1.GatewayConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-config",
-			Namespace: "default",
-		},
+		Name:      "test-config",
+		Namespace: "default",
 		Spec: aigv1b1.GatewayConfigSpec{
 			ExtProc: &aigv1b1.GatewayConfigExtProc{
 				Kubernetes: &egv1a1.KubernetesContainerSpec{
@@ -79,7 +77,7 @@ func TestGatewayConfigController_Reconcile(t *testing.T) {
 
 	// Reconcile - should succeed with no referencing Gateways.
 	result, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: "test-config", Namespace: "default"},
+		Name: "test-config", Namespace: "default",
 	})
 	require.NoError(t, err)
 	require.Equal(t, ctrl.Result{}, result)
@@ -99,10 +97,8 @@ func TestGatewayConfigController_NotifyGateways(t *testing.T) {
 
 	// Create a GatewayConfig.
 	gatewayConfig := &aigv1b1.GatewayConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-config",
-			Namespace: "default",
-		},
+		Name:      "test-config",
+		Namespace: "default",
 		Spec: aigv1b1.GatewayConfigSpec{
 			ExtProc: &aigv1b1.GatewayConfigExtProc{
 				Kubernetes: &egv1a1.KubernetesContainerSpec{
@@ -118,7 +114,7 @@ func TestGatewayConfigController_NotifyGateways(t *testing.T) {
 
 	// Reconcile without any referencing Gateway - should not add finalizer.
 	_, err = c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: "test-config", Namespace: "default"},
+		Name: "test-config", Namespace: "default",
 	})
 	require.NoError(t, err)
 
@@ -129,12 +125,10 @@ func TestGatewayConfigController_NotifyGateways(t *testing.T) {
 
 	// Create a Gateway that references the GatewayConfig.
 	gateway := &gwapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-gateway",
-			Namespace: "default",
-			Annotations: map[string]string{
-				GatewayConfigAnnotationKey: "test-config",
-			},
+		Name:      "test-gateway",
+		Namespace: "default",
+		Annotations: map[string]string{
+			GatewayConfigAnnotationKey: "test-config",
 		},
 		Spec: gwapiv1.GatewaySpec{
 			GatewayClassName: "test-class",
@@ -152,7 +146,7 @@ func TestGatewayConfigController_NotifyGateways(t *testing.T) {
 
 	// Reconcile again - should notify the Gateway and still not add any finalizer.
 	_, err = c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: "test-config", Namespace: "default"},
+		Name: "test-config", Namespace: "default",
 	})
 	require.NoError(t, err)
 
@@ -172,10 +166,8 @@ func TestGatewayConfigController_MultipleGatewaysReferencing(t *testing.T) {
 
 	// Create a GatewayConfig.
 	gatewayConfig := &aigv1b1.GatewayConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "shared-config",
-			Namespace: "default",
-		},
+		Name:      "shared-config",
+		Namespace: "default",
 		Spec: aigv1b1.GatewayConfigSpec{
 			ExtProc: &aigv1b1.GatewayConfigExtProc{
 				Kubernetes: &egv1a1.KubernetesContainerSpec{
@@ -192,12 +184,10 @@ func TestGatewayConfigController_MultipleGatewaysReferencing(t *testing.T) {
 	// Create two Gateways that reference the same GatewayConfig.
 	for _, name := range []string{"gateway-1", "gateway-2"} {
 		gateway := &gwapiv1.Gateway{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: "default",
-				Annotations: map[string]string{
-					GatewayConfigAnnotationKey: "shared-config",
-				},
+			Name:      name,
+			Namespace: "default",
+			Annotations: map[string]string{
+				GatewayConfigAnnotationKey: "shared-config",
 			},
 			Spec: gwapiv1.GatewaySpec{
 				GatewayClassName: "test-class",
@@ -216,7 +206,7 @@ func TestGatewayConfigController_MultipleGatewaysReferencing(t *testing.T) {
 
 	// Reconcile - should notify both gateways.
 	_, err = c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: "shared-config", Namespace: "default"},
+		Name: "shared-config", Namespace: "default",
 	})
 	require.NoError(t, err)
 
@@ -239,24 +229,20 @@ func TestGatewayConfigController_DeletionDoesNotBlock(t *testing.T) {
 
 	// Create a GatewayConfig marked for deletion.
 	gatewayConfig := &aigv1b1.GatewayConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "test-config",
-			Namespace:         "default",
-			DeletionTimestamp: &deletionTime,
-		},
-		Spec: aigv1b1.GatewayConfigSpec{},
+		Name:              "test-config",
+		Namespace:         "default",
+		DeletionTimestamp: &deletionTime,
+		Spec:              aigv1b1.GatewayConfigSpec{},
 	}
 	err := fakeClient.Create(t.Context(), gatewayConfig)
 	require.NoError(t, err)
 
 	// Create a Gateway that references the GatewayConfig.
 	gateway := &gwapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-gateway",
-			Namespace: "default",
-			Annotations: map[string]string{
-				GatewayConfigAnnotationKey: "test-config",
-			},
+		Name:      "test-gateway",
+		Namespace: "default",
+		Annotations: map[string]string{
+			GatewayConfigAnnotationKey: "test-config",
 		},
 		Spec: gwapiv1.GatewaySpec{
 			GatewayClassName: "test-class",
@@ -274,7 +260,7 @@ func TestGatewayConfigController_DeletionDoesNotBlock(t *testing.T) {
 
 	// Reconcile should not block deletion and should notify the referencing Gateway.
 	_, err = c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: "test-config", Namespace: "default"},
+		Name: "test-config", Namespace: "default",
 	})
 	require.NoError(t, err)
 
@@ -288,7 +274,7 @@ func TestGatewayConfigController_ReconcileNotFound(t *testing.T) {
 	c := NewGatewayConfigController(fakeClient, ctrl.Log, eventCh.Ch)
 
 	result, err := c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: "missing-config", Namespace: "default"},
+		Name: "missing-config", Namespace: "default",
 	})
 	require.NoError(t, err)
 	require.Equal(t, ctrl.Result{}, result)
@@ -305,17 +291,15 @@ func TestGatewayConfigController_ListErrorSetsNotAcceptedStatus(t *testing.T) {
 	c := NewGatewayConfigController(errClient, ctrl.Log, eventCh.Ch)
 
 	gatewayConfig := &aigv1b1.GatewayConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "list-error-config",
-			Namespace: "default",
-		},
-		Spec: aigv1b1.GatewayConfigSpec{},
+		Name:      "list-error-config",
+		Namespace: "default",
+		Spec:      aigv1b1.GatewayConfigSpec{},
 	}
 	err := fakeClient.Create(t.Context(), gatewayConfig)
 	require.NoError(t, err)
 
 	_, err = c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: "list-error-config", Namespace: "default"},
+		Name: "list-error-config", Namespace: "default",
 	})
 	require.Error(t, err)
 
@@ -335,12 +319,10 @@ func TestGatewayConfigController_GatewayReferencesNonExistingConfig(t *testing.T
 
 	// Create a Gateway that references a GatewayConfig that doesn't exist (e.g., user made a typo).
 	gateway := &gwapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-gateway",
-			Namespace: "default",
-			Annotations: map[string]string{
-				GatewayConfigAnnotationKey: "typo-config", // This config will never be created
-			},
+		Name:      "test-gateway",
+		Namespace: "default",
+		Annotations: map[string]string{
+			GatewayConfigAnnotationKey: "typo-config", // This config will never be created
 		},
 		Spec: gwapiv1.GatewaySpec{
 			GatewayClassName: "test-class",
@@ -359,7 +341,7 @@ func TestGatewayConfigController_GatewayReferencesNonExistingConfig(t *testing.T
 	// Try to reconcile the non-existing GatewayConfig.
 	// This should return nil (no error) since the resource doesn't exist.
 	_, err = c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: client.ObjectKey{Name: "typo-config", Namespace: "default"},
+		Name: "typo-config", Namespace: "default",
 	})
 	require.NoError(t, err)
 

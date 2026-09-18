@@ -34,10 +34,8 @@ func Test_aiGatewayRouteIndexFunc(t *testing.T) {
 
 	// Create an AIGatewayRoute.
 	aiGatewayRoute := &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "myroute",
-			Namespace: "default",
-		},
+		Name:      "myroute",
+		Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			ParentRefs: []gwapiv1a2.ParentReference{
 				{Name: "mytarget", Kind: ptr.To(gwapiv1a2.Kind("Gateway"))},
@@ -79,7 +77,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "api key with namespace",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-1", Namespace: "ns"},
+				Name: "some-backend-security-policy-1", Namespace: "ns",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 					APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
@@ -95,7 +93,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "api key without namespace",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-2", Namespace: "ns"},
+				Name: "some-backend-security-policy-2", Namespace: "ns",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 					APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
@@ -108,7 +106,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "aws credentials with namespace",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-3", Namespace: "ns"},
+				Name: "some-backend-security-policy-3", Namespace: "ns",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 					AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -125,7 +123,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "aws credentials without namespace",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-4", Namespace: "ns"},
+				Name: "some-backend-security-policy-4", Namespace: "ns",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 					AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -140,7 +138,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "Azure api key with namespace",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-5", Namespace: "ns"},
+				Name: "some-backend-security-policy-5", Namespace: "ns",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAzureAPIKey,
 					AzureAPIKey: &aigv1b1.BackendSecurityPolicyAzureAPIKey{
@@ -156,7 +154,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "Azure api key without namespace",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-6", Namespace: "ns"},
+				Name: "some-backend-security-policy-6", Namespace: "ns",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAzureAPIKey,
 					AzureAPIKey: &aigv1b1.BackendSecurityPolicyAzureAPIKey{
@@ -169,7 +167,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "Azure credentials with namespace",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-7", Namespace: "ns"},
+				Name: "some-backend-security-policy-7", Namespace: "ns",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 					AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
@@ -185,7 +183,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "Azure credentials without namespace",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-8", Namespace: "ns"},
+				Name: "some-backend-security-policy-8", Namespace: "ns",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 					AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
@@ -200,7 +198,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "AWS OIDC exchange token",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-9", Namespace: "foo"},
+				Name: "some-backend-security-policy-9", Namespace: "foo",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 					AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -213,7 +211,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "Azure OIDC exchange token",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-10", Namespace: "foo"},
+				Name: "some-backend-security-policy-10", Namespace: "foo",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 					AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
@@ -226,7 +224,7 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 		{
 			name: "anthropic api key",
 			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-2", Namespace: "ns"},
+				Name: "some-backend-security-policy-2", Namespace: "ns",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey,
 					AnthropicAPIKey: &aigv1b1.BackendSecurityPolicyAnthropicAPIKey{
@@ -276,10 +274,8 @@ func Test_referenceGrantToTargetKindIndexFunc(t *testing.T) {
 		{
 			name: "single target kind - AIServiceBackend",
 			referenceGrant: &gwapiv1b1.ReferenceGrant{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "grant1",
-					Namespace: "backend-ns",
-				},
+				Name:      "grant1",
+				Namespace: "backend-ns",
 				Spec: gwapiv1b1.ReferenceGrantSpec{
 					From: []gwapiv1b1.ReferenceGrantFrom{
 						{
@@ -301,10 +297,8 @@ func Test_referenceGrantToTargetKindIndexFunc(t *testing.T) {
 		{
 			name: "multiple target kinds",
 			referenceGrant: &gwapiv1b1.ReferenceGrant{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "grant2",
-					Namespace: "backend-ns",
-				},
+				Name:      "grant2",
+				Namespace: "backend-ns",
 				Spec: gwapiv1b1.ReferenceGrantSpec{
 					From: []gwapiv1b1.ReferenceGrantFrom{
 						{
@@ -330,10 +324,8 @@ func Test_referenceGrantToTargetKindIndexFunc(t *testing.T) {
 		{
 			name: "empty group for core resources",
 			referenceGrant: &gwapiv1b1.ReferenceGrant{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "grant3",
-					Namespace: "other-ns",
-				},
+				Name:      "grant3",
+				Namespace: "other-ns",
 				Spec: gwapiv1b1.ReferenceGrantSpec{
 					From: []gwapiv1b1.ReferenceGrantFrom{
 						{
@@ -355,10 +347,8 @@ func Test_referenceGrantToTargetKindIndexFunc(t *testing.T) {
 		{
 			name: "no target kinds",
 			referenceGrant: &gwapiv1b1.ReferenceGrant{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "grant4",
-					Namespace: "backend-ns",
-				},
+				Name:      "grant4",
+				Namespace: "backend-ns",
 				Spec: gwapiv1b1.ReferenceGrantSpec{
 					From: []gwapiv1b1.ReferenceGrantFrom{
 						{
@@ -391,10 +381,8 @@ func Test_referenceGrantIndexWithQuery(t *testing.T) {
 
 	// Create multiple ReferenceGrants with different target kinds
 	grant1 := &gwapiv1b1.ReferenceGrant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "grant-aiservicebackend",
-			Namespace: "backend-ns",
-		},
+		Name:      "grant-aiservicebackend",
+		Namespace: "backend-ns",
 		Spec: gwapiv1b1.ReferenceGrantSpec{
 			From: []gwapiv1b1.ReferenceGrantFrom{
 				{
@@ -413,10 +401,8 @@ func Test_referenceGrantIndexWithQuery(t *testing.T) {
 	}
 
 	grant2 := &gwapiv1b1.ReferenceGrant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "grant-secret",
-			Namespace: "backend-ns",
-		},
+		Name:      "grant-secret",
+		Namespace: "backend-ns",
 		Spec: gwapiv1b1.ReferenceGrantSpec{
 			From: []gwapiv1b1.ReferenceGrantFrom{
 				{
@@ -435,10 +421,8 @@ func Test_referenceGrantIndexWithQuery(t *testing.T) {
 	}
 
 	grant3 := &gwapiv1b1.ReferenceGrant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "grant-multiple",
-			Namespace: "backend-ns",
-		},
+		Name:      "grant-multiple",
+		Namespace: "backend-ns",
 		Spec: gwapiv1b1.ReferenceGrantSpec{
 			From: []gwapiv1b1.ReferenceGrantFrom{
 				{
@@ -575,7 +559,7 @@ func Test_handleFinalizer(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			obj := &aigv1b1.AIGatewayRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-object", Namespace: "test-namespace"},
+				Name: "test-object", Namespace: "test-namespace",
 			}
 
 			if tc.hasFinalizer {
@@ -583,7 +567,7 @@ func Test_handleFinalizer(t *testing.T) {
 			}
 
 			if tc.hasDeletionTS {
-				obj.DeletionTimestamp = ptr.To(metav1.Now())
+				obj.DeletionTimestamp = new(metav1.Now())
 			}
 
 			callbackExecuted := false
@@ -629,10 +613,8 @@ func Test_aiGatewayRouteToAttachedGatewayIndexFunc(t *testing.T) {
 		{
 			name: "parentRef cross-namespace reference",
 			route: &aigv1b1.AIGatewayRoute{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "ai-route",
-					Namespace: "envoy-ai-gateway-system",
-				},
+				Name:      "ai-route",
+				Namespace: "envoy-ai-gateway-system",
 				Spec: aigv1b1.AIGatewayRouteSpec{
 					ParentRefs: []gwapiv1a2.ParentReference{
 						{
@@ -648,10 +630,8 @@ func Test_aiGatewayRouteToAttachedGatewayIndexFunc(t *testing.T) {
 		{
 			name: "parentRef same namespace as route",
 			route: &aigv1b1.AIGatewayRoute{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "ai-route",
-					Namespace: "production",
-				},
+				Name:      "ai-route",
+				Namespace: "production",
 				Spec: aigv1b1.AIGatewayRouteSpec{
 					ParentRefs: []gwapiv1a2.ParentReference{
 						{
@@ -666,10 +646,8 @@ func Test_aiGatewayRouteToAttachedGatewayIndexFunc(t *testing.T) {
 		{
 			name: "multiple parentRefs with mixed namespaces",
 			route: &aigv1b1.AIGatewayRoute{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "ai-route",
-					Namespace: "app-namespace",
-				},
+				Name:      "ai-route",
+				Namespace: "app-namespace",
 				Spec: aigv1b1.AIGatewayRouteSpec{
 					ParentRefs: []gwapiv1a2.ParentReference{
 						{
@@ -692,10 +670,8 @@ func Test_aiGatewayRouteToAttachedGatewayIndexFunc(t *testing.T) {
 		{
 			name: "targetRefs always use route namespace",
 			route: &aigv1b1.AIGatewayRoute{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "ai-route",
-					Namespace: "default",
-				},
+				Name:      "ai-route",
+				Namespace: "default",
 				Spec: aigv1b1.AIGatewayRouteSpec{
 					ParentRefs: []gwapiv1a2.ParentReference{
 						{
@@ -727,10 +703,8 @@ func Test_mcpRouteToAttachedGatewayIndexFunc(t *testing.T) {
 		{
 			name: "parentRef cross-namespace reference",
 			route: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "mcp-route",
-					Namespace: "envoy-mcp-gateway-system",
-				},
+				Name:      "mcp-route",
+				Namespace: "envoy-mcp-gateway-system",
 				Spec: aigv1b1.MCPRouteSpec{
 					ParentRefs: []gwapiv1.ParentReference{
 						{
@@ -746,10 +720,8 @@ func Test_mcpRouteToAttachedGatewayIndexFunc(t *testing.T) {
 		{
 			name: "parentRef same namespace as route",
 			route: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "mcp-route",
-					Namespace: "production",
-				},
+				Name:      "mcp-route",
+				Namespace: "production",
 				Spec: aigv1b1.MCPRouteSpec{
 					ParentRefs: []gwapiv1.ParentReference{
 						{
@@ -764,10 +736,8 @@ func Test_mcpRouteToAttachedGatewayIndexFunc(t *testing.T) {
 		{
 			name: "multiple parentRefs with mixed namespaces",
 			route: &aigv1b1.MCPRoute{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "mcp-route",
-					Namespace: "app-namespace",
-				},
+				Name:      "mcp-route",
+				Namespace: "app-namespace",
 				Spec: aigv1b1.MCPRouteSpec{
 					ParentRefs: []gwapiv1.ParentReference{
 						{

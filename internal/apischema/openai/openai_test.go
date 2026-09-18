@@ -277,7 +277,7 @@ func TestOpenAIChatCompletionMessageUnmarshal(t *testing.T) {
 						OfAssistant: &ChatCompletionAssistantMessageParam{
 							Role: ChatMessageRoleAssistant,
 							Content: StringOrAssistantRoleContentUnion{Value: []ChatCompletionAssistantMessageParamContent{
-								{Text: ptr.To("you are a helpful assistant content"), Type: "text"},
+								{Text: new("you are a helpful assistant content"), Type: "text"},
 							}},
 						},
 					},
@@ -396,7 +396,7 @@ func TestOpenAIChatCompletionMessageUnmarshal(t *testing.T) {
 					},
 				},
 				MaxCompletionTokens: ptr.To[int64](1024),
-				ParallelToolCalls:   ptr.To(true),
+				ParallelToolCalls:   new(true),
 				Stop: openai.ChatCompletionNewParamsStopUnion{
 					OfStringArray: []string{"\n", "stop"},
 				},
@@ -733,7 +733,7 @@ func TestStringOrAssistantRoleContentUnionMarshal(t *testing.T) {
 			name: "content object",
 			input: StringOrAssistantRoleContentUnion{
 				Value: ChatCompletionAssistantMessageParamContent{
-					Text: ptr.To("Here is the answer"),
+					Text: new("Here is the answer"),
 					Type: ChatCompletionAssistantMessageParamContentTypeText,
 				},
 			},
@@ -886,7 +886,7 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 				},
 			},
 		},
-		Temperature: ptr.To(0.7),
+		Temperature: new(0.7),
 		MaxTokens:   ptr.To[int64](100),
 	}
 
@@ -927,7 +927,7 @@ func TestChatCompletionResponse(t *testing.T) {
 						FinishReason: ChatCompletionChoicesFinishReasonStop,
 						Message: ChatCompletionResponseChoiceMessage{
 							Role:    "assistant",
-							Content: ptr.To("Hello!"),
+							Content: new("Hello!"),
 						},
 					},
 				},
@@ -971,8 +971,8 @@ func TestChatCompletionResponse(t *testing.T) {
 						FinishReason: ChatCompletionChoicesFinishReasonStop,
 						Message: ChatCompletionResponseChoiceMessage{
 							Role:    "assistant",
-							Content: ptr.To("Check out httpbin.org"),
-							Annotations: ptr.To([]Annotation{
+							Content: new("Check out httpbin.org"),
+							Annotations: new([]Annotation{
 								{
 									Type: "url_citation",
 									URLCitation: &URLCitation{
@@ -1034,7 +1034,7 @@ func TestChatCompletionResponse(t *testing.T) {
 						FinishReason: ChatCompletionChoicesFinishReasonStop,
 						Message: ChatCompletionResponseChoiceMessage{
 							Role:    "assistant",
-							Content: ptr.To("This is a safe response"),
+							Content: new("This is a safe response"),
 							SafetyRatings: []*genai.SafetyRating{
 								{
 									Category:    genai.HarmCategoryHarassment,
@@ -1425,7 +1425,7 @@ func TestChatCompletionResponseChunkChoice(t *testing.T) {
 			choice: ChatCompletionResponseChunkChoice{
 				Index: 0,
 				Delta: &ChatCompletionResponseChunkChoiceDelta{
-					Content: ptr.To("Hello"),
+					Content: new("Hello"),
 					Role:    "assistant",
 				},
 			},
@@ -1436,7 +1436,7 @@ func TestChatCompletionResponseChunkChoice(t *testing.T) {
 			choice: ChatCompletionResponseChunkChoice{
 				Index: 0,
 				Delta: &ChatCompletionResponseChunkChoiceDelta{
-					Content: ptr.To(""),
+					Content: new(""),
 					Role:    "assistant",
 				},
 			},
@@ -1450,7 +1450,7 @@ func TestChatCompletionResponseChunkChoice(t *testing.T) {
 					Role: "assistant",
 					ToolCalls: []ChatCompletionChunkChoiceDeltaToolCall{
 						{
-							ID:   ptr.To("tooluse_QklrEHKjRu6Oc4BQUfy7ZQ"),
+							ID:   new("tooluse_QklrEHKjRu6Oc4BQUfy7ZQ"),
 							Type: "function",
 							Function: ChatCompletionMessageToolCallFunctionParam{
 								Name:      "cosine",
@@ -1468,7 +1468,7 @@ func TestChatCompletionResponseChunkChoice(t *testing.T) {
 			choice: ChatCompletionResponseChunkChoice{
 				Index: 0,
 				Delta: &ChatCompletionResponseChunkChoiceDelta{
-					Annotations: ptr.To([]Annotation{
+					Annotations: new([]Annotation{
 						{
 							Type: "url_citation",
 							URLCitation: &URLCitation{
@@ -1514,7 +1514,7 @@ func TestChatCompletionResponseChunk(t *testing.T) {
 					{
 						Index: 0,
 						Delta: &ChatCompletionResponseChunkChoiceDelta{
-							Content: ptr.To("Hello"),
+							Content: new("Hello"),
 						},
 					},
 				},
@@ -1533,7 +1533,7 @@ func TestChatCompletionResponseChunk(t *testing.T) {
 					{
 						Index: 0,
 						Delta: &ChatCompletionResponseChunkChoiceDelta{
-							Content: ptr.To("World"),
+							Content: new("World"),
 						},
 					},
 				},
@@ -2205,7 +2205,7 @@ func TestStringOrAssistantRoleContentUnionUnmarshal(t *testing.T) {
 				Value: []ChatCompletionAssistantMessageParamContent{
 					{
 						Type: ChatCompletionAssistantMessageParamContentTypeText,
-						Text: ptr.To("hello from array"),
+						Text: new("hello from array"),
 					},
 				},
 			},
@@ -2216,7 +2216,7 @@ func TestStringOrAssistantRoleContentUnionUnmarshal(t *testing.T) {
 			expected: StringOrAssistantRoleContentUnion{
 				Value: ChatCompletionAssistantMessageParamContent{
 					Type: ChatCompletionAssistantMessageParamContentTypeText,
-					Text: ptr.To("hello from single object"),
+					Text: new("hello from single object"),
 				},
 			},
 		},
@@ -2283,8 +2283,8 @@ func TestCompletionRequest(t *testing.T) {
 			req: CompletionRequest{
 				Model:       ModelGPT5Nano,
 				Prompt:      PromptUnion{Value: "test"},
-				MaxTokens:   ptr.To(10),
-				Temperature: ptr.To(0.7),
+				MaxTokens:   new(10),
+				Temperature: new(0.7),
 			},
 			expected: `{
 				"model": "gpt-5-nano",
@@ -2298,8 +2298,8 @@ func TestCompletionRequest(t *testing.T) {
 			req: CompletionRequest{
 				Model:       ModelGPT5Nano,
 				Prompt:      PromptUnion{Value: "test"},
-				MaxTokens:   ptr.To(10),
-				Temperature: ptr.To(0.0),
+				MaxTokens:   new(10),
+				Temperature: new(0.0),
 			},
 			expected: `{
 				"model": "gpt-5-nano",
@@ -2313,7 +2313,7 @@ func TestCompletionRequest(t *testing.T) {
 			req: CompletionRequest{
 				Model:     ModelGPT5Nano,
 				Prompt:    PromptUnion{Value: "test"},
-				MaxTokens: ptr.To(10),
+				MaxTokens: new(10),
 			},
 			expected: `{
 				"model": "gpt-5-nano",
@@ -2326,7 +2326,7 @@ func TestCompletionRequest(t *testing.T) {
 			req: CompletionRequest{
 				Model:            ModelGPT5Nano,
 				Prompt:           PromptUnion{Value: "test"},
-				FrequencyPenalty: ptr.To(0.0),
+				FrequencyPenalty: new(0.0),
 			},
 			expected: `{
 				"model": "gpt-5-nano",
@@ -2339,8 +2339,8 @@ func TestCompletionRequest(t *testing.T) {
 			req: CompletionRequest{
 				Model:       ModelGPT5Nano,
 				Prompt:      PromptUnion{Value: []string{"prompt1", "prompt2"}},
-				MaxTokens:   ptr.To(5),
-				Temperature: ptr.To(1.0),
+				MaxTokens:   new(5),
+				Temperature: new(1.0),
 			},
 			expected: `{
 				"model": "gpt-5-nano",
@@ -2354,7 +2354,7 @@ func TestCompletionRequest(t *testing.T) {
 			req: CompletionRequest{
 				Model:     ModelGPT5Nano,
 				Prompt:    PromptUnion{Value: []int{1212, 318}},
-				MaxTokens: ptr.To(5),
+				MaxTokens: new(5),
 			},
 			expected: `{
 				"model": "gpt-5-nano",
@@ -2424,7 +2424,7 @@ func TestCompletionResponse(t *testing.T) {
 				Choices: []CompletionChoice{
 					{
 						Text:         "\n\nThis is indeed a test",
-						Index:        ptr.To(0),
+						Index:        new(0),
 						FinishReason: "length",
 					},
 				},
@@ -2714,7 +2714,7 @@ func TestResponseFormatTextConfigUnionParamMarshal(t *testing.T) {
 					Type: "text",
 				},
 			},
-			expected:    ptr.To(`{"type":"text"}`),
+			expected:    new(`{"type":"text"}`),
 			expectedErr: nil,
 		},
 		{
@@ -2727,7 +2727,7 @@ func TestResponseFormatTextConfigUnionParamMarshal(t *testing.T) {
 					Schema: map[string]any{"type": "object", "properties": map[string]any{"step": map[string]any{"type": "string"}}, "required": []any{"steps"}},
 				},
 			},
-			expected:    ptr.To(`{"name": "math_response", "schema": {"type": "object", "properties": {"step": {"type": "string"}}, "required": ["steps"]}, "strict": true, "type": "json_schema"}`),
+			expected:    new(`{"name": "math_response", "schema": {"type": "object", "properties": {"step": {"type": "string"}}, "required": ["steps"]}, "strict": true, "type": "json_schema"}`),
 			expectedErr: nil,
 		},
 		{
@@ -2737,14 +2737,14 @@ func TestResponseFormatTextConfigUnionParamMarshal(t *testing.T) {
 					Type: "json_object",
 				},
 			},
-			expected:    ptr.To(`{"type":"json_object"}`),
+			expected:    new(`{"type":"json_object"}`),
 			expectedErr: nil,
 		},
 		{
 			name:        "marshal error no field set",
 			input:       ResponseFormatTextConfigUnionParam{},
 			expected:    nil,
-			expectedErr: ptr.To("no format to marshal in ResponseFormatTextConfigUnionParam"),
+			expectedErr: new("no format to marshal in ResponseFormatTextConfigUnionParam"),
 		},
 	}
 
@@ -2772,7 +2772,7 @@ func TestResponsePromptVariableUnionParamMarshalJSON(t *testing.T) {
 		{
 			name: "marshal string",
 			input: ResponsePromptVariableUnionParam{
-				OfString: ptr.To("test string"),
+				OfString: new("test string"),
 			},
 			expect: `"test string"`,
 		},
@@ -2835,7 +2835,7 @@ func TestResponsePromptVariableUnionParamUnmarshalJSON(t *testing.T) {
 			name:  "unmarshal string",
 			input: []byte(`"test string"`),
 			expect: &ResponsePromptVariableUnionParam{
-				OfString: ptr.To("test string"),
+				OfString: new("test string"),
 			},
 		},
 		{
@@ -2915,13 +2915,13 @@ func TestResponseToolUnionMarshalJSON(t *testing.T) {
 							Key:  "test",
 							Type: "eq",
 							Value: ComparisonFilterValueUnionParam{
-								OfString: ptr.To("value"),
+								OfString: new("value"),
 							},
 						},
 					},
 					RankingOptions: FileSearchToolRankingOptionsParam{
 						Ranker:         "auto",
-						ScoreThreshold: ptr.To(0.5),
+						ScoreThreshold: new(0.5),
 					},
 				},
 			},
@@ -2969,7 +2969,7 @@ func TestResponseToolUnionMarshalJSON(t *testing.T) {
 					ServerURL:         "https://test.com",
 					AllowedTools: ToolMcpAllowedToolsUnionParam{
 						OfMcpToolFilter: &ToolMcpAllowedToolsMcpToolFilterParam{
-							ReadOnly:  ptr.To(false),
+							ReadOnly:  new(false),
 							ToolNames: []string{"create_file", "update_file"},
 						},
 					},
@@ -2984,7 +2984,7 @@ func TestResponseToolUnionMarshalJSON(t *testing.T) {
 				OfCodeInterpreter: &ToolCodeInterpreterParam{
 					Type: "code_interpreter",
 					Container: ToolCodeInterpreterContainerUnionParam{
-						OfString: ptr.To("test"),
+						OfString: new("test"),
 					},
 				},
 			},
@@ -3119,13 +3119,13 @@ func TestResponseToolUnionUnmarshalJSON(t *testing.T) {
 							Key:  "test",
 							Type: "eq",
 							Value: ComparisonFilterValueUnionParam{
-								OfString: ptr.To("value"),
+								OfString: new("value"),
 							},
 						},
 					},
 					RankingOptions: FileSearchToolRankingOptionsParam{
 						Ranker:         "auto",
-						ScoreThreshold: ptr.To(0.5),
+						ScoreThreshold: new(0.5),
 					},
 				},
 			},
@@ -3192,7 +3192,7 @@ func TestResponseToolUnionUnmarshalJSON(t *testing.T) {
 					ServerURL:         "https://test.com",
 					AllowedTools: ToolMcpAllowedToolsUnionParam{
 						OfMcpToolFilter: &ToolMcpAllowedToolsMcpToolFilterParam{
-							ReadOnly:  ptr.To(false),
+							ReadOnly:  new(false),
 							ToolNames: []string{"create_file", "update_file"},
 						},
 					},
@@ -3207,7 +3207,7 @@ func TestResponseToolUnionUnmarshalJSON(t *testing.T) {
 				OfCodeInterpreter: &ToolCodeInterpreterParam{
 					Type: "code_interpreter",
 					Container: ToolCodeInterpreterContainerUnionParam{
-						OfString: ptr.To("test"),
+						OfString: new("test"),
 					},
 				},
 			},
@@ -3339,7 +3339,7 @@ func TestFileSearchToolFiltersUnionParamMarshalJSON(t *testing.T) {
 					Key:  "filename",
 					Type: "eq",
 					Value: ComparisonFilterValueUnionParam{
-						OfString: ptr.To("test.txt"),
+						OfString: new("test.txt"),
 					},
 				},
 			},
@@ -3353,7 +3353,7 @@ func TestFileSearchToolFiltersUnionParamMarshalJSON(t *testing.T) {
 					Type: "eq",
 					Value: ComparisonFilterValueUnionParam{
 						OfComparisonFilterValueArray: []ComparisonFilterValueArrayItemUnionParam{
-							{OfString: ptr.To("test.txt")},
+							{OfString: new("test.txt")},
 						},
 					},
 				},
@@ -3371,7 +3371,7 @@ func TestFileSearchToolFiltersUnionParamMarshalJSON(t *testing.T) {
 							Type: "gt",
 							Value: ComparisonFilterValueUnionParam{
 								OfComparisonFilterValueArray: []ComparisonFilterValueArrayItemUnionParam{
-									{OfFloat: ptr.To(1.0)},
+									{OfFloat: new(1.0)},
 								},
 							},
 						},
@@ -3390,7 +3390,7 @@ func TestFileSearchToolFiltersUnionParamMarshalJSON(t *testing.T) {
 							Key:  "status",
 							Type: "eq",
 							Value: ComparisonFilterValueUnionParam{
-								OfString: ptr.To("active"),
+								OfString: new("active"),
 							},
 						},
 					},
@@ -3437,7 +3437,7 @@ func TestFileSearchToolFiltersUnionParamUnmarshalJSON(t *testing.T) {
 							Key:  "status",
 							Type: "eq",
 							Value: ComparisonFilterValueUnionParam{
-								OfString: ptr.To("active"),
+								OfString: new("active"),
 							},
 						},
 					},
@@ -3455,7 +3455,7 @@ func TestFileSearchToolFiltersUnionParamUnmarshalJSON(t *testing.T) {
 							Type: "gt",
 							Value: ComparisonFilterValueUnionParam{
 								OfComparisonFilterValueArray: []ComparisonFilterValueArrayItemUnionParam{
-									{OfFloat: ptr.To(1.0)},
+									{OfFloat: new(1.0)},
 								},
 							},
 						},
@@ -3471,7 +3471,7 @@ func TestFileSearchToolFiltersUnionParamUnmarshalJSON(t *testing.T) {
 					Key:  "filename",
 					Type: "eq",
 					Value: ComparisonFilterValueUnionParam{
-						OfString: ptr.To("test.txt"),
+						OfString: new("test.txt"),
 					},
 				},
 			},
@@ -3485,7 +3485,7 @@ func TestFileSearchToolFiltersUnionParamUnmarshalJSON(t *testing.T) {
 					Type: "eq",
 					Value: ComparisonFilterValueUnionParam{
 						OfComparisonFilterValueArray: []ComparisonFilterValueArrayItemUnionParam{
-							{OfString: ptr.To("test.txt")},
+							{OfString: new("test.txt")},
 						},
 					},
 				},
@@ -3527,30 +3527,30 @@ func TestComparisonFilterValueUnionParamMarshalJSON(t *testing.T) {
 	}{
 		{
 			name:    "string value",
-			value:   ComparisonFilterValueUnionParam{OfString: ptr.To("test")},
+			value:   ComparisonFilterValueUnionParam{OfString: new("test")},
 			expJSON: []byte(`"test"`),
 		},
 		{
 			name:    "float value",
-			value:   ComparisonFilterValueUnionParam{OfFloat: ptr.To(42.5)},
+			value:   ComparisonFilterValueUnionParam{OfFloat: new(42.5)},
 			expJSON: []byte(`42.5`),
 		},
 		{
 			name:    "bool true value",
-			value:   ComparisonFilterValueUnionParam{OfBool: ptr.To(true)},
+			value:   ComparisonFilterValueUnionParam{OfBool: new(true)},
 			expJSON: []byte(`true`),
 		},
 		{
 			name:    "bool false value",
-			value:   ComparisonFilterValueUnionParam{OfBool: ptr.To(false)},
+			value:   ComparisonFilterValueUnionParam{OfBool: new(false)},
 			expJSON: []byte(`false`),
 		},
 		{
 			name: "array value",
 			value: ComparisonFilterValueUnionParam{
 				OfComparisonFilterValueArray: []ComparisonFilterValueArrayItemUnionParam{
-					{OfString: ptr.To("item1")},
-					{OfFloat: ptr.To(3.14)},
+					{OfString: new("item1")},
+					{OfFloat: new(3.14)},
 				},
 			},
 			expJSON: []byte(`["item1",3.14]`),
@@ -3586,49 +3586,49 @@ func TestComparisonFilterValueUnionParamUnmarshalJSON(t *testing.T) {
 			name: "string value",
 			in:   []byte(`"test"`),
 			expVal: &ComparisonFilterValueUnionParam{
-				OfString: ptr.To("test"),
+				OfString: new("test"),
 			},
 		},
 		{
 			name: "empty string value",
 			in:   []byte(`""`),
 			expVal: &ComparisonFilterValueUnionParam{
-				OfString: ptr.To(""),
+				OfString: new(""),
 			},
 		},
 		{
 			name: "float value",
 			in:   []byte(`42.5`),
 			expVal: &ComparisonFilterValueUnionParam{
-				OfFloat: ptr.To(42.5),
+				OfFloat: new(42.5),
 			},
 		},
 		{
 			name: "integer value (unmarshals as float)",
 			in:   []byte(`100`),
 			expVal: &ComparisonFilterValueUnionParam{
-				OfFloat: ptr.To(100.0),
+				OfFloat: new(100.0),
 			},
 		},
 		{
 			name: "zero float value",
 			in:   []byte(`0.0`),
 			expVal: &ComparisonFilterValueUnionParam{
-				OfFloat: ptr.To(0.0),
+				OfFloat: new(0.0),
 			},
 		},
 		{
 			name: "bool true value",
 			in:   []byte(`true`),
 			expVal: &ComparisonFilterValueUnionParam{
-				OfBool: ptr.To(true),
+				OfBool: new(true),
 			},
 		},
 		{
 			name: "bool false value",
 			in:   []byte(`false`),
 			expVal: &ComparisonFilterValueUnionParam{
-				OfBool: ptr.To(false),
+				OfBool: new(false),
 			},
 		},
 		{
@@ -3636,8 +3636,8 @@ func TestComparisonFilterValueUnionParamUnmarshalJSON(t *testing.T) {
 			in:   []byte(`["item1","item2"]`),
 			expVal: &ComparisonFilterValueUnionParam{
 				OfComparisonFilterValueArray: []ComparisonFilterValueArrayItemUnionParam{
-					{OfString: ptr.To("item1")},
-					{OfString: ptr.To("item2")},
+					{OfString: new("item1")},
+					{OfString: new("item2")},
 				},
 			},
 		},
@@ -3646,9 +3646,9 @@ func TestComparisonFilterValueUnionParamUnmarshalJSON(t *testing.T) {
 			in:   []byte(`[1.5,2.5,3.5]`),
 			expVal: &ComparisonFilterValueUnionParam{
 				OfComparisonFilterValueArray: []ComparisonFilterValueArrayItemUnionParam{
-					{OfFloat: ptr.To(1.5)},
-					{OfFloat: ptr.To(2.5)},
-					{OfFloat: ptr.To(3.5)},
+					{OfFloat: new(1.5)},
+					{OfFloat: new(2.5)},
+					{OfFloat: new(3.5)},
 				},
 			},
 		},
@@ -3657,8 +3657,8 @@ func TestComparisonFilterValueUnionParamUnmarshalJSON(t *testing.T) {
 			in:   []byte(`["item",42.5]`),
 			expVal: &ComparisonFilterValueUnionParam{
 				OfComparisonFilterValueArray: []ComparisonFilterValueArrayItemUnionParam{
-					{OfString: ptr.To("item")},
-					{OfFloat: ptr.To(42.5)},
+					{OfString: new("item")},
+					{OfFloat: new(42.5)},
 				},
 			},
 		},
@@ -3699,27 +3699,27 @@ func TestComparisonFilterValueArrayItemUnionParamMarshalJSON(t *testing.T) {
 	}{
 		{
 			name:    "string value",
-			value:   ComparisonFilterValueArrayItemUnionParam{OfString: ptr.To("test")},
+			value:   ComparisonFilterValueArrayItemUnionParam{OfString: new("test")},
 			expJSON: []byte(`"test"`),
 		},
 		{
 			name:    "empty string value",
-			value:   ComparisonFilterValueArrayItemUnionParam{OfString: ptr.To("")},
+			value:   ComparisonFilterValueArrayItemUnionParam{OfString: new("")},
 			expJSON: []byte(`""`),
 		},
 		{
 			name:    "float value",
-			value:   ComparisonFilterValueArrayItemUnionParam{OfFloat: ptr.To(42.5)},
+			value:   ComparisonFilterValueArrayItemUnionParam{OfFloat: new(42.5)},
 			expJSON: []byte(`42.5`),
 		},
 		{
 			name:    "zero float value",
-			value:   ComparisonFilterValueArrayItemUnionParam{OfFloat: ptr.To(0.0)},
+			value:   ComparisonFilterValueArrayItemUnionParam{OfFloat: new(0.0)},
 			expJSON: []byte(`0`),
 		},
 		{
 			name:    "negative float value",
-			value:   ComparisonFilterValueArrayItemUnionParam{OfFloat: ptr.To(-123.456)},
+			value:   ComparisonFilterValueArrayItemUnionParam{OfFloat: new(-123.456)},
 			expJSON: []byte(`-123.456`),
 		},
 		{
@@ -3753,56 +3753,56 @@ func TestComparisonFilterValueArrayItemUnionParamUnmarshalJSON(t *testing.T) {
 			name: "string value",
 			in:   []byte(`"test"`),
 			expVal: &ComparisonFilterValueArrayItemUnionParam{
-				OfString: ptr.To("test"),
+				OfString: new("test"),
 			},
 		},
 		{
 			name: "empty string value",
 			in:   []byte(`""`),
 			expVal: &ComparisonFilterValueArrayItemUnionParam{
-				OfString: ptr.To(""),
+				OfString: new(""),
 			},
 		},
 		{
 			name: "string with special characters",
 			in:   []byte(`"test\nvalue\twith\"quotes"`),
 			expVal: &ComparisonFilterValueArrayItemUnionParam{
-				OfString: ptr.To("test\nvalue\twith\"quotes"),
+				OfString: new("test\nvalue\twith\"quotes"),
 			},
 		},
 		{
 			name: "float value",
 			in:   []byte(`42.5`),
 			expVal: &ComparisonFilterValueArrayItemUnionParam{
-				OfFloat: ptr.To(42.5),
+				OfFloat: new(42.5),
 			},
 		},
 		{
 			name: "integer value (unmarshals as float)",
 			in:   []byte(`100`),
 			expVal: &ComparisonFilterValueArrayItemUnionParam{
-				OfFloat: ptr.To(100.0),
+				OfFloat: new(100.0),
 			},
 		},
 		{
 			name: "zero float value",
 			in:   []byte(`0`),
 			expVal: &ComparisonFilterValueArrayItemUnionParam{
-				OfFloat: ptr.To(0.0),
+				OfFloat: new(0.0),
 			},
 		},
 		{
 			name: "negative float value",
 			in:   []byte(`-99.99`),
 			expVal: &ComparisonFilterValueArrayItemUnionParam{
-				OfFloat: ptr.To(-99.99),
+				OfFloat: new(-99.99),
 			},
 		},
 		{
 			name: "large float value",
 			in:   []byte(`1.7976931348623157e+308`),
 			expVal: &ComparisonFilterValueArrayItemUnionParam{
-				OfFloat: ptr.To(1.7976931348623157e+308),
+				OfFloat: new(1.7976931348623157e+308),
 			},
 		},
 		{
@@ -3856,7 +3856,7 @@ func TestToolMcpAllowedToolsUnionParamMarshalJSON(t *testing.T) {
 			name: "marshal tool filter with read_only",
 			input: ToolMcpAllowedToolsUnionParam{
 				OfMcpToolFilter: &ToolMcpAllowedToolsMcpToolFilterParam{
-					ReadOnly:  ptr.To(true),
+					ReadOnly:  new(true),
 					ToolNames: []string{"readonly_tool"},
 				},
 			},
@@ -3920,7 +3920,7 @@ func TestToolMcpAllowedToolsUnionParamUnmarshalJSON(t *testing.T) {
 			input: []byte(`{"read_only":true,"tool_names":["readonly_tool"]}`),
 			expect: ToolMcpAllowedToolsUnionParam{
 				OfMcpToolFilter: &ToolMcpAllowedToolsMcpToolFilterParam{
-					ReadOnly:  ptr.To(true),
+					ReadOnly:  new(true),
 					ToolNames: []string{"readonly_tool"},
 				},
 			},
@@ -3930,7 +3930,7 @@ func TestToolMcpAllowedToolsUnionParamUnmarshalJSON(t *testing.T) {
 			input: []byte(`{"read_only":false,"tool_names":["modify_tool"]}`),
 			expect: ToolMcpAllowedToolsUnionParam{
 				OfMcpToolFilter: &ToolMcpAllowedToolsMcpToolFilterParam{
-					ReadOnly:  ptr.To(false),
+					ReadOnly:  new(false),
 					ToolNames: []string{"modify_tool"},
 				},
 			},
@@ -3988,7 +3988,7 @@ func TestToolMcpRequireApprovalUnionParamMarshalJSON(t *testing.T) {
 			input: ToolMcpRequireApprovalUnionParam{
 				OfMcpToolApprovalFilter: &ToolMcpRequireApprovalMcpToolApprovalFilterParam{
 					Always: ToolMcpRequireApprovalMcpToolApprovalFilterObjectParam{
-						ReadOnly:  ptr.To(true),
+						ReadOnly:  new(true),
 						ToolNames: []string{"readonly"},
 					},
 				},
@@ -3998,7 +3998,7 @@ func TestToolMcpRequireApprovalUnionParamMarshalJSON(t *testing.T) {
 		{
 			name: "marshal approval setting string",
 			input: ToolMcpRequireApprovalUnionParam{
-				OfMcpToolApprovalSetting: ptr.To("always"),
+				OfMcpToolApprovalSetting: new("always"),
 			},
 			expected: []byte(`"always"`),
 		},
@@ -4007,7 +4007,7 @@ func TestToolMcpRequireApprovalUnionParamMarshalJSON(t *testing.T) {
 			input: ToolMcpRequireApprovalUnionParam{
 				OfMcpToolApprovalFilter: &ToolMcpRequireApprovalMcpToolApprovalFilterParam{
 					Never: ToolMcpRequireApprovalMcpToolApprovalFilterObjectParam{
-						ReadOnly:  ptr.To(true),
+						ReadOnly:  new(true),
 						ToolNames: []string{"readonly"},
 					},
 				},
@@ -4019,11 +4019,11 @@ func TestToolMcpRequireApprovalUnionParamMarshalJSON(t *testing.T) {
 			input: ToolMcpRequireApprovalUnionParam{
 				OfMcpToolApprovalFilter: &ToolMcpRequireApprovalMcpToolApprovalFilterParam{
 					Always: ToolMcpRequireApprovalMcpToolApprovalFilterObjectParam{
-						ReadOnly:  ptr.To(false),
+						ReadOnly:  new(false),
 						ToolNames: []string{"create"},
 					},
 					Never: ToolMcpRequireApprovalMcpToolApprovalFilterObjectParam{
-						ReadOnly:  ptr.To(true),
+						ReadOnly:  new(true),
 						ToolNames: []string{"readonly"},
 					},
 				},
@@ -4064,7 +4064,7 @@ func TestToolMcpRequireApprovalUnionParamUnmarshalJSON(t *testing.T) {
 			name:  "unmarshal approval setting always",
 			input: []byte(`"always"`),
 			expect: ToolMcpRequireApprovalUnionParam{
-				OfMcpToolApprovalSetting: ptr.To("always"),
+				OfMcpToolApprovalSetting: new("always"),
 			},
 		},
 		{
@@ -4073,7 +4073,7 @@ func TestToolMcpRequireApprovalUnionParamUnmarshalJSON(t *testing.T) {
 			expect: ToolMcpRequireApprovalUnionParam{
 				OfMcpToolApprovalFilter: &ToolMcpRequireApprovalMcpToolApprovalFilterParam{
 					Always: ToolMcpRequireApprovalMcpToolApprovalFilterObjectParam{
-						ReadOnly:  ptr.To(true),
+						ReadOnly:  new(true),
 						ToolNames: []string{"readonly"},
 					},
 				},
@@ -4085,7 +4085,7 @@ func TestToolMcpRequireApprovalUnionParamUnmarshalJSON(t *testing.T) {
 			expect: ToolMcpRequireApprovalUnionParam{
 				OfMcpToolApprovalFilter: &ToolMcpRequireApprovalMcpToolApprovalFilterParam{
 					Never: ToolMcpRequireApprovalMcpToolApprovalFilterObjectParam{
-						ReadOnly:  ptr.To(false),
+						ReadOnly:  new(false),
 						ToolNames: []string{"modify_tool"},
 					},
 				},
@@ -4096,11 +4096,11 @@ func TestToolMcpRequireApprovalUnionParamUnmarshalJSON(t *testing.T) {
 			expect: ToolMcpRequireApprovalUnionParam{
 				OfMcpToolApprovalFilter: &ToolMcpRequireApprovalMcpToolApprovalFilterParam{
 					Always: ToolMcpRequireApprovalMcpToolApprovalFilterObjectParam{
-						ReadOnly:  ptr.To(false),
+						ReadOnly:  new(false),
 						ToolNames: []string{"create"},
 					},
 					Never: ToolMcpRequireApprovalMcpToolApprovalFilterObjectParam{
-						ReadOnly:  ptr.To(true),
+						ReadOnly:  new(true),
 						ToolNames: []string{"readonly"},
 					},
 				},
@@ -4145,7 +4145,7 @@ func TestToolCodeInterpreterContainerUnionParamMarshalJSON(t *testing.T) {
 		{
 			name: "marshal string container",
 			input: ToolCodeInterpreterContainerUnionParam{
-				OfString: ptr.To("auto"),
+				OfString: new("auto"),
 			},
 			expected: []byte(`"auto"`),
 		},
@@ -4203,7 +4203,7 @@ func TestToolCodeInterpreterContainerUnionParamUnmarshalJSON(t *testing.T) {
 			name:  "unmarshal string",
 			input: []byte(`"auto"`),
 			expect: ToolCodeInterpreterContainerUnionParam{
-				OfString: ptr.To("auto"),
+				OfString: new("auto"),
 			},
 		},
 		{
@@ -4378,7 +4378,7 @@ func TestResponseNewParamsConversationUnionMarshalJSON(t *testing.T) {
 		{
 			name: "marshal string conversation ID",
 			input: ResponseNewParamsConversationUnion{
-				OfString: ptr.To("conv-123"),
+				OfString: new("conv-123"),
 			},
 			expected: []byte(`"conv-123"`),
 		},
@@ -4425,7 +4425,7 @@ func TestResponseNewParamsConversationUnionUnmarshalJSON(t *testing.T) {
 			name:  "unmarshal string conversation ID",
 			input: []byte(`"conv-123"`),
 			expect: ResponseNewParamsConversationUnion{
-				OfString: ptr.To("conv-123"),
+				OfString: new("conv-123"),
 			},
 		},
 		{
@@ -4468,7 +4468,7 @@ func TestResponseNewParamsInputUnionMarshalJSON(t *testing.T) {
 		{
 			name: "marshal string input",
 			input: ResponseNewParamsInputUnion{
-				OfString: ptr.To("input text"),
+				OfString: new("input text"),
 			},
 			expected: []byte(`"input text"`),
 		},
@@ -4488,7 +4488,7 @@ func TestResponseNewParamsInputUnionMarshalJSON(t *testing.T) {
 							Type: "message",
 							Role: "user",
 							Content: EasyInputMessageContentUnionParam{
-								OfString: ptr.To("Hi"),
+								OfString: new("Hi"),
 							},
 						},
 					},
@@ -4530,7 +4530,7 @@ func TestResponseNewParamsInputUnionUnmarshalJSON(t *testing.T) {
 			name:  "unmarshal string input",
 			input: []byte(`"input text"`),
 			expect: ResponseNewParamsInputUnion{
-				OfString:        ptr.To("input text"),
+				OfString:        new("input text"),
 				OfInputItemList: nil,
 			},
 		},
@@ -4551,7 +4551,7 @@ func TestResponseNewParamsInputUnionUnmarshalJSON(t *testing.T) {
 							Type: "message",
 							Role: "user",
 							Content: EasyInputMessageContentUnionParam{
-								OfString: ptr.To("Hi"),
+								OfString: new("Hi"),
 							},
 						},
 					},
@@ -4599,7 +4599,7 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 					Role: "user",
 					Type: "message",
 					Content: EasyInputMessageContentUnionParam{
-						OfString: ptr.To("Hi"),
+						OfString: new("Hi"),
 					},
 				},
 			},
@@ -4640,14 +4640,14 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 		{
 			name: "marshal agent_message",
 			input: ResponseInputItemUnionParam{
-				OfAgentMessage: ptr.To(json.RawMessage(`{"type":"agent_message","role":"agent","content":[{"type":"text","text":"prior context"}]}`)),
+				OfAgentMessage: new(json.RawMessage(`{"type":"agent_message","role":"agent","content":[{"type":"text","text":"prior context"}]}`)),
 			},
 			expRes: []byte(`{"type":"agent_message","role":"agent","content":[{"type":"text","text":"prior context"}]}`),
 		},
 		{
 			name: "marshal agent_reasoning",
 			input: ResponseInputItemUnionParam{
-				OfAgentReasoning: ptr.To(json.RawMessage(`{"type":"agent_reasoning","summary":"prior reasoning"}`)),
+				OfAgentReasoning: new(json.RawMessage(`{"type":"agent_reasoning","summary":"prior reasoning"}`)),
 			},
 			expRes: []byte(`{"type":"agent_reasoning","summary":"prior reasoning"}`),
 		},
@@ -4740,7 +4740,7 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 					CallID: "call-789",
 					ID:     "rs-123",
 					Output: ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: ptr.To("output"),
+						OfString: new("output"),
 					},
 				},
 			},
@@ -4781,7 +4781,7 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 											Type:         "function",
 											Name:         "get_invoice",
 											Description:  "Get invoice details by invoice ID.",
-											DeferLoading: ptr.To(true),
+											DeferLoading: new(true),
 										},
 									},
 								},
@@ -5007,7 +5007,7 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 					CallID: "call-123",
 					ID:     "resp-123",
 					Output: ResponseCustomToolCallOutputOutputUnionParam{
-						OfString: ptr.To("some output"),
+						OfString: new("some output"),
 					},
 				},
 			},
@@ -5064,7 +5064,7 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 										"city": map[string]any{"type": "string"},
 									},
 								},
-								Strict: ptr.To(true),
+								Strict: new(true),
 							},
 						},
 					},
@@ -5106,7 +5106,7 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 				OfMessage: &EasyInputMessageParam{
 					Role: "user",
 					Content: EasyInputMessageContentUnionParam{
-						OfString: ptr.To("Hello"),
+						OfString: new("Hello"),
 					},
 				},
 			},
@@ -5145,7 +5145,7 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 					Role: "user",
 					Type: "message",
 					Content: EasyInputMessageContentUnionParam{
-						OfString: ptr.To("Hi"),
+						OfString: new("Hi"),
 					},
 				},
 			},
@@ -5287,7 +5287,7 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 					CallID: "call-789",
 					ID:     "rs-123",
 					Output: ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: ptr.To("output"),
+						OfString: new("output"),
 					},
 				},
 			},
@@ -5328,7 +5328,7 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 											Type:         "function",
 											Name:         "get_invoice",
 											Description:  "Get invoice details by invoice ID.",
-											DeferLoading: ptr.To(true),
+											DeferLoading: new(true),
 										},
 									},
 								},
@@ -5554,7 +5554,7 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 					CallID: "call-123",
 					ID:     "resp-123",
 					Output: ResponseCustomToolCallOutputOutputUnionParam{
-						OfString: ptr.To("some output"),
+						OfString: new("some output"),
 					},
 				},
 			},
@@ -5595,14 +5595,14 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 		{
 			name: "unmarshal agent_message",
 			expRes: ResponseInputItemUnionParam{
-				OfAgentMessage: ptr.To(json.RawMessage(`{"type":"agent_message","role":"agent","content":[{"type":"text","text":"prior context"}]}`)),
+				OfAgentMessage: new(json.RawMessage(`{"type":"agent_message","role":"agent","content":[{"type":"text","text":"prior context"}]}`)),
 			},
 			input: []byte(`{"type":"agent_message","role":"agent","content":[{"type":"text","text":"prior context"}]}`),
 		},
 		{
 			name: "unmarshal agent_reasoning",
 			expRes: ResponseInputItemUnionParam{
-				OfAgentReasoning: ptr.To(json.RawMessage(`{"type":"agent_reasoning","summary":"prior reasoning"}`)),
+				OfAgentReasoning: new(json.RawMessage(`{"type":"agent_reasoning","summary":"prior reasoning"}`)),
 			},
 			input: []byte(`{"type":"agent_reasoning","summary":"prior reasoning"}`),
 		},
@@ -5625,7 +5625,7 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 										"city": map[string]any{"type": "string"},
 									},
 								},
-								Strict: ptr.To(true),
+								Strict: new(true),
 							},
 						},
 					},
@@ -5665,7 +5665,7 @@ func TestEasyInputMessageContentUnionParamUnmarshalJSON(t *testing.T) {
 			name:  "unmarshal string content",
 			input: []byte(`"Hello, world!"`),
 			expect: EasyInputMessageContentUnionParam{
-				OfString:               ptr.To("Hello, world!"),
+				OfString:               new("Hello, world!"),
 				OfInputItemContentList: nil,
 			},
 		},
@@ -5673,7 +5673,7 @@ func TestEasyInputMessageContentUnionParamUnmarshalJSON(t *testing.T) {
 			name:  "unmarshal empty string",
 			input: []byte(`""`),
 			expect: EasyInputMessageContentUnionParam{
-				OfString:               ptr.To(""),
+				OfString:               new(""),
 				OfInputItemContentList: nil,
 			},
 		},
@@ -5681,7 +5681,7 @@ func TestEasyInputMessageContentUnionParamUnmarshalJSON(t *testing.T) {
 			name:  "unmarshal string with special characters",
 			input: []byte(`"Hello\nWorld\t!"`),
 			expect: EasyInputMessageContentUnionParam{
-				OfString:               ptr.To("Hello\nWorld\t!"),
+				OfString:               new("Hello\nWorld\t!"),
 				OfInputItemContentList: nil,
 			},
 		},
@@ -5883,7 +5883,7 @@ func TestEasyInputMessageContentUnionParamMarshalJSON(t *testing.T) {
 			name:   "marshal string content",
 			expect: []byte(`"Hello, world!"`),
 			input: EasyInputMessageContentUnionParam{
-				OfString:               ptr.To("Hello, world!"),
+				OfString:               new("Hello, world!"),
 				OfInputItemContentList: nil,
 			},
 		},
@@ -5891,7 +5891,7 @@ func TestEasyInputMessageContentUnionParamMarshalJSON(t *testing.T) {
 			name:   "marshal empty string",
 			expect: []byte(`""`),
 			input: EasyInputMessageContentUnionParam{
-				OfString:               ptr.To(""),
+				OfString:               new(""),
 				OfInputItemContentList: nil,
 			},
 		},
@@ -5899,7 +5899,7 @@ func TestEasyInputMessageContentUnionParamMarshalJSON(t *testing.T) {
 			name:   "marshal string with special characters",
 			expect: []byte(`"Hello\nWorld\t!"`),
 			input: EasyInputMessageContentUnionParam{
-				OfString:               ptr.To("Hello\nWorld\t!"),
+				OfString:               new("Hello\nWorld\t!"),
 				OfInputItemContentList: nil,
 			},
 		},
@@ -6350,7 +6350,7 @@ func TestResponseOutputMessageContentUnionMarshalJSON(t *testing.T) {
 		{
 			name: "marshal output string",
 			input: ResponseOutputMessageContentUnion{
-				OfString: ptr.To("Hello, world!"),
+				OfString: new("Hello, world!"),
 			},
 			expected: `"Hello, world!"`,
 		},
@@ -6711,7 +6711,7 @@ func TestResponseOutputMessageContentUnionUnmarshalJSON(t *testing.T) {
 		{
 			name: "unmarshal output string",
 			expected: ResponseOutputMessageContentUnion{
-				OfString: ptr.To("Hello, world!"),
+				OfString: new("Hello, world!"),
 			},
 			input: `"Hello, world!"`,
 		},
@@ -7591,21 +7591,21 @@ func TestResponseInputItemFunctionCallOutputOutputUnionParamMarshalJSON(t *testi
 			name:   "string output",
 			expect: []byte(`"output from function"`),
 			input: ResponseInputItemFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To("output from function"),
+				OfString: new("output from function"),
 			},
 		},
 		{
 			name:   "string output with empty value",
 			expect: []byte(`""`),
 			input: ResponseInputItemFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To(""),
+				OfString: new(""),
 			},
 		},
 		{
 			name:   "string output with special characters",
 			expect: []byte(`"output with \"quotes\" and newline\n"`),
 			input: ResponseInputItemFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To("output with \"quotes\" and newline\n"),
+				OfString: new("output with \"quotes\" and newline\n"),
 			},
 		},
 		{
@@ -7743,21 +7743,21 @@ func TestResponseInputItemFunctionCallOutputOutputUnionParamUnmarshalJSON(t *tes
 			name:  "string output",
 			input: []byte(`"output from function"`),
 			expect: ResponseInputItemFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To("output from function"),
+				OfString: new("output from function"),
 			},
 		},
 		{
 			name:  "string output with empty value",
 			input: []byte(`""`),
 			expect: ResponseInputItemFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To(""),
+				OfString: new(""),
 			},
 		},
 		{
 			name:  "string output with special characters",
 			input: []byte(`"output with \"quotes\" and newline\n"`),
 			expect: ResponseInputItemFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To("output with \"quotes\" and newline\n"),
+				OfString: new("output with \"quotes\" and newline\n"),
 			},
 		},
 		{
@@ -9190,14 +9190,14 @@ func TestResponseToolChoiceUnionMarshalJSON(t *testing.T) {
 			name:   "tool choice mode - auto",
 			expect: []byte(`"auto"`),
 			input: ResponseToolChoiceUnion{
-				OfToolChoiceMode: ptr.To("auto"),
+				OfToolChoiceMode: new("auto"),
 			},
 		},
 		{
 			name:   "tool choice mode - required",
 			expect: []byte(`"required"`),
 			input: ResponseToolChoiceUnion{
-				OfToolChoiceMode: ptr.To("required"),
+				OfToolChoiceMode: new("required"),
 			},
 		},
 		{
@@ -9330,14 +9330,14 @@ func TestResponseToolChoiceUnionUnmarshalJSON(t *testing.T) {
 			name:  "tool choice mode - auto",
 			input: []byte(`"auto"`),
 			expect: ResponseToolChoiceUnion{
-				OfToolChoiceMode: ptr.To("auto"),
+				OfToolChoiceMode: new("auto"),
 			},
 		},
 		{
 			name:  "tool choice mode - required",
 			input: []byte(`"required"`),
 			expect: ResponseToolChoiceUnion{
-				OfToolChoiceMode: ptr.To("required"),
+				OfToolChoiceMode: new("required"),
 			},
 		},
 		{
@@ -9498,14 +9498,14 @@ func TestResponseInstructionsUnionMarshalJSON(t *testing.T) {
 			name:   "instructions as string",
 			expect: []byte(`"You are a helpful assistant."`),
 			input: ResponseInstructionsUnion{
-				OfString: ptr.To("You are a helpful assistant."),
+				OfString: new("You are a helpful assistant."),
 			},
 		},
 		{
 			name:   "instructions as empty string",
 			expect: []byte(`""`),
 			input: ResponseInstructionsUnion{
-				OfString: ptr.To(""),
+				OfString: new(""),
 			},
 		},
 		{
@@ -9546,14 +9546,14 @@ func TestResponseInstructionsUnionUnmarshalJSON(t *testing.T) {
 			name:  "instructions as string",
 			input: []byte(`"You are a helpful assistant."`),
 			expect: ResponseInstructionsUnion{
-				OfString: ptr.To("You are a helpful assistant."),
+				OfString: new("You are a helpful assistant."),
 			},
 		},
 		{
 			name:  "instructions as empty string",
 			input: []byte(`""`),
 			expect: ResponseInstructionsUnion{
-				OfString: ptr.To(""),
+				OfString: new(""),
 			},
 		},
 		{
@@ -9645,7 +9645,7 @@ func TestResponseOutputItemUnionMarshalJSON(t *testing.T) {
 				OfFunctionCallOutput: &ResponseFunctionCallOutput{
 					CallID: "call-123",
 					Output: ResponseFunctionCallOutputOutputUnionParam{
-						OfString: ptr.To("function output string"),
+						OfString: new("function output string"),
 					},
 					ID:     "resp-123",
 					Status: "completed",
@@ -9777,7 +9777,7 @@ func TestResponseOutputItemUnionMarshalJSON(t *testing.T) {
 											Type:         "function",
 											Name:         "get_invoice",
 											Description:  "Get invoice details by invoice ID.",
-											DeferLoading: ptr.To(true),
+											DeferLoading: new(true),
 										},
 									},
 								},
@@ -9994,7 +9994,7 @@ func TestResponseOutputItemUnionMarshalJSON(t *testing.T) {
 					CallID: "call-123",
 					Status: "completed",
 					Output: ResponseCustomToolCallOutputOutputUnionParam{
-						OfString: ptr.To("some output"),
+						OfString: new("some output"),
 					},
 				},
 			},
@@ -10080,7 +10080,7 @@ func TestResponseOutputItemUnionUnmarshalJSON(t *testing.T) {
 				OfFunctionCallOutput: &ResponseFunctionCallOutput{
 					CallID: "call-123",
 					Output: ResponseFunctionCallOutputOutputUnionParam{
-						OfString: ptr.To("function output string"),
+						OfString: new("function output string"),
 					},
 					ID:     "resp-123",
 					Status: "completed",
@@ -10212,7 +10212,7 @@ func TestResponseOutputItemUnionUnmarshalJSON(t *testing.T) {
 											Type:         "function",
 											Name:         "get_invoice",
 											Description:  "Get invoice details by invoice ID.",
-											DeferLoading: ptr.To(true),
+											DeferLoading: new(true),
 										},
 									},
 								},
@@ -10429,7 +10429,7 @@ func TestResponseOutputItemUnionUnmarshalJSON(t *testing.T) {
 					CallID: "call-123",
 					Status: "completed",
 					Output: ResponseCustomToolCallOutputOutputUnionParam{
-						OfString: ptr.To("some output"),
+						OfString: new("some output"),
 					},
 				},
 			},
@@ -10466,21 +10466,21 @@ func TestResponseunctionCallOutputOutputUnionParamMarshalJSON(t *testing.T) {
 			name:   "string output",
 			expect: []byte(`"output from function"`),
 			input: ResponseFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To("output from function"),
+				OfString: new("output from function"),
 			},
 		},
 		{
 			name:   "string output with empty value",
 			expect: []byte(`""`),
 			input: ResponseFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To(""),
+				OfString: new(""),
 			},
 		},
 		{
 			name:   "string output with special characters",
 			expect: []byte(`"output with \"quotes\" and newline\n"`),
 			input: ResponseFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To("output with \"quotes\" and newline\n"),
+				OfString: new("output with \"quotes\" and newline\n"),
 			},
 		},
 		{
@@ -10618,21 +10618,21 @@ func TestResponseFunctionCallOutputOutputUnionParamUnmarshalJSON(t *testing.T) {
 			name:  "string output",
 			input: []byte(`"output from function"`),
 			expect: ResponseFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To("output from function"),
+				OfString: new("output from function"),
 			},
 		},
 		{
 			name:  "string output with empty value",
 			input: []byte(`""`),
 			expect: ResponseFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To(""),
+				OfString: new(""),
 			},
 		},
 		{
 			name:  "string output with special characters",
 			input: []byte(`"output with \"quotes\" and newline\n"`),
 			expect: ResponseFunctionCallOutputOutputUnionParam{
-				OfString: ptr.To("output with \"quotes\" and newline\n"),
+				OfString: new("output with \"quotes\" and newline\n"),
 			},
 		},
 		{
@@ -11442,7 +11442,7 @@ func TestResponseStreamEventUnionUnmarshalJSON(t *testing.T) {
 						Object:            "response",
 						Model:             "gpt-4o-2024-08-06",
 						CreatedAt:         JSONUNIXTime(time.Unix(int64(1741487325), 0).UTC()),
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "in_progress",
 						TopP:              1,
@@ -11469,8 +11469,8 @@ func TestResponseStreamEventUnionUnmarshalJSON(t *testing.T) {
 						Object:            "response",
 						Model:             "gpt-4o-2024-08-06",
 						CreatedAt:         JSONUNIXTime(time.Unix(int64(1741487325), 0).UTC()),
-						CompletedAt:       ptr.To(JSONUNIXTime(time.Unix(int64(1741487326), 0).UTC())),
-						ParallelToolCalls: ptr.To(true),
+						CompletedAt:       new(JSONUNIXTime(time.Unix(int64(1741487326), 0).UTC())),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "completed",
 						TopP:              1,
@@ -11522,7 +11522,7 @@ func TestResponseStreamEventUnionUnmarshalJSON(t *testing.T) {
 							Code:    "server_error",
 							Message: "The model failed to generate a response.",
 						},
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "failed",
 						TopP:              1,
@@ -11550,7 +11550,7 @@ func TestResponseStreamEventUnionUnmarshalJSON(t *testing.T) {
 						IncompleteDetails: ResponseIncompleteDetails{
 							Reason: "max_output_tokens",
 						},
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "incomplete",
 						TopP:              1,
@@ -11579,7 +11579,7 @@ func TestResponseStreamEventUnionUnmarshalJSON(t *testing.T) {
 						Object:            "response",
 						Model:             "gpt-4o-2024-08-06",
 						CreatedAt:         JSONUNIXTime(time.Unix(int64(1741487325), 0).UTC()),
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "in_progress",
 						TopP:              1,
@@ -11604,7 +11604,7 @@ func TestResponseStreamEventUnionUnmarshalJSON(t *testing.T) {
 						Object:            "response",
 						Model:             "gpt-4o-2024-08-06",
 						CreatedAt:         JSONUNIXTime(time.Unix(int64(1741487325), 0).UTC()),
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "queued",
 						TopP:              1,
@@ -12290,7 +12290,7 @@ func TestResponseStreamEventUnionMarshalJSON(t *testing.T) {
 						Object:            "response",
 						Model:             "gpt-4o-2024-08-06",
 						CreatedAt:         JSONUNIXTime(time.Unix(int64(1741487325), 0).UTC()),
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "in_progress",
 						TopP:              1,
@@ -12317,8 +12317,8 @@ func TestResponseStreamEventUnionMarshalJSON(t *testing.T) {
 						Object:            "response",
 						Model:             "gpt-4o-2024-08-06",
 						CreatedAt:         JSONUNIXTime(time.Unix(int64(1741487325), 0).UTC()),
-						CompletedAt:       ptr.To(JSONUNIXTime(time.Unix(int64(1741487326), 0).UTC())),
-						ParallelToolCalls: ptr.To(true),
+						CompletedAt:       new(JSONUNIXTime(time.Unix(int64(1741487326), 0).UTC())),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "completed",
 						TopP:              1,
@@ -12370,7 +12370,7 @@ func TestResponseStreamEventUnionMarshalJSON(t *testing.T) {
 							Code:    "server_error",
 							Message: "The model failed to generate a response.",
 						},
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "failed",
 						TopP:              1,
@@ -12398,7 +12398,7 @@ func TestResponseStreamEventUnionMarshalJSON(t *testing.T) {
 						IncompleteDetails: ResponseIncompleteDetails{
 							Reason: "max_output_tokens",
 						},
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "incomplete",
 						TopP:              1,
@@ -12427,7 +12427,7 @@ func TestResponseStreamEventUnionMarshalJSON(t *testing.T) {
 						Object:            "response",
 						Model:             "gpt-4o-2024-08-06",
 						CreatedAt:         JSONUNIXTime(time.Unix(int64(1741487325), 0).UTC()),
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "in_progress",
 						TopP:              1,
@@ -12452,7 +12452,7 @@ func TestResponseStreamEventUnionMarshalJSON(t *testing.T) {
 						Object:            "response",
 						Model:             "gpt-4o-2024-08-06",
 						CreatedAt:         JSONUNIXTime(time.Unix(int64(1741487325), 0).UTC()),
-						ParallelToolCalls: ptr.To(true),
+						ParallelToolCalls: new(true),
 						Temperature:       1,
 						Status:            "queued",
 						TopP:              1,

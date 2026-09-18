@@ -17,7 +17,6 @@ import (
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -64,7 +63,7 @@ func newServerWithForwardProxy(t *testing.T, proxyAddr string) *Server {
 	t.Helper()
 	c := newFakeClient()
 	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+		Name: "myroute", Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			// Namespace omitted on purpose: it must default to the route's namespace.
 			ParentRefs: []gwapiv1.ParentReference{{Name: "eg-gateway"}},
@@ -74,14 +73,12 @@ func newServerWithForwardProxy(t *testing.T, proxyAddr string) *Server {
 		},
 	}))
 	require.NoError(t, c.Create(t.Context(), &gwapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "eg-gateway",
-			Namespace:   "default",
-			Annotations: map[string]string{gatewayConfigAnnotationKey: "gwconfig"},
-		},
-		Spec: gwapiv1.GatewaySpec{GatewayClassName: "eg"},
+		Name:        "eg-gateway",
+		Namespace:   "default",
+		Annotations: map[string]string{gatewayConfigAnnotationKey: "gwconfig"},
+		Spec:        gwapiv1.GatewaySpec{GatewayClassName: "eg"},
 	}))
-	gc := &aigv1b1.GatewayConfig{ObjectMeta: metav1.ObjectMeta{Name: "gwconfig", Namespace: "default"}}
+	gc := &aigv1b1.GatewayConfig{Name: "gwconfig", Namespace: "default"}
 	if proxyAddr != "" {
 		gc.Spec.ForwardProxy = &aigv1b1.GatewayConfigForwardProxy{Address: proxyAddr}
 	}
@@ -229,8 +226,8 @@ func serverWithObjects(t *testing.T, objs ...client.Object) *Server {
 
 func gwGateway(name, configName string) *gwapiv1.Gateway {
 	g := &gwapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-		Spec:       gwapiv1.GatewaySpec{GatewayClassName: "eg"},
+		Name: name, Namespace: "default",
+		Spec: gwapiv1.GatewaySpec{GatewayClassName: "eg"},
 	}
 	if configName != "" {
 		g.Annotations = map[string]string{gatewayConfigAnnotationKey: configName}
@@ -239,7 +236,7 @@ func gwGateway(name, configName string) *gwapiv1.Gateway {
 }
 
 func gwConfig(name, address string) *aigv1b1.GatewayConfig {
-	gc := &aigv1b1.GatewayConfig{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+	gc := &aigv1b1.GatewayConfig{Name: name, Namespace: "default"}
 	if address != "" {
 		gc.Spec.ForwardProxy = &aigv1b1.GatewayConfigForwardProxy{Address: address}
 	}
@@ -248,8 +245,8 @@ func gwConfig(name, address string) *aigv1b1.GatewayConfig {
 
 func routeWithParents(parents ...gwapiv1.ParentReference) *aigv1b1.AIGatewayRoute {
 	return &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
-		Spec:       aigv1b1.AIGatewayRouteSpec{ParentRefs: parents},
+		Name: "myroute", Namespace: "default",
+		Spec: aigv1b1.AIGatewayRouteSpec{ParentRefs: parents},
 	}
 }
 

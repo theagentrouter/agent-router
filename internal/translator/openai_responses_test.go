@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -53,7 +52,7 @@ func TestResponsesOpenAIToOpenAITranslator_RequestBody(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: false,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi"}`)
@@ -76,7 +75,7 @@ func TestResponsesOpenAIToOpenAITranslator_RequestBody(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: true,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","stream":true,"input":"Hi"}`)
@@ -96,7 +95,7 @@ func TestResponsesOpenAIToOpenAITranslator_RequestBody(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: false,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi"}`)
@@ -106,7 +105,7 @@ func TestResponsesOpenAIToOpenAITranslator_RequestBody(t *testing.T) {
 		require.Equal(t, "gpt-4-turbo", translator.requestModel)
 
 		// Verify the model was overridden in the body
-		var result map[string]interface{}
+		var result map[string]any
 		err = json.Unmarshal(body, &result)
 		require.NoError(t, err)
 		require.Equal(t, "gpt-4-turbo", result["model"])
@@ -124,7 +123,7 @@ func TestResponsesOpenAIToOpenAITranslator_RequestBody(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: false,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o", "input":"Hi"}`)
@@ -145,7 +144,7 @@ func TestResponsesOpenAIToOpenAITranslator_RequestBody(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: false,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 
@@ -155,7 +154,7 @@ func TestResponsesOpenAIToOpenAITranslator_RequestBody(t *testing.T) {
 		require.NotEmpty(t, body)
 
 		// Verify the model override is in the body
-		var result map[string]interface{}
+		var result map[string]any
 		err = json.Unmarshal(body, &result)
 		require.NoError(t, err)
 		require.Equal(t, "override-model", result["model"])
@@ -182,7 +181,7 @@ func TestResponsesOpenAIToOpenAITranslator_ResponseBody(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: false,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi"}`)
@@ -263,7 +262,7 @@ func TestResponsesOpenAIToOpenAITranslator_ResponseBody(t *testing.T) {
 			Model:  "o1",
 			Stream: false,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"o1","input":"Hi"}`)
@@ -323,7 +322,7 @@ func TestResponsesOpenAIToOpenAITranslator_ResponseBody(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: false,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi"}`)
@@ -379,7 +378,7 @@ func TestResponsesOpenAIToOpenAITranslator_ResponseBody(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: true,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi","stream":true}`)
@@ -443,7 +442,7 @@ data: [DONE]
 			Model:  "o1",
 			Stream: true,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"o1","input":"Hi","stream":true}`)
@@ -478,7 +477,7 @@ data: [DONE]
 			Model:  "gpt-4o-mini",
 			Stream: true,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o-mini","input":"Hi","stream": true}`)
@@ -523,7 +522,7 @@ func TestResponses_HandleStreamingResponse(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: true,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi","stream":true}`)
@@ -581,7 +580,7 @@ data: [DONE]
 			Model:  "gpt-4o",
 			Stream: true,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi","stream":true}`)
@@ -603,7 +602,7 @@ data: [DONE]
 			Model:  "gpt-4o",
 			Stream: true,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi","stream":true}`)
@@ -661,7 +660,7 @@ data: [DONE]
 			Model:  "gpt-4o",
 			Stream: true,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi","stream":true}`)
@@ -711,7 +710,7 @@ func TestResponses_HandleNonStreamingResponse(t *testing.T) {
 			Model:  "gpt-4o",
 			Stream: false,
 			Input: openai.ResponseNewParamsInputUnion{
-				OfString: ptr.To("Hi"),
+				OfString: new("Hi"),
 			},
 		}
 		original := []byte(`{"model":"gpt-4o","input":"Hi"`)

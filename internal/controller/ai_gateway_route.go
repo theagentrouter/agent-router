@@ -8,12 +8,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
@@ -124,10 +124,8 @@ func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.
 
 	return []*egv1a1.HTTPRouteFilter{
 		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      hostRewriteName,
-				Namespace: ns,
-			},
+			Name:      hostRewriteName,
+			Namespace: ns,
 			Spec: egv1a1.HTTPRouteFilterSpec{
 				URLRewrite: &egv1a1.HTTPURLRewriteFilter{
 					Hostname: &egv1a1.HTTPHostnameModifier{
@@ -137,15 +135,13 @@ func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      notFoundName,
-				Namespace: ns,
-			},
+			Name:      notFoundName,
+			Namespace: ns,
 			Spec: egv1a1.HTTPRouteFilterSpec{
 				DirectResponse: &egv1a1.HTTPDirectResponseFilter{
-					StatusCode: ptr.To(404),
+					StatusCode: new(404),
 					Body: &egv1a1.CustomResponseBody{
-						Inline: ptr.To(
+						Inline: new(
 							// "Likely" since the matching rule can be arbitrary, not necessarily matching on the model name.
 							`No matching route found. It is likely because the model specified in your request is not configured in the Gateway.`,
 						),
@@ -191,24 +187,18 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 	if apierrors.IsNotFound(err) {
 		// This means that this AIGatewayRoute is a new one.
 		httpRoute = gwapiv1.HTTPRoute{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        aiGatewayRoute.Name,
-				Namespace:   aiGatewayRoute.Namespace,
-				Labels:      make(map[string]string),
-				Annotations: make(map[string]string),
-			},
-			Spec: gwapiv1.HTTPRouteSpec{},
+			Name:        aiGatewayRoute.Name,
+			Namespace:   aiGatewayRoute.Namespace,
+			Labels:      make(map[string]string),
+			Annotations: make(map[string]string),
+			Spec:        gwapiv1.HTTPRouteSpec{},
 		}
 
 		// Copy labels from AIGatewayRoute to HTTPRoute.
-		for k, v := range aiGatewayRoute.Labels {
-			httpRoute.Labels[k] = v
-		}
+		maps.Copy(httpRoute.Labels, aiGatewayRoute.Labels)
 
 		// Copy non-controller annotations from AIGatewayRoute to HTTPRoute.
-		for k, v := range aiGatewayRoute.Annotations {
-			httpRoute.Annotations[k] = v
-		}
+		maps.Copy(httpRoute.Annotations, aiGatewayRoute.Annotations)
 		if err = ctrlutil.SetControllerReference(aiGatewayRoute, &httpRoute, c.client.Scheme()); err != nil {
 			panic(fmt.Errorf("BUG: failed to set controller reference for HTTPRoute: %w", err))
 		}
@@ -274,15 +264,13 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 				}
 				ns := gwapiv1.Namespace(backendNamespace)
 				backendRefs = append(backendRefs,
-					gwapiv1.HTTPBackendRef{BackendRef: gwapiv1.BackendRef{
-						BackendObjectReference: gwapiv1.BackendObjectReference{
-							Group:     (*gwapiv1.Group)(br.Group),
-							Kind:      (*gwapiv1.Kind)(br.Kind),
-							Name:      gwapiv1.ObjectName(br.Name),
-							Namespace: &ns,
-						},
-						Weight: br.Weight,
-					}},
+					gwapiv1.HTTPBackendRef{
+						Group:     (*gwapiv1.Group)(br.Group),
+						Kind:      (*gwapiv1.Kind)(br.Kind),
+						Name:      gwapiv1.ObjectName(br.Name),
+						Namespace: &ns,
+						Weight:    br.Weight,
+					},
 				)
 			} else {
 				// Handle AIServiceBackend reference with cross-namespace validation.
@@ -305,10 +293,10 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 				}
 
 				backendRefs = append(backendRefs,
-					gwapiv1.HTTPBackendRef{BackendRef: gwapiv1.BackendRef{
+					gwapiv1.HTTPBackendRef{
 						BackendObjectReference: backendObjRef,
 						Weight:                 br.Weight,
-					}},
+					},
 				)
 			}
 		}
@@ -352,14 +340,10 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 	}
 
 	// Copy labels from AIGatewayRoute to HTTPRoute.
-	for k, v := range aiGatewayRoute.Labels {
-		dst.Labels[k] = v
-	}
+	maps.Copy(dst.Labels, aiGatewayRoute.Labels)
 
 	// Copy non-controller annotations from AIGatewayRoute to HTTPRoute.
-	for k, v := range aiGatewayRoute.Annotations {
-		dst.Annotations[k] = v
-	}
+	maps.Copy(dst.Annotations, aiGatewayRoute.Annotations)
 
 	// HACK: We need to set an annotation so that Envoy Gateway reconciles the HTTPRoute when the backend refs change.
 	dst.Annotations[httpRouteBackendRefPriorityAnnotationKey] = buildPriorityAnnotation(aiGatewayRoute.Spec.Rules)

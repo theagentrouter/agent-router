@@ -13,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
@@ -290,7 +289,7 @@ func TestAnthropicToAWSBedrockTranslator_ResponseBody_NonStreaming(t *testing.T)
 			Message: awsbedrock.Message{
 				Role: "assistant",
 				Content: []*awsbedrock.ContentBlock{
-					{Text: ptr.To("Hello! How can I help you?")},
+					{Text: new("Hello! How can I help you?")},
 				},
 			},
 		},

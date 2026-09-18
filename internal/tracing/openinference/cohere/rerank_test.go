@@ -24,7 +24,7 @@ func TestRerankRecorder_StartParams(t *testing.T) {
 	req := &cohereschema.RerankV2Request{
 		Model:     "rerank-english-v3",
 		Query:     "reset password",
-		TopN:      ptr(2),
+		TopN:      new(2),
 		Documents: []string{"d1", "d2"},
 	}
 	reqBody, _ := json.Marshal(req)
@@ -42,7 +42,7 @@ func TestRerankRecorder_RecordRequest(t *testing.T) {
 	req := &cohereschema.RerankV2Request{
 		Model:     "rerank-english-v3",
 		Query:     "reset password",
-		TopN:      ptr(2),
+		TopN:      new(2),
 		Documents: []string{"d1", "d2"},
 	}
 	reqBody, _ := json.Marshal(req)
@@ -72,7 +72,7 @@ func TestRerankRecorder_RecordRequest_HideInputs(t *testing.T) {
 	req := &cohereschema.RerankV2Request{
 		Model:     "rerank-english-v3",
 		Query:     "reset password",
-		TopN:      ptr(2),
+		TopN:      new(2),
 		Documents: []string{"d1", "d2"},
 	}
 	reqBody, _ := json.Marshal(req)
@@ -214,7 +214,8 @@ func TestRerankRecorder_RecordResponseOnError(t *testing.T) {
 	}
 }
 
-func ptr[T any](v T) *T { return &v }
+//go:fix inline
+
 func fptr(v int) *float64 {
 	f := float64(v)
 	return &f

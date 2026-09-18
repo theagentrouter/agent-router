@@ -19,7 +19,6 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -92,10 +91,8 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 	if apierrors.IsNotFound(err) {
 		// SecurityPolicy doesn't exist, create it.
 		securityPolicy = egv1a1.SecurityPolicy{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      securityPolicyName,
-				Namespace: mcpRoute.Namespace,
-			},
+			Name:      securityPolicyName,
+			Namespace: mcpRoute.Namespace,
 		}
 		// Set owner reference to mcpRoute for garbage collection.
 		if err = ctrlutil.SetControllerReference(mcpRoute, &securityPolicy, c.client.Scheme()); err != nil {
@@ -187,11 +184,9 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 	// TODO: use sectionName to target the MCP proxy rule only when the HTTPRouteRule name is in stable channel.
 	securityPolicySpec.TargetRefs = []gwapiv1.LocalPolicyTargetReferenceWithSectionName{
 		{
-			LocalPolicyTargetReference: gwapiv1.LocalPolicyTargetReference{
-				Group: "gateway.networking.k8s.io",
-				Kind:  "HTTPRoute",
-				Name:  gwapiv1.ObjectName(httpRouteName),
-			},
+			Group: "gateway.networking.k8s.io",
+			Kind:  "HTTPRoute",
+			Name:  gwapiv1.ObjectName(httpRouteName),
 		},
 	}
 
@@ -222,10 +217,8 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context
 	if apierrors.IsNotFound(err) {
 		// BackendTrafficPolicy doesn't exist, create it.
 		backendTrafficPolicy = egv1a1.BackendTrafficPolicy{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      backendTrafficPolicyName,
-				Namespace: mcpRoute.Namespace,
-			},
+			Name:      backendTrafficPolicyName,
+			Namespace: mcpRoute.Namespace,
 		}
 		// Set owner reference to mcpRoute for garbage collection.
 		if err = ctrlutil.SetControllerReference(mcpRoute, &backendTrafficPolicy, c.client.Scheme()); err != nil {
@@ -278,11 +271,9 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context
 	// Target the HTTPRoute MCP proxy rule only.
 	backendTrafficPolicy.Spec.TargetRefs = []gwapiv1.LocalPolicyTargetReferenceWithSectionName{
 		{
-			LocalPolicyTargetReference: gwapiv1.LocalPolicyTargetReference{
-				Group: "gateway.networking.k8s.io",
-				Kind:  "HTTPRoute",
-				Name:  gwapiv1.ObjectName(httpRouteName),
-			},
+			Group: "gateway.networking.k8s.io",
+			Kind:  "HTTPRoute",
+			Name:  gwapiv1.ObjectName(httpRouteName),
 			// TODO: this filter should be applied to the MCP proxy rule only, enable sectionName when supported in Envoy Gateway.
 			// SectionName: ptr.To(gwapiv1a2.SectionName(mcpProxyRuleName)).
 		},
@@ -372,10 +363,8 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataHRF(ctx context
 	if apierrors.IsNotFound(err) {
 		// HTTPRouteFilter doesn't exist, create it.
 		httpRouteFilter = egv1a1.HTTPRouteFilter{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      httpRouteFilterName,
-				Namespace: mcpRoute.Namespace,
-			},
+			Name:      httpRouteFilterName,
+			Namespace: mcpRoute.Namespace,
 		}
 		// Set owner reference to mcpRoute for garbage collection.
 		if err = ctrlutil.SetControllerReference(mcpRoute, &httpRouteFilter, c.client.Scheme()); err != nil {
@@ -391,11 +380,11 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataHRF(ctx context
 	// Configure direct response with OAuth metadata.
 	httpRouteFilter.Spec = egv1a1.HTTPRouteFilterSpec{
 		DirectResponse: &egv1a1.HTTPDirectResponseFilter{
-			ContentType: ptr.To("application/json"),
+			ContentType: new("application/json"),
 			StatusCode:  ptr.To(http.StatusOK),
 			Body: &egv1a1.CustomResponseBody{
 				Type:   ptr.To(egv1a1.ResponseValueTypeInline),
-				Inline: ptr.To(metadataJSON),
+				Inline: new(metadataJSON),
 			},
 			Header: &gwapiv1.HTTPHeaderFilter{},
 		},
@@ -443,10 +432,8 @@ func (c *MCPRouteController) ensureOAuthAuthServerMetadataHRF(ctx context.Contex
 	if apierrors.IsNotFound(err) {
 		// HTTPRouteFilter doesn't exist, create it.
 		httpRouteFilter = egv1a1.HTTPRouteFilter{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      authServerFilterName,
-				Namespace: mcpRoute.Namespace,
-			},
+			Name:      authServerFilterName,
+			Namespace: mcpRoute.Namespace,
 		}
 		// Set owner reference to mcpRoute for garbage collection.
 		if err = ctrlutil.SetControllerReference(mcpRoute, &httpRouteFilter, c.client.Scheme()); err != nil {
@@ -462,11 +449,11 @@ func (c *MCPRouteController) ensureOAuthAuthServerMetadataHRF(ctx context.Contex
 	// Configure direct response with OAuth authorization server metadata.
 	httpRouteFilter.Spec = egv1a1.HTTPRouteFilterSpec{
 		DirectResponse: &egv1a1.HTTPDirectResponseFilter{
-			ContentType: ptr.To("application/json"),
+			ContentType: new("application/json"),
 			StatusCode:  ptr.To(http.StatusOK),
 			Body: &egv1a1.CustomResponseBody{
 				Type:   ptr.To(egv1a1.ResponseValueTypeInline),
-				Inline: ptr.To(metadataJSON),
+				Inline: new(metadataJSON),
 			},
 			Header: &gwapiv1.HTTPHeaderFilter{},
 		},
@@ -493,7 +480,7 @@ func (c *MCPRouteController) ensureOAuthAuthServerMetadataHRF(ctx context.Contex
 // * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-server-location
 // * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
 func buildOAuthProtectedResourceMetadataJSON(auth *aigv1b1.MCPRouteOAuth) string {
-	response := map[string]interface{}{
+	response := map[string]any{
 		"resource":                 auth.ProtectedResourceMetadata.Resource,
 		"authorization_servers":    []string{auth.Issuer},
 		"bearer_methods_supported": []string{"header"},
@@ -557,7 +544,7 @@ func (c *MCPRouteController) buildOAuthAuthServerMetadataJSON(oauth *aigv1b1.MCP
 	// These fields are currently hardcoded for keycloak compatibility.
 	// We don't fail the reconciliation if fetching metadata fails,
 	// as the authorization server metadata is just for back-compatibility with the MCP spec 2025-03-26.
-	response := map[string]interface{}{
+	response := map[string]any{
 		"issuer":                                authServer,
 		"authorization_endpoint":                authServer + "/protocol/openid-connect/auth",
 		"token_endpoint":                        authServer + "/protocol/openid-connect/token",
@@ -869,11 +856,9 @@ func (c *MCPRouteController) tryGetBackendsForJWKS(ctx context.Context, jwksURL 
 		if string(btp.Spec.Validation.Hostname) == hostname {
 			for _, ref := range btp.Spec.TargetRefs {
 				backendRefs = append(backendRefs, egv1a1.BackendRef{
-					BackendObjectReference: gwapiv1.BackendObjectReference{
-						Group: &ref.Group,
-						Kind:  &ref.Kind,
-						Name:  ref.Name,
-					},
+					Group: &ref.Group,
+					Kind:  &ref.Kind,
+					Name:  ref.Name,
 				})
 			}
 		}

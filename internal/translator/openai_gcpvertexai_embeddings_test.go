@@ -36,7 +36,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
+					Model: "text-embedding-004",
 					Input: openai.EmbeddingRequestInput{
 						Value: "This is a test text for embedding",
 					},
@@ -56,7 +56,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
+					Model: "text-embedding-004",
 					Input: openai.EmbeddingRequestInput{
 						Value: "Test text",
 					},
@@ -74,7 +74,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
+					Model: "text-embedding-004",
 					Input: openai.EmbeddingRequestInput{
 						Value: openai.EmbeddingInputItem{
 							Content:  openai.EmbeddingContent{Value: "This is a document for retrieval"},
@@ -98,7 +98,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
+					Model: "text-embedding-004",
 					Input: openai.EmbeddingRequestInput{
 						Value: []openai.EmbeddingInputItem{
 							{
@@ -130,7 +130,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004", Dimensions: &[]int{256}[0]},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004", Dimensions: &[]int{256}[0]},
+					Model: "text-embedding-004", Dimensions: &[]int{256}[0],
 					Input: openai.EmbeddingRequestInput{
 						Value: "Text for dimension testing",
 					},
@@ -149,7 +149,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
+					Model: "text-embedding-004",
 					Input: openai.EmbeddingRequestInput{
 						Value: openai.EmbeddingInputItem{
 							Content:  openai.EmbeddingContent{Value: "Text for similarity check"},
@@ -173,7 +173,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{AutoTruncate: &[]bool{true}[0]}},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{AutoTruncate: &[]bool{true}[0]}},
+					Model: "text-embedding-004", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{AutoTruncate: &[]bool{true}[0]},
 					Input: openai.EmbeddingRequestInput{
 						Value: "Test text for auto truncate",
 					},
@@ -192,7 +192,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{TaskType: "RETRIEVAL_QUERY"}},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{TaskType: "RETRIEVAL_QUERY"}},
+					Model: "text-embedding-004", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{TaskType: "RETRIEVAL_QUERY"},
 					Input: openai.EmbeddingRequestInput{
 						Value: []openai.EmbeddingInputItem{
 							{
@@ -221,7 +221,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
+					Model: "text-embedding-004",
 					Input: openai.EmbeddingRequestInput{
 						Value: []string{"First text", "Second text", "Third text"},
 					},
@@ -242,7 +242,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+					Model: "gemini-embedding-2-preview",
 					Input: openai.EmbeddingRequestInput{
 						Value: "hello world",
 					},
@@ -261,7 +261,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+					Model: "gemini-embedding-2-preview",
 					Input: openai.EmbeddingRequestInput{
 						Value: []string{"a", "b", "c"},
 					},
@@ -274,7 +274,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview", Dimensions: &[]int{256}[0]},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview", Dimensions: &[]int{256}[0]},
+					Model: "gemini-embedding-2-preview", Dimensions: &[]int{256}[0],
 					Input: openai.EmbeddingRequestInput{
 						Value: "test",
 					},
@@ -293,7 +293,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{TaskType: "RETRIEVAL_QUERY"}},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{TaskType: "RETRIEVAL_QUERY"}},
+					Model: "gemini-embedding-2-preview", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{TaskType: "RETRIEVAL_QUERY"},
 					Input: openai.EmbeddingRequestInput{
 						Value: "query text",
 					},
@@ -312,7 +312,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+					Model: "gemini-embedding-2-preview",
 					Input: openai.EmbeddingRequestInput{
 						Value: openai.EmbeddingInputItem{
 							Content:  openai.EmbeddingContent{Value: "doc for retrieval"},
@@ -329,7 +329,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{AutoTruncate: &[]bool{true}[0]}},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{AutoTruncate: &[]bool{true}[0]}},
+					Model: "gemini-embedding-2-preview", GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{AutoTruncate: &[]bool{true}[0]},
 					Input: openai.EmbeddingRequestInput{
 						Value: "text for auto truncate",
 					},
@@ -348,7 +348,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+					Model: "gemini-embedding-2-preview",
 					Input: openai.EmbeddingRequestInput{
 						Value: []openai.EmbeddingInputItem{
 							{Content: openai.EmbeddingContent{Value: "first item"}},
@@ -364,7 +364,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-001"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-001"},
+					Model: "gemini-embedding-001",
 					Input: openai.EmbeddingRequestInput{
 						Value: "test",
 					},
@@ -384,7 +384,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
+					Model: "text-embedding-004",
 					Input: openai.EmbeddingRequestInput{
 						Value: "override test",
 					},
@@ -404,7 +404,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfChat: &openai.EmbeddingChatRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+					Model: "gemini-embedding-2-preview",
 					Messages: []openai.ChatCompletionMessageParamUnion{
 						{OfUser: &openai.ChatCompletionUserMessageParam{
 							Role:    "user",
@@ -426,7 +426,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfChat: &openai.EmbeddingChatRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+					Model: "gemini-embedding-2-preview",
 					Messages: []openai.ChatCompletionMessageParamUnion{
 						{OfUser: &openai.ChatCompletionUserMessageParam{
 							Role: "user",
@@ -456,7 +456,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfChat: &openai.EmbeddingChatRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+					Model: "gemini-embedding-2-preview",
 					Messages: []openai.ChatCompletionMessageParamUnion{
 						{OfUser: &openai.ChatCompletionUserMessageParam{
 							Role: "user",
@@ -486,7 +486,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfChat: &openai.EmbeddingChatRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+					Model: "gemini-embedding-2-preview",
 					Messages: []openai.ChatCompletionMessageParamUnion{
 						{OfUser: &openai.ChatCompletionUserMessageParam{
 							Role: "user",
@@ -520,7 +520,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfChat: &openai.EmbeddingChatRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+					Model: "gemini-embedding-2-preview",
 					Messages: []openai.ChatCompletionMessageParamUnion{
 						{OfUser: &openai.ChatCompletionUserMessageParam{
 							Role:    "user",
@@ -547,7 +547,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
 				OfChat: &openai.EmbeddingChatRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
+					Model: "text-embedding-004",
 					Messages: []openai.ChatCompletionMessageParamUnion{
 						{OfUser: &openai.ChatCompletionUserMessageParam{
 							Role:    "user",
@@ -563,7 +563,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview", Dimensions: &[]int{128}[0], GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{TaskType: "RETRIEVAL_QUERY"}},
 				OfChat: &openai.EmbeddingChatRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview", Dimensions: &[]int{128}[0], GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{TaskType: "RETRIEVAL_QUERY"}},
+					Model: "gemini-embedding-2-preview", Dimensions: &[]int{128}[0], GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{TaskType: "RETRIEVAL_QUERY"},
 					Messages: []openai.ChatCompletionMessageParamUnion{
 						{OfUser: &openai.ChatCompletionUserMessageParam{
 							Role:    "user",
@@ -1195,10 +1195,10 @@ func TestResponseModel_GCPVertexAIEmbeddings_EmbedContent(t *testing.T) {
 
 	// Build request through RequestBody to set internal state.
 	req := &openai.EmbeddingRequest{
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
+		Model: "gemini-embedding-2-preview",
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
-			Input:                openai.EmbeddingRequestInput{Value: "hello world"},
+			Model: "gemini-embedding-2-preview",
+			Input: openai.EmbeddingRequestInput{Value: "hello world"},
 		},
 	}
 	reqBody, _ := json.Marshal(req)
@@ -1243,10 +1243,10 @@ func TestResponseModel_GCPVertexAIEmbeddings(t *testing.T) {
 
 	// Initialize translator with embedding request
 	req := &openai.EmbeddingRequest{
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
+		Model: "text-embedding-004",
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-004"},
-			Input:                openai.EmbeddingRequestInput{Value: "test"},
+			Model: "text-embedding-004",
+			Input: openai.EmbeddingRequestInput{Value: "test"},
 		},
 	}
 	reqBody, _ := json.Marshal(req)

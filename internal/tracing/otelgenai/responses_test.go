@@ -26,7 +26,7 @@ func TestResponsesConversationID(t *testing.T) {
 		{
 			name: "string form",
 			req: &openai.ResponseRequest{Conversation: openai.ResponseNewParamsConversationUnion{
-				OfString: ptr("conv_123"),
+				OfString: new("conv_123"),
 			}},
 			expected: "conv_123",
 		},
@@ -54,7 +54,7 @@ func TestResponsesRecorder_conversationIDNotGated(t *testing.T) {
 	span := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
 		r.RecordRequest(span, &openai.ResponseRequest{
 			Model:        "gpt-5-nano",
-			Conversation: openai.ResponseNewParamsConversationUnion{OfString: ptr("conv_123")},
+			Conversation: openai.ResponseNewParamsConversationUnion{OfString: new("conv_123")},
 		}, nil)
 		return false
 	})
@@ -99,7 +99,7 @@ func TestResponsesRequestAttrs_readFromRequest(t *testing.T) {
 
 	require.Equal(t, []attribute.KeyValue{
 		attribute.Float64(RequestTemperature, 0),
-	}, responsesRequestAttrs(&openai.ResponseRequest{Temperature: ptr(0.0)}))
+	}, responsesRequestAttrs(&openai.ResponseRequest{Temperature: new(0.0)}))
 }
 
 func TestResponsesOutputMessages(t *testing.T) {
@@ -151,7 +151,7 @@ func TestResponsesOutputMessages(t *testing.T) {
 			resp: &openai.Response{Output: []openai.ResponseOutputItemUnion{{
 				OfOutputMessage: &openai.ResponseOutputMessage{
 					Role:    "assistant",
-					Content: openai.ResponseOutputMessageContentUnion{OfString: ptr("hi there")},
+					Content: openai.ResponseOutputMessageContentUnion{OfString: new("hi there")},
 				},
 			}}},
 			expected: `[{"role":"assistant","parts":[{"type":"text","content":"hi there"}]}]`,

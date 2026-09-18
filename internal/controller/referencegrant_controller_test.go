@@ -31,10 +31,8 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 
 	t.Run("ReferenceGrant created - triggers affected AIGatewayRoutes", func(t *testing.T) {
 		referenceGrant := &gwapiv1b1.ReferenceGrant{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-grant",
-				Namespace: "backend-ns",
-			},
+			Name:      "test-grant",
+			Namespace: "backend-ns",
 			Spec: gwapiv1b1.ReferenceGrantSpec{
 				From: []gwapiv1b1.ReferenceGrantFrom{
 					{
@@ -53,10 +51,8 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		}
 
 		affectedRoute := &aigv1b1.AIGatewayRoute{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "affected-route",
-				Namespace: "route-ns",
-			},
+			Name:      "affected-route",
+			Namespace: "route-ns",
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{
@@ -109,10 +105,8 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
 
 		req := reconcile.Request{
-			NamespacedName: client.ObjectKey{
-				Namespace: "backend-ns",
-				Name:      "deleted-grant",
-			},
+			Namespace: "backend-ns",
+			Name:      "deleted-grant",
 		}
 
 		result, err := controller.Reconcile(context.Background(), req)
@@ -125,10 +119,8 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 
 	t.Run("ReferenceGrant with no affected routes", func(t *testing.T) {
 		referenceGrant := &gwapiv1b1.ReferenceGrant{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-grant",
-				Namespace: "backend-ns",
-			},
+			Name:      "test-grant",
+			Namespace: "backend-ns",
 			Spec: gwapiv1b1.ReferenceGrantSpec{
 				From: []gwapiv1b1.ReferenceGrantFrom{
 					{
@@ -170,10 +162,8 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 
 	t.Run("ReferenceGrant with multiple affected routes", func(t *testing.T) {
 		referenceGrant := &gwapiv1b1.ReferenceGrant{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-grant",
-				Namespace: "backend-ns",
-			},
+			Name:      "test-grant",
+			Namespace: "backend-ns",
 			Spec: gwapiv1b1.ReferenceGrantSpec{
 				From: []gwapiv1b1.ReferenceGrantFrom{
 					{
@@ -192,10 +182,8 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		}
 
 		route1 := &aigv1b1.AIGatewayRoute{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "route-1",
-				Namespace: "route-ns",
-			},
+			Name:      "route-1",
+			Namespace: "route-ns",
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{
@@ -211,10 +199,8 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		}
 
 		route2 := &aigv1b1.AIGatewayRoute{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "route-2",
-				Namespace: "route-ns",
-			},
+			Name:      "route-2",
+			Namespace: "route-ns",
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{
@@ -300,10 +286,8 @@ func TestReferenceGrantController_Reconcile_GetError(t *testing.T) {
 
 	// Try to reconcile a non-existent ReferenceGrant - this should be handled gracefully
 	req := reconcile.Request{
-		NamespacedName: client.ObjectKey{
-			Namespace: "test-ns",
-			Name:      "non-existent",
-		},
+		Namespace: "test-ns",
+		Name:      "non-existent",
 	}
 
 	result, err := controller.Reconcile(context.Background(), req)
@@ -317,10 +301,8 @@ func TestReferenceGrantController_Reconcile_GetAffectedRoutesError(t *testing.T)
 	_ = gwapiv1b1.Install(scheme)
 
 	referenceGrant := &gwapiv1b1.ReferenceGrant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-grant",
-			Namespace: "backend-ns",
-		},
+		Name:      "test-grant",
+		Namespace: "backend-ns",
 		Spec: gwapiv1b1.ReferenceGrantSpec{
 			From: []gwapiv1b1.ReferenceGrantFrom{
 				{
@@ -394,10 +376,8 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 			},
 			routes: []aigv1b1.AIGatewayRoute{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "affected-route",
-						Namespace: "route-ns",
-					},
+					Name:      "affected-route",
+					Namespace: "route-ns",
 					Spec: aigv1b1.AIGatewayRouteSpec{
 						Rules: []aigv1b1.AIGatewayRouteRule{
 							{
@@ -412,10 +392,8 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 					},
 				},
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "unaffected-route",
-						Namespace: "route-ns",
-					},
+					Name:      "unaffected-route",
+					Namespace: "route-ns",
 					Spec: aigv1b1.AIGatewayRouteSpec{
 						Rules: []aigv1b1.AIGatewayRouteRule{
 							{
@@ -457,10 +435,8 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 			},
 			routes: []aigv1b1.AIGatewayRoute{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "route-in-different-ns",
-						Namespace: "other-ns",
-					},
+					Name:      "route-in-different-ns",
+					Namespace: "other-ns",
 					Spec: aigv1b1.AIGatewayRouteSpec{
 						Rules: []aigv1b1.AIGatewayRouteRule{
 							{
@@ -502,10 +478,8 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 			},
 			routes: []aigv1b1.AIGatewayRoute{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "route",
-						Namespace: "route-ns",
-					},
+					Name:      "route",
+					Namespace: "route-ns",
 					Spec: aigv1b1.AIGatewayRouteSpec{
 						Rules: []aigv1b1.AIGatewayRouteRule{
 							{
@@ -569,10 +543,8 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
 
 		grant := &gwapiv1b1.ReferenceGrant{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-grant",
-				Namespace: "backend-ns",
-			},
+			Name:      "test-grant",
+			Namespace: "backend-ns",
 			Spec: gwapiv1b1.ReferenceGrantSpec{
 				From: []gwapiv1b1.ReferenceGrantFrom{
 					{
@@ -609,10 +581,8 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes_WithNonMatchingFrom
 	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
 
 	grant := &gwapiv1b1.ReferenceGrant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-grant",
-			Namespace: "backend-ns",
-		},
+		Name:      "test-grant",
+		Namespace: "backend-ns",
 		Spec: gwapiv1b1.ReferenceGrantSpec{
 			From: []gwapiv1b1.ReferenceGrantFrom{
 				{

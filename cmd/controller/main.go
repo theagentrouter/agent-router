@@ -97,7 +97,7 @@ func parsePullPolicy(s string) (corev1.PullPolicy, error) {
 // parseWatchNamespaces parses a comma-separated list of namespaces into a slice of strings.
 func parseWatchNamespaces(s string) []string {
 	var namespaces []string
-	for _, n := range strings.Split(s, ",") {
+	for n := range strings.SplitSeq(s, ",") {
 		ns := strings.TrimSpace(n)
 		if ns != "" {
 			namespaces = append(namespaces, ns)

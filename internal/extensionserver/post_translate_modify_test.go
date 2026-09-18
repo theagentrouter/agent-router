@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -501,8 +500,8 @@ func newMetadataForwardingServer(t *testing.T) (*Server, client.Client) {
 	c := newFakeClient()
 	newGateway := func(name, configName string) *gwapiv1.Gateway {
 		gw := &gwapiv1.Gateway{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
-			Spec:       gwapiv1.GatewaySpec{GatewayClassName: "eg"},
+			Name: name, Namespace: "ns",
+			Spec: gwapiv1.GatewaySpec{GatewayClassName: "eg"},
 		}
 		if configName != "" {
 			gw.Annotations = map[string]string{gatewayConfigAnnotationKey: configName}
@@ -511,7 +510,7 @@ func newMetadataForwardingServer(t *testing.T) (*Server, client.Client) {
 	}
 	newGatewayConfig := func(name string, namespaces ...string) *aigv1b1.GatewayConfig {
 		return &aigv1b1.GatewayConfig{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+			Name: name, Namespace: "ns",
 			Spec: aigv1b1.GatewayConfigSpec{
 				ExtProc: &aigv1b1.GatewayConfigExtProc{MetadataForwardingNamespaces: namespaces},
 			},
@@ -519,7 +518,7 @@ func newMetadataForwardingServer(t *testing.T) (*Server, client.Client) {
 	}
 	newRoute := func(name string, parents ...string) *aigv1b1.AIGatewayRoute {
 		route := &aigv1b1.AIGatewayRoute{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+			Name: name, Namespace: "ns",
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				Rules: []aigv1b1.AIGatewayRouteRule{
 					{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
@@ -645,7 +644,7 @@ func Test_maybeModifyCluster_forwardsDeclaredMetadataNamespaces(t *testing.T) {
 func Test_maybeModifyCluster_rebuildsOwnFiltersOnExistingChain(t *testing.T) {
 	c := newFakeClient()
 	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "ns"},
+		Name: "myroute", Namespace: "ns",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			ParentRefs: []gwapiv1.ParentReference{{Name: "eg-gateway"}},
 			Rules: []aigv1b1.AIGatewayRouteRule{
@@ -654,15 +653,13 @@ func Test_maybeModifyCluster_rebuildsOwnFiltersOnExistingChain(t *testing.T) {
 		},
 	}))
 	require.NoError(t, c.Create(t.Context(), &gwapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:        "eg-gateway",
-			Namespace:   "ns",
-			Annotations: map[string]string{gatewayConfigAnnotationKey: "gwconfig"},
-		},
-		Spec: gwapiv1.GatewaySpec{GatewayClassName: "eg"},
+		Name:        "eg-gateway",
+		Namespace:   "ns",
+		Annotations: map[string]string{gatewayConfigAnnotationKey: "gwconfig"},
+		Spec:        gwapiv1.GatewaySpec{GatewayClassName: "eg"},
 	}))
 	require.NoError(t, c.Create(t.Context(), &aigv1b1.GatewayConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "gwconfig", Namespace: "ns"},
+		Name: "gwconfig", Namespace: "ns",
 		Spec: aigv1b1.GatewayConfigSpec{
 			ExtProc: &aigv1b1.GatewayConfigExtProc{
 				MetadataForwardingNamespaces: []string{"envoy.filters.http.ext_authz"},

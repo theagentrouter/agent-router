@@ -14,7 +14,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
@@ -88,7 +87,7 @@ func TestTokenizeTranslator_RequestBody(t *testing.T) {
 		require.Equal(t, "override-model", translator.requestModel)
 
 		// Verify the body contains the overridden model
-		var parsedBody map[string]interface{}
+		var parsedBody map[string]any
 		require.NoError(t, json.Unmarshal(body, &parsedBody))
 		require.Equal(t, "override-model", parsedBody["model"])
 
@@ -118,7 +117,7 @@ func TestTokenizeTranslator_RequestBody(t *testing.T) {
 		require.Equal(t, "override-model", translator.requestModel)
 
 		// Verify the body contains the overridden model
-		var parsedBody map[string]interface{}
+		var parsedBody map[string]any
 		require.NoError(t, json.Unmarshal(body, &parsedBody))
 		require.Equal(t, "override-model", parsedBody["model"])
 
@@ -242,7 +241,7 @@ func TestTokenizeTranslator_ResponseError(t *testing.T) {
 				Type: "error",
 				Error: openai.ErrorType{
 					Type:    openAIBackendError,
-					Code:    ptr.To("503"),
+					Code:    new("503"),
 					Message: "tokenizer service unavailable",
 				},
 			},
@@ -258,7 +257,7 @@ func TestTokenizeTranslator_ResponseError(t *testing.T) {
 			output: openai.Error{
 				Error: openai.ErrorType{
 					Type:    "BadRequestError",
-					Code:    ptr.To("400"),
+					Code:    new("400"),
 					Message: "invalid tokenize request",
 				},
 			},
@@ -275,7 +274,7 @@ func TestTokenizeTranslator_ResponseError(t *testing.T) {
 				Type: "error",
 				Error: openai.ErrorType{
 					Type:    openAIBackendError,
-					Code:    ptr.To("504"),
+					Code:    new("504"),
 					Message: "<html><body>Gateway Timeout</body></html>",
 				},
 			},
@@ -456,7 +455,7 @@ func TestTokenizeTranslator_ModelOverride(t *testing.T) {
 		req := &tokenize.RequestUnion{
 			CompletionRequest: &tokenize.CompletionRequest{
 				Model:            "gpt-4",
-				AddSpecialTokens: ptr.To(true),
+				AddSpecialTokens: new(true),
 			},
 		}
 
@@ -488,7 +487,7 @@ func TestTokenizeTranslator_ModelOverride(t *testing.T) {
 			ChatRequest: &tokenize.ChatRequest{
 				Model:           "gpt-4",
 				Messages:        []openai.ChatCompletionMessageParamUnion{{}},
-				ReturnTokenStrs: ptr.To(true),
+				ReturnTokenStrs: new(true),
 			},
 		}
 

@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	fake2 "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
@@ -50,7 +49,7 @@ func TestBackendSecurityController_Reconcile(t *testing.T) {
 
 	// Create AIServiceBackend that references the BackendSecurityPolicy.
 	asb := &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+		Name: "foo", Namespace: "default",
 		Spec: aigv1b1.AIServiceBackendSpec{
 			BackendRef: gwapiv1.BackendObjectReference{
 				Name: gwapiv1.ObjectName("mybackend"),
@@ -61,7 +60,7 @@ func TestBackendSecurityController_Reconcile(t *testing.T) {
 	require.NoError(t, fakeClient.Create(t.Context(), asb))
 
 	err := fakeClient.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: backendSecurityPolicyName, Namespace: namespace},
+		Name: backendSecurityPolicyName, Namespace: namespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
@@ -77,7 +76,7 @@ func TestBackendSecurityController_Reconcile(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: backendSecurityPolicyName}})
+	res, err := c.Reconcile(t.Context(), reconcile.Request{Namespace: namespace, Name: backendSecurityPolicyName})
 	require.NoError(t, err)
 	require.False(t, res.Requeue)
 	items := aiServiceBackendEventCh.RequireItemsEventually(t, 1)
@@ -94,12 +93,12 @@ func TestBackendSecurityController_Reconcile(t *testing.T) {
 
 	// Test targeting an InferencePool.
 	inferencePool := &gwaiev1.InferencePool{
-		ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "default"},
+		Name: "bar", Namespace: "default",
 	}
 	require.NoError(t, fakeClient.Create(t.Context(), inferencePool))
 
 	bspInferencePool := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "bsp-inference-pool", Namespace: namespace},
+		Name: "bsp-inference-pool", Namespace: namespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
@@ -115,7 +114,7 @@ func TestBackendSecurityController_Reconcile(t *testing.T) {
 		},
 	}
 	require.NoError(t, fakeClient.Create(t.Context(), bspInferencePool))
-	res, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: bspInferencePool.Name}})
+	res, err = c.Reconcile(t.Context(), reconcile.Request{Namespace: namespace, Name: bspInferencePool.Name})
 	require.NoError(t, err)
 	require.False(t, res.Requeue)
 	inferencePoolItems := inferencePoolEventCh.RequireItemsEventually(t, 1)
@@ -123,9 +122,9 @@ func TestBackendSecurityController_Reconcile(t *testing.T) {
 	require.Equal(t, inferencePool, inferencePoolItems[0])
 
 	// Test the case where the BackendSecurityPolicy is being deleted.
-	err = fakeClient.Delete(t.Context(), &aigv1b1.BackendSecurityPolicy{ObjectMeta: metav1.ObjectMeta{Name: backendSecurityPolicyName, Namespace: namespace}})
+	err = fakeClient.Delete(t.Context(), &aigv1b1.BackendSecurityPolicy{Name: backendSecurityPolicyName, Namespace: namespace})
 	require.NoError(t, err)
-	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: backendSecurityPolicyName}})
+	_, err = c.Reconcile(t.Context(), reconcile.Request{Namespace: namespace, Name: backendSecurityPolicyName})
 	require.NoError(t, err)
 }
 
@@ -155,10 +154,8 @@ func TestBackendSecurityPolicyController_Reconcile_SyncError(t *testing.T) {
 
 	// Create a BackendSecurityPolicy with invalid spec to trigger sync error.
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "invalid-bsp",
-			Namespace: "default",
-		},
+		Name:      "invalid-bsp",
+		Namespace: "default",
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: "InvalidType", // Invalid type to cause sync error.
 		},
@@ -168,10 +165,8 @@ func TestBackendSecurityPolicyController_Reconcile_SyncError(t *testing.T) {
 
 	// Reconcile should fail during sync.
 	_, err = c.Reconcile(t.Context(), reconcile.Request{
-		NamespacedName: types.NamespacedName{
-			Namespace: "default",
-			Name:      "invalid-bsp",
-		},
+		Namespace: "default",
+		Name:      "invalid-bsp",
 	})
 	require.Error(t, err)
 
@@ -191,14 +186,12 @@ func TestBackendSecurityPolicyController_ReconcileOIDC_Fail(t *testing.T) {
 	bspNamespace := "default"
 
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace},
+		Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
 				OIDCExchangeToken: &aigv1b1.AWSOIDCExchangeToken{
-					BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
-						OIDC: egv1a1.OIDC{},
-					},
+					OIDC: egv1a1.OIDC{},
 				},
 			},
 		},
@@ -206,7 +199,7 @@ func TestBackendSecurityPolicyController_ReconcileOIDC_Fail(t *testing.T) {
 	err := cl.Create(t.Context(), bsp)
 	require.NoError(t, err)
 	// Expects rotate credentials to fail due to missing OIDC details.
-	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: bspNamespace, Name: fmt.Sprintf("%s-OIDC", bspName)}})
+	res, err := c.Reconcile(t.Context(), reconcile.Request{Namespace: bspNamespace, Name: fmt.Sprintf("%s-OIDC", bspName)})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to create oidc config")
 	require.Equal(t, time.Minute, res.RequeueAfter)
@@ -242,10 +235,8 @@ func TestBackendSecurityPolicyController_RotateCredential(t *testing.T) {
 	oidcSecretName := "oidcClientSecret"
 
 	oidcSecret := corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      oidcSecretName,
-			Namespace: bspNamespace,
-		},
+		Name:      oidcSecretName,
+		Namespace: bspNamespace,
 		Data: map[string][]byte{
 			"client-secret": []byte("client-secret"),
 		},
@@ -258,21 +249,19 @@ func TestBackendSecurityPolicyController_RotateCredential(t *testing.T) {
 			Issuer:        discoveryServer.URL,
 			TokenEndpoint: &tokenServer.URL,
 		},
-		ClientID: ptr.To("some-client-id"),
+		ClientID: new("some-client-id"),
 		ClientSecret: gwapiv1.SecretObjectReference{
 			Name:      gwapiv1.ObjectName(oidcSecretName),
 			Namespace: (*gwapiv1.Namespace)(&bspNamespace),
 		},
 	}
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace},
+		Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
 				OIDCExchangeToken: &aigv1b1.AWSOIDCExchangeToken{
-					BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
-						OIDC: oidc,
-					},
+					OIDC: oidc,
 				},
 				Region: "us-east-1",
 			},
@@ -288,12 +277,10 @@ func TestBackendSecurityPolicyController_RotateCredential(t *testing.T) {
 			"default", "accessKey", "secretKey", "sessionToken", "us-east-2"),
 	}
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("ai-eg-bsp-%s-OIDC", bspName),
-			Namespace: bspNamespace,
-			Annotations: map[string]string{
-				rotators.ExpirationTimeAnnotationKey: time.Now().Add(60 * time.Minute).Format(time.RFC3339),
-			},
+		Name:      fmt.Sprintf("ai-eg-bsp-%s-OIDC", bspName),
+		Namespace: bspNamespace,
+		Annotations: map[string]string{
+			rotators.ExpirationTimeAnnotationKey: time.Now().Add(60 * time.Minute).Format(time.RFC3339),
 		},
 		Data: data,
 	}
@@ -338,10 +325,8 @@ func TestBackendSecurityPolicyController_RotateExpiredCredential(t *testing.T) {
 	awsSecretName := rotators.GetBSPSecretName(fmt.Sprintf("%s-OIDC", bspName))
 
 	oidcSecret := corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      oidcSecretName,
-			Namespace: bspNamespace,
-		},
+		Name:      oidcSecretName,
+		Namespace: bspNamespace,
 		Data: map[string][]byte{
 			"client-secret": []byte("client-secret"),
 		},
@@ -353,21 +338,19 @@ func TestBackendSecurityPolicyController_RotateExpiredCredential(t *testing.T) {
 			Issuer:        discoveryServer.URL,
 			TokenEndpoint: &tokenServer.URL,
 		},
-		ClientID: ptr.To("some-client-id"),
+		ClientID: new("some-client-id"),
 		ClientSecret: gwapiv1.SecretObjectReference{
 			Name:      gwapiv1.ObjectName(oidcSecretName),
 			Namespace: (*gwapiv1.Namespace)(&bspNamespace),
 		},
 	}
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace},
+		Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
 				OIDCExchangeToken: &aigv1b1.AWSOIDCExchangeToken{
-					BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
-						OIDC: oidc,
-					},
+					OIDC: oidc,
 				},
 			},
 		},
@@ -436,10 +419,8 @@ func TestBackendSecurityPolicyController_GetBackendSecurityPolicyAuthOIDC(t *tes
 			ClientID: "client-id",
 			TenantID: "tenant-id",
 			OIDCExchangeToken: &aigv1b1.AzureOIDCExchangeToken{
-				BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
-					OIDC: egv1a1.OIDC{
-						ClientID: ptr.To("some-client-id"),
-					},
+				OIDC: egv1a1.OIDC{
+					ClientID: new("some-client-id"),
 				},
 			},
 		},
@@ -461,10 +442,8 @@ func TestBackendSecurityPolicyController_GetBackendSecurityPolicyAuthOIDC(t *tes
 		Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 		AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
 			OIDCExchangeToken: &aigv1b1.AWSOIDCExchangeToken{
-				BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
-					OIDC: egv1a1.OIDC{
-						ClientID: ptr.To("some-client-id"),
-					},
+				OIDC: egv1a1.OIDC{
+					ClientID: new("some-client-id"),
 				},
 			},
 		},
@@ -484,7 +463,7 @@ func TestBackendSecurityPolicyController_GetBackendSecurityPolicyAuthOIDC(t *tes
 				OIDCExchangeToken: aigv1b1.GCPOIDCExchangeToken{
 					BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
 						OIDC: egv1a1.OIDC{
-							ClientID: ptr.To("some-client-id"),
+							ClientID: new("some-client-id"),
 						},
 					},
 				},
@@ -505,7 +484,7 @@ func TestNewBackendSecurityPolicyController_ReconcileAzureMissingSecret(t *testi
 	clientID := "some-client-id"
 
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: "default"},
+		Name: bspName, Namespace: "default",
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 			AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
@@ -517,7 +496,7 @@ func TestNewBackendSecurityPolicyController_ReconcileAzureMissingSecret(t *testi
 	}
 	err := cl.Create(t.Context(), bsp)
 	require.NoError(t, err)
-	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: bspName}})
+	res, err := c.Reconcile(t.Context(), reconcile.Request{Namespace: "default", Name: bspName})
 	require.Error(t, err)
 	require.Equal(t, "secrets \"some-azure-secret\" not found", err.Error())
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
@@ -532,15 +511,13 @@ func TestNewBackendSecurityPolicyController_ReconcileAzureMissingSecretData(t *t
 	clientID := "some-client-id"
 
 	azureClientSecret := corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "some-azure-secret",
-			Namespace: "default",
-		},
+		Name:      "some-azure-secret",
+		Namespace: "default",
 	}
 	require.NoError(t, cl.Create(t.Context(), &azureClientSecret, &client.CreateOptions{}))
 
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: "default"},
+		Name: bspName, Namespace: "default",
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 			AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
@@ -555,7 +532,7 @@ func TestNewBackendSecurityPolicyController_ReconcileAzureMissingSecretData(t *t
 	}
 	err := cl.Create(t.Context(), bsp)
 	require.NoError(t, err)
-	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: bspName}})
+	res, err := c.Reconcile(t.Context(), reconcile.Request{Namespace: "default", Name: bspName})
 	require.Error(t, err)
 	require.Equal(t, "missing azure client secret key client-secret", err.Error())
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
@@ -569,21 +546,19 @@ func TestNewBackendSecurityPolicyController_RotateCredentialInvalidType(t *testi
 	bspNamespace := "default"
 
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace},
+		Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: "Unknown",
 			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
 				OIDCExchangeToken: &aigv1b1.AWSOIDCExchangeToken{
-					BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
-						OIDC: egv1a1.OIDC{},
-					},
+					OIDC: egv1a1.OIDC{},
 				},
 			},
 		},
 	}
 	err := cl.Create(t.Context(), bsp)
 	require.NoError(t, err)
-	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: bspNamespace, Name: fmt.Sprintf("%s-OIDC", bspName)}})
+	res, err := c.Reconcile(t.Context(), reconcile.Request{Namespace: bspNamespace, Name: fmt.Sprintf("%s-OIDC", bspName)})
 	require.Error(t, err)
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
 }
@@ -596,7 +571,7 @@ func TestNewBackendSecurityPolicyController_RotateCredentialAwsCredentialFile(t 
 	bspNamespace := "default"
 
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace},
+		Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -606,7 +581,7 @@ func TestNewBackendSecurityPolicyController_RotateCredentialAwsCredentialFile(t 
 	}
 	err := cl.Create(t.Context(), bsp)
 	require.NoError(t, err)
-	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: bspNamespace, Name: fmt.Sprintf("%s-OIDC", bspName)}})
+	res, err := c.Reconcile(t.Context(), reconcile.Request{Namespace: bspNamespace, Name: fmt.Sprintf("%s-OIDC", bspName)})
 	require.NoError(t, err)
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
 }
@@ -619,7 +594,7 @@ func TestNewBackendSecurityPolicyController_RotateCredentialGcpCredentialFile(t 
 	bspNamespace := "default"
 
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-sa", bspName), Namespace: bspNamespace},
+		Name: fmt.Sprintf("%s-sa", bspName), Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 			GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -633,7 +608,7 @@ func TestNewBackendSecurityPolicyController_RotateCredentialGcpCredentialFile(t 
 	}
 	err := cl.Create(t.Context(), bsp)
 	require.NoError(t, err)
-	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: bspNamespace, Name: fmt.Sprintf("%s-sa", bspName)}})
+	res, err := c.Reconcile(t.Context(), reconcile.Request{Namespace: bspNamespace, Name: fmt.Sprintf("%s-sa", bspName)})
 	require.Error(t, err)
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
 }
@@ -647,10 +622,8 @@ func TestNewBackendSecurityPolicyController_RotateCredentialAzureIncorrectSecret
 	clientID := "some-client-id"
 	secretName := rotators.GetBSPSecretName("some-secret")
 	err := cl.Create(t.Context(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: "default",
-		},
+		Name:      secretName,
+		Namespace: "default",
 		Data: map[string][]byte{
 			"client-secret": []byte("client-secret"),
 		},
@@ -658,7 +631,7 @@ func TestNewBackendSecurityPolicyController_RotateCredentialAzureIncorrectSecret
 	require.NoError(t, err)
 
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "some-policy", Namespace: "default"},
+		Name: "some-policy", Namespace: "default",
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 			AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
@@ -699,10 +672,8 @@ func TestBackendSecurityPolicyController_ExecutionRotation(t *testing.T) {
 	bspName := "some-back-end-security-policy"
 	oidcSecretName := "oidcClientSecret"
 	oidcSecret := corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      oidcSecretName,
-			Namespace: bspNamespace,
-		},
+		Name:      oidcSecretName,
+		Namespace: bspNamespace,
 		Data: map[string][]byte{
 			"client-secret": []byte("client-secret"),
 		},
@@ -713,21 +684,19 @@ func TestBackendSecurityPolicyController_ExecutionRotation(t *testing.T) {
 			Issuer:        discoveryServer.URL,
 			TokenEndpoint: &tokenServer.URL,
 		},
-		ClientID: ptr.To("some-client-id"),
+		ClientID: new("some-client-id"),
 		ClientSecret: gwapiv1.SecretObjectReference{
 			Name:      gwapiv1.ObjectName(oidcSecretName),
 			Namespace: (*gwapiv1.Namespace)(&bspNamespace),
 		},
 	}
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace},
+		Name: fmt.Sprintf("%s-OIDC", bspName), Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
 				OIDCExchangeToken: &aigv1b1.AWSOIDCExchangeToken{
-					BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
-						OIDC: oidc,
-					},
+					OIDC: oidc,
 				},
 				Region: "us-east-1",
 			},
@@ -742,12 +711,10 @@ func TestBackendSecurityPolicyController_ExecutionRotation(t *testing.T) {
 	now := time.Now()
 	expirationTime := now.Add(-1 * time.Hour)
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("ai-eg-bsp-%s-OIDC", bspName),
-			Namespace: bspNamespace,
-			Annotations: map[string]string{
-				rotators.ExpirationTimeAnnotationKey: expirationTime.Format(time.RFC3339),
-			},
+		Name:      fmt.Sprintf("ai-eg-bsp-%s-OIDC", bspName),
+		Namespace: bspNamespace,
+		Annotations: map[string]string{
+			rotators.ExpirationTimeAnnotationKey: expirationTime.Format(time.RFC3339),
 		},
 		Data: data,
 	}
@@ -920,11 +887,9 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials(t *test
 
 	for _, tt := range validationTests {
 		bsp := &aigv1b1.BackendSecurityPolicy{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      bspName,
-				Namespace: bspNamespace,
-			},
-			Spec: *tt.bsp,
+			Name:      bspName,
+			Namespace: bspNamespace,
+			Spec:      *tt.bsp,
 		}
 		t.Run(tt.name, func(t *testing.T) {
 			res, err := c.rotateCredential(context.Background(), bsp)
@@ -947,10 +912,8 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials(t *test
 func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_ADC(t *testing.T) {
 	c := NewBackendSecurityPolicyController(fake.NewFakeClient(), fake2.NewClientset(), ctrl.Log, nil, nil)
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "gcp-adc-policy",
-			Namespace: "default",
-		},
+		Name:      "gcp-adc-policy",
+		Namespace: "default",
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 			GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -974,10 +937,8 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_OIDC(t 
 
 	oidcSecretName := "gcp-oidc-secret" // #nosec G101
 	oidcSecret := corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      oidcSecretName,
-			Namespace: bspNamespace,
-		},
+		Name:      oidcSecretName,
+		Namespace: bspNamespace,
 		Data: map[string][]byte{
 			"client-secret": []byte("client-secret"),
 		},
@@ -989,14 +950,14 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_OIDC(t 
 		Provider: egv1a1.OIDCProvider{
 			Issuer: "https://fake-issuer.com",
 		},
-		ClientID: ptr.To("some-client-id"),
+		ClientID: new("some-client-id"),
 		ClientSecret: gwapiv1.SecretObjectReference{
 			Name:      gwapiv1.ObjectName(oidcSecretName),
 			Namespace: (*gwapiv1.Namespace)(&bspNamespace),
 		},
 	}
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: bspNamespace},
+		Name: bspName, Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 			GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -1049,10 +1010,8 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_Credent
 
 	serviceAccountSecretName := "gcp-sa-secret" // #nosec G101
 	serviceAccountSecret := corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceAccountSecretName,
-			Namespace: bspNamespace,
-		},
+		Name:      serviceAccountSecretName,
+		Namespace: bspNamespace,
 		Data: map[string][]byte{
 			rotators.GCPServiceAccountJSON: []byte(serviceAccountJSON),
 		},
@@ -1061,7 +1020,7 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_Credent
 
 	// Create backend security policy with GCP service account credentials file config.
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: bspNamespace},
+		Name: bspName, Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 			GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -1100,7 +1059,7 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_Missing
 
 	// Create backend security policy with GCP credentials file that doesn't exist.
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: bspNamespace},
+		Name: bspName, Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 			GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -1134,10 +1093,8 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_Missing
 	// Create a secret without the required GCP service account JSON key.
 	serviceAccountSecretName := "gcp-incomplete-secret" // #nosec G101
 	serviceAccountSecret := corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceAccountSecretName,
-			Namespace: bspNamespace,
-		},
+		Name:      serviceAccountSecretName,
+		Namespace: bspNamespace,
 		Data: map[string][]byte{
 			"wrong-key": []byte("some-data"),
 		},
@@ -1146,7 +1103,7 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_Missing
 
 	// Create backend security policy with GCP credentials file config pointing to incomplete secret.
 	bsp := &aigv1b1.BackendSecurityPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: bspNamespace},
+		Name: bspName, Namespace: bspNamespace,
 		Spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 			GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -1179,9 +1136,7 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 		{
 			name: "AWS without OIDCExchangeToken",
 			bsp: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "aws-bsp",
-				},
+				Name: "aws-bsp",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 					AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -1197,17 +1152,13 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 		{
 			name: "AWS with OIDCExchangeToken",
 			bsp: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "aws-oidc-bsp",
-				},
+				Name: "aws-oidc-bsp",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 					AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
 						OIDCExchangeToken: &aigv1b1.AWSOIDCExchangeToken{
-							BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
-								OIDC: egv1a1.OIDC{
-									ClientID: ptr.To("some-client-id"),
-								},
+							OIDC: egv1a1.OIDC{
+								ClientID: new("some-client-id"),
 							},
 						},
 					},
@@ -1218,9 +1169,7 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 		{
 			name: "Azure without OIDCExchangeToken",
 			bsp: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "azure-bsp",
-				},
+				Name: "azure-bsp",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 					AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
@@ -1234,17 +1183,13 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 		{
 			name: "Azure with OIDCExchangeToken",
 			bsp: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "azure-oidc-bsp",
-				},
+				Name: "azure-oidc-bsp",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 					AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
 						OIDCExchangeToken: &aigv1b1.AzureOIDCExchangeToken{
-							BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
-								OIDC: egv1a1.OIDC{
-									ClientID: ptr.To("some-client-id"),
-								},
+							OIDC: egv1a1.OIDC{
+								ClientID: new("some-client-id"),
 							},
 						},
 					},
@@ -1255,9 +1200,7 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 		{
 			name: "GCP type",
 			bsp: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "gcp-bsp",
-				},
+				Name: "gcp-bsp",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 					GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -1272,9 +1215,7 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 		{
 			name: "GCP with service account credential file",
 			bsp: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "gcp-bsp-sa",
-				},
+				Name: "gcp-bsp-sa",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
 					GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
@@ -1291,9 +1232,7 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 		{
 			name: "APIKey type",
 			bsp: &aigv1b1.BackendSecurityPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "apikey-bsp",
-				},
+				Name: "apikey-bsp",
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 				},

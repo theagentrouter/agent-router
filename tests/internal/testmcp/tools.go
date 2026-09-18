@@ -22,7 +22,8 @@ type TestTool[In, Out any] struct {
 }
 
 // ptr returns a pointer to the given value. Useful to gget pointers to primitive types.
-func ptr[T any](x T) *T { return &x }
+//
+//go:fix inline
 
 // ToolEchoArgs defines the arguments for the echo tool.
 type ToolEchoArgs struct {
@@ -111,7 +112,7 @@ var ToolError = TestTool[ToolErrorArgs, any]{
 				"error": {
 					Type:        "string",
 					Description: "Error message to return from the tool",
-					MinLength:   ptr(2),
+					MinLength:   new(2),
 				},
 			},
 			Required: []string{"error"},
