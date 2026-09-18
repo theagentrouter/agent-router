@@ -229,7 +229,10 @@ func NewTracingFromEnv(ctx context.Context, stdout io.Writer, headerAttributeMap
 	propagator := autoprop.NewTextMapPropagator()
 
 	// Use provided header attribute mapping.
-	headerAttrs := headerAttributeMapping
+	// Merge the optional user.id header mapping (env-configured) into the
+	// request tracers' header attributes. The MCP tracer below deliberately
+	// keeps the unmerged input; see envUserIDHeader's doc for why.
+	headerAttrs := withUserIDHeaderFromEnv(headerAttributeMapping, os.Stderr)
 
 	tracer := tp.Tracer("envoyproxy/ai-gateway")
 	return &tracingImpl{
@@ -310,7 +313,11 @@ func NewTracingFromEnv(ctx context.Context, stdout io.Writer, headerAttributeMap
 			recorders.countTokens,
 			headerAttrs,
 		),
-		mcpTracer: newMCPTracer(tracer, propagator, headerAttrs, recorders.mcp),
+		// MCP tracer deliberately gets the ORIGINAL mapping (not the
+		// user.id-merged headerAttrs): its meta-first lookup would bypass
+		// both the sanitizer and the consumer-auth gate — see
+		// envUserIDHeader's doc.
+		mcpTracer: newMCPTracer(tracer, propagator, headerAttributeMapping, recorders.mcp),
 		shutdown:  tp.Shutdown, // we have to shut down what we create.
 	}, nil
 }
