@@ -288,6 +288,9 @@ spec:
         apiKey:
           secretRef:
             name: {{ .BackendName }}-token
+          {{- if .APIKeyHeader }}
+          header: {{ .APIKeyHeader }}
+          {{- end }}
       {{- end }}
   {{- end }}
 ---
