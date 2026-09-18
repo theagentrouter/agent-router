@@ -267,6 +267,7 @@ func buildExtProcClusterForInferencePoolEndpointPicker(pool *gwaiev1.InferencePo
 	c.TypedExtensionProtocolOptions = map[string]*anypb.Any{
 		"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": anyHTTP2,
 	}
+	c.CircuitBreakers = maxExtProcCircuitBreakers()
 
 	return c, nil
 }
