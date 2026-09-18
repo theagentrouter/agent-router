@@ -836,6 +836,12 @@ type streamingToolCall struct {
 	id        string
 	name      string
 	inputJSON string
+	// openaiIndex is this call's index within the OpenAI tool_calls array,
+	// assigned in tool-block arrival order. It is not the Anthropic content
+	// block index: OpenAI indexes are dense across tool calls only, while
+	// Anthropic block indexes count every block, including text and
+	// thinking.
+	openaiIndex int64
 }
 
 // anthropicStreamParser manages the stateful translation of an Anthropic SSE stream
@@ -843,6 +849,10 @@ type streamingToolCall struct {
 type anthropicStreamParser struct {
 	buffer          bytes.Buffer
 	activeMessageID string
+	// activeToolCalls is keyed by the Anthropic content block index carried
+	// on every content_block_* event, so lookups are position-independent:
+	// text or thinking blocks interleaved between tool blocks cannot
+	// desynchronize the routing of input_json_delta or content_block_stop.
 	activeToolCalls map[int64]*streamingToolCall
 	toolIndex       int64
 	tokenUsage      metrics.TokenUsage
@@ -1003,7 +1013,7 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 
 		// Add active tool calls to the final chunk.
 		var toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall
-		for toolIndex, tool := range p.activeToolCalls {
+		for _, tool := range p.activeToolCalls {
 			toolCalls = append(toolCalls, openai.ChatCompletionChunkChoiceDeltaToolCall{
 				ID:   &tool.id,
 				Type: openai.ChatCompletionMessageToolCallTypeFunction,
@@ -1011,7 +1021,7 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 					Name:      tool.name,
 					Arguments: tool.inputJSON,
 				},
-				Index: toolIndex,
+				Index: tool.openaiIndex,
 			})
 		}
 
@@ -1122,11 +1132,14 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 				}
 			}
 
-			// Store the complete input JSON in our state.
-			p.activeToolCalls[p.toolIndex] = &streamingToolCall{
-				id:        event.ContentBlock.ID,
-				name:      event.ContentBlock.Name,
-				inputJSON: argsJSON,
+			// Store the complete input JSON in our state, keyed by the
+			// Anthropic block index; the OpenAI tool_calls index advances
+			// only when a tool block starts.
+			p.activeToolCalls[event.Index] = &streamingToolCall{
+				id:          event.ContentBlock.ID,
+				name:        event.ContentBlock.Name,
+				inputJSON:   argsJSON,
+				openaiIndex: p.toolIndex,
 			}
 
 			delta := openai.ChatCompletionResponseChunkChoiceDelta{
@@ -1210,14 +1223,17 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &text}
 			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
 		case string(constant.ValueOf[constant.InputJSONDelta]()):
-			tool, ok := p.activeToolCalls[p.toolIndex]
+			// Route by the event's own block index, never by "the last tool
+			// started": the two only coincide while no other block type
+			// interleaves.
+			tool, ok := p.activeToolCalls[event.Index]
 			if !ok {
-				return nil, fmt.Errorf("received input_json_delta for unknown tool at index %d", p.toolIndex)
+				return nil, fmt.Errorf("received input_json_delta for unknown content block at index %d", event.Index)
 			}
 			delta := openai.ChatCompletionResponseChunkChoiceDelta{
 				ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
 					{
-						Index: p.toolIndex,
+						Index: tool.openaiIndex,
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Arguments: event.Delta.PartialJSON,
 						},
@@ -1229,12 +1245,34 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		}
 
 	case string(constant.ValueOf[constant.ContentBlockStop]()):
-		// This event is for state cleanup, no chunk is sent.
 		var event anthropic.ContentBlockStopEvent
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil, fmt.Errorf("unmarshal content_block_stop: %w", err)
 		}
-		delete(p.activeToolCalls, p.toolIndex)
+		// Only a tool block's own stop clears its state; a text or thinking
+		// block stopping must not evict a tool tracked under another index.
+		tool, ok := p.activeToolCalls[event.Index]
+		if !ok {
+			return nil, nil
+		}
+		delete(p.activeToolCalls, event.Index)
+		if tool.inputJSON == "" {
+			// Zero-argument tool: no input_json_delta ever arrived, and
+			// content_block_start already emitted Arguments:"" for the
+			// "input":{} case, so a client concatenating the stream ends up
+			// with "", which is not valid JSON. Emit a synthetic {}.
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{
+				ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+					{
+						Index: tool.openaiIndex,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Arguments: "{}",
+						},
+					},
+				},
+			}
+			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
+		}
 		return nil, nil
 
 	case string(constant.ValueOf[constant.MessageStop]()):
