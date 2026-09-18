@@ -579,7 +579,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 	// Configuration for MCP processor.
 	var effectiveMCPRoute bool
-	ec.MCPConfig, effectiveMCPRoute = mcpConfig(mcpRoutes)
+	ec.MCPConfig, effectiveMCPRoute = mcpConfig(ctx, c.client, mcpRoutes)
 	hasEffectiveRoute = hasEffectiveRoute || effectiveMCPRoute
 
 	c.warnUndeclaredMetadataNamespaces(ec, declaredMetadataNamespaces, gatewayName, gatewayNamespace)
@@ -595,7 +595,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 }
 
 // reconcileFilterConfigSecretForMCPGateway updates the filter config secret for the external processor.
-func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffectiveRoute bool) {
+func mcpConfig(ctx context.Context, k8sClient client.Client, mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffectiveRoute bool) {
 	if len(mcpRoutes) == 0 {
 		return nil, false
 	}
@@ -654,7 +654,9 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{}
 
 			if route.Spec.SecurityPolicy.OAuth != nil {
-				mcpRoute.Authorization.ResourceMetadataURL = buildResourceMetadataURL(&route.Spec.SecurityPolicy.OAuth.ProtectedResourceMetadata)
+				if resourceURL, err := resolveOAuthResourceURL(ctx, k8sClient, route); err == nil {
+					mcpRoute.Authorization.ResourceMetadataURL = buildResourceMetadataURL(resourceURL)
+				}
 			}
 
 			defaultAction := ptr.Deref(authorization.DefaultAction, egv1a1.AuthorizationActionDeny)

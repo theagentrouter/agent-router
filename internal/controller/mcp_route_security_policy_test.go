@@ -706,7 +706,7 @@ func Test_buildOAuthProtectedResourceMetadataJSON(t *testing.T) {
 		},
 	}
 
-	result := buildOAuthProtectedResourceMetadataJSON(auth)
+	result := buildOAuthProtectedResourceMetadataJSON(auth, "https://api.example.com/mcp")
 
 	var jsonResponse map[string]interface{}
 	err := json.Unmarshal([]byte(result), &jsonResponse)
@@ -720,102 +720,78 @@ func Test_buildOAuthProtectedResourceMetadataJSON(t *testing.T) {
 
 func Test_buildWWWAuthenticateHeaderValue(t *testing.T) {
 	tests := []struct {
-		name     string
-		metadata *aigv1b1.ProtectedResourceMetadata
-		expected string
+		name            string
+		resourceURL     string
+		scopesSupported []string
+		expected        string
 	}{
 		{
-			name: "https URL with path",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource: "https://api.example.com/mcp/v1",
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp/v1"`,
+			name:        "https URL with path",
+			resourceURL: "https://api.example.com/mcp/v1",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp/v1"`,
 		},
 		{
-			name: "https URL without path",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource: "https://api.example.com",
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource"`,
+			name:        "https URL without path",
+			resourceURL: "https://api.example.com",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource"`,
 		},
 		{
-			name: "https URL with trailing slash",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource: "https://api.example.com/mcp/",
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp"`,
+			name:        "https URL with trailing slash",
+			resourceURL: "https://api.example.com/mcp/",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp"`,
 		},
 		{
-			name: "http URL with path",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource: "http://api.example.com/mcp/v1",
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="http://api.example.com/.well-known/oauth-protected-resource/mcp/v1"`,
+			name:        "http URL with path",
+			resourceURL: "http://api.example.com/mcp/v1",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="http://api.example.com/.well-known/oauth-protected-resource/mcp/v1"`,
 		},
 		{
-			name: "http URL without path",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource: "http://api.example.com",
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="http://api.example.com/.well-known/oauth-protected-resource"`,
+			name:        "http URL without path",
+			resourceURL: "http://api.example.com",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="http://api.example.com/.well-known/oauth-protected-resource"`,
 		},
 		{
-			name: "http URL with trailing slash",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource: "http://api.example.com/mcp/",
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="http://api.example.com/.well-known/oauth-protected-resource/mcp"`,
+			name:        "http URL with trailing slash",
+			resourceURL: "http://api.example.com/mcp/",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="http://api.example.com/.well-known/oauth-protected-resource/mcp"`,
 		},
 		{
-			name: "URL with port number https",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource: "https://api.example.com:8080/mcp",
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com:8080/.well-known/oauth-protected-resource/mcp"`,
+			name:        "URL with port number https",
+			resourceURL: "https://api.example.com:8080/mcp",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com:8080/.well-known/oauth-protected-resource/mcp"`,
 		},
 		{
-			name: "URL with port number http",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource: "http://api.example.com:8080/mcp",
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="http://api.example.com:8080/.well-known/oauth-protected-resource/mcp"`,
+			name:        "URL with port number http",
+			resourceURL: "http://api.example.com:8080/mcp",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="http://api.example.com:8080/.well-known/oauth-protected-resource/mcp"`,
 		},
 		{
-			name: "complex path with multiple segments",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource: "https://api.example.com/v1/mcp/endpoint",
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/v1/mcp/endpoint"`,
+			name:        "complex path with multiple segments",
+			resourceURL: "https://api.example.com/v1/mcp/endpoint",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/v1/mcp/endpoint"`,
 		},
 		{
-			name: "with empty scopes supported",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource:        "https://api.example.com/mcp",
-				ScopesSupported: []string{},
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp"`,
+			name:        "with empty scopes supported",
+			resourceURL: "https://api.example.com/mcp",
+			expected:    `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp"`,
 		},
 		{
-			name: "with single scope supported",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource:        "https://api.example.com/mcp",
-				ScopesSupported: []string{"read"},
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp", scope="read"`,
+			name:            "with single scope supported",
+			resourceURL:     "https://api.example.com/mcp",
+			scopesSupported: []string{"read"},
+			expected:        `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp", scope="read"`,
 		},
 		{
-			name: "with multiple scopes supported",
-			metadata: &aigv1b1.ProtectedResourceMetadata{
-				Resource:        "https://api.example.com/mcp",
-				ScopesSupported: []string{"read", "write"},
-			},
-			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp", scope="read write"`,
+			name:            "with multiple scopes supported",
+			resourceURL:     "https://api.example.com/mcp",
+			scopesSupported: []string{"read", "write"},
+			expected:        `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp", scope="read write"`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildWWWAuthenticateHeaderValue(tt.metadata)
+			result := buildWWWAuthenticateHeaderValue(tt.resourceURL, tt.scopesSupported)
 			require.Equal(t, tt.expected, result)
 		})
 	}
@@ -1053,5 +1029,817 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, 1*time.Second)
 		require.NoError(t, err)
 		require.Equal(t, "http://"+addr+issuerPath, metadata.Issuer)
+	})
+}
+
+func Test_resolveDeterministicHostname(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+	ctx := t.Context()
+
+	// Seed parent Gateway objects for tests.
+	gwSingleListener := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-single", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "https",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("gw-single.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, gwSingleListener))
+
+	gwDeduplicatedListeners := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-dedup", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "http",
+					Protocol: gwapiv1.HTTPProtocolType,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("gw-shared.example.com")),
+				},
+				{
+					Name:     "https",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("gw-shared.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, gwDeduplicatedListeners))
+
+	gwMultipleListeners := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-multi", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "listener-a",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("a.example.com")),
+				},
+				{
+					Name:     "listener-b",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("b.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, gwMultipleListeners))
+
+	gwWildcardListener := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-wildcard", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "https",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("*.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, gwWildcardListener))
+
+	gwNoHostnames := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-no-host", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "https",
+					Protocol: gwapiv1.HTTPSProtocolType,
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, gwNoHostnames))
+
+	tests := []struct {
+		name        string
+		mcpRoute    *aigv1b1.MCPRoute
+		k8sClient   client.Client
+		expected    string
+		expectedErr string
+	}{
+		{
+			name: "route specifies multiple hostnames",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					Hostnames: []gwapiv1.Hostname{"a.example.com", "b.example.com"},
+				},
+			},
+			expectedErr: "cannot derive OAuth protectedResourceMetadata.resource: route specifies multiple hostnames",
+		},
+		{
+			name: "route specifies wildcard hostname",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r2", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					Hostnames: []gwapiv1.Hostname{"*.example.com"},
+				},
+			},
+			expectedErr: "contains wildcard",
+		},
+		{
+			name: "route specifies empty hostname",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r3", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					Hostnames: []gwapiv1.Hostname{""},
+				},
+			},
+			expectedErr: "route hostname is empty",
+		},
+		{
+			name: "route specifies single valid hostname",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r4", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					Hostnames: []gwapiv1.Hostname{"api.example.com"},
+				},
+			},
+			expected: "api.example.com",
+		},
+		{
+			name: "route has no hostnames and no parentRefs",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r5", Namespace: "default"},
+			},
+			expectedErr: "route must reference exactly one parent gateway",
+		},
+		{
+			name: "route has multiple parentRefs",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r6", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw1"},
+						{Name: "gw2"},
+					},
+				},
+			},
+			expectedErr: "route must reference exactly one parent gateway",
+		},
+		{
+			name: "client is nil when resolving via parentRefs",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r7", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-single"},
+					},
+				},
+			},
+			k8sClient:   nil,
+			expectedErr: "parent Gateway cannot be inspected without Kubernetes client",
+		},
+		{
+			name: "parent Gateway not found",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r9", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "non-existent-gw"},
+					},
+				},
+			},
+			k8sClient:   fakeClient,
+			expectedErr: "failed to get parent Gateway default/non-existent-gw",
+		},
+		{
+			name: "parent Gateway sectionName found",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r10", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-multi", SectionName: ptr.To(gwapiv1.SectionName("listener-a"))},
+					},
+				},
+			},
+			k8sClient: fakeClient,
+			expected:  "a.example.com",
+		},
+		{
+			name: "parent Gateway sectionName not found",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r11", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-multi", SectionName: ptr.To(gwapiv1.SectionName("unknown-listener"))},
+					},
+				},
+			},
+			k8sClient:   fakeClient,
+			expectedErr: "has no listener named \"unknown-listener\"",
+		},
+		{
+			name: "parent Gateway sectionName listener has wildcard",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r12", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-wildcard", SectionName: ptr.To(gwapiv1.SectionName("https"))},
+					},
+				},
+			},
+			k8sClient:   fakeClient,
+			expectedErr: "listener \"https\" hostname \"*.example.com\" contains wildcard",
+		},
+		{
+			name: "parent Gateway sectionName listener has no hostname",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r13", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-no-host", SectionName: ptr.To(gwapiv1.SectionName("https"))},
+					},
+				},
+			},
+			k8sClient:   fakeClient,
+			expectedErr: "listener \"https\" on parent Gateway default/gw-no-host has no hostname configured",
+		},
+		{
+			name: "parent Gateway single listener",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r14", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-single"},
+					},
+				},
+			},
+			k8sClient: fakeClient,
+			expected:  "gw-single.example.com",
+		},
+		{
+			name: "parent Gateway deduplicated listener hostnames",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r15", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-dedup"},
+					},
+				},
+			},
+			k8sClient: fakeClient,
+			expected:  "gw-shared.example.com",
+		},
+		{
+			name: "parent Gateway multiple listener hostnames",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r16", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-multi"},
+					},
+				},
+			},
+			k8sClient:   fakeClient,
+			expectedErr: "parent Gateway default/gw-multi has multiple listener hostnames",
+		},
+		{
+			name: "parent Gateway listener with wildcard",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r17", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-wildcard"},
+					},
+				},
+			},
+			k8sClient:   fakeClient,
+			expectedErr: "parent Gateway default/gw-wildcard listener hostname \"*.example.com\" contains wildcard",
+		},
+		{
+			name: "parent Gateway no listeners with hostname",
+			mcpRoute: &aigv1b1.MCPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "r18", Namespace: "default"},
+				Spec: aigv1b1.MCPRouteSpec{
+					ParentRefs: []gwapiv1.ParentReference{
+						{Name: "gw-no-host"},
+					},
+				},
+			},
+			k8sClient:   fakeClient,
+			expectedErr: "parent Gateway default/gw-no-host has no HTTP/HTTPS listeners with configured hostnames",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := resolveDeterministicHostname(ctx, tt.k8sClient, tt.mcpRoute)
+			if tt.expectedErr != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.expectedErr)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
+func Test_resolveOAuthResourceURL(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+	ctx := t.Context()
+
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-gw", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "https",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Port:     443,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("gateway.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, gw))
+
+	httpGw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "http-gw", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "http",
+					Protocol: gwapiv1.HTTPProtocolType,
+					Port:     80,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("http-gateway.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, httpGw))
+
+	customPortGw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "custom-port-gw", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "https-8443",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Port:     8443,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("gateway.example.com")),
+				},
+				{
+					Name:     "http-8080",
+					Protocol: gwapiv1.HTTPProtocolType,
+					Port:     8080,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("gateway.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, customPortGw))
+
+	dualGw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "dual-gw", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "http",
+					Protocol: gwapiv1.HTTPProtocolType,
+					Port:     80,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("dual.example.com")),
+				},
+				{
+					Name:     "https",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Port:     443,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("dual.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, dualGw))
+
+	tcpGw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "tcp-gw", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "tcp-listener",
+					Protocol: gwapiv1.TCPProtocolType,
+					Port:     9000,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("tcp.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, tcpGw))
+
+	t.Run("explicit resource takes precedence", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"ignored.example.com"},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{
+						ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+							Resource: "https://explicit.example.com/mcp/",
+						},
+					},
+				},
+			},
+		}
+		url, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.NoError(t, err)
+		require.Equal(t, "https://explicit.example.com/mcp", url)
+	})
+
+	t.Run("omitted resource derives from route hostname with default path", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r2", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"route.example.com"},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		url, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.NoError(t, err)
+		require.Equal(t, "https://route.example.com/mcp", url)
+	})
+
+	t.Run("omitted resource derives from route hostname with custom path", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r3", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				Path:      ptr.To("/v1/custom/endpoint/"),
+				Hostnames: []gwapiv1.Hostname{"route.example.com"},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		url, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.NoError(t, err)
+		require.Equal(t, "https://route.example.com/v1/custom/endpoint", url)
+	})
+
+	t.Run("omitted resource derives from parent gateway listener hostname", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r4", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{Name: "my-gw"},
+				},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		url, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.NoError(t, err)
+		require.Equal(t, "https://gateway.example.com/mcp", url)
+	})
+
+	t.Run("omitted resource fails derivation when hostname is ambiguous", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r5", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"a.com", "b.com"},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		_, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "route specifies multiple hostnames")
+	})
+
+	t.Run("omitted resource derives http scheme when listener is HTTP:80", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r-http", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{Name: "http-gw"},
+				},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		url, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.NoError(t, err)
+		require.Equal(t, "http://http-gateway.example.com/mcp", url)
+	})
+
+	t.Run("omitted resource derives https scheme with non-standard port 8443 via sectionName", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r-https-8443", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{
+						Name:        "custom-port-gw",
+						SectionName: (*gwapiv1.SectionName)(ptr.To("https-8443")),
+					},
+				},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		url, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.NoError(t, err)
+		require.Equal(t, "https://gateway.example.com:8443/mcp", url)
+	})
+
+	t.Run("omitted resource derives http scheme with non-standard port 8080 via sectionName", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r-http-8080", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{
+						Name:        "custom-port-gw",
+						SectionName: (*gwapiv1.SectionName)(ptr.To("http-8080")),
+					},
+				},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		url, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.NoError(t, err)
+		require.Equal(t, "http://gateway.example.com:8080/mcp", url)
+	})
+
+	t.Run("omitted resource prefers https:443 when both http:80 and https:443 listeners exist", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r-dual", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{Name: "dual-gw"},
+				},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		url, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.NoError(t, err)
+		require.Equal(t, "https://dual.example.com/mcp", url)
+	})
+
+	t.Run("omitted resource rejects non-HTTP/HTTPS listener referenced by sectionName", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r-tcp", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{
+						Name:        "tcp-gw",
+						SectionName: (*gwapiv1.SectionName)(ptr.To("tcp-listener")),
+					},
+				},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		_, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), `protocol "TCP" is not HTTP or HTTPS`)
+	})
+
+	t.Run("route hostname derives scheme and port from parent gateway listener if attached", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r-route-attached", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"gateway.example.com"},
+				ParentRefs: []gwapiv1.ParentReference{
+					{
+						Name:        "custom-port-gw",
+						SectionName: (*gwapiv1.SectionName)(ptr.To("http-8080")),
+					},
+				},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		url, err := resolveOAuthResourceURL(ctx, fakeClient, mcpRoute)
+		require.NoError(t, err)
+		require.Equal(t, "http://gateway.example.com:8080/mcp", url)
+	})
+}
+
+func TestMCPRouteController_syncMCPRouteSecurityPolicy_AutoDeriveResource(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewMCPRouteController(fakeClient, nil, logr.Discard(), eventCh.Ch)
+	ctx := t.Context()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"jwks_uri": "https://auth.example.com/.well-known/jwks.json",
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "https",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("gw-host.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, gw))
+
+	jwks := &aigv1b1.JWKS{
+		RemoteJWKS: &egv1a1.RemoteJWKS{
+			URI: "https://auth.example.com/.well-known/jwks.json",
+		},
+	}
+
+	t.Run("auto-derives from route hostname", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "route-auto-hostname", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"mcp.example.com"},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{
+						Issuer: "https://auth.example.com",
+						JWKS:   jwks,
+						ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+							ScopesSupported: []string{"tools"},
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, fakeClient.Create(ctx, mcpRoute))
+		require.NoError(t, c.syncMCPRouteSecurityPolicy(ctx, mcpRoute, "main-route"))
+
+		// Check BackendTrafficPolicy WWW-Authenticate value
+		var btp egv1a1.BackendTrafficPolicy
+		btpName := oauthProtectedResourceMetadataName(mcpRoute.Name)
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: btpName, Namespace: mcpRoute.Namespace}, &btp))
+		require.Len(t, btp.Spec.ResponseOverride, 1)
+		headers := btp.Spec.ResponseOverride[0].Response.Header.Set
+		var wwwAuth string
+		for _, h := range headers {
+			if string(h.Name) == "WWW-Authenticate" {
+				wwwAuth = h.Value
+				break
+			}
+		}
+		require.NotEmpty(t, wwwAuth)
+		require.Contains(t, wwwAuth, `resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"`)
+
+		// Check HTTPRouteFilter metadata JSON
+		var hrf egv1a1.HTTPRouteFilter
+		hrfName := oauthProtectedResourceMetadataName(mcpRoute.Name)
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: hrfName, Namespace: mcpRoute.Namespace}, &hrf))
+		require.NotNil(t, hrf.Spec.DirectResponse)
+		require.NotNil(t, hrf.Spec.DirectResponse.Body.Inline)
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(*hrf.Spec.DirectResponse.Body.Inline), &body))
+		require.Equal(t, "https://mcp.example.com/mcp", body["resource"])
+	})
+
+	t.Run("auto-derives from parent gateway listener hostname", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "route-auto-gateway", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{Name: "test-gw"},
+				},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{
+						Issuer: "https://auth.example.com",
+						JWKS:   jwks,
+						ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+							ScopesSupported: []string{"tools"},
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, fakeClient.Create(ctx, mcpRoute))
+		require.NoError(t, c.syncMCPRouteSecurityPolicy(ctx, mcpRoute, "main-route"))
+
+		var hrf egv1a1.HTTPRouteFilter
+		hrfName := oauthProtectedResourceMetadataName(mcpRoute.Name)
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: hrfName, Namespace: mcpRoute.Namespace}, &hrf))
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(*hrf.Spec.DirectResponse.Body.Inline), &body))
+		require.Equal(t, "https://gw-host.example.com/mcp", body["resource"])
+	})
+
+	t.Run("fails when hostname is ambiguous", func(t *testing.T) {
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "route-ambiguous", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"a.example.com", "b.example.com"},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{
+						Issuer: "https://auth.example.com",
+						JWKS:   jwks,
+					},
+				},
+			},
+		}
+		require.NoError(t, fakeClient.Create(ctx, mcpRoute))
+		err := c.syncMCPRouteSecurityPolicy(ctx, mcpRoute, "main-route")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "route specifies multiple hostnames")
+	})
+
+	t.Run("updates HRF and BTP when gateway listener hostname changes", func(t *testing.T) {
+		gwChanging := &gwapiv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "gw-changing", Namespace: "default"},
+			Spec: gwapiv1.GatewaySpec{
+				Listeners: []gwapiv1.Listener{
+					{
+						Name:     "https",
+						Protocol: gwapiv1.HTTPSProtocolType,
+						Hostname: (*gwapiv1.Hostname)(ptr.To("initial.example.com")),
+					},
+				},
+			},
+		}
+		require.NoError(t, fakeClient.Create(ctx, gwChanging))
+
+		mcpRoute := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "route-gw-changing", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{Name: "gw-changing"},
+				},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					OAuth: &aigv1b1.MCPRouteOAuth{
+						Issuer: "https://auth.example.com",
+						JWKS:   jwks,
+						ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+							ScopesSupported: []string{"tools"},
+						},
+					},
+				},
+			},
+		}
+		require.NoError(t, fakeClient.Create(ctx, mcpRoute))
+		require.NoError(t, c.syncMCPRouteSecurityPolicy(ctx, mcpRoute, "main-route"))
+
+		// Check initial BTP and HRF
+		var btp egv1a1.BackendTrafficPolicy
+		btpName := oauthProtectedResourceMetadataName(mcpRoute.Name)
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: btpName, Namespace: mcpRoute.Namespace}, &btp))
+		require.Len(t, btp.Spec.ResponseOverride, 1)
+		var wwwAuth string
+		for _, h := range btp.Spec.ResponseOverride[0].Response.Header.Set {
+			if string(h.Name) == "WWW-Authenticate" {
+				wwwAuth = h.Value
+				break
+			}
+		}
+		require.Contains(t, wwwAuth, `resource_metadata="https://initial.example.com/.well-known/oauth-protected-resource/mcp"`)
+
+		var hrf egv1a1.HTTPRouteFilter
+		hrfName := oauthProtectedResourceMetadataName(mcpRoute.Name)
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: hrfName, Namespace: mcpRoute.Namespace}, &hrf))
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(*hrf.Spec.DirectResponse.Body.Inline), &body))
+		require.Equal(t, "https://initial.example.com/mcp", body["resource"])
+
+		// Gateway listener hostname changes
+		gwChanging.Spec.Listeners[0].Hostname = (*gwapiv1.Hostname)(ptr.To("updated.example.com"))
+		require.NoError(t, fakeClient.Update(ctx, gwChanging))
+
+		// Gateway watcher enqueues the MCPRoute
+		reqs := c.gatewayEventHandler(ctx, gwChanging)
+		require.Len(t, reqs, 1)
+		require.Equal(t, "default/route-gw-changing", reqs[0].String())
+
+		// Re-sync after Gateway event
+		require.NoError(t, c.syncMCPRouteSecurityPolicy(ctx, mcpRoute, "main-route"))
+
+		// Check updated BTP and HRF have the new hostname
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: btpName, Namespace: mcpRoute.Namespace}, &btp))
+		wwwAuth = ""
+		for _, h := range btp.Spec.ResponseOverride[0].Response.Header.Set {
+			if string(h.Name) == "WWW-Authenticate" {
+				wwwAuth = h.Value
+				break
+			}
+		}
+		require.Contains(t, wwwAuth, `resource_metadata="https://updated.example.com/.well-known/oauth-protected-resource/mcp"`)
+
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: hrfName, Namespace: mcpRoute.Namespace}, &hrf))
+		require.NoError(t, json.Unmarshal([]byte(*hrf.Spec.DirectResponse.Body.Inline), &body))
+		require.Equal(t, "https://updated.example.com/mcp", body["resource"])
 	})
 }

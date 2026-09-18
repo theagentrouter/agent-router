@@ -1381,3 +1381,112 @@ func TestValidatePerBackendPrefixMode(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPRouteController_gatewayEventHandler(t *testing.T) {
+	t.Run("enqueues attached routes in same namespace and cross namespace, ignores non-attached", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+		eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+		c := NewMCPRouteController(fakeClient, fakekube.NewClientset(), ctrl.Log, eventCh.Ch)
+
+		// Create target Gateway.
+		gw := &gwapiv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-gateway",
+				Namespace: "gateway-ns",
+			},
+		}
+		require.NoError(t, fakeClient.Create(t.Context(), gw))
+
+		// Route 1: in same namespace, attaches to test-gateway.
+		route1 := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "route-same-ns",
+				Namespace: "gateway-ns",
+			},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{Name: "test-gateway"},
+				},
+			},
+		}
+		require.NoError(t, fakeClient.Create(t.Context(), route1))
+
+		// Route 2: in another namespace, explicitly targets test-gateway in gateway-ns.
+		route2 := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "route-cross-ns",
+				Namespace: "other-ns",
+			},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{
+						Name:      "test-gateway",
+						Namespace: ptr.To(gwapiv1.Namespace("gateway-ns")),
+					},
+				},
+			},
+		}
+		require.NoError(t, fakeClient.Create(t.Context(), route2))
+
+		// Route 3: targets a different gateway.
+		route3 := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "route-other-gw",
+				Namespace: "gateway-ns",
+			},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{Name: "other-gateway"},
+				},
+			},
+		}
+		require.NoError(t, fakeClient.Create(t.Context(), route3))
+
+		res := c.gatewayEventHandler(t.Context(), gw)
+		require.Len(t, res, 2)
+		names := []string{res[0].String(), res[1].String()}
+		require.Contains(t, names, "gateway-ns/route-same-ns")
+		require.Contains(t, names, "other-ns/route-cross-ns")
+	})
+
+	t.Run("non gateway object returns nil", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+		eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+		c := NewMCPRouteController(fakeClient, fakekube.NewClientset(), ctrl.Log, eventCh.Ch)
+
+		res := c.gatewayEventHandler(t.Context(), &corev1.Secret{})
+		require.Nil(t, res)
+	})
+
+	t.Run("fallback when index not registered", func(t *testing.T) {
+		// Client without indices
+		plainFakeClient := fake.NewClientBuilder().WithScheme(Scheme).Build()
+		eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+		c := NewMCPRouteController(plainFakeClient, fakekube.NewClientset(), ctrl.Log, eventCh.Ch)
+
+		gw := &gwapiv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-gateway",
+				Namespace: "gateway-ns",
+			},
+		}
+		require.NoError(t, plainFakeClient.Create(t.Context(), gw))
+
+		route := &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "route-same-ns",
+				Namespace: "gateway-ns",
+			},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{
+					{Name: "test-gateway"},
+				},
+			},
+		}
+		require.NoError(t, plainFakeClient.Create(t.Context(), route))
+
+		res := c.gatewayEventHandler(t.Context(), gw)
+		require.Len(t, res, 1)
+		require.Equal(t, "gateway-ns/route-same-ns", res[0].String())
+	})
+}

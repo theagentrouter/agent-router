@@ -213,7 +213,7 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 }
 
 // ensureOAuthProtectedResourceMetadataBTP ensures that the BackendTrafficPolicy resource exists with response override for WWW-Authenticate header.
-func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, httpRouteName string) error {
+func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, httpRouteName string, resourceURL string) error {
 	var backendTrafficPolicy egv1a1.BackendTrafficPolicy
 	backendTrafficPolicyName := oauthProtectedResourceMetadataName(mcpRoute.Name)
 	err := c.client.Get(ctx, client.ObjectKey{Name: backendTrafficPolicyName, Namespace: mcpRoute.Namespace}, &backendTrafficPolicy)
@@ -237,7 +237,7 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context
 
 	// Build WWW-Authenticate header value based on RFC 9728 and MCP spec.
 	auth := mcpRoute.Spec.SecurityPolicy.OAuth
-	wwwAuthenticateValue := buildWWWAuthenticateHeaderValue(&auth.ProtectedResourceMetadata)
+	wwwAuthenticateValue := buildWWWAuthenticateHeaderValue(resourceURL, auth.ProtectedResourceMetadata.ScopesSupported)
 
 	// Configure response override for 401 responses.
 	backendTrafficPolicy.Spec = egv1a1.BackendTrafficPolicySpec{
@@ -303,12 +303,285 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context
 	return nil
 }
 
+type derivedHostInfo struct {
+	scheme   string
+	hostname string
+	port     gwapiv1.PortNumber
+	hostPort string
+}
+
+func listenerSchemeAndHostPort(hostname string, protocol gwapiv1.ProtocolType, port gwapiv1.PortNumber) (string, string) {
+	scheme := "https"
+	if protocol == gwapiv1.HTTPProtocolType {
+		scheme = "http"
+	}
+	hostPort := hostname
+	if scheme == "https" && port != 443 && port > 0 {
+		hostPort = fmt.Sprintf("%s:%d", hostname, port)
+	} else if scheme == "http" && port != 80 && port > 0 {
+		hostPort = fmt.Sprintf("%s:%d", hostname, port)
+	}
+	return scheme, hostPort
+}
+
+func hostnameMatches(listenerHostname string, routeHostname string) bool {
+	if listenerHostname == "" || listenerHostname == routeHostname {
+		return true
+	}
+	if strings.HasPrefix(listenerHostname, "*.") {
+		suffix := listenerHostname[1:]
+		return strings.HasSuffix(routeHostname, suffix) && len(routeHostname) > len(suffix) && !strings.Contains(routeHostname[:len(routeHostname)-len(suffix)], ".")
+	}
+	return false
+}
+
+// resolveDeterministicHostname returns the single unambiguous, non-wildcard hostname for the MCPRoute.
+// It checks the route's Spec.Hostnames first. If none are specified, it inspects the parent Gateway/Listener
+// referenced in Spec.ParentRefs.
+func resolveDeterministicHostname(ctx context.Context, k8sClient client.Client, mcpRoute *aigv1b1.MCPRoute) (string, error) {
+	info, err := resolveDeterministicHostInfo(ctx, k8sClient, mcpRoute)
+	if err != nil {
+		return "", err
+	}
+	return info.hostname, nil
+}
+
+// resolveDeterministicHostInfo derives the scheme, hostname, and port from an MCPRoute's spec.hostnames
+// or its parent Gateway's listeners. It returns an error if no host can be determined,
+// if multiple conflicting hostnames exist, or if wildcards are present.
+func resolveDeterministicHostInfo(ctx context.Context, k8sClient client.Client, mcpRoute *aigv1b1.MCPRoute) (*derivedHostInfo, error) {
+	if len(mcpRoute.Spec.Hostnames) > 1 {
+		return nil, errors.New("cannot derive OAuth protectedResourceMetadata.resource: route specifies multiple hostnames; resource must be explicitly configured")
+	}
+	if len(mcpRoute.Spec.Hostnames) == 1 {
+		h := string(mcpRoute.Spec.Hostnames[0])
+		if strings.Contains(h, "*") {
+			return nil, fmt.Errorf("cannot derive OAuth protectedResourceMetadata.resource: route hostname %q contains wildcard; resource must be explicitly configured", h)
+		}
+		if h == "" {
+			return nil, errors.New("cannot derive OAuth protectedResourceMetadata.resource: route hostname is empty; resource must be explicitly configured")
+		}
+
+		// When resolving from route spec.hostnames, check parent Gateway listener for matching protocol/port if attached.
+		if len(mcpRoute.Spec.ParentRefs) == 1 && k8sClient != nil {
+			parentRef := mcpRoute.Spec.ParentRefs[0]
+			gwNamespace := mcpRoute.Namespace
+			if parentRef.Namespace != nil {
+				gwNamespace = string(*parentRef.Namespace)
+			}
+			gwName := string(parentRef.Name)
+
+			var gw gwapiv1.Gateway
+			if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: gwNamespace, Name: gwName}, &gw); err == nil {
+				if parentRef.SectionName != nil && *parentRef.SectionName != "" {
+					sectionName := *parentRef.SectionName
+					for _, l := range gw.Spec.Listeners {
+						if string(l.Name) == string(sectionName) {
+							if l.Protocol == gwapiv1.HTTPProtocolType || l.Protocol == gwapiv1.HTTPSProtocolType {
+								listenerH := ""
+								if l.Hostname != nil {
+									listenerH = string(*l.Hostname)
+								}
+								if hostnameMatches(listenerH, h) {
+									scheme, hostPort := listenerSchemeAndHostPort(h, l.Protocol, l.Port)
+									return &derivedHostInfo{scheme: scheme, hostname: h, port: l.Port, hostPort: hostPort}, nil
+								}
+							}
+							break
+						}
+					}
+				} else {
+					var matchingHTTPS, matchingHTTP []gwapiv1.Listener
+					for _, l := range gw.Spec.Listeners {
+						listenerH := ""
+						if l.Hostname != nil {
+							listenerH = string(*l.Hostname)
+						}
+						if hostnameMatches(listenerH, h) {
+							switch l.Protocol {
+							case gwapiv1.HTTPSProtocolType:
+								matchingHTTPS = append(matchingHTTPS, l)
+							case gwapiv1.HTTPProtocolType:
+								matchingHTTP = append(matchingHTTP, l)
+							}
+						}
+					}
+					if len(matchingHTTPS) > 0 {
+						chosen := matchingHTTPS[0]
+						for _, l := range matchingHTTPS {
+							if l.Port == 443 {
+								chosen = l
+								break
+							}
+						}
+						scheme, hostPort := listenerSchemeAndHostPort(h, gwapiv1.HTTPSProtocolType, chosen.Port)
+						return &derivedHostInfo{scheme: scheme, hostname: h, port: chosen.Port, hostPort: hostPort}, nil
+					} else if len(matchingHTTP) > 0 {
+						chosen := matchingHTTP[0]
+						for _, l := range matchingHTTP {
+							if l.Port == 80 {
+								chosen = l
+								break
+							}
+						}
+						scheme, hostPort := listenerSchemeAndHostPort(h, gwapiv1.HTTPProtocolType, chosen.Port)
+						return &derivedHostInfo{scheme: scheme, hostname: h, port: chosen.Port, hostPort: hostPort}, nil
+					}
+				}
+			}
+		}
+
+		return &derivedHostInfo{scheme: "https", hostname: h, port: 443, hostPort: h}, nil
+	}
+
+	// No hostnames on the route, resolve via parentRefs.
+	if len(mcpRoute.Spec.ParentRefs) != 1 {
+		return nil, errors.New("cannot derive OAuth protectedResourceMetadata.resource: route must reference exactly one parent gateway; resource must be explicitly configured")
+	}
+	if k8sClient == nil {
+		return nil, errors.New("cannot derive OAuth protectedResourceMetadata.resource: parent Gateway cannot be inspected without Kubernetes client; resource must be explicitly configured")
+	}
+
+	parentRef := mcpRoute.Spec.ParentRefs[0]
+
+	gwNamespace := mcpRoute.Namespace
+	if parentRef.Namespace != nil {
+		gwNamespace = string(*parentRef.Namespace)
+	}
+	gwName := string(parentRef.Name)
+
+	var gw gwapiv1.Gateway
+	if err := k8sClient.Get(ctx, client.ObjectKey{Namespace: gwNamespace, Name: gwName}, &gw); err != nil {
+		return nil, fmt.Errorf("failed to get parent Gateway %s/%s for OAuth resource derivation: %w", gwNamespace, gwName, err)
+	}
+
+	if parentRef.SectionName != nil && *parentRef.SectionName != "" {
+		sectionName := *parentRef.SectionName
+		var targetListener *gwapiv1.Listener
+		for i := range gw.Spec.Listeners {
+			l := &gw.Spec.Listeners[i]
+			if string(l.Name) == string(sectionName) {
+				if l.Protocol != gwapiv1.HTTPProtocolType && l.Protocol != gwapiv1.HTTPSProtocolType {
+					return nil, fmt.Errorf("cannot derive OAuth protectedResourceMetadata.resource: listener %q on parent Gateway %s/%s protocol %q is not HTTP or HTTPS; resource must be explicitly configured", sectionName, gwNamespace, gwName, l.Protocol)
+				}
+				targetListener = l
+				break
+			}
+		}
+		if targetListener == nil {
+			return nil, fmt.Errorf("cannot derive OAuth protectedResourceMetadata.resource: parent Gateway %s/%s has no listener named %q", gwNamespace, gwName, sectionName)
+		}
+		if targetListener.Hostname == nil || *targetListener.Hostname == "" {
+			return nil, fmt.Errorf("cannot derive OAuth protectedResourceMetadata.resource: listener %q on parent Gateway %s/%s has no hostname configured; resource must be explicitly configured", sectionName, gwNamespace, gwName)
+		}
+		h := string(*targetListener.Hostname)
+		if strings.Contains(h, "*") {
+			return nil, fmt.Errorf("cannot derive OAuth protectedResourceMetadata.resource: listener %q hostname %q contains wildcard; resource must be explicitly configured", sectionName, h)
+		}
+		scheme, hostPort := listenerSchemeAndHostPort(h, targetListener.Protocol, targetListener.Port)
+		return &derivedHostInfo{scheme: scheme, hostname: h, port: targetListener.Port, hostPort: hostPort}, nil
+	}
+
+	// No sectionName specified, inspect listeners.
+	uniqueHostnames := make(map[string]struct{})
+	var eligibleListeners []gwapiv1.Listener
+	for _, l := range gw.Spec.Listeners {
+		if l.Protocol != gwapiv1.HTTPProtocolType && l.Protocol != gwapiv1.HTTPSProtocolType {
+			continue
+		}
+		if l.Hostname != nil && *l.Hostname != "" {
+			uniqueHostnames[string(*l.Hostname)] = struct{}{}
+			eligibleListeners = append(eligibleListeners, l)
+		}
+	}
+
+	if len(uniqueHostnames) == 0 {
+		return nil, fmt.Errorf("cannot derive OAuth protectedResourceMetadata.resource: parent Gateway %s/%s has no HTTP/HTTPS listeners with configured hostnames; resource must be explicitly configured", gwNamespace, gwName)
+	}
+	if len(uniqueHostnames) > 1 {
+		return nil, fmt.Errorf("cannot derive OAuth protectedResourceMetadata.resource: parent Gateway %s/%s has multiple listener hostnames; resource must be explicitly configured", gwNamespace, gwName)
+	}
+
+	var h string
+	for name := range uniqueHostnames {
+		h = name
+	}
+	if strings.Contains(h, "*") {
+		return nil, fmt.Errorf("cannot derive OAuth protectedResourceMetadata.resource: parent Gateway %s/%s listener hostname %q contains wildcard; resource must be explicitly configured", gwNamespace, gwName, h)
+	}
+
+	var httpsListeners, httpListeners []gwapiv1.Listener
+	for _, l := range eligibleListeners {
+		switch l.Protocol {
+		case gwapiv1.HTTPSProtocolType:
+			httpsListeners = append(httpsListeners, l)
+		case gwapiv1.HTTPProtocolType:
+			httpListeners = append(httpListeners, l)
+		}
+	}
+
+	if len(httpsListeners) > 0 {
+		chosen := httpsListeners[0]
+		for _, l := range httpsListeners {
+			if l.Port == 443 {
+				chosen = l
+				break
+			}
+		}
+		scheme, hostPort := listenerSchemeAndHostPort(h, gwapiv1.HTTPSProtocolType, chosen.Port)
+		return &derivedHostInfo{scheme: scheme, hostname: h, port: chosen.Port, hostPort: hostPort}, nil
+	}
+
+	chosen := httpListeners[0]
+	for _, l := range httpListeners {
+		if l.Port == 80 {
+			chosen = l
+			break
+		}
+	}
+	scheme, hostPort := listenerSchemeAndHostPort(h, gwapiv1.HTTPProtocolType, chosen.Port)
+	return &derivedHostInfo{scheme: scheme, hostname: h, port: chosen.Port, hostPort: hostPort}, nil
+}
+
+// resolveOAuthResourceURL returns the resource URL to use for OAuth metadata, either from the
+// explicit ProtectedResourceMetadata.Resource field or auto-derived from the deterministic hostname.
+func resolveOAuthResourceURL(ctx context.Context, k8sClient client.Client, mcpRoute *aigv1b1.MCPRoute) (string, error) {
+	if mcpRoute.Spec.SecurityPolicy == nil || mcpRoute.Spec.SecurityPolicy.OAuth == nil {
+		return "", errors.New("OAuth configuration is nil")
+	}
+
+	auth := mcpRoute.Spec.SecurityPolicy.OAuth
+	if auth.ProtectedResourceMetadata.Resource != "" {
+		return strings.TrimSuffix(auth.ProtectedResourceMetadata.Resource, "/"), nil
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	info, err := resolveDeterministicHostInfo(ctx, k8sClient, mcpRoute)
+	if err != nil {
+		return "", err
+	}
+
+	path := ptr.Deref(mcpRoute.Spec.Path, "/mcp")
+	if path == "" {
+		path = "/mcp"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	path = strings.TrimSuffix(path, "/")
+
+	return fmt.Sprintf("%s://%s%s", info.scheme, info.hostPort, path), nil
+}
+
 // buildResourceMetadataURL constructs the OAuth protected resource metadata URL using the resource identifier.
 // References:
 // * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-server-location
 // * https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-func buildResourceMetadataURL(metadata *aigv1b1.ProtectedResourceMetadata) string {
-	resourceURL := strings.TrimSuffix(metadata.Resource, "/")
+func buildResourceMetadataURL(resource string) string {
+	resourceURL := strings.TrimSuffix(resource, "/")
 
 	var (
 		baseURL       string
@@ -343,23 +616,23 @@ func buildResourceMetadataURL(metadata *aigv1b1.ProtectedResourceMetadata) strin
 // References:
 // * https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#protected-resource-metadata-discovery-requirements
 // * https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-func buildWWWAuthenticateHeaderValue(metadata *aigv1b1.ProtectedResourceMetadata) string {
-	resourceMetadataURL := buildResourceMetadataURL(metadata)
+func buildWWWAuthenticateHeaderValue(resourceURL string, scopesSupported []string) string {
+	resourceMetadataURL := buildResourceMetadataURL(resourceURL)
 	headerValue := `Bearer error="invalid_token", error_description="The access token is missing or invalid"`
 
 	// Add resource_metadata as per RFC 9728 Section 5.1.
 	headerValue = fmt.Sprintf(`%s, resource_metadata="%s"`, headerValue, resourceMetadataURL)
 
-	if len(metadata.ScopesSupported) > 0 {
+	if len(scopesSupported) > 0 {
 		// Add scope as per RFC 6750 Section 3.
-		headerValue = fmt.Sprintf(`%s, scope="%s"`, headerValue, strings.Join(metadata.ScopesSupported, " "))
+		headerValue = fmt.Sprintf(`%s, scope="%s"`, headerValue, strings.Join(scopesSupported, " "))
 	}
 
 	return headerValue
 }
 
 // ensureOAuthProtectedResourceMetadataHRF ensures that the HTTPRouteFilter resource exists with direct response for OAuth metadata.
-func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataHRF(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
+func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataHRF(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, resourceURL string) error {
 	if mcpRoute.Spec.SecurityPolicy == nil || mcpRoute.Spec.SecurityPolicy.OAuth == nil {
 		return nil
 	}
@@ -386,7 +659,7 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataHRF(ctx context
 	}
 
 	// Build OAuth protected resource metadata JSON response.
-	metadataJSON := buildOAuthProtectedResourceMetadataJSON(mcpRoute.Spec.SecurityPolicy.OAuth)
+	metadataJSON := buildOAuthProtectedResourceMetadataJSON(mcpRoute.Spec.SecurityPolicy.OAuth, resourceURL)
 
 	// Configure direct response with OAuth metadata.
 	httpRouteFilter.Spec = egv1a1.HTTPRouteFilterSpec{
@@ -492,9 +765,9 @@ func (c *MCPRouteController) ensureOAuthAuthServerMetadataHRF(ctx context.Contex
 // References:
 // * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-server-location
 // * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
-func buildOAuthProtectedResourceMetadataJSON(auth *aigv1b1.MCPRouteOAuth) string {
+func buildOAuthProtectedResourceMetadataJSON(auth *aigv1b1.MCPRouteOAuth, resourceURL string) string {
 	response := map[string]interface{}{
-		"resource":                 auth.ProtectedResourceMetadata.Resource,
+		"resource":                 resourceURL,
 		"authorization_servers":    []string{auth.Issuer},
 		"bearer_methods_supported": []string{"header"},
 	}
@@ -503,9 +776,6 @@ func buildOAuthProtectedResourceMetadataJSON(auth *aigv1b1.MCPRouteOAuth) string
 	}
 	if len(auth.ProtectedResourceMetadata.ScopesSupported) != 0 {
 		response["scopes_supported"] = auth.ProtectedResourceMetadata.ScopesSupported
-	}
-	if auth.ProtectedResourceMetadata.ResourceName != nil && *auth.ProtectedResourceMetadata.ResourceName != "" {
-		response["resource_name"] = auth.ProtectedResourceMetadata.ResourceName
 	}
 	if len(auth.ProtectedResourceMetadata.ResourceSigningAlgValuesSupported) > 0 {
 		response["resource_signing_alg_values_supported"] = auth.ProtectedResourceMetadata.ResourceSigningAlgValuesSupported
@@ -592,13 +862,18 @@ func (c *MCPRouteController) cleanupSecurityPolicyResources(ctx context.Context,
 }
 
 func (c *MCPRouteController) ensureOAuthResources(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, httpRouteName string) error {
+	resourceURL, err := resolveOAuthResourceURL(ctx, c.client, mcpRoute)
+	if err != nil {
+		return err
+	}
+
 	// Create BackendTrafficPolicy for WWW-Authenticate header with OAuth resource metadata in 401 responses.
-	if btpErr := c.ensureOAuthProtectedResourceMetadataBTP(ctx, mcpRoute, httpRouteName); btpErr != nil {
+	if btpErr := c.ensureOAuthProtectedResourceMetadataBTP(ctx, mcpRoute, httpRouteName, resourceURL); btpErr != nil {
 		return fmt.Errorf("failed to ensure BackendTrafficPolicy: %w", btpErr)
 	}
 
 	// Create HTTPRouteFilter for OAuth protected resource metadata endpoint.
-	if hrfErr := c.ensureOAuthProtectedResourceMetadataHRF(ctx, mcpRoute); hrfErr != nil {
+	if hrfErr := c.ensureOAuthProtectedResourceMetadataHRF(ctx, mcpRoute, resourceURL); hrfErr != nil {
 		return fmt.Errorf("failed to ensure HTTPRouteFilter: %w", hrfErr)
 	}
 
