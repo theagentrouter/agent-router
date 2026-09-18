@@ -644,6 +644,19 @@ func TestEnableQuotaRateLimitOnRoute_WithBucketRules(t *testing.T) {
 		require.NotNil(t, rh)
 		require.Equal(t, "x-user-id", rh.HeaderName)
 		require.Equal(t, translator.BucketRuleDescriptorKey(0, 0, "x-user-id", ""), rh.DescriptorKey)
+
+		// Stream-done entry (index 1) must use the same RequestHeaders action so the
+		// token cost is charged to the per-value bucket checked at request time,
+		// instead of to a single bucket shared by every header value.
+		streamDone := perRoute.RateLimits[1]
+		require.True(t, streamDone.ApplyOnStreamDone)
+		require.NotNil(t, streamDone.HitsAddend)
+		require.Len(t, streamDone.Actions, 3)
+		require.Nil(t, streamDone.Actions[2].GetGenericKey())
+		sdRh := streamDone.Actions[2].GetRequestHeaders()
+		require.NotNil(t, sdRh)
+		require.Equal(t, "x-user-id", sdRh.HeaderName)
+		require.Equal(t, rh.DescriptorKey, sdRh.DescriptorKey)
 	})
 
 	t.Run("regex header with invert", func(t *testing.T) {
