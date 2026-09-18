@@ -46,6 +46,7 @@ Each metric comes with some default attributes such as:
 - `gen_ai.request.model` - The model name requested (may be overridden)
 - `gen_ai.response.model` - The model name returned in the response
 - `gen_ai.provider.name` - The provider name (e.g., `openai`, `anthropic`)
+- `gen_ai.backend` - The `AIServiceBackend` that served the request, as `namespace/name`
 
 :::tip
 

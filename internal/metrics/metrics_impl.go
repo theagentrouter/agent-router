@@ -32,6 +32,7 @@ func (f *metricsImplFactory) NewMetrics() Metrics {
 		requestModel:                  "unknown",
 		responseModel:                 "unknown",
 		backend:                       "unknown",
+		aiServiceBackend:              "unknown",
 		requestHeaderAttributeMapping: f.requestHeaderAttributeMapping,
 	}
 }
@@ -50,6 +51,7 @@ type metricsImpl struct {
 	// responseModel is the model that ultimately generated the response (may differ due to backend override).
 	responseModel                 string
 	backend                       string
+	aiServiceBackend              string
 	requestHeaderAttributeMapping map[string]string // maps HTTP headers to metric attribute names.
 
 	// Fields for streaming token latency calculation, not used for non-streaming requests.
@@ -104,6 +106,7 @@ func (b *metricsImpl) SetBackend(backend *filterapi.Backend) {
 	default:
 		b.backend = backend.Name
 	}
+	b.aiServiceBackend = internalapi.AIServiceBackendName(backend.Name)
 }
 
 // buildBaseAttributes creates the base attributes for metrics recording.
@@ -113,12 +116,13 @@ func (b *metricsImpl) buildBaseAttributes(headers map[string]string) attribute.S
 	origModel := attribute.Key(genaiAttributeOriginalModel).String(b.originalModel)
 	reqModel := attribute.Key(genaiAttributeRequestModel).String(b.requestModel)
 	respModel := attribute.Key(genaiAttributeResponseModel).String(b.responseModel)
+	backend := attribute.Key(genaiAttributeBackend).String(b.aiServiceBackend)
 	if len(b.requestHeaderAttributeMapping) == 0 {
-		return attribute.NewSet(opt, provider, origModel, reqModel, respModel)
+		return attribute.NewSet(opt, provider, origModel, reqModel, respModel, backend)
 	}
 
 	// Add header values as attributes based on the header mapping if headers are provided.
-	attrs := []attribute.KeyValue{opt, provider, origModel, reqModel, respModel}
+	attrs := []attribute.KeyValue{opt, provider, origModel, reqModel, respModel, backend}
 	for headerName, labelName := range b.requestHeaderAttributeMapping {
 		if headerValue, exists := headers[headerName]; exists {
 			attrs = append(attrs, attribute.Key(labelName).String(headerValue))

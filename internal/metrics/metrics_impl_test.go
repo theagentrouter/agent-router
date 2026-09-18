@@ -69,6 +69,7 @@ func TestRecordTokenUsage(t *testing.T) {
 			// gen_ai.request.model - https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#common-attributes
 			attribute.Key(genaiAttributeRequestModel).String("test-model"),
 			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String(""),
 		}
 		// gen_ai.token.type values - https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#common-attributes
 		inputAttrs              = attribute.NewSet(append(attrs, attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeInput))...)
@@ -120,6 +121,7 @@ func testRecordTokenLatency(t *testing.T) {
 			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
 			attribute.Key(genaiAttributeRequestModel).String("test-model"),
 			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String(""),
 		)
 	)
 
@@ -166,6 +168,7 @@ func testRecordRequestCompletion(t *testing.T) {
 			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
 			attribute.Key(genaiAttributeRequestModel).String("test-model"),
 			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String("custom"),
 		}
 		attrsSuccess = attribute.NewSet(attrs...)
 		attrsFailure = attribute.NewSet(append(attrs, attribute.Key(genaiAttributeErrorType).String(genaiErrorTypeFallback))...)
@@ -238,6 +241,7 @@ func TestHeaderLabelMapping(t *testing.T) {
 		attribute.Key(genaiAttributeOriginalModel).String("test-model"),
 		attribute.Key(genaiAttributeRequestModel).String("test-model"),
 		attribute.Key(genaiAttributeResponseModel).String("test-model"),
+		attribute.Key(genaiAttributeBackend).String(""),
 		attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeInput),
 		attribute.Key("tenant.id").String("user123"),
 		attribute.Key("org_id").String("org456"),
@@ -283,6 +287,7 @@ func TestModelNameHeaderKey(t *testing.T) {
 		attribute.Key(genaiAttributeOriginalModel).String("llama3-2-1b"),
 		attribute.Key(genaiAttributeRequestModel).String("backend-specific-model"),
 		attribute.Key(genaiAttributeResponseModel).String("us.meta.llama3-2-1b-instruct-v1:0"),
+		attribute.Key(genaiAttributeBackend).String(""),
 		attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeInput),
 	)
 	count, sum := getHistogramValues(t, mr, genaiMetricClientTokenUsage, inputAttrs)
@@ -310,6 +315,7 @@ func TestLabels_SetModel_RequestAndResponseDiffer(t *testing.T) {
 		attribute.Key(genaiAttributeOriginalModel).String("orig-model"),
 		attribute.Key(genaiAttributeRequestModel).String("req-model"),
 		attribute.Key(genaiAttributeResponseModel).String("res-model"),
+		attribute.Key(genaiAttributeBackend).String(""),
 		attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeInput),
 	)
 	count, sum := getHistogramValues(t, mr, genaiMetricClientTokenUsage, inputAttrs)
@@ -322,6 +328,7 @@ func TestLabels_SetModel_RequestAndResponseDiffer(t *testing.T) {
 		attribute.Key(genaiAttributeOriginalModel).String("orig-model"),
 		attribute.Key(genaiAttributeRequestModel).String("req-model"),
 		attribute.Key(genaiAttributeResponseModel).String("res-model"),
+		attribute.Key(genaiAttributeBackend).String(""),
 		attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeCachedInput),
 	)
 	count, sum = getHistogramValues(t, mr, genaiMetricClientTokenUsage, cachedInputAttrs)
@@ -334,6 +341,7 @@ func TestLabels_SetModel_RequestAndResponseDiffer(t *testing.T) {
 		attribute.Key(genaiAttributeOriginalModel).String("orig-model"),
 		attribute.Key(genaiAttributeRequestModel).String("req-model"),
 		attribute.Key(genaiAttributeResponseModel).String("res-model"),
+		attribute.Key(genaiAttributeBackend).String(""),
 		attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeCacheCreationInput),
 	)
 	count, sum = getHistogramValues(t, mr, genaiMetricClientTokenUsage, cacheCreationInputAttrs)
@@ -346,6 +354,7 @@ func TestLabels_SetModel_RequestAndResponseDiffer(t *testing.T) {
 		attribute.Key(genaiAttributeOriginalModel).String("orig-model"),
 		attribute.Key(genaiAttributeRequestModel).String("req-model"),
 		attribute.Key(genaiAttributeResponseModel).String("res-model"),
+		attribute.Key(genaiAttributeBackend).String(""),
 		attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeOutput),
 	)
 	count, sum = getHistogramValues(t, mr, genaiMetricClientTokenUsage, outputAttrs)
@@ -392,6 +401,7 @@ func TestRecordTokenLatency_MaxAcrossStream_EndHasNoUsage(t *testing.T) {
 			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
 			attribute.Key(genaiAttributeRequestModel).String("test-model"),
 			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String(""),
 		)
 
 		pm.StartRequest(nil)
@@ -433,6 +443,7 @@ func TestRecordTokenLatency_OnlyFinalUsage(t *testing.T) {
 			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
 			attribute.Key(genaiAttributeRequestModel).String("test-model"),
 			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String(""),
 		)
 
 		pm.StartRequest(nil)
@@ -471,6 +482,7 @@ func TestRecordTokenLatency_ZeroTokensFirst(t *testing.T) {
 			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
 			attribute.Key(genaiAttributeRequestModel).String("test-model"),
 			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String(""),
 		)
 
 		pm.StartRequest(nil)
@@ -516,6 +528,7 @@ func TestRecordTokenLatency_IntegerTruncation(t *testing.T) {
 			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
 			attribute.Key(genaiAttributeRequestModel).String("test-model"),
 			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String(""),
 		)
 
 		pm.StartRequest(nil)
@@ -552,6 +565,7 @@ func TestRecordTokenLatency_SingleToken(t *testing.T) {
 			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
 			attribute.Key(genaiAttributeRequestModel).String("test-model"),
 			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String(""),
 		)
 
 		pm.StartRequest(nil)
@@ -596,6 +610,7 @@ func TestRecordTokenLatency_MultipleChunksFormula(t *testing.T) {
 			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
 			attribute.Key(genaiAttributeRequestModel).String("test-model"),
 			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String(""),
 		)
 
 		pm.StartRequest(nil)
@@ -695,5 +710,45 @@ func TestSetBackendProviderName(t *testing.T) {
 			pm.SetBackend(backend)
 			assert.Equal(t, tc.expectedProvider, pm.backend)
 		})
+	}
+}
+
+func TestAIServiceBackendAttribute(t *testing.T) {
+	// Two backends sharing an API schema must stay distinguishable, which is what
+	// gen_ai.provider.name alone cannot express. Both record into the same meter so
+	// their data points would collapse into one if the attribute did not separate them.
+	mr := metric.NewManualReader()
+	meter := metric.NewMeterProvider(metric.WithReader(mr)).Meter("test")
+
+	backendNames := []string{
+		internalapi.PerRouteRuleRefBackendName("default", "primary", "some-route", 0, 0),
+		internalapi.PerRouteRuleRefBackendName("default", "fallback", "some-route", 0, 1),
+	}
+	for _, backendName := range backendNames {
+		pm := NewMetricsFactory(meter, nil, GenAIOperationCompletion).NewMetrics().(*metricsImpl)
+
+		pm.StartRequest(nil)
+		pm.SetOriginalModel("test-model")
+		pm.SetRequestModel("test-model")
+		pm.SetResponseModel("test-model")
+		pm.SetBackend(&filterapi.Backend{
+			Name:   backendName,
+			Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
+		})
+		pm.RecordTokenUsage(t.Context(), TokenUsage{inputTokens: 10, inputTokenSet: true}, nil)
+	}
+
+	for _, backendName := range backendNames {
+		attrs := attribute.NewSet(
+			attribute.Key(genaiAttributeOperationName).String(string(GenAIOperationCompletion)),
+			attribute.Key(genaiAttributeProviderName).String(genaiProviderOpenAI),
+			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
+			attribute.Key(genaiAttributeRequestModel).String("test-model"),
+			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String(internalapi.AIServiceBackendName(backendName)),
+			attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeInput),
+		)
+		count, _ := testotel.GetHistogramValues(t, mr, genaiMetricClientTokenUsage, attrs)
+		require.Equal(t, uint64(1), count)
 	}
 }

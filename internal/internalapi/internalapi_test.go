@@ -266,6 +266,40 @@ func TestFormatRequestHeaderAttributeMapping(t *testing.T) {
 	}
 }
 
+func TestAIServiceBackendName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "per-route rule ref backend name",
+			input:    PerRouteRuleRefBackendName("default", "some-backend", "some-route", 0, 1),
+			expected: "default/some-backend",
+		},
+		{
+			name:     "namespace and name only",
+			input:    "default/some-backend",
+			expected: "default/some-backend",
+		},
+		{
+			name:     "no separator",
+			input:    "some-backend",
+			expected: "some-backend",
+		},
+		{
+			name:     "empty",
+			input:    "",
+			expected: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, AIServiceBackendName(tt.input))
+		})
+	}
+}
+
 // Recognized forms, all case-sensitive lowercase:
 //   - Public: bedrock-runtime.<region>.amazonaws.com
 //   - Public FIPS: bedrock-runtime-fips.<region>.amazonaws.com
