@@ -400,7 +400,7 @@ func quotaValueToPolicy(qv *aigv1a1.QuotaValue) (*rlsconfv3.RateLimitPolicy, err
 	}, nil
 }
 
-// parseDuration accepts exactly "1s", "1m", "1h", or "1d".
+// parseDuration accepts exactly "1s", "1m", "1h", "1d", "1w", "1mo", or "1y".
 func parseDuration(s string) (rlsconfv3.RateLimitUnit, error) {
 	switch s {
 	case "1s":
@@ -411,8 +411,14 @@ func parseDuration(s string) (rlsconfv3.RateLimitUnit, error) {
 		return rlsconfv3.RateLimitUnit_HOUR, nil
 	case "1d":
 		return rlsconfv3.RateLimitUnit_DAY, nil
+	case "1w":
+		return rlsconfv3.RateLimitUnit_WEEK, nil
+	case "1mo":
+		return rlsconfv3.RateLimitUnit_MONTH, nil
+	case "1y":
+		return rlsconfv3.RateLimitUnit_YEAR, nil
 	default:
-		return 0, fmt.Errorf("unsupported duration %q: must be one of 1s, 1m, 1h", s)
+		return 0, fmt.Errorf("unsupported duration %q: must be one of 1s, 1m, 1h, 1d, 1w, 1mo, 1y", s)
 	}
 }
 
