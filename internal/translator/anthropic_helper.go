@@ -1414,6 +1414,33 @@ func awsAnthropicCountTokensPath(model string) string {
 	return fmt.Sprintf(awsBedrockCountTokensPathFormat, url.PathEscape(model))
 }
 
+// httpStatusToAnthropicErrorType maps an upstream HTTP status code to Anthropic's
+// error type taxonomy. Shared by translators that produce Anthropic-schema error
+// responses from a non-Anthropic-shaped upstream (e.g. AWS Bedrock's Converse and
+// CountTokens APIs), so a client always sees a well-formed
+// {"type":"error","error":{"type":...,"message":...}} envelope regardless of backend.
+// See: https://docs.claude.com/en/api/errors#http-errors
+func httpStatusToAnthropicErrorType(statusCode string) string {
+	switch statusCode {
+	case "400":
+		return "invalid_request_error"
+	case "401":
+		return "authentication_error"
+	case "403":
+		return "permission_error"
+	case "404":
+		return "not_found_error"
+	case "429":
+		return "rate_limit_error"
+	case "500":
+		return "internal_server_error"
+	case "503":
+		return "service_unavailable_error"
+	default:
+		return "internal_server_error"
+	}
+}
+
 // openAIToAnthropicCountTokensParams builds the Anthropic MessageCountTokensParams
 // from an OpenAI-compatible tokenize chat request. Shared by GCP and AWS Anthropic tokenize translators.
 //
