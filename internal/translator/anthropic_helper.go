@@ -172,6 +172,16 @@ func translateOpenAItoAnthropicTools(openAITools []openai.Tool, openAIToolChoice
 	if len(openAITools) > 0 {
 		anthropicTools := make([]anthropic.ToolUnionParam, 0, len(openAITools))
 		for _, openAITool := range openAITools {
+			if openAITool.Type == openai.ToolTypeAnthropicWebSearch {
+				anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{
+					OfWebSearchTool20260209: &anthropic.WebSearchTool20260209Param{
+						Name: constant.WebSearch(openAITool.Name),
+						Type: constant.WebSearch20260209(openAITool.Type),
+					},
+				})
+				continue
+			}
+
 			if openAITool.Type != openai.ToolTypeFunction {
 				err = fmt.Errorf("%w: unsupported tool type: %s", internalapi.ErrInvalidRequestBody, openAITool.Type)
 				return
@@ -205,9 +215,9 @@ func translateOpenAItoAnthropicTools(openAITools []openai.Tool, openAIToolChoice
 			}
 
 			anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{OfTool: &toolParam})
-			if len(anthropicTools) > 0 {
-				tools = anthropicTools
-			}
+		}
+		if len(anthropicTools) > 0 {
+			tools = anthropicTools
 		}
 
 		// 2. Handle the tool_choice parameter.
