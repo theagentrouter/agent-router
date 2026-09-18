@@ -1500,6 +1500,36 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 	})
 }
 
+func TestBuildAnthropicParamsPreservesStructuredOutputPropertyOrder(t *testing.T) {
+	rawSchema := json.RawMessage(`{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"},"middle":{"type":"boolean"}},"required":["zeta","alpha","middle"]}`)
+	request := &openai.ChatCompletionRequest{
+		Model:               "claude-sonnet-4-6",
+		MaxCompletionTokens: ptr.To(int64(1024)),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			{OfUser: &openai.ChatCompletionUserMessageParam{
+				Role:    "user",
+				Content: openai.StringOrUserRoleContentUnion{Value: "test"},
+			}},
+		},
+		ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
+			OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+				Type: "json_schema",
+				JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+					Name:   "ordered_schema",
+					Schema: rawSchema,
+				},
+			},
+		},
+	}
+
+	params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(params)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"schema":`+string(rawSchema))
+}
+
 func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 	tests := []struct {
 		name           string
