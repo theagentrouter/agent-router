@@ -555,6 +555,16 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) openAIMessageToGeminiMes
 		gcr.GenerationConfig.ThinkingConfig = getGenerationConfigThinkingConfig(openAIReq.Thinking)
 	}
 
+	// include_thoughts is an explicit opt-in for returning the model's thought summary.
+	// It is independent of reasoning_effort (ThinkingLevel) and the thinking budget, so it
+	// is layered onto whichever ThinkingConfig those produced (creating one if needed).
+	if openAIReq.IncludeThoughts != nil {
+		if gcr.GenerationConfig.ThinkingConfig == nil {
+			gcr.GenerationConfig.ThinkingConfig = &genai.ThinkingConfig{}
+		}
+		gcr.GenerationConfig.ThinkingConfig.IncludeThoughts = *openAIReq.IncludeThoughts
+	}
+
 	// Apply vendor-specific fields after standard OpenAI-to-Gemini translation.
 	// Vendor fields take precedence over translated fields when conflicts occur.
 	o.applyVendorSpecificFields(openAIReq, &gcr, requestModel)
