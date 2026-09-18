@@ -14,6 +14,8 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/stretchr/testify/require"
+
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
 func TestIsGoodStatusCode(t *testing.T) {
@@ -256,5 +258,54 @@ func TestHeaderMutationCarrier(t *testing.T) {
 				},
 			},
 		}, mutation)
+	})
+}
+
+func TestMutationsFromTranslationResult(t *testing.T) {
+	t.Run("a non-empty header is set with its raw value", func(t *testing.T) {
+		header, body := mutationsFromTranslationResult([]internalapi.Header{
+			{":path", "/v1/models/x:rawPredict"},
+		}, nil)
+		require.NotNil(t, header)
+		require.Len(t, header.SetHeaders, 1)
+		require.Equal(t, ":path", header.SetHeaders[0].Header.Key)
+		require.Equal(t, []byte("/v1/models/x:rawPredict"), header.SetHeaders[0].Header.RawValue)
+		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, header.SetHeaders[0].AppendAction)
+		require.Empty(t, header.RemoveHeaders)
+		require.Nil(t, body, "a nil body must not produce a body mutation")
+	})
+
+	t.Run("an empty-valued header is removed, not set", func(t *testing.T) {
+		// A translator emits Header{name, ""} to request removal, e.g. when an allowlist
+		// filter strips every value of a multi-valued header (filterHeaderValues returns
+		// changed==true with an empty result). It must become a RemoveHeaders entry, never
+		// a present-but-empty SetHeaders entry.
+		header, _ := mutationsFromTranslationResult([]internalapi.Header{
+			{"anthropic-beta", ""},
+		}, nil)
+		require.NotNil(t, header)
+		require.Empty(t, header.SetHeaders, "an empty value must never be forwarded as a set header")
+		require.Equal(t, []string{"anthropic-beta"}, header.RemoveHeaders)
+	})
+
+	t.Run("set and remove are split within one result", func(t *testing.T) {
+		header, _ := mutationsFromTranslationResult([]internalapi.Header{
+			{"content-length", "42"},
+			{"anthropic-beta", ""},
+			{":path", "/v1/x"},
+		}, nil)
+		require.NotNil(t, header)
+		setKeys := make([]string, 0, len(header.SetHeaders))
+		for _, h := range header.SetHeaders {
+			setKeys = append(setKeys, h.Header.Key)
+		}
+		require.ElementsMatch(t, []string{"content-length", ":path"}, setKeys)
+		require.Equal(t, []string{"anthropic-beta"}, header.RemoveHeaders)
+	})
+
+	t.Run("an empty but non-nil body is a body mutation", func(t *testing.T) {
+		_, body := mutationsFromTranslationResult(nil, []byte{})
+		require.NotNil(t, body, "an empty (non-nil) body clears the body")
+		require.Equal(t, []byte{}, body.GetBody())
 	})
 }
