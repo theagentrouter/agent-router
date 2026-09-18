@@ -3403,3 +3403,323 @@ func TestMapReasoningEffortToThinkingLevel(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenAIMessagesToGeminiContents_ContentGrouping covers how messages are grouped into
+// contents. Vertex AI rejects requests whose contents mix function responses with text,
+// carry a content with no parts, or end with a model turn.
+func TestOpenAIMessagesToGeminiContents_ContentGrouping(t *testing.T) {
+	tests := []struct {
+		name             string
+		messages         []openai.ChatCompletionMessageParamUnion
+		expectedContents []genai.Content
+	}{
+		{
+			name: "user text after a tool result starts a new content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "what is the weather"},
+				}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role: openai.ChatMessageRoleAssistant,
+					ToolCalls: []openai.ChatCompletionMessageToolCallParam{{
+						ID:       ptr.To("tool_call_1"),
+						Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_weather", Arguments: "{}"},
+					}},
+				}},
+				{OfTool: &openai.ChatCompletionToolMessageParam{
+					ToolCallID: "tool_call_1",
+					Content:    openai.ContentUnion{Value: "sunny"},
+				}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "thanks"},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "what is the weather"}}},
+				{Role: genai.RoleModel, Parts: []*genai.Part{{
+					FunctionCall:     &genai.FunctionCall{Name: "get_weather", Args: map[string]any{}},
+					ThoughtSignature: dummyThoughtSignature,
+				}}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{{
+					FunctionResponse: &genai.FunctionResponse{Name: "get_weather", Response: map[string]any{"output": "sunny"}},
+				}}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "thanks"}}},
+			},
+		},
+		{
+			name: "parallel function responses share one content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "compare them"},
+				}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role: openai.ChatMessageRoleAssistant,
+					ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+						{
+							ID:       ptr.To("call_a"),
+							Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+							Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "tool_a", Arguments: "{}"},
+						},
+						{
+							ID:       ptr.To("call_b"),
+							Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+							Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "tool_b", Arguments: "{}"},
+						},
+					},
+				}},
+				{OfTool: &openai.ChatCompletionToolMessageParam{
+					ToolCallID: "call_a", Content: openai.ContentUnion{Value: "a"},
+				}},
+				{OfTool: &openai.ChatCompletionToolMessageParam{
+					ToolCallID: "call_b", Content: openai.ContentUnion{Value: "b"},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "compare them"}}},
+				{Role: genai.RoleModel, Parts: []*genai.Part{
+					{
+						FunctionCall:     &genai.FunctionCall{Name: "tool_a", Args: map[string]any{}},
+						ThoughtSignature: dummyThoughtSignature,
+					},
+					{FunctionCall: &genai.FunctionCall{Name: "tool_b", Args: map[string]any{}}},
+				}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{
+					{FunctionResponse: &genai.FunctionResponse{Name: "tool_a", Response: map[string]any{"output": "a"}}},
+					{FunctionResponse: &genai.FunctionResponse{Name: "tool_b", Response: map[string]any{"output": "b"}}},
+				}},
+			},
+		},
+		{
+			name: "assistant message with no parts yields no content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "hi"},
+				}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: ""},
+				}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "again"},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "hi"}}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "again"}}},
+			},
+		},
+		{
+			name: "trailing model turn is dropped",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "hi"},
+				}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: "hello"},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "hi"}}},
+			},
+		},
+		{
+			name: "empty text parts in array content are skipped",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role: openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{
+						Value: []openai.ChatCompletionContentPartUserUnionParam{
+							{OfText: &openai.ChatCompletionContentPartTextParam{
+								Type: string(openai.ChatCompletionContentPartTextTypeText),
+								Text: "",
+							}},
+							{OfText: &openai.ChatCompletionContentPartTextParam{
+								Type: string(openai.ChatCompletionContentPartTextTypeText),
+								Text: "real",
+							}},
+						},
+					},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "real"}}},
+			},
+		},
+		{
+			name: "user text before a tool result starts a new content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "what is the weather"},
+				}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role: openai.ChatMessageRoleAssistant,
+					ToolCalls: []openai.ChatCompletionMessageToolCallParam{{
+						ID:       ptr.To("tool_call_1"),
+						Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "get_weather", Arguments: "{}"},
+					}},
+				}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "use celsius"},
+				}},
+				{OfTool: &openai.ChatCompletionToolMessageParam{
+					ToolCallID: "tool_call_1",
+					Content:    openai.ContentUnion{Value: "sunny"},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "what is the weather"}}},
+				{Role: genai.RoleModel, Parts: []*genai.Part{{
+					FunctionCall:     &genai.FunctionCall{Name: "get_weather", Args: map[string]any{}},
+					ThoughtSignature: dummyThoughtSignature,
+				}}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "use celsius"}}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{{
+					FunctionResponse: &genai.FunctionResponse{Name: "get_weather", Response: map[string]any{"output": "sunny"}},
+				}}},
+			},
+		},
+		{
+			name: "empty user message between parallel function responses does not split them",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "compare them"},
+				}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role: openai.ChatMessageRoleAssistant,
+					ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+						{
+							ID:       ptr.To("call_a"),
+							Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+							Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "tool_a", Arguments: "{}"},
+						},
+						{
+							ID:       ptr.To("call_b"),
+							Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+							Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "tool_b", Arguments: "{}"},
+						},
+					},
+				}},
+				{OfTool: &openai.ChatCompletionToolMessageParam{
+					ToolCallID: "call_a", Content: openai.ContentUnion{Value: "a"},
+				}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: ""},
+				}},
+				{OfTool: &openai.ChatCompletionToolMessageParam{
+					ToolCallID: "call_b", Content: openai.ContentUnion{Value: "b"},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "compare them"}}},
+				{Role: genai.RoleModel, Parts: []*genai.Part{
+					{
+						FunctionCall:     &genai.FunctionCall{Name: "tool_a", Args: map[string]any{}},
+						ThoughtSignature: dummyThoughtSignature,
+					},
+					{FunctionCall: &genai.FunctionCall{Name: "tool_b", Args: map[string]any{}}},
+				}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{
+					{FunctionResponse: &genai.FunctionResponse{Name: "tool_a", Response: map[string]any{"output": "a"}}},
+					{FunctionResponse: &genai.FunctionResponse{Name: "tool_b", Response: map[string]any{"output": "b"}}},
+				}},
+			},
+		},
+		{
+			name: "consecutive trailing model turns are all dropped",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "hi"},
+				}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: "first"},
+				}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: "second"},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "hi"}}},
+			},
+		},
+		{
+			name: "user message with only empty text contributes nothing",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "hi"},
+				}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role: openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{
+						Value: []openai.ChatCompletionContentPartUserUnionParam{
+							{OfText: &openai.ChatCompletionContentPartTextParam{
+								Type: string(openai.ChatCompletionContentPartTextTypeText),
+								Text: "",
+							}},
+						},
+					},
+				}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "again"},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "hi"}, {Text: "again"}}},
+			},
+		},
+		{
+			name: "empty text alongside an image keeps the image",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role: openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{
+						Value: []openai.ChatCompletionContentPartUserUnionParam{
+							{OfText: &openai.ChatCompletionContentPartTextParam{
+								Type: string(openai.ChatCompletionContentPartTextTypeText),
+								Text: "",
+							}},
+							{OfImageURL: &openai.ChatCompletionContentPartImageParam{
+								Type: openai.ChatCompletionContentPartImageTypeImageURL,
+								ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+									URL: "https://example.com/image.jpg",
+								},
+							}},
+						},
+					},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{
+					{FileData: &genai.FileData{FileURI: "https://example.com/image.jpg", MIMEType: "image/jpeg"}},
+				}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			contents, _, err := openAIMessagesToGeminiContents(tc.messages, "gemini-3-pro")
+			require.NoError(t, err)
+			if d := cmp.Diff(tc.expectedContents, contents); d != "" {
+				t.Errorf("Gemini Contents mismatch (-want +got):\n%s", d)
+			}
+		})
+	}
+}
