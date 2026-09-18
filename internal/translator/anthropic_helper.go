@@ -341,28 +341,36 @@ func openAIToAnthropicContent(content any) ([]anthropic.ContentBlockParamUnion, 
 	return nil, fmt.Errorf("unsupported OpenAI content type: %T", content)
 }
 
-// extractSystemPromptFromDeveloperMsg flattens content and checks for cache flags.
-// It returns the combined string and a boolean indicating if any part was cacheable.
-func extractSystemPromptFromDeveloperMsg(msg openai.ChatCompletionDeveloperMessageParam) (msgValue string, cacheParam *anthropic.CacheControlEphemeralParam) {
+// extractSystemPromptFromDeveloperMsg converts a developer message into one or
+// more Anthropic TextBlockParams, preserving per-block cache_control so that
+// Anthropic's prompt caching breakpoints survive the translation.
+func extractSystemPromptFromDeveloperMsg(msg openai.ChatCompletionDeveloperMessageParam) []anthropic.TextBlockParam {
 	switch v := msg.Content.Value.(type) {
 	case nil:
-		return
+		return nil
 	case string:
-		msgValue = v
-		return
-	case []openai.ChatCompletionContentPartTextParam:
-		// Concatenate all text parts and check for caching.
-		var sb strings.Builder
-		for _, part := range v {
-			sb.WriteString(part.Text)
-			if isCacheEnabled(part.AnthropicContentFields) {
-				cacheParam = &part.CacheControl
-			}
+		if v == "" {
+			return nil
 		}
-		msgValue = sb.String()
-		return
+		return []anthropic.TextBlockParam{{Text: v}}
+	case []openai.ChatCompletionContentPartTextParam:
+		blocks := make([]anthropic.TextBlockParam, 0, len(v))
+		for _, part := range v {
+			if part.Text == "" {
+				continue
+			}
+			block := anthropic.TextBlockParam{Text: part.Text}
+			if isCacheEnabled(part.AnthropicContentFields) {
+				block.CacheControl = part.CacheControl
+			}
+			blocks = append(blocks, block)
+		}
+		if len(blocks) == 0 {
+			return nil
+		}
+		return blocks
 	default:
-		return
+		return nil
 	}
 }
 
@@ -471,20 +479,10 @@ func openAIToAnthropicMessages(openAIMsgs []openai.ChatCompletionMessageParamUni
 		switch {
 		case msg.OfSystem != nil:
 			devParam := systemMsgToDeveloperMsg(*msg.OfSystem)
-			systemText, cacheControl := extractSystemPromptFromDeveloperMsg(devParam)
-			systemBlock := anthropic.TextBlockParam{Text: systemText}
-			if cacheControl != nil {
-				systemBlock.CacheControl = *cacheControl
-			}
-			systemBlocks = append(systemBlocks, systemBlock)
+			systemBlocks = append(systemBlocks, extractSystemPromptFromDeveloperMsg(devParam)...)
 			i++
 		case msg.OfDeveloper != nil:
-			systemText, cacheControl := extractSystemPromptFromDeveloperMsg(*msg.OfDeveloper)
-			systemBlock := anthropic.TextBlockParam{Text: systemText}
-			if cacheControl != nil {
-				systemBlock.CacheControl = *cacheControl
-			}
-			systemBlocks = append(systemBlocks, systemBlock)
+			systemBlocks = append(systemBlocks, extractSystemPromptFromDeveloperMsg(*msg.OfDeveloper)...)
 			i++
 		case msg.OfUser != nil:
 			message := *msg.OfUser
