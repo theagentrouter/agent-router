@@ -438,6 +438,13 @@ func TestAnthropicToOpenAITranslator_ResponseError(t *testing.T) {
 			wantErrMsg:  "Bad request",
 		},
 		{
+			name:        "JSON error with numeric type, message, param and event_id from OpenAI-compatible backend",
+			headers:     map[string]string{contentTypeHeaderName: "application/json"},
+			body:        `{"type":"error","error":{"type":500,"message":400,"param":1,"event_id":2}}`,
+			wantErrType: "500",
+			wantErrMsg:  "400",
+		},
+		{
 			name:        "non-JSON 400 error",
 			headers:     map[string]string{statusHeaderName: "400", contentTypeHeaderName: "text/plain"},
 			body:        "Bad request body",
