@@ -555,7 +555,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 	// that accumulates compressed bytes across chunks.
 	var decodingResult contentDecodingResult
 	if u.parent.stream && u.responseEncoding != "" {
-		decodingResult, err = u.decodeStreamingContent(body.Body, body.EndOfStream)
+		decodingResult, err = u.decodeStreamingContent(body.Body)
 	} else {
 		decodingResult, err = decodeContentIfNeeded(body.Body, u.responseEncoding)
 	}
@@ -661,7 +661,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 // It accumulates raw compressed bytes across chunks and re-decompresses from the beginning each time,
 // returning only the newly decompressed data. This is necessary because gzip streams are stateful
 // and a new decompressor cannot be created mid-stream without the full preceding data.
-func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) decodeStreamingContent(chunk []byte, endOfStream bool) (contentDecodingResult, error) {
+func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) decodeStreamingContent(chunk []byte) (contentDecodingResult, error) {
 	u.compressedBuf = append(u.compressedBuf, chunk...)
 	decodingResult, err := decodeContentIfNeeded(u.compressedBuf, u.responseEncoding)
 	if err != nil {
@@ -669,11 +669,17 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) decodeStream
 	}
 	allDecompressed, readErr := io.ReadAll(decodingResult.reader)
 	if readErr != nil {
-		if endOfStream || !errors.Is(readErr, io.ErrUnexpectedEOF) {
+		if !errors.Is(readErr, io.ErrUnexpectedEOF) {
 			return contentDecodingResult{}, fmt.Errorf("failed to decompress streaming content: %w", readErr)
 		}
-		// For non-final chunks, ErrUnexpectedEOF is expected: the gzip stream is incomplete
-		// (footer not yet received), but all data up to this point is valid.
+		// ErrUnexpectedEOF means the gzip stream was cut short: the footer (CRC32 + ISIZE)
+		// has not arrived, but all data decompressed up to this point is valid. This happens
+		// mid-stream when the footer simply hasn't been received yet, and also at end-of-stream
+		// when the upstream connection resets before sending the footer (e.g. an ALB idle
+		// timeout during a long streaming response). In both cases we return the partial data
+		// rather than failing the whole response, which would otherwise surface to the client
+		// as an empty 200. Genuine corruption (bad CRC, malformed header) reports a different
+		// error (gzip.ErrChecksum / gzip.ErrHeader, not ErrUnexpectedEOF) and is still fatal.
 	}
 	newData := allDecompressed[u.decompressedOffset:]
 	u.decompressedOffset = len(allDecompressed)
