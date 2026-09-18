@@ -1,0 +1,90 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# This example configures access to Azure OpenAI using an Azure managed identity available to the
+# Envoy AI Gateway controller, e.g. on an AKS cluster with a managed identity attached or with
+# Azure Workload Identity federated to the controller's service account. No client secret is needed.
+#
+# The managed identity must be granted a role that allows accessing the Azure OpenAI resource,
+# e.g. "Cognitive Services OpenAI User".
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: envoy-ai-gateway-basic-azure
+  namespace: default
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway-basic
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: gpt-4.5-preview
+      backendRefs:
+        - name: envoy-ai-gateway-basic-azure
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: envoy-ai-gateway-basic-azure
+  namespace: default
+spec:
+  schema:
+    name: AzureOpenAI
+    version: 2025-01-01-preview
+    ## OR using OpenAI compatible API
+    # name: OpenAI
+    # version: openai/v1
+  backendRef:
+    name: envoy-ai-gateway-basic-azure
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: envoy-ai-gateway-basic-azure-credentials
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: envoy-ai-gateway-basic-azure
+  type: AzureCredentials
+  azureCredentials:
+    # Use the system-assigned managed identity, Azure Workload Identity, or any other credential
+    # available in the controller's environment.
+    managedIdentity: {}
+    ## OR use a user-assigned managed identity by specifying its client ID.
+    # managedIdentity:
+    #   clientID: AZURE_MANAGED_IDENTITY_CLIENT_ID # Replace with the client ID of the user-assigned managed identity.
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: envoy-ai-gateway-basic-azure
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: dummy-azure-resource.openai.azure.com # Replace "dummy-azure-resource" with your Azure OpenAI resource e.g. <azure_resource_name>.openai.azure.com
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: envoy-ai-gateway-basic-azure-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: "gateway.envoyproxy.io"
+      kind: Backend
+      name: envoy-ai-gateway-basic-azure
+  validation:
+    wellKnownCACertificates: "System"
+    hostname: dummy-azure-resource.openai.azure.com # Replace "dummy-azure-resource" with your Azure OpenAI resource e.g. <azure_resource_name>.openai.azure.com

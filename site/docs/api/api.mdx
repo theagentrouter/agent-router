@@ -568,6 +568,7 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [APISchema](#github-com-envoyproxy-ai-gateway-api-v1alpha1-apischema)
 - [AWSCredentialsFile](#github-com-envoyproxy-ai-gateway-api-v1alpha1-awscredentialsfile)
 - [AWSOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1alpha1-awsoidcexchangetoken)
+- [AzureManagedIdentity](#github-com-envoyproxy-ai-gateway-api-v1alpha1-azuremanagedidentity)
 - [AzureOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1alpha1-azureoidcexchangetoken)
 - [BackendSecurityPolicyAPIKey](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyapikey)
 - [BackendSecurityPolicyAWSCredentials](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyawscredentials)
@@ -1000,6 +1001,28 @@ and store them in a temporary credentials file.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-azuremanagedidentity">AzureManagedIdentity</a>
+
+
+
+**Appears in:**
+- [BackendSecurityPolicyAzureCredentials](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyazurecredentials)
+
+AzureManagedIdentity configures managed identity authentication.
+An empty ClientID uses the default Azure credential chain.
+
+##### Fields
+
+
+
+<ApiField
+  name="clientID"
+  type="string"
+  required="false"
+  description="ClientID selects a user-assigned managed identity."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-azureoidcexchangetoken">AzureOIDCExchangeToken</a>
 
 
@@ -1147,8 +1170,8 @@ BackendSecurityPolicyAzureAPIKey specifies the Azure OpenAI API key.
 - [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyspec)
 
 BackendSecurityPolicyAzureCredentials contains the supported authentication mechanisms to access Azure.
-Only one of ClientSecretRef or OIDCExchangeToken must be specified. Credentials will not be generated if
-neither are set.
+Exactly one of ClientSecretRef, OIDCExchangeToken, or ManagedIdentity must be specified. Credentials will
+not be generated if none are set.
 
 ##### Fields
 
@@ -1157,13 +1180,13 @@ neither are set.
 <ApiField
   name="clientID"
   type="string"
-  required="true"
-  description="ClientID is a unique identifier for an application in Azure."
+  required="false"
+  description="ClientID is a unique identifier for an application in Azure.<br />This field is required unless ManagedIdentity is used, in which case it must not be set."
 /><ApiField
   name="tenantID"
   type="string"
-  required="true"
-  description="TenantId is a unique identifier for an Azure Active Directory instance."
+  required="false"
+  description="TenantId is a unique identifier for an Azure Active Directory instance.<br />This field is required unless ManagedIdentity is used, in which case it must not be set."
 /><ApiField
   name="clientSecretRef"
   type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
@@ -1174,6 +1197,11 @@ neither are set.
   type="[AzureOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1alpha1-azureoidcexchangetoken)"
   required="false"
   description="OIDCExchangeToken specifies the oidc configurations used to obtain an oidc token. The oidc token will be<br />used to obtain temporary credentials to access Azure."
+/><ApiField
+  name="managedIdentity"
+  type="[AzureManagedIdentity](#github-com-envoyproxy-ai-gateway-api-v1alpha1-azuremanagedidentity)"
+  required="false"
+  description="ManagedIdentity configures Azure managed identity authentication."
 />
 
 
@@ -3133,6 +3161,7 @@ MCPRouteList contains a list of MCPRoute.
 - [APISchema](#github-com-envoyproxy-ai-gateway-api-v1beta1-apischema)
 - [AWSCredentialsFile](#github-com-envoyproxy-ai-gateway-api-v1beta1-awscredentialsfile)
 - [AWSOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-awsoidcexchangetoken)
+- [AzureManagedIdentity](#github-com-envoyproxy-ai-gateway-api-v1beta1-azuremanagedidentity)
 - [AzureOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-azureoidcexchangetoken)
 - [BackendSecurityPolicyAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyapikey)
 - [BackendSecurityPolicyAWSCredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyawscredentials)
@@ -3570,6 +3599,28 @@ and store them in a temporary credentials file.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-azuremanagedidentity">AzureManagedIdentity</a>
+
+
+
+**Appears in:**
+- [BackendSecurityPolicyAzureCredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyazurecredentials)
+
+AzureManagedIdentity configures managed identity authentication.
+An empty ClientID uses the default Azure credential chain.
+
+##### Fields
+
+
+
+<ApiField
+  name="clientID"
+  type="string"
+  required="false"
+  description="ClientID selects a user-assigned managed identity."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-azureoidcexchangetoken">AzureOIDCExchangeToken</a>
 
 
@@ -3717,8 +3768,8 @@ BackendSecurityPolicyAzureAPIKey specifies the Azure OpenAI API key.
 - [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspec)
 
 BackendSecurityPolicyAzureCredentials contains the supported authentication mechanisms to access Azure.
-Only one of ClientSecretRef or OIDCExchangeToken must be specified. Credentials will not be generated if
-neither are set.
+Exactly one of ClientSecretRef, OIDCExchangeToken, or ManagedIdentity must be specified. Credentials will
+not be generated if none are set.
 
 ##### Fields
 
@@ -3727,13 +3778,13 @@ neither are set.
 <ApiField
   name="clientID"
   type="string"
-  required="true"
-  description="ClientID is a unique identifier for an application in Azure."
+  required="false"
+  description="ClientID is a unique identifier for an application in Azure.<br />This field is required unless ManagedIdentity is used, in which case it must not be set."
 /><ApiField
   name="tenantID"
   type="string"
-  required="true"
-  description="TenantId is a unique identifier for an Azure Active Directory instance."
+  required="false"
+  description="TenantId is a unique identifier for an Azure Active Directory instance.<br />This field is required unless ManagedIdentity is used, in which case it must not be set."
 /><ApiField
   name="clientSecretRef"
   type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
@@ -3744,6 +3795,11 @@ neither are set.
   type="[AzureOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-azureoidcexchangetoken)"
   required="false"
   description="OIDCExchangeToken specifies the oidc configurations used to obtain an oidc token. The oidc token will be<br />used to obtain temporary credentials to access Azure."
+/><ApiField
+  name="managedIdentity"
+  type="[AzureManagedIdentity](#github-com-envoyproxy-ai-gateway-api-v1beta1-azuremanagedidentity)"
+  required="false"
+  description="ManagedIdentity configures Azure managed identity authentication."
 />
 
 

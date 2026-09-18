@@ -9,6 +9,7 @@ traffic for various AI providers.
 - `aws-irsa.yaml` - AWS Bedrock with IRSA (IAM Roles for Service Accounts)
 - `aws-pod-identity.yaml` - AWS Bedrock with EKS Pod Identity
 - `azure_openai.yaml` - Azure OpenAI integration
+- `azure_openai_managed_identity.yaml` - Azure OpenAI with Azure Managed Identity (system- or user-assigned)
 - `gcp_vertex.yaml` - GCP Vertex AI integration
 - `tars.yaml` - TARS integration
 - `cohere.yaml` - Cohere integration

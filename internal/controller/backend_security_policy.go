@@ -150,8 +150,12 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 		var provider tokenprovider.TokenProvider
 		options := policy.TokenRequestOptions{Scopes: []string{azureScopeURL}}
 
-		oidc := getBackendSecurityPolicyAuthOIDC(&bsp.Spec)
-		if oidc != nil {
+		if managedIdentity := bsp.Spec.AzureCredentials.ManagedIdentity; managedIdentity != nil {
+			provider, err = tokenprovider.NewAzureManagedIdentityTokenProvider(ctx, managedIdentity.ClientID, options)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+		} else if oidc := getBackendSecurityPolicyAuthOIDC(&bsp.Spec); oidc != nil {
 			var oidcProvider tokenprovider.TokenProvider
 			oidcProvider, err = tokenprovider.NewOidcTokenProvider(ctx, c.client, oidc)
 			if err != nil {
@@ -183,7 +187,7 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 				return ctrl.Result{}, err
 			}
 		} else {
-			return ctrl.Result{}, fmt.Errorf("one of secret ref or oidc must be defined, namespace %s name %s", bsp.Namespace, bsp.Name)
+			return ctrl.Result{}, fmt.Errorf("one of secret ref, oidc, or managed identity must be defined, namespace %s name %s", bsp.Namespace, bsp.Name)
 		}
 
 		rotator, err = rotators.NewAzureTokenRotator(c.client, c.kube, c.logger, bsp.Namespace, bsp.Name, preRotationWindow, provider)
