@@ -135,7 +135,7 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 	fs.StringVar(&flags.endpointPrefixes,
 		"endpointPrefixes",
 		"",
-		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic.",
+		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe.",
 	)
 	fs.IntVar(&flags.maxRecvMsgSize,
 		"maxRecvMsgSize",
@@ -304,6 +304,7 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	transcriptionMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTranscription)
 	translationMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTranslation)
 	rerankMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationRerank)
+	systemOneMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationSystemOne)
 	tokenizeMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTokenize)
 	responsesInputTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationResponsesInputTokens)
 	countTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationCountTokens)
@@ -335,6 +336,8 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 		imageGenerationMetricsFactory, tracing.ImageGenerationTracer(), endpointspec.ImageGenerationEndpointSpec{}))
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Cohere, "/v2/rerank"), extproc.NewFactory(
 		rerankMetricsFactory, tracing.RerankTracer(), endpointspec.RerankEndpointSpec{}))
+	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.TypeSafe, "/v1/systemone"), extproc.NewFactory(
+		systemOneMetricsFactory, tracing.SystemOneTracer(), endpointspec.SystemOneEndpointSpec{}))
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/models"), extproc.NewModelsProcessor)
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/models"), extproc.NewAnthropicModelsProcessor)
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/messages"), extproc.NewFactory(

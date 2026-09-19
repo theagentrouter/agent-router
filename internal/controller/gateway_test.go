@@ -2883,6 +2883,14 @@ func Test_schemaToFilterAPI(t *testing.T) {
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI, Prefix: "openai/v1"},
 		},
 		{
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaTypeSafe},
+			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe, Version: "v1"},
+		},
+		{
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaTypeSafe, Version: ptr.To("v2")},
+			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe, Version: "v2"},
+		},
+		{
 			in: aigv1b1.VersionedAPISchema{
 				Name:   aigv1b1.APISchemaAWSOpenAI,
 				Prefix: ptr.To("custom/v1"),
