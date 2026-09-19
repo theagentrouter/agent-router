@@ -11,13 +11,17 @@ package mcpproxy
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -37,7 +41,27 @@ var errModernListNoBackends = errors.New("list request failed for all backends")
 const (
 	defaultTTLMs      = 0
 	defaultCacheScope = "public"
+	// resources/read results are typically user-specific, so when a backend
+	// omits cacheScope the gateway defaults to "private" per the caching SEP:
+	// https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching#cache-scope-field
+	defaultResourcesReadCacheScope = "private"
 )
+
+// subscriptionListenIntent captures the client's original subscriptions/listen
+// opt-ins so outbound notifications can be filtered after backend fan-out.
+type subscriptionListenIntent struct {
+	resourceURIs         map[string]struct{} // gateway-namespaced URIs the client asked for
+	toolsListChanged     bool
+	promptsListChanged   bool
+	resourcesListChanged bool
+}
+
+// backendJSONRPCError wraps a raw JSON-RPC error object returned by a backend.
+// It preserves the structured error so it can be forwarded to the client as-is
+// rather than being stringified into a text/plain 500 response.
+type backendJSONRPCError struct {
+	raw json.RawMessage
+}
 
 // serveModernPOST handles modern (2026-07-28) stateless POST requests.
 // This is the Phase 1 entry point for modern clients talking to modern backends.
@@ -79,7 +103,7 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 		m.l.Error("missing route header on modern request")
 		errType = metrics.MCPErrorInternal
 		err = errors.New("missing route header")
-		onErrorResponse(w, http.StatusInternalServerError, "missing route header")
+		onRequestError(w, http.StatusInternalServerError, -32603, "missing route header", req.ID)
 		return
 	}
 
@@ -87,8 +111,7 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 	if headerMethod != req.Method {
 		errType = metrics.MCPErrorInvalidJSONRPC
 		err = fmt.Errorf("Mcp-Method header mismatch")
-		onErrorResponse(w, http.StatusBadRequest,
-			fmt.Sprintf("Mcp-Method header '%s' does not match body method '%s'", headerMethod, req.Method))
+		onRequestError(w, http.StatusBadRequest, errCodeHeaderMismatch, fmt.Sprintf("Mcp-Method header '%s' does not match body method '%s'", headerMethod, req.Method), req.ID)
 		return
 	}
 
@@ -96,17 +119,17 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 	case "initialize", "notifications/initialized":
 		errType = metrics.MCPErrorUnsupportedMethod
 		err = fmt.Errorf("method removed in 2026-07-28: %s", req.Method)
-		onErrorResponse(w, http.StatusNotFound, "method removed in 2026-07-28: use server/discover")
+		onRequestError(w, http.StatusNotFound, errCodeMethodNotFound, "method removed in 2026-07-28: use server/discover", req.ID)
 		return
 	case "ping":
 		errType = metrics.MCPErrorUnsupportedMethod
 		err = errors.New("ping removed in 2026-07-28")
-		onErrorResponse(w, http.StatusNotFound, "ping removed in 2026-07-28")
+		onRequestError(w, http.StatusNotFound, errCodeMethodNotFound, "ping removed in 2026-07-28", req.ID)
 		return
 	case "logging/setLevel":
 		errType = metrics.MCPErrorUnsupportedMethod
 		err = errors.New("logging/setLevel removed in 2026-07-28")
-		onErrorResponse(w, http.StatusNotFound, "logging/setLevel removed in 2026-07-28; use _meta logLevel")
+		onRequestError(w, http.StatusNotFound, errCodeMethodNotFound, "logging/setLevel removed in 2026-07-28; use _meta logLevel", req.ID)
 		return
 	}
 
@@ -125,7 +148,7 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
 		if err != nil {
 			errType = metrics.MCPErrorInvalidParam
-			onErrorResponse(w, http.StatusBadRequest, "invalid params")
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
 			return
 		}
 		params = p
@@ -135,7 +158,7 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
 		if err != nil {
 			errType = metrics.MCPErrorInvalidParam
-			onErrorResponse(w, http.StatusBadRequest, "invalid params")
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
 			return
 		}
 		params = p
@@ -145,7 +168,7 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
 		if err != nil {
 			errType = metrics.MCPErrorInvalidParam
-			onErrorResponse(w, http.StatusBadRequest, "invalid params")
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
 			return
 		}
 		params = p
@@ -155,7 +178,7 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
 		if err != nil {
 			errType = metrics.MCPErrorInvalidParam
-			onErrorResponse(w, http.StatusBadRequest, "invalid params")
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
 			return
 		}
 		params = p
@@ -165,15 +188,74 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
 		if err != nil {
 			errType = metrics.MCPErrorInvalidParam
-			onErrorResponse(w, http.StatusBadRequest, "invalid params")
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
 			return
 		}
 		params = p
 		result, err = m.handleModernPromptsList(ctx, w, r, req, route, span)
+	case "tools/call":
+		p := &mcp.CallToolParams{}
+		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
+		if err != nil {
+			errType = metrics.MCPErrorInvalidParam
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
+			return
+		}
+		params = p
+		result, err = m.handleModernToolsCall(ctx, w, r, req, route, span)
+	case "resources/read":
+		p := &mcp.ReadResourceParams{}
+		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
+		if err != nil {
+			errType = metrics.MCPErrorInvalidParam
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
+			return
+		}
+		params = p
+		result, err = m.handleModernResourcesRead(ctx, w, r, req, route, span)
+	case "prompts/get":
+		p := &mcp.GetPromptParams{}
+		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
+		if err != nil {
+			errType = metrics.MCPErrorInvalidParam
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
+			return
+		}
+		params = p
+		result, err = m.handleModernPromptsGet(ctx, w, r, req, route, span)
+	case "subscriptions/listen":
+		p := &mcp.SubscriptionsListenParams{}
+		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
+		if err != nil {
+			errType = metrics.MCPErrorInvalidParam
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
+			return
+		}
+		params = p
+		result, err = m.handleSubscriptionsListen(ctx, w, r, req, route, span)
+	case "completion/complete":
+		p := &mcp.CompleteParams{}
+		span, err = parseParamsAndMaybeStartSpan(ctx, m, req, p, r.Header)
+		if err != nil {
+			errType = metrics.MCPErrorInvalidParam
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid params", req.ID)
+			return
+		}
+		params = p
+		result, err = m.handleModernComplete(ctx, w, r, req, route, span)
 	default:
+		// Client→server notifications are fire-and-forget: they carry no id and
+		// must never receive a response body. Accept them silently so the gateway
+		// doesn't reject valid notifications (e.g. notifications/progress) that
+		// it doesn't need to forward. Non-notification unknown methods are still
+		// rejected with 404.
+		if strings.HasPrefix(req.Method, "notifications/") && !req.ID.IsValid() {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
 		errType = metrics.MCPErrorUnsupportedMethod
 		err = fmt.Errorf("unknown method: %s", req.Method)
-		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown method: %s", req.Method))
+		onRequestError(w, http.StatusNotFound, errCodeMethodNotFound, fmt.Sprintf("unknown method: %s", req.Method), req.ID)
 		return
 	}
 	if errType == "" {
@@ -189,10 +271,10 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 // Header extraction matches newSession: route-level forwardHeaders are read
 // before backendSelector, then per-backend ForwardHeaders are read for the
 // selected set only.
-func (m *mcpRequestContext) resolveModernRouteBackends(w http.ResponseWriter, route filterapi.MCPRouteName) (*mcpProxyConfigRoute, map[filterapi.MCPBackendName]filterapi.MCPBackend, error) {
+func (m *mcpRequestContext) resolveModernRouteBackends(w http.ResponseWriter, route filterapi.MCPRouteName, id jsonrpc.ID) (*mcpProxyConfigRoute, map[filterapi.MCPBackendName]filterapi.MCPBackend, error) {
 	routeConfig, ok := m.routes[route]
 	if !ok {
-		onErrorResponse(w, http.StatusNotFound, "route not found")
+		onRequestError(w, http.StatusNotFound, errCodeInvalidParams, "route not found", id)
 		return nil, nil, fmt.Errorf("%w: %s", errBackendNotFound, route)
 	}
 
@@ -202,7 +284,7 @@ func (m *mcpRequestContext) resolveModernRouteBackends(w http.ResponseWriter, ro
 	// 2. select authorized backends
 	selected, err := m.selectAuthorizedBackends(route, routeConfig)
 	if err != nil {
-		onErrorResponse(w, http.StatusForbidden, "access denied")
+		onRequestError(w, http.StatusForbidden, errCodeInvalidRequest, "access denied", id)
 		return nil, nil, err
 	}
 
@@ -212,6 +294,21 @@ func (m *mcpRequestContext) resolveModernRouteBackends(w http.ResponseWriter, ro
 	return routeConfig, selected, nil
 }
 
+// lookupSelectedBackend returns the named backend from the already-selected
+// set produced by resolveModernRouteBackends. Writes 403 if the backend is on
+// the route but excluded by backendSelector, or 404 if it is unknown.
+func lookupSelectedBackend(w http.ResponseWriter, routeConfig *mcpProxyConfigRoute, selected map[filterapi.MCPBackendName]filterapi.MCPBackend, backendName string, id jsonrpc.ID) (filterapi.MCPBackend, error) {
+	if backend, ok := selected[backendName]; ok {
+		return backend, nil
+	}
+	if _, onRoute := routeConfig.backends[backendName]; onRoute {
+		onRequestError(w, http.StatusForbidden, errCodeInvalidRequest, "access denied", id)
+		return filterapi.MCPBackend{}, errors.New("authorization failed")
+	}
+	onRequestError(w, http.StatusNotFound, errCodeInvalidParams, fmt.Sprintf("unknown backend %s", backendName), id)
+	return filterapi.MCPBackend{}, fmt.Errorf("%w: %s", errBackendNotFound, backendName)
+}
+
 // handleServerDiscover fans out server/discover to selected backends, merges results.
 //
 // This is a fan-out handler: it records per-backend metrics itself and sets
@@ -219,7 +316,7 @@ func (m *mcpRequestContext) resolveModernRouteBackends(w http.ResponseWriter, ro
 // skipped.
 func (m *mcpRequestContext) handleServerDiscover(ctx context.Context, w http.ResponseWriter, req *jsonrpc.Request, route filterapi.MCPRouteName, span tracingapi.MCPSpan) (handlerResult, error) {
 	m.perBackendMetricsRecorded = true
-	_, selectedBackends, err := m.resolveModernRouteBackends(w, route)
+	_, selectedBackends, err := m.resolveModernRouteBackends(w, route, req.ID)
 	if err != nil {
 		return handlerResult{}, err
 	}
@@ -246,7 +343,7 @@ func (m *mcpRequestContext) handleServerDiscover(ctx context.Context, w http.Res
 	}
 	if len(results) == 0 {
 		m.l.Error("server/discover failed for all backends", slog.String("route", route))
-		onErrorResponse(w, http.StatusInternalServerError, "failed to discover any backend")
+		onRequestError(w, http.StatusInternalServerError, -32603, "failed to discover any backend", req.ID)
 		return handlerResult{}, errors.New("failed to discover any backend")
 	}
 	merged := mergeDiscoverResults(m.l, results)
@@ -339,14 +436,14 @@ func (m *mcpRequestContext) handleModernToolsList(ctx context.Context, w http.Re
 	// even when this handler is invoked directly (e.g. in tests) so auth stays enforced.
 	m.requestHeaders = r.Header
 
-	_, selected, err := m.resolveModernRouteBackends(w, route)
+	_, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
 	if err != nil {
 		return handlerResult{}, err
 	}
 
 	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListToolsResult](ctx, m, req, route, selected, span)
 	if err != nil {
-		onErrorResponse(w, http.StatusInternalServerError, "failed to list tools for all backends")
+		onRequestError(w, http.StatusInternalServerError, -32603, "failed to list tools for all backends", req.ID)
 		return handlerResult{}, err
 	}
 	result := m.mergeToolsList(&session{route: route}, responses)
@@ -366,14 +463,14 @@ func (m *mcpRequestContext) handleModernResourcesList(ctx context.Context, w htt
 	m.perBackendMetricsRecorded = true
 	m.requestHeaders = r.Header
 
-	_, selected, err := m.resolveModernRouteBackends(w, route)
+	_, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
 	if err != nil {
 		return handlerResult{}, err
 	}
 
 	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListResourcesResult](ctx, m, req, route, selected, span)
 	if err != nil {
-		onErrorResponse(w, http.StatusInternalServerError, "failed to list resources for all backends")
+		onRequestError(w, http.StatusInternalServerError, -32603, "failed to list resources for all backends", req.ID)
 		return handlerResult{}, err
 	}
 	result := m.mergeResourceList(&session{route: route}, responses)
@@ -392,13 +489,13 @@ func (m *mcpRequestContext) handleModernResourceTemplatesList(ctx context.Contex
 	m.perBackendMetricsRecorded = true
 	m.requestHeaders = r.Header
 
-	_, selected, err := m.resolveModernRouteBackends(w, route)
+	_, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
 	if err != nil {
 		return handlerResult{}, err
 	}
 	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListResourceTemplatesResult](ctx, m, req, route, selected, span)
 	if err != nil {
-		onErrorResponse(w, http.StatusInternalServerError, "failed to list resource templates for all backends")
+		onRequestError(w, http.StatusInternalServerError, -32603, "failed to list resource templates for all backends", req.ID)
 		return handlerResult{}, err
 	}
 	result := m.mergeResourcesTemplateList(&session{route: route}, responses)
@@ -418,14 +515,14 @@ func (m *mcpRequestContext) handleModernPromptsList(ctx context.Context, w http.
 	m.perBackendMetricsRecorded = true
 	m.requestHeaders = r.Header
 
-	_, selected, err := m.resolveModernRouteBackends(w, route)
+	_, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
 	if err != nil {
 		return handlerResult{}, err
 	}
 
 	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListPromptsResult](ctx, m, req, route, selected, span)
 	if err != nil {
-		onErrorResponse(w, http.StatusInternalServerError, "failed to list prompts for all backends")
+		onRequestError(w, http.StatusInternalServerError, -32603, "failed to list prompts for all backends", req.ID)
 		return handlerResult{}, err
 	}
 	result := m.mergePromptsList(&session{route: route}, responses)
@@ -435,6 +532,688 @@ func (m *mcpRequestContext) handleModernPromptsList(ctx context.Context, w http.
 	}
 	writeJSONRPCResult(w, req.ID, &result)
 	return handlerResult{}, nil
+}
+
+// handleModernToolsCall handles tools/call on the modern stateless path (P1.5).
+// Routes to the single backend identified by the backend__toolName prefix.
+func (m *mcpRequestContext) handleModernToolsCall(ctx context.Context, w http.ResponseWriter, r *http.Request, req *jsonrpc.Request, route filterapi.MCPRouteName, span tracingapi.MCPSpan) (handlerResult, error) {
+	m.requestHeaders = r.Header
+
+	routeConfig, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
+	if err != nil {
+		return handlerResult{}, err
+	}
+
+	// Extract tool name from params.
+	var params mcp.CallToolParams
+	if err = json.Unmarshal(req.Params, &params); err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid tools/call params", req.ID)
+		return handlerResult{}, fmt.Errorf("invalid tools/call params: %w", &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: err.Error()})
+	}
+
+	// Resolve the backend: Never-mode backends expose bare tool names (resolved
+	// via the static, per-route neverModeToolIndex computed at config load), so
+	// try that first and fall back to parsing the "<backend>__<tool>" prefix.
+	// This mirrors legacy handleToolCallRequest so both eras route identically.
+	var (
+		backendName, upstreamName string
+		resolvedFromIndex         bool
+	)
+	if indexedBackend, inIndex := routeConfig.neverModeToolIndex[params.Name]; inIndex {
+		backendName, upstreamName, resolvedFromIndex = indexedBackend, params.Name, true
+	}
+	if !resolvedFromIndex {
+		backendName, upstreamName, err = upstreamResourceName(params.Name)
+		if err != nil {
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid tool name: %v", err), req.ID)
+			return handlerResult{}, fmt.Errorf("%w: %s", errInvalidToolName, params.Name)
+		}
+	}
+	result := handlerResult{backendName: backendName}
+
+	backend, err := lookupSelectedBackend(w, routeConfig, selected, backendName, req.ID)
+	if err != nil {
+		return result, err
+	}
+
+	// Enforce per-route tool selector filters.
+	if selector := routeConfig.toolSelectors[backendName]; selector != nil && !selector.allows(upstreamName) {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid tool name: %s", upstreamName), req.ID)
+		return result, fmt.Errorf("%w: %s", errInvalidToolName, upstreamName)
+	}
+
+	// Enforce per-route authorization (same semantics as legacy path).
+	if routeConfig.authorization != nil {
+		httpPath := ""
+		if r.URL != nil {
+			httpPath = r.URL.Path
+		}
+		allowed, requiredScopes := m.authorizeRequest(routeConfig.authorization, &authorizationRequest{
+			Headers:    r.Header,
+			HTTPMethod: r.Method,
+			Host:       r.Host,
+			HTTPPath:   httpPath,
+			MCPMethod:  req.Method,
+			Backend:    backendName,
+			Tool:       upstreamName,
+			Params:     &params,
+		})
+		if !allowed {
+			// Include a scope challenge when available.
+			if len(requiredScopes) > 0 {
+				if challenge := buildInsufficientScopeHeader(requiredScopes, routeConfig.authorization.ResourceMetadataURL); challenge != "" {
+					w.Header().Set("WWW-Authenticate", challenge)
+				}
+			}
+			onRequestError(w, http.StatusForbidden, errCodeInvalidRequest, "access denied", req.ID)
+			return result, errors.New("authorization failed")
+		}
+	}
+
+	// Rewrite the params with the unprefixed name.
+	params.Name = upstreamName
+	rewrittenParams, err := json.Marshal(params)
+	if err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid tools/call params: %v", err), req.ID)
+		return result, fmt.Errorf("invalid tools/call params: %w", err)
+	}
+	req.Params = rewrittenParams
+
+	// Send and proxy (P1.9: MRTR passthrough). Re-prefix any resource URIs the
+	// backend returned (ResourceLink / EmbeddedResource entries and _meta) back
+	// into the gateway's downstream namespace, matching legacy maybeResponseModify.
+	// Interim MRTR results (resultType: "input_required") are passed through verbatim.
+	return m.sendModernRequestAndProxy(ctx, w, req, route, backend, result, span,
+		func(resp json.RawMessage) (json.RawMessage, bool) {
+			return rewriteToolsCallResult(resp, backendName)
+		})
+}
+
+// handleModernResourcesRead handles resources/read (P1.5 single-target).
+func (m *mcpRequestContext) handleModernResourcesRead(ctx context.Context, w http.ResponseWriter, r *http.Request, req *jsonrpc.Request, route filterapi.MCPRouteName, span tracingapi.MCPSpan) (handlerResult, error) {
+	m.requestHeaders = r.Header
+
+	routeConfig, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
+	if err != nil {
+		return handlerResult{}, err
+	}
+
+	var params mcp.ReadResourceParams
+	if err = json.Unmarshal(req.Params, &params); err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid resources/read params", req.ID)
+		return handlerResult{}, fmt.Errorf("invalid resources/read params: %w", &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: err.Error()})
+	}
+
+	backendName, upstreamURI, err := upstreamResourceURI(params.URI)
+	if err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid resource URI: %v", err), req.ID)
+		return handlerResult{}, fmt.Errorf("%w: %s", errInvalidToolName, params.URI)
+	}
+	result := handlerResult{backendName: backendName}
+
+	backend, err := lookupSelectedBackend(w, routeConfig, selected, backendName, req.ID)
+	if err != nil {
+		return result, err
+	}
+
+	params.URI = upstreamURI
+	rewrittenParams, err := json.Marshal(params)
+	if err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid resources/read params: %v", err), req.ID)
+		return result, fmt.Errorf("invalid resources/read params: %w", err)
+	}
+	req.Params = rewrittenParams
+
+	// Send and proxy. Re-prefix content URIs back to downstream form so clients
+	// see consistent namespaced URIs, and ensure caching hints are present.
+	// Interim MRTR results (resultType: "input_required") are not cacheable and
+	// pass through verbatim, so only complete results are rewritten.
+	return m.sendModernRequestAndProxy(ctx, w, req, route, backend, result, span,
+		func(resp json.RawMessage) (json.RawMessage, bool) {
+			return rewriteResourcesReadResult(resp, backendName)
+		})
+}
+
+// rewriteResourcesReadResult re-prefixes content URIs and injects caching hints
+// on a complete resources/read result. Per the MCP caching SEP, servers MUST
+// include ttlMs/cacheScope on resultType:"complete" resources/read responses;
+// interim MRTR results (resultType:"input_required") are not cacheable and are
+// left untouched. URI rewriting is shared with legacy via
+// rewriteResourcesReadContentsURIs so unknown fields are preserved.
+// Returns (rewritten, true) for a complete result, or (nil, false) when the
+// caller should pass the result through verbatim.
+//
+// https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching#cacheable-results
+func rewriteResourcesReadResult(result json.RawMessage, backendName string) (json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(result, &m) != nil {
+		return nil, false
+	}
+	// Non-complete (input_required) results are not cacheable; leave untouched.
+	if rt, ok := m["resultType"]; ok {
+		var s string
+		if json.Unmarshal(rt, &s) == nil && s != "" && s != "complete" {
+			return nil, false
+		}
+	}
+	if _, ok := m["inputRequests"]; ok {
+		return nil, false
+	}
+
+	_ = rewriteResourcesReadContentsURIs(m, backendName)
+
+	// Inject caching hints when the backend omits them (or sends an empty
+	// cacheScope from a zero-value Cacheable). ttlMs defaults to 0 (immediately
+	// stale); cacheScope defaults to "private" because resources/read content
+	// is typically caller-specific.
+	// https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching#cacheable-results
+	if raw, ok := m["ttlMs"]; !ok || string(raw) == "null" {
+		m["ttlMs"] = json.RawMessage(strconv.Itoa(defaultTTLMs))
+	}
+	if raw, ok := m["cacheScope"]; !ok || string(raw) == "null" || string(raw) == `""` {
+		scope, _ := json.Marshal(defaultResourcesReadCacheScope)
+		m["cacheScope"] = scope
+	}
+
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// handleModernPromptsGet handles prompts/get (P1.5 single-target).
+func (m *mcpRequestContext) handleModernPromptsGet(ctx context.Context, w http.ResponseWriter, r *http.Request, req *jsonrpc.Request, route filterapi.MCPRouteName, span tracingapi.MCPSpan) (handlerResult, error) {
+	m.requestHeaders = r.Header
+
+	routeConfig, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
+	if err != nil {
+		return handlerResult{}, err
+	}
+
+	var params mcp.GetPromptParams
+	if err = json.Unmarshal(req.Params, &params); err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid prompts/get params", req.ID)
+		return handlerResult{}, fmt.Errorf("invalid prompts/get params: %w", &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: err.Error()})
+	}
+
+	// Never-mode backends may expose bare prompt names (via neverModePromptIndex),
+	// otherwise the "<backend>__<prompt>" prefix is parsed. Shared with legacy via
+	// resolvePromptBackend so both eras resolve names identically.
+	backendName, upstreamName, err := m.resolvePromptBackend(route, params.Name)
+	if err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid prompt name: %v", err), req.ID)
+		return handlerResult{}, fmt.Errorf("%w: %s", errInvalidToolName, params.Name)
+	}
+	result := handlerResult{backendName: backendName}
+
+	backend, err := lookupSelectedBackend(w, routeConfig, selected, backendName, req.ID)
+	if err != nil {
+		return result, err
+	}
+
+	// Enforce per-route prompt selector filters (parity with the tools/call path).
+	if selector := routeConfig.promptSelectors[backendName]; selector != nil && !selector.allows(upstreamName) {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid prompt name: %s", upstreamName), req.ID)
+		return result, fmt.Errorf("%w: %s", errInvalidToolName, upstreamName)
+	}
+
+	params.Name = upstreamName
+	rewrittenParams, err := json.Marshal(params)
+	if err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid prompts/get params: %v", err), req.ID)
+		return result, fmt.Errorf("invalid prompts/get params: %w", err)
+	}
+	req.Params = rewrittenParams
+
+	return m.sendModernRequestAndProxy(ctx, w, req, route, backend, result, span, nil)
+}
+
+// handleModernComplete handles completion/complete (P1.5 single-target).
+func (m *mcpRequestContext) handleModernComplete(ctx context.Context, w http.ResponseWriter, r *http.Request, req *jsonrpc.Request, route filterapi.MCPRouteName, span tracingapi.MCPSpan) (handlerResult, error) {
+	m.requestHeaders = r.Header
+
+	routeConfig, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
+	if err != nil {
+		return handlerResult{}, err
+	}
+
+	var params mcp.CompleteParams
+	if err = json.Unmarshal(req.Params, &params); err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid completion/complete params", req.ID)
+		return handlerResult{}, fmt.Errorf("invalid completion/complete params: %w", &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: err.Error()})
+	}
+	if params.Ref == nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "completion/complete requires a ref", req.ID)
+		return handlerResult{}, fmt.Errorf("%w: missing ref", errInvalidToolName)
+	}
+
+	// completion/complete targets a specific prompt or resource by ref. Resolve
+	// the owning backend from the ref and unprefix it, matching legacy
+	// handleCompletionComplete. Either Name (ref/prompt) or URI (ref/resource)
+	// carries the namespaced identifier depending on Ref.Type.
+	// https://modelcontextprotocol.io/specification/2026-07-28
+	var backendName string
+	switch params.Ref.Type {
+	case "ref/prompt":
+		backendName, params.Ref.Name, err = m.resolvePromptBackend(route, params.Ref.Name)
+	case "ref/resource":
+		backendName, params.Ref.URI, err = upstreamResourceURI(params.Ref.URI)
+	default:
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("unsupported ref type: %s", params.Ref.Type), req.ID)
+		return handlerResult{}, fmt.Errorf("%w: unsupported ref type %s", errInvalidToolName, params.Ref.Type)
+	}
+	if err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid ref %s: %v", cmp.Or(params.Ref.Name, params.Ref.URI), err), req.ID)
+		return handlerResult{}, err
+	}
+	result := handlerResult{backendName: backendName}
+
+	backend, err := lookupSelectedBackend(w, routeConfig, selected, backendName, req.ID)
+	if err != nil {
+		return result, err
+	}
+
+	// Rewrite params with the unprefixed ref.
+	rewrittenParams, err := json.Marshal(&params)
+	if err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid completion/complete params: %v", err), req.ID)
+		return result, fmt.Errorf("invalid completion/complete params: %w", err)
+	}
+	req.Params = rewrittenParams
+
+	return m.sendModernRequestAndProxy(ctx, w, req, route, backend, result, span, nil)
+}
+
+// handleSubscriptionsListen handles subscriptions/listen (P1.8).
+// Opens SSE streams to backends and merges notification events.
+//
+// This is a long-lived streaming handler, not a request/response call, so it
+// does not fit the request-duration metric shape. It sets
+// perBackendMetricsRecorded to skip the generic recording in serveModernPOST,
+// mirroring how the legacy path treats streaming/notification methods.
+//
+// Resource subscription URIs are gateway-namespaced (backend+scheme://…). Before
+// fan-out they are partitioned by owning backend and sent upstream unprefixed,
+// matching every other single-target handler. Notifications are filtered against
+// the client's original opt-ins before forwarding.
+func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w http.ResponseWriter, r *http.Request, req *jsonrpc.Request, route filterapi.MCPRouteName, span tracingapi.MCPSpan) (handlerResult, error) {
+	m.perBackendMetricsRecorded = true
+	m.requestHeaders = r.Header
+
+	routeConfig, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
+	if err != nil {
+		return handlerResult{}, err
+	}
+
+	var params mcp.SubscriptionsListenParams
+	if err = json.Unmarshal(req.Params, &params); err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "invalid subscriptions/listen params", req.ID)
+		return handlerResult{}, fmt.Errorf("invalid subscriptions/listen params: %w", &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: err.Error()})
+	}
+
+	intent, perBackendURIs, err := partitionResourceSubscriptions(params.Notifications)
+	if err != nil {
+		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid resource subscription URI: %v", err), req.ID)
+		return handlerResult{}, err
+	}
+	for backendName := range perBackendURIs {
+		if _, err := lookupSelectedBackend(w, routeConfig, selected, backendName, req.ID); err != nil {
+			return handlerResult{}, err
+		}
+	}
+
+	wantListChanged := intent.toolsListChanged || intent.promptsListChanged || intent.resourcesListChanged
+
+	// Set SSE response headers only after params are validated — a 400 cannot
+	// follow a started event-stream.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	// Fan out a per-backend listen request: only backends that own a subscribed
+	// URI (or that must receive list_changed opt-ins) are contacted, and each
+	// sees bare upstream URIs rather than gateway-namespaced ones.
+	events := make(chan *sseEvent)
+	var wg sync.WaitGroup
+	for _, backend := range selected {
+		uris := perBackendURIs[backend.Name]
+		if len(uris) == 0 && !wantListChanged {
+			continue
+		}
+		backendParams := buildBackendListenParams(&params, uris)
+		paramsBytes, marshalErr := json.Marshal(backendParams)
+		if marshalErr != nil {
+			continue
+		}
+		backendReq := &jsonrpc.Request{
+			Method: req.Method,
+			ID:     req.ID,
+			Params: paramsBytes,
+		}
+		body, encErr := jsonrpc.EncodeMessage(backendReq)
+		if encErr != nil {
+			continue
+		}
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, m.backendListenerAddr, bytes.NewReader(body))
+		if reqErr != nil {
+			continue
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set(mcpProtocolVersionHeader, protocolVersion20260728)
+		httpReq.Header.Set(mcpMethodHeader, "subscriptions/listen")
+		httpReq.Header.Set(internalapi.MCPBackendHeader, backend.Name)
+		httpReq.Header.Set(internalapi.MCPRouteHeader, route)
+
+		resp, doErr := m.client.Do(httpReq)
+		if doErr != nil {
+			m.l.Warn("subscriptions/listen failed", slog.String("backend", backend.Name), slog.String("error", doErr.Error()))
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			continue
+		}
+		if span != nil {
+			span.RecordRouteToBackend(backend.Name, "", true)
+		}
+		// Defer close immediately so bodyclose can see the cleanup path; the
+		// reader goroutine still drains the body until EOF or cancel.
+		defer resp.Body.Close()
+		backendName := backend.Name
+		wg.Go(func() {
+			parser := newSSEEventParser(resp.Body, backendName)
+			for {
+				event, err := parser.next()
+				if event != nil {
+					select {
+					case events <- event:
+					case <-ctx.Done():
+						return
+					}
+				}
+				if err != nil {
+					return
+				}
+			}
+		})
+	}
+
+	// Close the events channel once all backend readers finish so the merge loop
+	// can drain and exit cleanly.
+	go func() {
+		wg.Wait()
+		close(events)
+	}()
+
+	// Merge loop: forward rewritten, intent-filtered events to the client,
+	// sending periodic keep-alives while idle. When all backends close
+	// (gracefully or otherwise), the gateway writes a completion result per
+	// the subscriptions spec before returning.
+	keepAlive := time.NewTicker(15 * time.Second)
+	defer keepAlive.Stop()
+	done := ctx.Done()
+	for {
+		select {
+		case <-done:
+			// Client disconnected — on Streamable HTTP this IS the
+			// cancellation signal per the spec. Upstream bodies are closed
+			// by deferred resp.Body.Close, tearing down backend streams.
+			return handlerResult{}, nil
+		case event, ok := <-events:
+			if !ok {
+				// All backend streams ended. Write a graceful completion
+				// result so the client knows the subscription closed cleanly
+				// rather than via a transport drop.
+				// https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions#graceful-closure
+				writeSSECompletionResult(w, req.ID)
+				if flusher != nil {
+					flusher.Flush()
+				}
+				return handlerResult{}, nil
+			}
+			m.forwardSubscriptionEvent(w, event, intent)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		case <-keepAlive.C:
+			_, _ = w.Write([]byte(": keep-alive\n\n"))
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}
+}
+
+// partitionResourceSubscriptions splits gateway-namespaced resource subscription
+// URIs by owning backend, returning the client's intent (namespaced URIs + list
+// flags) and a per-backend list of bare upstream URIs. URIs that do not parse
+// fail the request; callers must still verify each backend is selected.
+func partitionResourceSubscriptions(notifs *mcp.NotificationSubscriptions) (subscriptionListenIntent, map[filterapi.MCPBackendName][]string, error) {
+	intent := subscriptionListenIntent{resourceURIs: make(map[string]struct{})}
+	perBackend := make(map[filterapi.MCPBackendName][]string)
+	if notifs == nil {
+		return intent, perBackend, nil
+	}
+	intent.toolsListChanged = notifs.ToolsListChanged
+	intent.promptsListChanged = notifs.PromptsListChanged
+	intent.resourcesListChanged = notifs.ResourcesListChanged
+
+	for _, uri := range notifs.ResourceSubscriptions {
+		backendName, upstreamURI, err := upstreamResourceURI(uri)
+		if err != nil {
+			return subscriptionListenIntent{}, nil, fmt.Errorf("%w: %s", err, uri)
+		}
+		intent.resourceURIs[uri] = struct{}{}
+		perBackend[backendName] = append(perBackend[backendName], upstreamURI)
+	}
+	return intent, perBackend, nil
+}
+
+// buildBackendListenParams copies the client listen params with resource
+// subscriptions replaced by the bare upstream URIs for one backend.
+func buildBackendListenParams(client *mcp.SubscriptionsListenParams, upstreamURIs []string) *mcp.SubscriptionsListenParams {
+	out := &mcp.SubscriptionsListenParams{Meta: client.Meta}
+	if client.Notifications == nil {
+		return out
+	}
+	n := *client.Notifications
+	n.ResourceSubscriptions = append([]string(nil), upstreamURIs...)
+	out.Notifications = &n
+	return out
+}
+
+// forwardSubscriptionEvent rewrites and conditionally forwards a single SSE
+// notification event from a backend to the downstream client. resources/updated
+// URIs are re-prefixed into the gateway namespace; notifications the client did
+// not opt into are dropped. Backend graceful-closure responses (jsonrpc.Response
+// to the listen request) are silently consumed — the gateway synthesizes its own
+// completion result once all backends close. notifications/cancelled from a
+// backend (server-initiated teardown) is forwarded to the client.
+func (m *mcpRequestContext) forwardSubscriptionEvent(w io.Writer, event *sseEvent, intent subscriptionListenIntent) {
+	kept := event.messages[:0]
+	for _, msg := range event.messages {
+		switch v := msg.(type) {
+		case *jsonrpc.Response:
+			// Backend sent a graceful completion result for its listen
+			// request. Swallow it; the gateway emits its own once all
+			// backend streams end.
+			continue
+		case *jsonrpc.Request:
+			if v == nil {
+				continue
+			}
+			switch v.Method {
+			case "notifications/resources/updated":
+				rewritten, ok := rewriteUpdatedURI(json.RawMessage(v.Params), event.backend)
+				if !ok {
+					continue
+				}
+				v.Params = []byte(rewritten)
+				var envelope struct {
+					URI string `json:"uri"`
+				}
+				if json.Unmarshal(rewritten, &envelope) != nil {
+					continue
+				}
+				if _, subscribed := intent.resourceURIs[envelope.URI]; !subscribed {
+					continue
+				}
+			case "notifications/tools/list_changed":
+				if !intent.toolsListChanged {
+					continue
+				}
+			case "notifications/resources/list_changed":
+				if !intent.resourcesListChanged {
+					continue
+				}
+			case "notifications/prompts/list_changed":
+				if !intent.promptsListChanged {
+					continue
+				}
+			case "notifications/subscriptions/acknowledged":
+				if rewritten, ok := rewriteAcknowledgedSubscriptions(json.RawMessage(v.Params), event.backend, intent.resourceURIsForBackend(event.backend)); ok {
+					v.Params = []byte(rewritten)
+				}
+			case "notifications/cancelled":
+				// Server-initiated subscription teardown (spec: server MUST
+				// send this when it tears down the stream). Forward as-is.
+			default:
+				// Unknown notification type — forward for extensibility.
+			}
+		default:
+			continue
+		}
+		kept = append(kept, msg)
+	}
+	if len(kept) == 0 {
+		return
+	}
+	event.messages = kept
+	event.writeAndMaybeFlush(w)
+}
+
+// writeSSECompletionResult writes a graceful subscriptions/listen completion
+// result as an SSE event. Per the spec, the server SHOULD respond with
+// resultType:"complete" before closing the stream so the client knows the
+// subscription ended cleanly.
+// https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions#graceful-closure
+func writeSSECompletionResult(w io.Writer, listenID jsonrpc.ID) {
+	result := map[string]any{
+		"resultType": "complete",
+	}
+	encoded, _ := json.Marshal(result)
+	resp := &jsonrpc.Response{ID: listenID, Result: encoded}
+	data, _ := jsonrpc.EncodeMessage(resp)
+	_, _ = w.Write([]byte("event: message\n"))
+	_, _ = w.Write([]byte("data: "))
+	_, _ = w.Write(data)
+	_, _ = w.Write([]byte("\n\n"))
+}
+
+// rewriteAcknowledgedSubscriptions normalizes resourceSubscriptions in a
+// notifications/subscriptions/acknowledged params payload so the client sees
+// the gateway-namespaced URI array it subscribed with.
+//
+// Per the subscriptions SEP the field is a string[]. Some backends (notably
+// go-sdk) currently emit a boolean true instead; when that happens we
+// substitute clientURIs — the gateway-namespaced URIs this backend was asked
+// to honor — so the client can confirm what was acknowledged.
+func rewriteAcknowledgedSubscriptions(params json.RawMessage, backendName string, clientURIs []string) (json.RawMessage, bool) {
+	if len(params) == 0 {
+		return nil, false
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(params, &m) != nil {
+		return nil, false
+	}
+	notifsRaw, ok := m["notifications"]
+	if !ok {
+		return nil, false
+	}
+	var notifs map[string]json.RawMessage
+	if json.Unmarshal(notifsRaw, &notifs) != nil {
+		return nil, false
+	}
+	urisRaw, ok := notifs["resourceSubscriptions"]
+	if !ok {
+		return nil, false
+	}
+
+	var uris []string
+	if json.Unmarshal(urisRaw, &uris) == nil && len(uris) > 0 {
+		// Backend echoed an array of upstream URIs — re-prefix for the client.
+		for i, uri := range uris {
+			uris[i] = downstreamResourceURI(uri, backendName)
+		}
+	} else {
+		// Boolean true / null / empty / unexpected shape — substitute the
+		// client's gateway-namespaced URIs for this backend so the ack is
+		// still a string[] as the spec requires.
+		uris = append([]string(nil), clientURIs...)
+	}
+	prefixed, err := json.Marshal(uris)
+	if err != nil {
+		return nil, false
+	}
+	notifs["resourceSubscriptions"] = prefixed
+	notifsOut, err := json.Marshal(notifs)
+	if err != nil {
+		return nil, false
+	}
+	m["notifications"] = notifsOut
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// resourceURIsForBackend returns the gateway-namespaced resource subscription
+// URIs from intent that belong to backendName, in stable order.
+func (intent subscriptionListenIntent) resourceURIsForBackend(backendName string) []string {
+	var uris []string
+	for uri := range intent.resourceURIs {
+		owner, _, err := upstreamResourceURI(uri)
+		if err == nil && owner == backendName {
+			uris = append(uris, uri)
+		}
+	}
+	sort.Strings(uris)
+	return uris
+}
+
+// rewriteUpdatedURI re-prefixes the "uri" field in a notifications/resources/updated
+// params payload with the backend name, returning (rewritten, true) on success.
+func rewriteUpdatedURI(params json.RawMessage, backendName string) (json.RawMessage, bool) {
+	if len(params) == 0 {
+		return nil, false
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(params, &m) != nil {
+		return nil, false
+	}
+	uriRaw, ok := m["uri"]
+	if !ok {
+		return nil, false
+	}
+	var uri string
+	if json.Unmarshal(uriRaw, &uri) != nil || uri == "" {
+		return nil, false
+	}
+	prefixed, _ := json.Marshal(downstreamResourceURI(uri, backendName))
+	m["uri"] = prefixed
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // sendToAllModernBackendsAndAggregateResponses fans out a modern (stateless) list request
@@ -497,6 +1276,58 @@ func sendToAllModernBackendsAndAggregateResponses[T any](ctx context.Context, m 
 		return nil, fmt.Errorf("%w: %s failed for all backends on route %s", errModernListNoBackends, req.Method, route)
 	}
 	return responses, nil
+}
+
+// modernResultRewriter optionally transforms a backend's raw JSON-RPC result
+// before it is written back to the client (e.g. re-prefixing namespaced URIs or
+// injecting caching hints). It returns (rewritten, true) to send the rewritten
+// payload, or (nil, false) to pass the original result through verbatim — which
+// is how interim MRTR (resultType: "input_required") results are preserved.
+type modernResultRewriter func(result json.RawMessage) (json.RawMessage, bool)
+
+// sendModernRequestAndProxy sends req to a single modern backend and proxies the
+// response back to the client, centralizing the send / error-handling / write
+// sequence shared by every single-target modern handler (tools/call,
+// resources/read, prompts/get, completion/complete).
+// It records the per-backend routing span (when span is non-nil), sends the
+// request, writes a 500 error response on failure, applies the optional rewrite,
+// and finally writes the JSON-RPC result. rewrite may be nil to pass the backend
+// result through unchanged.
+func (m *mcpRequestContext) sendModernRequestAndProxy(
+	ctx context.Context,
+	w http.ResponseWriter,
+	req *jsonrpc.Request,
+	route filterapi.MCPRouteName,
+	backend filterapi.MCPBackend,
+	result handlerResult,
+	span tracingapi.MCPSpan,
+	rewrite modernResultRewriter,
+) (handlerResult, error) {
+	if span != nil {
+		span.RecordRouteToBackend(backend.Name, "", false)
+	}
+
+	resp, err := m.sendModernRequest(ctx, req, route, backend)
+	if err != nil {
+		// If the backend returned a structured JSON-RPC error, forward it to the
+		// client as a proper JSON-RPC error response instead of stringifying it
+		// into a text/plain 500.
+		var bjErr *backendJSONRPCError
+		if errors.As(err, &bjErr) {
+			writeBackendJSONRPCError(w, req.ID, bjErr.raw)
+			return result, err
+		}
+		onRequestError(w, http.StatusInternalServerError, -32603, fmt.Sprintf("call to %s failed: %v", backend.Name, err), req.ID)
+		return result, err
+	}
+
+	if rewrite != nil {
+		if rewritten, ok := rewrite(resp); ok {
+			resp = rewritten
+		}
+	}
+	writeRawJSONRPCResult(w, req.ID, resp)
+	return result, nil
 }
 
 // sendModernRequest sends a JSON-RPC request to a modern backend with proper headers (P1.6).
@@ -602,7 +1433,7 @@ func validateModernJSONRPCResponse(req *jsonrpc.Request, rpcResp map[string]json
 	case resultPresent && errorPresent:
 		return fmt.Errorf("backend response has both result and error")
 	case errorPresent:
-		return fmt.Errorf("backend error: %s", string(errField))
+		return &backendJSONRPCError{raw: errField}
 	case !resultPresent:
 		return fmt.Errorf("backend returned no result")
 	}
@@ -801,4 +1632,23 @@ func (m *mcpRequestContext) applyForwardHeaders(httpReq *http.Request, route fil
 		perBackend = m.perBackendExtraHeaders[backend.Name]
 	}
 	applyExtractedForwardHeaders(httpReq, m.extraHeaders, perBackend)
+}
+
+func (e *backendJSONRPCError) Error() string {
+	return fmt.Sprintf("backend JSON-RPC error: %s", string(e.raw))
+}
+
+// writeBackendJSONRPCError writes a backend's JSON-RPC error as a proper
+// JSON-RPC error response to the client, preserving the original error code,
+// message, and data. The HTTP status is 200 so the JSON-RPC layer can parse it.
+func writeBackendJSONRPCError(w http.ResponseWriter, id jsonrpc.ID, raw json.RawMessage) {
+	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id.Raw(),
+		"error":   raw,
+	}
+	encoded, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(encoded)
 }

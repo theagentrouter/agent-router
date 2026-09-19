@@ -132,6 +132,10 @@ type OTLPCollector struct {
 	spanCh    chan *tracev1.ResourceSpans
 	metricsCh chan *metricsv1.ResourceMetrics
 	logsCh    chan *logsv1.ResourceLogs
+	// pendingSpans holds spans from a multi-span OTLP batch that TakeSpan has
+	// not yet returned. The batch processor often exports server/discover and
+	// Initialize together; returning only Spans[0] would drop the rest.
+	pendingSpans []*tracev1.Span
 }
 
 // Env returns the environment variables needed to configure the OTLP collector.
@@ -150,13 +154,27 @@ func (o *OTLPCollector) SetEnv(setenv func(key string, value string)) {
 }
 
 // TakeSpan returns a single span or nil if none were recorded.
+// When an OTLP export contains multiple spans, remaining spans are queued and
+// returned by subsequent TakeSpan calls so batched exports are not dropped.
 func (o *OTLPCollector) TakeSpan() *tracev1.Span {
+	if len(o.pendingSpans) > 0 {
+		span := o.pendingSpans[0]
+		o.pendingSpans = o.pendingSpans[1:]
+		return span
+	}
 	select {
 	case resourceSpans := <-o.spanCh:
-		if len(resourceSpans.ScopeSpans) == 0 || len(resourceSpans.ScopeSpans[0].Spans) == 0 {
+		var spans []*tracev1.Span
+		for _, scopeSpans := range resourceSpans.ScopeSpans {
+			spans = append(spans, scopeSpans.Spans...)
+		}
+		if len(spans) == 0 {
 			return nil
 		}
-		return resourceSpans.ScopeSpans[0].Spans[0]
+		if len(spans) > 1 {
+			o.pendingSpans = spans[1:]
+		}
+		return spans[0]
 	case <-time.After(otlpTimeout):
 		return nil
 	}
