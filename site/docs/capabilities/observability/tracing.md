@@ -166,7 +166,7 @@ conventions treat those as metadata rather than content.
 Message content is currently mapped for chat completions and Anthropic
 messages. Other endpoints record operation, model, usage and sampling
 parameters. Several — image generation, speech, transcription, translation and
-rerank — have no content attributes defined by the conventions at all.
+rerank and TypeSafe System One — have no content attributes defined by the conventions at all.
 
 The `OPENINFERENCE_HIDE_*` variables described below apply only to the
 OpenInference convention. They have no effect when `gen_ai` is selected.
