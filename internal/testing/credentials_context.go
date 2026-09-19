@@ -36,6 +36,9 @@ const (
 	// RequiredCredentialDeepInfra is the bit flag for the DeepInfra API key.
 	// https://deepinfra.com/docs/openai_api
 	RequiredCredentialDeepInfra
+	// RequiredCredentialOpenRouter is the bit flag for the OpenRouter API key.
+	// https://openrouter.ai/docs
+	RequiredCredentialOpenRouter
 	// RequiredCredentialAnthropic is the bit flag for the Anthropic API key.
 	RequiredCredentialAnthropic
 	// RequiredCredentialCohere is the bit flag for the Cohere API key.
@@ -45,7 +48,7 @@ const (
 // CredentialsContext holds the context for the credentials used in the tests.
 type CredentialsContext struct {
 	// OpenAIValid, AWSValid, AzureValid, etc. are true if the credentials are set and ready to use the real services.
-	OpenAIValid, AWSValid, AzureValid, GeminiValid, GroqValid, GrokValid, SambaNovaValid, DeepInfraValid, AnthropicValid, CohereValid bool
+	OpenAIValid, AWSValid, AzureValid, GeminiValid, GroqValid, GrokValid, SambaNovaValid, DeepInfraValid, OpenRouterValid, AnthropicValid, CohereValid bool
 	// OpenAIAPIKey is the OpenAI API key. This defaults to "dummy-openai-api-key" if not set.
 	OpenAIAPIKey string
 	// AnthropicAPIKey is the Anthropic API key. This defaults to "dummy-anthropic-api-key" if not set.
@@ -68,6 +71,8 @@ type CredentialsContext struct {
 	SambaNovaAPIKey string
 	// DeepInfraAPIKey is the API key for DeepInfra API. https://deepinfra.com/docs/openai_api
 	DeepInfraAPIKey string
+	// OpenRouterAPIKey is the API key for OpenRouter API. https://openrouter.ai/docs
+	OpenRouterAPIKey string
 }
 
 // MaybeSkip skips the test if the required credentials are not set.
@@ -95,6 +100,9 @@ func (c CredentialsContext) MaybeSkip(t testing.TB, required RequiredCredential)
 	}
 	if required&RequiredCredentialDeepInfra != 0 && !c.DeepInfraValid {
 		t.Skip("skipping test as DeepInfra API key is not set in TEST_DEEPINFRA_API_KEY")
+	}
+	if required&RequiredCredentialOpenRouter != 0 && !c.OpenRouterValid {
+		t.Skip("skipping test as OpenRouter API key is not set in TEST_OPENROUTER_API_KEY")
 	}
 	if required&RequiredCredentialAnthropic != 0 && !c.AnthropicValid {
 		t.Skip("skipping test as Anthropic API key is not set in TEST_ANTHROPIC_API_KEY")
@@ -135,6 +143,11 @@ func RequireNewCredentialsContext() (ctx CredentialsContext) {
 	deepInfraAPIKeyEnv := os.Getenv("TEST_DEEPINFRA_API_KEY")
 	ctx.DeepInfraValid = deepInfraAPIKeyEnv != ""
 	ctx.DeepInfraAPIKey = cmp.Or(deepInfraAPIKeyEnv, "dummy-deepinfra-api-key")
+
+	// Set up credential for OpenRouter API.
+	openRouterAPIKeyEnv := os.Getenv("TEST_OPENROUTER_API_KEY")
+	ctx.OpenRouterValid = openRouterAPIKeyEnv != ""
+	ctx.OpenRouterAPIKey = cmp.Or(openRouterAPIKeyEnv, "dummy-openrouter-api-key")
 
 	// Set up credential file for Azure.
 	azureAccessTokenEnv := os.Getenv("TEST_AZURE_ACCESS_TOKEN")
