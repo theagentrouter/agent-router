@@ -12,6 +12,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
@@ -286,6 +287,35 @@ func NewRerankRecorder(config *Config) tracingapi.RerankRecorder {
 		config:       configOrEnv(config),
 		requestModel: func(r *cohere.RerankV2Request) string { return r.Model },
 	}
+}
+
+// NewSystemOneRecorder creates a tracingapi.SystemOneRecorder.
+//
+// System One is a decision model, not a chat model, so it is a custom
+// operation. The response carries no messages; only the resolved model and
+// token usage are recorded.
+func NewSystemOneRecorder(config *Config) tracingapi.SystemOneRecorder {
+	return &recorder[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]{
+		operation:     OperationSystemOne,
+		config:        configOrEnv(config),
+		requestModel:  func(r *typesafe.SystemOneRequest) string { return r.Model },
+		responseAttrs: systemOneResponseAttrs,
+	}
+}
+
+func systemOneResponseAttrs(resp *typesafe.SystemOneResponse) []attribute.KeyValue {
+	attrs := responseIdentityAttrs("", resp.Model)
+	if resp.Usage != nil {
+		var in, out int
+		if resp.Usage.InputTokens != nil {
+			in = *resp.Usage.InputTokens
+		}
+		if resp.Usage.OutputTokens != nil {
+			out = *resp.Usage.OutputTokens
+		}
+		attrs = append(attrs, usageAttrs(in, out)...)
+	}
+	return attrs
 }
 
 // NewMessageRecorder creates a tracingapi.MessageRecorder.
