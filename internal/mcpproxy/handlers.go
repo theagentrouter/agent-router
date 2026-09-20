@@ -1059,6 +1059,8 @@ func (m *mcpRequestContext) maybeServerToClientRequestModify(ctx context.Context
 			params.URI = downstreamResourceURI(params.URI, backend)
 			msg.Params, _ = json.Marshal(params) // Already decoded params, so ignore error.
 		}
+	case "ping":
+		// No payload rewrite; continue to common request-ID encoding.
 	default:
 		// Others are not server->client requests that we care about.
 		return nil
@@ -1134,6 +1136,7 @@ func (m *mcpRequestContext) recordResponse(ctx context.Context, rawMsg jsonrpc.M
 		case "roots/list":
 		case "sampling/createMessage":
 		case "elicitation/create":
+		case "ping":
 		default:
 			knownMethod = false
 			m.metrics.RecordMethodErrorCount(ctx, msg.Method, nil, metrics.MCPStatusError)
