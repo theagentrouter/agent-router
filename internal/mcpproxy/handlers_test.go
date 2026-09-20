@@ -1201,6 +1201,7 @@ func TestRecordResponse(t *testing.T) {
 			{method: "notifications/message"},
 			{method: "sampling/createMessage"},
 			{method: "elicitation/create"},
+			{method: "ping"},
 			{method: "notifications/tools/list_changed"},
 		} {
 			msg := jsonrpc.Request{Method: tc.method}
@@ -2300,9 +2301,12 @@ func TestMCPProxy_maybeServerToClientRequestModify(t *testing.T) {
 		verify func(t *testing.T, modified *jsonrpc.Request)
 	}{
 		{
-			name:   "not server-to-client request",
-			msg:    &jsonrpc.Request{Method: "ping"},
-			verify: func(t *testing.T, modified *jsonrpc.Request) { require.Equal(t, "ping", modified.Method) },
+			name: "ping",
+			msg:  &jsonrpc.Request{ID: f64ID, Method: "ping"},
+			verify: func(t *testing.T, modified *jsonrpc.Request) {
+				require.Equal(t, "ping", modified.Method)
+				require.Equal(t, "1__i__backend", modified.ID.Raw())
+			},
 		},
 		{
 			name:   "roots/list invalid param",
