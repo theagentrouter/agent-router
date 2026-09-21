@@ -442,6 +442,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 					TotalTokens:      38,
 					PromptTokensDetails: &openai.PromptTokensDetails{
 						CachedTokens:        5,
+						CacheWriteTokens:    3,
 						CacheCreationTokens: 3,
 					},
 					CompletionTokensDetails: &openai.CompletionTokensDetails{},
@@ -478,6 +479,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 					PromptTokens: 42, CompletionTokens: 15, TotalTokens: 57,
 					PromptTokensDetails: &openai.PromptTokensDetails{
 						CachedTokens:        10,
+						CacheWriteTokens:    7,
 						CacheCreationTokens: 7,
 					},
 					CompletionTokensDetails: &openai.CompletionTokensDetails{},
@@ -654,7 +656,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 			expectedTokenUsage := tokenUsageFrom(
 				int32(tt.expectedOpenAIResponse.Usage.PromptTokens),                            // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CachedTokens),        // nolint:gosec
-				int32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CacheCreationTokens), // nolint:gosec
+				int32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CacheWriteTokens),    // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.CompletionTokens),                        // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.TotalTokens),                             // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.CompletionTokensDetails.ReasoningTokens), // nolint:gosec

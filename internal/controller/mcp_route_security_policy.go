@@ -114,6 +114,7 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 		name := "mcp-jwt-provider"
 		jwtProvider := egv1a1.JWTProvider{
 			Name:      name,
+			Issuer:    oauth.Issuer,
 			Audiences: oauth.Audiences,
 		}
 

@@ -217,6 +217,55 @@ func TestMergeToolsList_PreservesExplicitFalseToolHints(t *testing.T) {
 	require.Contains(t, string(encoded), `"idempotentHint":false`)
 }
 
+// TestMergeListResults_MergesCachingHints verifies SEP-2549 ttlMs/cacheScope are
+// folded into the shared merge* helpers (legacy and modern). Older servers may
+// omit the fields; missing ttlMs is treated as 0 (immediately stale).
+func TestMergeListResults_MergesCachingHints(t *testing.T) {
+	proxy := newTestMCPProxy()
+	proxy.routes["test-route"].toolSelectors = nil
+	proxy.requestHeaders = http.Header{}
+	s := &session{route: "test-route"}
+
+	t.Run("most restrictive across backends", func(t *testing.T) {
+		tools := proxy.mergeToolsList(s, []broadCastResponse[mcp.ListToolsResult]{
+			{backendName: "backend1", res: mcp.ListToolsResult{Cacheable: mcp.Cacheable{TTLMs: 2000, CacheScope: "public"}}},
+			{backendName: "backend2", res: mcp.ListToolsResult{Cacheable: mcp.Cacheable{TTLMs: 500, CacheScope: "private"}}},
+		})
+		require.Equal(t, 500, tools.TTLMs)
+		require.Equal(t, "private", tools.CacheScope)
+
+		resources := proxy.mergeResourceList(s, []broadCastResponse[mcp.ListResourcesResult]{
+			{backendName: "backend1", res: mcp.ListResourcesResult{Cacheable: mcp.Cacheable{TTLMs: 2000, CacheScope: "public"}}},
+			{backendName: "backend2", res: mcp.ListResourcesResult{Cacheable: mcp.Cacheable{TTLMs: 500, CacheScope: "private"}}},
+		})
+		require.Equal(t, 500, resources.TTLMs)
+		require.Equal(t, "private", resources.CacheScope)
+
+		templates := proxy.mergeResourcesTemplateList(s, []broadCastResponse[mcp.ListResourceTemplatesResult]{
+			{backendName: "backend1", res: mcp.ListResourceTemplatesResult{Cacheable: mcp.Cacheable{TTLMs: 2000, CacheScope: "public"}}},
+			{backendName: "backend2", res: mcp.ListResourceTemplatesResult{Cacheable: mcp.Cacheable{TTLMs: 500, CacheScope: "private"}}},
+		})
+		require.Equal(t, 500, templates.TTLMs)
+		require.Equal(t, "private", templates.CacheScope)
+
+		prompts := proxy.mergePromptsList(s, []broadCastResponse[mcp.ListPromptsResult]{
+			{backendName: "backend1", res: mcp.ListPromptsResult{Cacheable: mcp.Cacheable{TTLMs: 2000, CacheScope: "public"}}},
+			{backendName: "backend2", res: mcp.ListPromptsResult{Cacheable: mcp.Cacheable{TTLMs: 500, CacheScope: "private"}}},
+		})
+		require.Equal(t, 500, prompts.TTLMs)
+		require.Equal(t, "private", prompts.CacheScope)
+	})
+
+	t.Run("omitted hints default to immediately stale public", func(t *testing.T) {
+		tools := proxy.mergeToolsList(s, []broadCastResponse[mcp.ListToolsResult]{
+			{backendName: "backend1", res: mcp.ListToolsResult{}},
+			{backendName: "backend2", res: mcp.ListToolsResult{Cacheable: mcp.Cacheable{TTLMs: 1500, CacheScope: "public"}}},
+		})
+		require.Equal(t, 0, tools.TTLMs)
+		require.Equal(t, "public", tools.CacheScope)
+	})
+}
+
 func TestOnError(t *testing.T) {
 	rr := httptest.NewRecorder()
 	onErrorResponse(rr, http.StatusBadRequest, "test error")

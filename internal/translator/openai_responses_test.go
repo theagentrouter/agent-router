@@ -212,8 +212,9 @@ func TestResponsesOpenAIToOpenAITranslator_ResponseBody(t *testing.T) {
   			],
   			"usage": {
     			"input_tokens": 10,
-    			"input_tokens_details": {
-      				"cached_tokens": 2
+				"input_tokens_details": {
+					"cached_tokens": 2,
+					"cache_write_tokens": 3
     			},
     			"output_tokens": 5,
     			"output_tokens_details": {
@@ -248,7 +249,7 @@ func TestResponsesOpenAIToOpenAITranslator_ResponseBody(t *testing.T) {
 
 		cacheCreationTokens, ok := tokenUsage.CacheCreationInputTokens()
 		require.True(t, ok)
-		require.Equal(t, uint32(0), cacheCreationTokens)
+		require.Equal(t, uint32(3), cacheCreationTokens)
 
 		reasoningTokens, ok := tokenUsage.ReasoningTokens()
 		require.True(t, ok)
@@ -401,7 +402,7 @@ data: {"type":"response.content_part.done","item_id":"msg_67c9fdcf37fc8190ba8211
 
 data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_67c9fdcf37fc8190ba82116e33fb28c507b8b0ad4e5eb654","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello, how can I help?","annotations":[]}]}}
 
-data: {"type":"response.completed","response":{"id":"resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b","object":"response","created_at":1741476542,"status":"completed","model":"","output":[{"type":"message","id":"msg_67ccd2bf17f0819081ff3bb2cf6508e60bb6a6b452d3795b","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello, how can I help?"}]}],"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":2},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":15}}}
+data: {"type":"response.completed","response":{"id":"resp_67ccd2bed1ec8190b14f964abc0542670bb6a6b452d3795b","object":"response","created_at":1741476542,"status":"completed","model":"","output":[{"type":"message","id":"msg_67ccd2bf17f0819081ff3bb2cf6508e60bb6a6b452d3795b","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello, how can I help?"}]}],"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":3},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":15}}}
 
 data: [DONE]
 
@@ -428,7 +429,7 @@ data: [DONE]
 
 		cacheCreationTokens, ok := tokenUsage.CacheCreationInputTokens()
 		require.True(t, ok)
-		require.Equal(t, uint32(0), cacheCreationTokens)
+		require.Equal(t, uint32(3), cacheCreationTokens)
 
 		reasoningTokens, ok := tokenUsage.ReasoningTokens()
 		require.True(t, ok)

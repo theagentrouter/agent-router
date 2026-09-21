@@ -6410,6 +6410,21 @@ spec:
                                 Either one of Header or QueryParam can be specified to inject the API key.
                               minLength: 1
                               type: string
+                            injectionPolicy:
+                              default: Always
+                              description: |-
+                                InjectionPolicy controls when the configured API key is written onto the target header.
+                                Always (the default) writes the credential, replacing any existing value, including
+                                values populated by forwardHeaders.
+                                IfNotPresent writes the API key only if the target header is absent, so a
+                                caller-supplied token forwarded onto the same header is preserved.
+
+                                InjectionPolicy applies only to header injection. It must not be set to IfNotPresent
+                                when queryParam is used, because query-parameter injection always rewrites the backend URL.
+                              enum:
+                              - Always
+                              - IfNotPresent
+                              type: string
                             inline:
                               description: Inline contains the API key as an inline
                                 string.
@@ -6477,6 +6492,10 @@ spec:
                               && has(self.inline))
                           - message: only one of header or queryParam can be set
                             rule: '!(has(self.header) && has(self.queryParam))'
+                          - message: injectionPolicy cannot be IfNotPresent when queryParam
+                              is set
+                            rule: '!(has(self.queryParam) && has(self.injectionPolicy)
+                              && self.injectionPolicy == ''IfNotPresent'')'
                       type: object
                     toolSelector:
                       description: |-

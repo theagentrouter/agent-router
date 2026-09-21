@@ -420,7 +420,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 			expectedTokenUsage := tokenUsageFrom(
 				int32(tt.expectedOpenAIResponse.Usage.PromptTokens),                            // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CachedTokens),        // nolint:gosec
-				int32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CacheCreationTokens), // nolint:gosec
+				int32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CacheWriteTokens),    // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.CompletionTokens),                        // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.TotalTokens),                             // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.CompletionTokensDetails.ReasoningTokens), // nolint:gosec

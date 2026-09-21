@@ -337,11 +337,27 @@ type MCPBackendSecurityPolicy struct {
 	APIKey *MCPBackendAPIKey `json:"apiKey,omitempty"`
 }
 
+// MCPBackendAPIKeyInjectionPolicy controls when the configured API key is written onto the request.
+//
+// +kubebuilder:validation:Enum=Always;IfNotPresent
+type MCPBackendAPIKeyInjectionPolicy string
+
+const (
+	// MCPBackendAPIKeyInjectionAlways writes the configured key onto the target header,
+	// replacing any existing value. This is the default and preserves existing behavior.
+	MCPBackendAPIKeyInjectionAlways MCPBackendAPIKeyInjectionPolicy = "Always"
+
+	// MCPBackendAPIKeyInjectionIfNotPresent writes the configured key only when the target
+	// header is absent, so a value already set (for example by forwardHeaders) is preserved.
+	MCPBackendAPIKeyInjectionIfNotPresent MCPBackendAPIKeyInjectionPolicy = "IfNotPresent"
+)
+
 // MCPBackendAPIKey defines the configuration for the API Key Authentication to a backend.
 // When both `header` and `queryParam` are unspecified, the API key will be injected into the "Authorization" header by default.
 //
 // +kubebuilder:validation:XValidation:rule="(has(self.secretRef) && !has(self.inline)) || (!has(self.secretRef) && has(self.inline))", message="exactly one of secretRef or inline must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.header) && has(self.queryParam))", message="only one of header or queryParam can be set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.queryParam) && has(self.injectionPolicy) && self.injectionPolicy == 'IfNotPresent')", message="injectionPolicy cannot be IfNotPresent when queryParam is set"
 type MCPBackendAPIKey struct {
 	// secretRef is the Kubernetes secret which contains the API keys.
 	// The key of the secret should be "apiKey".
@@ -378,6 +394,19 @@ type MCPBackendAPIKey struct {
 	// +kubebuilder:validation:MinLength=1
 	// +optional
 	QueryParam *string `json:"queryParam,omitempty"`
+
+	// InjectionPolicy controls when the configured API key is written onto the target header.
+	// Always (the default) writes the credential, replacing any existing value, including
+	// values populated by forwardHeaders.
+	// IfNotPresent writes the API key only if the target header is absent, so a
+	// caller-supplied token forwarded onto the same header is preserved.
+	//
+	// InjectionPolicy applies only to header injection. It must not be set to IfNotPresent
+	// when queryParam is used, because query-parameter injection always rewrites the backend URL.
+	//
+	// +kubebuilder:default=Always
+	// +optional
+	InjectionPolicy *MCPBackendAPIKeyInjectionPolicy `json:"injectionPolicy,omitempty"`
 }
 
 // MCPRouteSecurityPolicy defines the security policy for a MCPRoute.

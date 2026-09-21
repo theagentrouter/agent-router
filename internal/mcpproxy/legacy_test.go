@@ -218,6 +218,89 @@ func TestServePOST_InitializeRequest(t *testing.T) {
 	require.Equal(t, 1, int(capaCount))
 }
 
+// TestServePOST_InitializeRequest_NegotiatesProtocolVersion verifies that the gateway
+// returns max(protocolVersion20250618, min(clientVersion, min(backends))) end-to-end.
+func TestServePOST_InitializeRequest_NegotiatesProtocolVersion(t *testing.T) {
+	tests := []struct {
+		name           string
+		clientVersion  string
+		backendVersion string
+		wantVersion    string
+	}{
+		{
+			name:           "backend newer than client returns client version",
+			clientVersion:  protocolVersion20250618,
+			backendVersion: protocolVersion20260728,
+			wantVersion:    protocolVersion20250618,
+		},
+		{
+			name:           "backend older than client returns backend version",
+			clientVersion:  protocolVersion20260728,
+			backendVersion: protocolVersion20250618,
+			wantVersion:    protocolVersion20250618,
+		},
+		{
+			name:           "backend and client same version",
+			clientVersion:  "2025-11-05",
+			backendVersion: "2025-11-05",
+			wantVersion:    "2025-11-05",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			initResponse := fmt.Sprintf(`{
+"jsonrpc": "2.0",
+"id": 1,
+"result": {
+"protocolVersion": %q,
+"capabilities": {"tools": {"listChanged": true}},
+"serverInfo": {"name": "TestServer", "version": "1.0.0"}
+}
+}`, tc.backendVersion)
+
+			testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(sessionIDHeader) == "" {
+					w.Header().Set(sessionIDHeader, "test-session-456")
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(initResponse))
+				} else {
+					w.WriteHeader(http.StatusAccepted)
+				}
+			}))
+			t.Cleanup(testServer.Close)
+
+			proxy := newTestMCPProxy()
+			proxy.backendListenerAddr = testServer.URL
+
+			id, err := jsonrpc.MakeID("test-1")
+			require.NoError(t, err)
+			initReq := &jsonrpc.Request{
+				Method: "initialize",
+				ID:     id,
+				Params: fmt.Appendf(nil, `{"protocolVersion": %q, "capabilities": {}, "clientInfo": {"name": "Test", "version": "1.0.0"}}`, tc.clientVersion),
+			}
+			body, err := jsonrpc.EncodeMessage(initReq)
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+			rr := httptest.NewRecorder()
+
+			proxy.servePOST(rr, req)
+
+			require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+			// Verify the negotiated protocol version appears in the response body.
+			responseBody := rr.Body.String()
+			require.Contains(t, responseBody, fmt.Sprintf(`"protocolVersion":%q`, tc.wantVersion))
+		})
+	}
+}
+
+// TestServePOST_InitializeRequest_BackendSelectorDenied verifies that a backendSelector denying
+// every route backend is treated as an authorization decision (403), not a system failure (500).
 func TestServePOST_InitializeRequest_BackendSelectorDenied(t *testing.T) {
 	proxy := newTestMCPProxy()
 	proxy.routes["test-route"].backendSelector = mustCompileBackendSelector(t, &filterapi.MCPRouteAuthorization{
