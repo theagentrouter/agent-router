@@ -700,48 +700,98 @@ func TestContentTranslationCoverage(t *testing.T) {
 
 // TestSystemPromptExtractionCoverage adds specific coverage for the extractSystemPromptFromDeveloperMsg helper.
 func TestSystemPromptExtractionCoverage(t *testing.T) {
+	ephemeral := anthropic.CacheControlEphemeralParam{Type: constant.ValueOf[constant.Ephemeral]()}
 	tests := []struct {
 		name           string
 		inputMsg       openai.ChatCompletionDeveloperMessageParam
-		expectedPrompt string
+		expectedBlocks []anthropic.TextBlockParam
 	}{
 		{
-			name: "developer message with content parts",
+			name: "developer message with multiple content parts produces separate blocks",
 			inputMsg: openai.ChatCompletionDeveloperMessageParam{
 				Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{
 					{Type: "text", Text: "part 1"},
-					{Type: "text", Text: " part 2"},
+					{Type: "text", Text: "part 2"},
 				}},
 			},
-			expectedPrompt: "part 1 part 2",
+			expectedBlocks: []anthropic.TextBlockParam{
+				{Text: "part 1"},
+				{Text: "part 2"},
+			},
 		},
 		{
-			name:           "developer message with nil content",
+			name:           "developer message with nil content returns nil",
 			inputMsg:       openai.ChatCompletionDeveloperMessageParam{Content: openai.ContentUnion{Value: nil}},
-			expectedPrompt: "",
+			expectedBlocks: nil,
 		},
 		{
-			name: "developer message with string content",
+			name: "developer message with empty string returns nil",
+			inputMsg: openai.ChatCompletionDeveloperMessageParam{
+				Content: openai.ContentUnion{Value: ""},
+			},
+			expectedBlocks: nil,
+		},
+		{
+			name: "developer message with string content returns single block",
 			inputMsg: openai.ChatCompletionDeveloperMessageParam{
 				Content: openai.ContentUnion{Value: "simple string"},
 			},
-			expectedPrompt: "simple string",
+			expectedBlocks: []anthropic.TextBlockParam{{Text: "simple string"}},
 		},
 		{
-			name: "developer message with text parts array",
+			name: "developer message with single text part returns single block",
 			inputMsg: openai.ChatCompletionDeveloperMessageParam{
 				Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{
 					{Type: "text", Text: "text part"},
 				}},
 			},
-			expectedPrompt: "text part",
+			expectedBlocks: []anthropic.TextBlockParam{{Text: "text part"}},
+		},
+		{
+			name: "per-block cache_control preserved: first block cached, second not",
+			inputMsg: openai.ChatCompletionDeveloperMessageParam{
+				Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{
+					{
+						Type: "text",
+						Text: "static prompt",
+						AnthropicContentFields: &openai.AnthropicContentFields{
+							CacheControl: ephemeral,
+						},
+					},
+					{Type: "text", Text: "dynamic context"},
+				}},
+			},
+			expectedBlocks: []anthropic.TextBlockParam{
+				{Text: "static prompt", CacheControl: ephemeral},
+				{Text: "dynamic context"},
+			},
+		},
+		{
+			name: "array with single empty text part returns nil",
+			inputMsg: openai.ChatCompletionDeveloperMessageParam{
+				Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{
+					{Type: "text", Text: ""},
+				}},
+			},
+			expectedBlocks: nil,
+		},
+		{
+			name: "array with mixed empty and non-empty parts filters empties",
+			inputMsg: openai.ChatCompletionDeveloperMessageParam{
+				Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{
+					{Type: "text", Text: ""},
+					{Type: "text", Text: "non-empty"},
+					{Type: "text", Text: ""},
+				}},
+			},
+			expectedBlocks: []anthropic.TextBlockParam{{Text: "non-empty"}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			prompt, _ := extractSystemPromptFromDeveloperMsg(tt.inputMsg)
-			require.Equal(t, tt.expectedPrompt, prompt)
+			blocks := extractSystemPromptFromDeveloperMsg(tt.inputMsg)
+			require.Equal(t, tt.expectedBlocks, blocks)
 		})
 	}
 }
