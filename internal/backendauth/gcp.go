@@ -48,7 +48,13 @@ func newGCPHandler(ctx context.Context, gcpAuth *filterapi.GCPAuth) (filterapi.B
 	} else {
 		// Use ADC for GKE Workload Identity. TokenSource auto-refreshes in Do().
 		// Inject HTTP client with proxy support into context for token operations.
-		ctx = context.WithValue(ctx, oauth2.HTTPClient, gcpHTTPClient)
+		//
+		// The token source keeps this context for every later token exchange, so
+		// it must outlive the configuration load that builds the handler: the
+		// watcher cancels the load's context as soon as the load returns, and
+		// external_account credentials would then fail every exchange with
+		// "context canceled".
+		ctx = context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient, gcpHTTPClient)
 		creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
 		if err != nil {
 			return nil, fmt.Errorf("failed to find GCP default credentials: %w", err)
