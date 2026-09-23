@@ -7,6 +7,7 @@ package translator
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1490,6 +1491,131 @@ func TestAnthropicToAWSBedrockTranslator_ResponseBody_StreamingToolUse(t *testin
 	assert.Contains(t, bodyStr, "event: content_block_delta")
 	assert.Contains(t, bodyStr, `"input_json_delta"`)
 	assert.Contains(t, bodyStr, `"tool_use"`)
+}
+
+// Real ConverseStream sends contentBlockStart only for tool use blocks. Text and
+// reasoning blocks begin with their first contentBlockDelta.
+func TestAnthropicToAWSBedrockTranslator_ResponseBody_StreamingWithoutContentBlockStart(t *testing.T) {
+	type bedrockEvent struct {
+		eventType string
+		payload   map[string]any
+	}
+	delta := func(idx int, d map[string]any) bedrockEvent {
+		return bedrockEvent{"contentBlockDelta", map[string]any{"contentBlockIndex": idx, "delta": d}}
+	}
+	stop := func(idx int) bedrockEvent {
+		return bedrockEvent{"contentBlockStop", map[string]any{"contentBlockIndex": idx}}
+	}
+	tests := []struct {
+		name     string
+		events   []bedrockEvent
+		expected []string
+	}{
+		{
+			name:   "text only",
+			events: []bedrockEvent{delta(0, map[string]any{"text": "p"}), delta(0, map[string]any{"text": "ong"}), stop(0)},
+			expected: []string{
+				"content_block_start 0 text",
+				"content_block_delta 0 text_delta",
+				"content_block_delta 0 text_delta",
+				"content_block_stop 0",
+			},
+		},
+		{
+			name: "redacted reasoning then text",
+			events: []bedrockEvent{
+				delta(0, map[string]any{"reasoningContent": map[string]any{"redactedContent": []byte("rsn_opaque")}}),
+				stop(0),
+				delta(1, map[string]any{"text": "pong"}),
+				stop(1),
+			},
+			expected: []string{
+				"content_block_start 0 redacted_thinking rsn_opaque",
+				"content_block_stop 0",
+				"content_block_start 1 text",
+				"content_block_delta 1 text_delta",
+				"content_block_stop 1",
+			},
+		},
+		{
+			name: "reasoning text then tool use",
+			events: []bedrockEvent{
+				delta(0, map[string]any{"reasoningContent": map[string]any{"text": "Let me think"}}),
+				stop(0),
+				{"contentBlockStart", map[string]any{
+					"contentBlockIndex": 1,
+					"start":             map[string]any{"toolUse": map[string]any{"name": "get_weather", "toolUseId": "tu_1"}},
+				}},
+				delta(1, map[string]any{"toolUse": map[string]any{"input": `{"city":"Paris"}`}}),
+				stop(1),
+			},
+			expected: []string{
+				"content_block_start 0 thinking",
+				"content_block_delta 0 thinking_delta",
+				"content_block_stop 0",
+				"content_block_start 1 tool_use",
+				"content_block_delta 1 input_json_delta",
+				"content_block_stop 1",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := NewAnthropicToAWSBedrockTranslator("")
+			req := &anthropicschema.MessagesRequest{
+				Model:     "test-model",
+				MaxTokens: 100,
+				Stream:    true,
+				Messages: []anthropicschema.MessageParam{
+					{Role: anthropicschema.MessageRoleUser, Content: anthropicschema.MessageContent{Text: "Hi"}},
+				},
+			}
+			rawBody, _ := json.Marshal(req)
+			_, _, _ = translator.RequestBody(rawBody, req, false)
+			_, _ = translator.ResponseHeaders(map[string]string{"content-type": "application/vnd.amazon.eventstream"})
+
+			events := append([]bedrockEvent{{"messageStart", map[string]any{"role": "assistant"}}}, tt.events...)
+			events = append(events, bedrockEvent{"messageStop", map[string]any{"stopReason": "end_turn"}})
+			var eventStreamData bytes.Buffer
+			for _, ev := range events {
+				payload, err := json.Marshal(ev.payload)
+				require.NoError(t, err)
+				writeEventStreamMessage(t, &eventStreamData, ev.eventType, payload)
+			}
+
+			_, body, _, _, err := translator.ResponseBody(nil, &eventStreamData, true, nil)
+			require.NoError(t, err)
+
+			var got []string
+			for _, line := range strings.Split(string(body), "\n") {
+				data, ok := strings.CutPrefix(line, "data: ")
+				if !ok {
+					continue
+				}
+				var ev struct {
+					Type         string `json:"type"`
+					Index        int    `json:"index"`
+					ContentBlock struct {
+						Type string `json:"type"`
+						Data string `json:"data"`
+					} `json:"content_block"`
+					Delta struct {
+						Type string `json:"type"`
+					} `json:"delta"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(data), &ev))
+				switch ev.Type {
+				case "content_block_start":
+					got = append(got, strings.TrimSpace(fmt.Sprintf("%s %d %s %s", ev.Type, ev.Index, ev.ContentBlock.Type, ev.ContentBlock.Data)))
+				case "content_block_delta":
+					got = append(got, fmt.Sprintf("%s %d %s", ev.Type, ev.Index, ev.Delta.Type))
+				case "content_block_stop":
+					got = append(got, fmt.Sprintf("%s %d", ev.Type, ev.Index))
+				}
+			}
+			require.Equal(t, tt.expected, got)
+		})
+	}
 }
 
 func TestPromoteAnthropicSystemMessagesToParam(t *testing.T) {

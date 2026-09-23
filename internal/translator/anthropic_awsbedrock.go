@@ -44,6 +44,8 @@ type anthropicToAWSBedrockTranslator struct {
 	// defer emitting content_block_start until the first delta tells us the actual type.
 	pendingBlockStart    bool
 	pendingBlockStartIdx int
+	// blockOpen tracks whether content_block_start was emitted for the current block.
+	blockOpen bool
 	// streamingUsage tracks the latest usage from metadata events for emission in SSE.
 	streamingUsage *awsbedrock.TokenUsage
 }
@@ -675,6 +677,7 @@ func (a *anthropicToAWSBedrockTranslator) convertEventToAnthropicSSE(event *awsb
 				},
 			}
 			a.writeSSEEvent("content_block_start", cbStart, out)
+			a.blockOpen = true
 		} else {
 			// Bedrock doesn't distinguish text vs thinking at block start time,
 			// so we defer emitting content_block_start until the first delta.
@@ -685,6 +688,12 @@ func (a *anthropicToAWSBedrockTranslator) convertEventToAnthropicSSE(event *awsb
 	case awsbedrock.ConverseStreamEventTypeContentBlockDelta.String():
 		if event.Delta == nil {
 			return
+		}
+		// Bedrock only sends contentBlockStart for tool use blocks, so text and
+		// reasoning blocks are opened on their first delta.
+		if !a.blockOpen && event.Delta.ToolUse == nil {
+			a.pendingBlockStart = true
+			a.pendingBlockStartIdx = event.ContentBlockIndex
 		}
 		switch {
 		case event.Delta.Text != nil:
@@ -709,8 +718,22 @@ func (a *anthropicToAWSBedrockTranslator) convertEventToAnthropicSSE(event *awsb
 			}
 			a.writeSSEEvent("content_block_delta", cbDelta, out)
 		case event.Delta.ReasoningContent != nil:
-			a.flushPendingBlockStart("thinking", out)
 			rc := event.Delta.ReasoningContent
+			if rc.RedactedContent != nil {
+				// Mirrors the non-streaming redacted_thinking block. Anthropic streams its
+				// data in content_block_start and sends no deltas for it.
+				if a.pendingBlockStart {
+					a.pendingBlockStart = false
+					a.blockOpen = true
+					a.writeSSEEvent("content_block_start", map[string]any{
+						"type":          "content_block_start",
+						"index":         a.pendingBlockStartIdx,
+						"content_block": map[string]any{"type": "redacted_thinking", "data": string(rc.RedactedContent)},
+					}, out)
+				}
+				return
+			}
+			a.flushPendingBlockStart("thinking", out)
 			if rc.Text != "" {
 				cbDelta := map[string]any{
 					"type":  "content_block_delta",
@@ -736,6 +759,7 @@ func (a *anthropicToAWSBedrockTranslator) convertEventToAnthropicSSE(event *awsb
 		}
 
 	case awsbedrock.ConverseStreamEventTypeContentBlockStop.String():
+		a.blockOpen = false
 		cbStop := map[string]any{
 			"type":  "content_block_stop",
 			"index": event.ContentBlockIndex,
@@ -780,6 +804,7 @@ func (a *anthropicToAWSBedrockTranslator) flushPendingBlockStart(blockType strin
 		return
 	}
 	a.pendingBlockStart = false
+	a.blockOpen = true
 	contentBlock := map[string]any{"type": blockType}
 	switch blockType {
 	case "text":
