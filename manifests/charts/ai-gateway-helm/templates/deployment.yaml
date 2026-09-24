@@ -90,6 +90,10 @@ spec:
               {{- $anthropic := .Values.endpointConfig.anthropic -}}
               {{- $endpointPrefixes = append $endpointPrefixes (printf "anthropic:%s" $anthropic) -}}
             {{- end -}}
+            {{- if hasKey .Values.endpointConfig "typesafe" -}}
+              {{- $typesafe := .Values.endpointConfig.typesafe -}}
+              {{- $endpointPrefixes = append $endpointPrefixes (printf "typesafe:%s" $typesafe) -}}
+            {{- end -}}
             {{- if $endpointPrefixes }}
             - "--endpointPrefixes={{ join "," $endpointPrefixes }}"
             {{- end }}

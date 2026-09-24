@@ -137,12 +137,12 @@ func (o *openAIToOpenAITranslatorV1Responses) handleNonStreamingResponse(body io
 	responseModel = cmp.Or(resp.Model, o.requestModel)
 
 	if resp.Usage != nil {
-		tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                                         // #nosec G115
-		tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                                       // #nosec G115
-		tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                                         // #nosec G115
-		tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens))               // #nosec G115
-		tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.InputTokensDetails.CacheCreationTokens)) // #nosec G115
-		tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens))             // #nosec G115
+		tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                                             // #nosec G115
+		tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                                           // #nosec G115
+		tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                                             // #nosec G115
+		tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens))                   // #nosec G115
+		tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.InputTokensDetails.CacheWriteTokensValue())) // #nosec G115
+		tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens))                 // #nosec G115
 	}
 
 	// Record non-streaming response to span if tracing is enabled.
@@ -158,13 +158,12 @@ func setTokenUsageFromResponse(tokenUsage *metrics.TokenUsage, resp *openai.Resp
 	if resp == nil || resp.Usage == nil {
 		return
 	}
-	tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                           // #nosec G115
-	tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                         // #nosec G115
-	tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                           // #nosec G115
-	tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens)) // #nosec G115
-	// Openai does not support cache creation response.
-	tokenUsage.SetCacheCreationInputTokens(uint32(0))                                     // #nosec G115
-	tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens)) // #nosec G115
+	tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                                             // #nosec G115
+	tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                                           // #nosec G115
+	tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                                             // #nosec G115
+	tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens))                   // #nosec G115
+	tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.InputTokensDetails.CacheWriteTokensValue())) // #nosec G115
+	tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens))                 // #nosec G115
 }
 
 // extractUsageFromBufferEvent extracts the token usage and model from the buffered SSE events.

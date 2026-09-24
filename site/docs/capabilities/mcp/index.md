@@ -251,7 +251,46 @@ Each `forwardHeaders` entry specifies:
 - `name` (required): The header to extract from the incoming client request.
 - `backendHeader` (optional): A different header name to use when forwarding to the backend. If omitted, the original header name is used.
 
+Header **values** are forwarded verbatim. The gateway does not add an auth scheme such as `Bearer `.
+
 Headers are scoped per-backend — during fan-out operations like `tools/list`, only the backends with explicit `forwardHeaders` configuration receive the forwarded headers. Other backends in the same route are unaffected.
+
+To keep a default least-privilege service-account token on a backend while letting callers override it with a personal access token, set `securityPolicy.apiKey.injectionPolicy: IfNotPresent` and map the client token onto the same header with `forwardHeaders`. When the client omits that header, the gateway injects the configured API key (and prefixes it with `Bearer ` when the target is `Authorization`). When the client sends it, the forwarded value is preserved as-is. The default is `injectionPolicy: Always`, which always injects the configured credential.
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-unified
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: github
+      kind: Backend
+      group: gateway.envoyproxy.io
+      securityPolicy:
+        apiKey:
+          secretRef:
+            name: github-sa-token # default least-privilege service account
+          injectionPolicy: IfNotPresent
+      forwardHeaders:
+        - name: X-GitHub-PAT
+          backendHeader: Authorization
+```
+
+For that example, send the full header value the backend expects, including the scheme:
+
+```
+X-GitHub-PAT: Bearer ghp_...
+```
+
+A raw token (`X-GitHub-PAT: ghp_...`) is copied onto `Authorization` unchanged, so the backend typically rejects it. Omit `X-GitHub-PAT` to use the injected service-account key instead.
+
+`injectionPolicy` applies only to header injection. Do not combine `injectionPolicy: IfNotPresent` with `queryParam`. If the MCPRoute itself uses OAuth or API-key client authentication, do not forward inbound `Authorization` (that is the gateway token). Use a dedicated client header and `backendHeader` to map it onto the backend credential header.
 
 ### OAuth Authentication
 

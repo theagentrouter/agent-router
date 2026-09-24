@@ -39,6 +39,13 @@ type mcpRequestContext struct {
 	requestHeaders            http.Header
 	originalPath              string
 	perBackendMetricsRecorded bool
+	// extraHeaders and perBackendExtraHeaders are request-derived headers to
+	// forward upstream. The modern path fills them in resolveModernRouteBackends
+	// (same order as newSession). The legacy path stores the same maps on the
+	// session instead.
+	extraHeaders           map[string]string
+	perBackendExtraHeaders map[filterapi.MCPBackendName]map[string]string
+	forwardHeadersResolved bool
 }
 
 // defaultMaxRequestBodySize is the default maximum allowed POST body size in bytes (4 MiB).
@@ -152,6 +159,35 @@ func extractMetaFromJSONRPCMessage(msg jsonrpc.Message) map[string]any {
 	return params.Meta
 }
 
+// selectAuthorizedBackends returns the subset of route backends this request may fan out to.
+// spec.backendSelector is evaluated once per candidate backend using the caller's
+// headers. JWT/CEL inputs are parsed once and reused across candidates. With no
+// selector configured, all route backends are returned.
+func (m *mcpRequestContext) selectAuthorizedBackends(routeName filterapi.MCPRouteName, route *mcpProxyConfigRoute) (map[filterapi.MCPBackendName]filterapi.MCPBackend, error) {
+	if route.backendSelector == nil {
+		return route.backends, nil
+	}
+	headers := m.requestHeaders
+	if headers == nil {
+		headers = http.Header{}
+	}
+	filtered := make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(route.backends))
+	authzCtx := m.newAuthzContext(&authorizationRequest{Headers: headers})
+	for name, backend := range route.backends {
+		allowed, _ := m.authorizeRequestWith(route.backendSelector, &authorizationRequest{
+			Headers: headers,
+			Backend: name,
+		}, authzCtx)
+		if allowed {
+			filtered[name] = backend
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("%w for route %s", errNoMatchingBackendSelector, routeName)
+	}
+	return filtered, nil
+}
+
 // newSession creates a new session for a downstream client.
 // It multiplexes the initialize request to all backends defined in the MCPRoute associated with the downstream request.
 // startAt is the time when the overall HTTP request started, used for recording request duration metrics.
@@ -163,42 +199,21 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 		return nil, fmt.Errorf("no backends found for route %s", routeName)
 	}
 
+	// Route-level headers are extracted before backendSelector so the same
+	// request-derived header set is available for authorization and later
+	// backend calls. Per-backend headers are extracted after selection so
+	// denied backends never receive forwarded credentials.
 	forwardHeaders := extractForwardHeaders(m.requestHeaders, backends.forwardHeaders)
 
 	// spec.backendSelector, if configured, is evaluated once per candidate backend here,
 	// at session-initialize time, rather than on every subsequent call in the session.
 	// With no selector configured, all backends are considered (unchanged behavior).
-	selectedBackends := backends.backends
-	if backends.backendSelector != nil {
-		filtered := make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(backends.backends))
-		// The JWT and CEL headers are identical for every candidate backend in this loop --
-		// only request.mcp.backend changes -- so parse/build them once and reuse across
-		// all candidates instead of redoing it per backend.
-		authzCtx := m.newAuthzContext(&authorizationRequest{Headers: m.requestHeaders})
-		for name, backend := range backends.backends {
-			allowed, _ := m.authorizeRequestWith(backends.backendSelector, &authorizationRequest{
-				Headers: m.requestHeaders,
-				Backend: name,
-			}, authzCtx)
-			if allowed {
-				filtered[name] = backend
-			}
-		}
-		if len(filtered) == 0 {
-			return nil, fmt.Errorf("%w for route %s", errNoMatchingBackendSelector, routeName)
-		}
-		selectedBackends = filtered
+	selectedBackends, err := m.selectAuthorizedBackends(routeName, backends)
+	if err != nil {
+		return nil, err
 	}
 
-	// Extract per-backend forward headers.
-	perBackendHeaders := make(map[filterapi.MCPBackendName]map[string]string)
-	for _, backend := range selectedBackends {
-		if len(backend.ForwardHeaders) > 0 {
-			if h := extractPerBackendForwardHeaders(m.requestHeaders, backend.ForwardHeaders); h != nil {
-				perBackendHeaders[backend.Name] = h
-			}
-		}
-	}
+	perBackendHeaders := m.extractPerBackendHeaders(selectedBackends)
 
 	var (
 		wg      sync.WaitGroup
@@ -219,9 +234,9 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 				m.l.Debug("creating MCP session", slog.String("backend", backend.Name))
 			}
 			backendStartAt := time.Now()
-			initResult, err := m.initializeSession(ctx, routeName, backend, p, startAt)
-			if err != nil {
-				m.l.Error("failed to create MCP session", slog.String("backend", backend.Name), slog.String("error", err.Error()))
+			initResult, initErr := m.initializeSession(ctx, routeName, backend, p, startAt)
+			if initErr != nil {
+				m.l.Error("failed to create MCP session", slog.String("backend", backend.Name), slog.String("error", initErr.Error()))
 				// If one backend fails, don't fail the overall connection. Create a session to the rest of the backends, as they
 				// may provide the needed methods.
 				// TODO: should we record a metric for this?
@@ -235,9 +250,10 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 				span.RecordRouteToBackend(backend.Name, string(initResult.sessionID), true)
 			}
 			entries[entryIndex] = compositeSessionEntry{
-				sessionID:    initResult.sessionID,
-				backendName:  backend.Name,
-				capabilities: initResult.result.Capabilities,
+				sessionID:       initResult.sessionID,
+				backendName:     backend.Name,
+				capabilities:    initResult.result.Capabilities,
+				protocolVersion: initResult.result.ProtocolVersion,
 			}
 		})
 	}
@@ -308,18 +324,143 @@ func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, las
 	var perBackendHeaders map[filterapi.MCPBackendName]map[string]string
 	if routeConfig := m.routes[route]; routeConfig != nil {
 		extraHeaders = extractForwardHeaders(m.requestHeaders, routeConfig.forwardHeaders)
-		// Extract per-backend forward headers.
-		perBackendHeaders = make(map[filterapi.MCPBackendName]map[string]string)
-		for _, backend := range routeConfig.backends {
-			if len(backend.ForwardHeaders) > 0 {
-				if h := extractPerBackendForwardHeaders(m.requestHeaders, backend.ForwardHeaders); h != nil {
-					perBackendHeaders[backend.Name] = h
-				}
-			}
-		}
+		perBackendHeaders = m.extractPerBackendHeaders(routeConfig.backends)
 	}
 
 	return &session{id: id, route: route, reqCtx: m, perBackendSessions: perBackendSessionIDs, extraHeaders: extraHeaders, perBackendExtraHeaders: perBackendHeaders}, nil
+}
+
+// backendReportedVersions is one backend's advertised protocol version(s).
+// Legacy initialize contributes a single version; modern server/discover may
+// contribute a SupportedVersions list. Name is used only in warning logs.
+type backendReportedVersions struct {
+	name     string
+	versions []string
+}
+
+// mergedProtocolVersion negotiates the single MCP protocol version the gateway
+// advertises to a client, given what each backend supports and (optionally) the
+// version the client asked for. It is shared by the stateful legacy initialize
+// path (handleInitializeRequest) and the stateless modern server/discover path
+// (mergeDiscoverResults) so both negotiate identically.
+//
+// The negotiated version is:
+//
+//	max(protocolVersion20250618, min(clientVersion, min(perBackendMax)))
+//
+// where perBackendMax is the highest version each backend advertises, and the
+// min against clientVersion is skipped when clientVersion is empty.
+// The floor is applied last so a client (or backend) below 2025-06-18 is
+// lifted to the gateway-tested minimum rather than pulling the result down.
+//
+// Rationale for each clamp:
+//   - min across backends: the gateway aggregates several backends behind one
+//     endpoint, so it can only honestly guarantee features every backend
+//     supports. Advertising a newer version than the weakest backend would let a
+//     client rely on capabilities that backend cannot deliver.
+//   - min with client: prefer not to advertise newer than the client asked for;
+//     the client keys its own behavior off the negotiated version.
+//   - max(floor): 2025-06-18 is the version the gateway itself was built and
+//     tested against. Applied last so pre-floor clients/backends are lifted
+//     rather than dragging the advertised version below what the gateway has
+//     ever spoken. A pre-floor client SHOULD disconnect per the MCP spec if it
+//     cannot support the returned version; a pre-floor backend may receive
+//     requests it cannot parse — both cases are logged as warnings.
+//
+// NOTE: MCP protocol versions are NOT guaranteed to be backward compatible
+// across the transport boundary (e.g. 2024-11-05 used HTTP+SSE while 2025-03-26+
+// use Streamable HTTP). Versions are ISO date strings (YYYY-MM-DD), so
+// lexicographic comparison yields chronological ordering. Negotiating the
+// minimum is a best-effort "honest floor" rather than a correctness guarantee;
+// mismatches across a breaking boundary are surfaced via the warnings below.
+func mergedProtocolVersion(l *slog.Logger, clientVersion string, backends []backendReportedVersions) string {
+	const floor = protocolVersion20250618
+
+	// Compute the minimum, across backends, of each backend's best (highest)
+	// supported version. Backends that reported nothing are ignored: every
+	// spec-compliant server MUST return a protocolVersion in its initialize
+	// response, so an empty entry means we failed to learn it, not that the
+	// backend supports "no version".
+	var backendMin string
+	var downgradedBackends []string // backends advertising newer than the merged min.
+	var flooredBackends []string    // backends whose best version is below the floor.
+	type namedMax struct {
+		name string
+		max  string
+	}
+	backendMaxes := make([]namedMax, 0, len(backends))
+	for _, b := range backends {
+		var backendMax string
+		for _, v := range b.versions {
+			if v == "" {
+				continue
+			}
+			if v > backendMax {
+				backendMax = v
+			}
+		}
+		if backendMax == "" {
+			continue
+		}
+		name := b.name
+		if name == "" {
+			name = fmt.Sprintf("backend[%d]", len(backendMaxes))
+		}
+		backendMaxes = append(backendMaxes, namedMax{name: name, max: backendMax})
+		if backendMin == "" || backendMax < backendMin {
+			backendMin = backendMax
+		}
+	}
+
+	// If we learned nothing from any backend, fall back to the floor.
+	if backendMin == "" {
+		return floor
+	}
+
+	// candidate = min(clientVersion, backendMin). Empty clientVersion means no constraint.
+	merged := backendMin
+	if clientVersion != "" && clientVersion < merged {
+		merged = clientVersion
+	}
+
+	// Apply the tested-version floor last so pre-floor clients/backends cannot
+	// pull the advertised version below what the gateway has been tested on.
+	if merged < floor {
+		merged = floor
+	}
+
+	// Classify backends for warnings.
+	for _, bm := range backendMaxes {
+		if bm.max > merged {
+			downgradedBackends = append(downgradedBackends, fmt.Sprintf("%s(%s)", bm.name, bm.max))
+		}
+		if bm.max < floor {
+			flooredBackends = append(flooredBackends, fmt.Sprintf("%s(%s)", bm.name, bm.max))
+		}
+	}
+
+	if l != nil && len(downgradedBackends) > 0 {
+		l.Warn("MCP protocol version downgraded below some backends: clients may attempt unsupported features",
+			slog.String("merged_version", merged),
+			slog.String("downgraded_backends", strings.Join(downgradedBackends, ", ")),
+			slog.String("note", "MCP versions are not backward compatible across the 2024-11-05 vs 2025-03-26+ transport boundary"),
+		)
+	}
+	if l != nil && (len(flooredBackends) > 0 || (clientVersion != "" && clientVersion < floor)) {
+		attrs := []any{
+			slog.String("merged_version", merged),
+			slog.String("floor", floor),
+		}
+		if clientVersion != "" && clientVersion < floor {
+			attrs = append(attrs, slog.String("client_requested", clientVersion))
+		}
+		if len(flooredBackends) > 0 {
+			attrs = append(attrs, slog.String("floored_backends", strings.Join(flooredBackends, ", ")))
+		}
+		l.Warn("MCP protocol version below floor: lifting to gateway-tested minimum; affected backends may receive unparsable requests", attrs...)
+	}
+
+	return merged
 }
 
 type initializeResult struct {

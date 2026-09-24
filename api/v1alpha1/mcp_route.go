@@ -345,6 +345,7 @@ type MCPRouteOAuth struct {
 	//
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=32
+	// +optional
 	Audiences []string `json:"audiences"`
 
 	// JWKS defines how a JSON Web Key Sets (JWKS) can be obtained to verify the access tokens presented by the clients.

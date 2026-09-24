@@ -755,16 +755,23 @@ func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema fil
 		featureCheckModel = modelNameOverride
 	}
 	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil && outputConfigAvailable(apiSchema, featureCheckModel) {
-		// Convert OpenAI JSON schema to Anthropic OutputConfig format
+		// Validate that the OpenAI JSON schema is an object while retaining its
+		// original bytes. Anthropic's SDK sorts map keys when marshaling, which
+		// would otherwise change the property order seen by Claude.
+		rawSchema := openAIReq.ResponseFormat.OfJSONSchema.JSONSchema.Schema
 		var schemaMap map[string]any
-		if err = json.Unmarshal(openAIReq.ResponseFormat.OfJSONSchema.JSONSchema.Schema, &schemaMap); err != nil {
+		if err = json.Unmarshal(rawSchema, &schemaMap); err != nil {
 			return nil, fmt.Errorf("failed to parse JSON schema: %w", err)
 		}
+		format := anthropic.JSONOutputFormatParam{
+			Type:   constant.JSONSchema("json_schema"),
+			Schema: schemaMap,
+		}
+		// Override only the serialized schema with the validated raw JSON. Keeping
+		// Schema populated above preserves the typed representation for callers.
+		format.SetExtraFields(map[string]any{"schema": rawSchema})
 		params.OutputConfig = anthropic.OutputConfigParam{
-			Format: anthropic.JSONOutputFormatParam{
-				Type:   constant.JSONSchema("json_schema"),
-				Schema: schemaMap,
-			},
+			Format: format,
 		}
 	}
 
@@ -991,8 +998,8 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 				CompletionTokens: int(outputTokens),
 				TotalTokens:      int(totalTokens),
 				PromptTokensDetails: &openai.PromptTokensDetails{
-					CachedTokens:        int(cachedTokens),
-					CacheCreationTokens: int(cacheCreationTokens),
+					CachedTokens:     int(cachedTokens),
+					CacheWriteTokens: int(cacheCreationTokens),
 				},
 				CompletionTokensDetails: &openai.CompletionTokensDetails{
 					ReasoningTokens: int(reasoningTokens),
@@ -1199,8 +1206,15 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		}
 		switch event.Delta.Type {
 		case string(constant.ValueOf[constant.TextDelta]()), string(constant.ValueOf[constant.ThinkingDelta]()):
-			// Treat thinking_delta just like a text_delta.
-			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &event.Delta.Text}
+			// Treat thinking_delta just like a text_delta, but read the field
+			// that belongs to the variant: RawContentBlockDeltaUnion.Text is
+			// only populated for text_delta, and .Thinking only for
+			// thinking_delta.
+			text := event.Delta.Text
+			if event.Delta.Type == string(constant.ValueOf[constant.ThinkingDelta]()) {
+				text = event.Delta.Thinking
+			}
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &text}
 			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
 		case string(constant.ValueOf[constant.InputJSONDelta]()):
 			tool, ok := p.activeToolCalls[p.toolIndex]
@@ -1318,8 +1332,8 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 		PromptTokens:     int(inputTokens),
 		TotalTokens:      int(totalTokens),
 		PromptTokensDetails: &openai.PromptTokensDetails{
-			CachedTokens:        int(cachedTokens),
-			CacheCreationTokens: int(cacheCreationTokens),
+			CachedTokens:     int(cachedTokens),
+			CacheWriteTokens: int(cacheCreationTokens),
 		},
 		CompletionTokensDetails: &openai.CompletionTokensDetails{
 			ReasoningTokens: int(reasoningTokens),

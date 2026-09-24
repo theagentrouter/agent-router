@@ -9,6 +9,7 @@ import ProvidersStrip from '@site/src/components/home/ProvidersStrip';
 import Community from '@site/src/components/home/Community';
 import LatestBlogs from '@site/src/components/LatestBlogs';
 import Adopters from '@site/src/components/Adopters';
+import Solutions from '@site/src/components/Solutions';
 
 /**
  * Homepage — "Warm Minimal + Pop" (see design/mockups/b2-warm-minimal-pop.html).
@@ -26,6 +27,8 @@ export default function Home(): React.ReactElement {
         <HowItFits />
         <Capabilities />
         <Quickstart />
+        {/* commercial packagings of the project, kept apart from adopters */}
+        <Solutions />
         <LatestBlogs />
         <Community />
       </main>
