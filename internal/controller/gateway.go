@@ -175,6 +175,8 @@ func schemaToFilterAPI(schema aigv1b1.VersionedAPISchema) filterapi.VersionedAPI
 		ret.Prefix = cmp.Or(ptr.Deref(schema.Prefix, ""), "v1")
 	case aigv1b1.APISchemaAWSOpenAI:
 		ret.Prefix = cmp.Or(ptr.Deref(schema.Prefix, ""), "openai/v1")
+	case aigv1b1.APISchemaTypeSafe:
+		ret.Version = cmp.Or(ptr.Deref(schema.Version, ""), "v1")
 	default:
 		ret.Version = ptr.Deref(schema.Version, "")
 	}

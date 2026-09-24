@@ -14,5 +14,13 @@
     "logoUrl": "/img/solutions/tetrate.svg",
     "url": "https://tetrate.io/agent-router-product",
     "description": "Agent Router in your own cloud, on-prem, or edge, with cross-team cost attribution, admin controls, runtime guardrails, enterprise SSO, and multi-region deployment."
+  },
+  {
+    "name": "Nutanix Agent Gateway",
+    "vendor": "Nutanix",
+    "deployment": "Self-managed",
+    "logoUrl": "/img/solutions/nutanix-agent-gateway.svg",
+    "url": "https://nutanix.storylane.io/share/nai-gateway-guided",
+    "description": "Nutanix Agent Gateway is a self hosted enterprise grade product that can run on any cloud or on-prem to address agent governance and cost control.It integrates seemelessly with the Nutanix Private Inference product to operationalize open weight models for a sovereign and cost efficient solution"
   }
 ]

@@ -17,6 +17,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 )
 
 type (
@@ -41,6 +42,8 @@ type (
 		TranslationTracer() TranslationTracer
 		// RerankTracer creates spans for rerank requests.
 		RerankTracer() RerankTracer
+		// SystemOneTracer creates spans for TypeSafe System One requests.
+		SystemOneTracer() SystemOneTracer
 		// MessageTracer creates spans for Anthropic messages requests.
 		MessageTracer() MessageTracer
 		// TokenizeTracer creates spans for tokenize requests.
@@ -91,6 +94,8 @@ type (
 	TranslationTracer = RequestTracer[openai.TranslationRequest, openai.TranslationResponse, struct{}]
 	// RerankTracer creates spans for rerank requests.
 	RerankTracer = RequestTracer[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
+	// SystemOneTracer creates spans for TypeSafe System One requests.
+	SystemOneTracer = RequestTracer[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
 	// MessageTracer creates spans for Anthropic messages requests.
 	MessageTracer = RequestTracer[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeTracer creates spans for tokenize requests.
@@ -132,6 +137,8 @@ type (
 	TranslationSpan = Span[openai.TranslationResponse, struct{}]
 	// RerankSpan represents a rerank request span.
 	RerankSpan = Span[cohere.RerankV2Response, struct{}]
+	// SystemOneSpan represents a TypeSafe System One request span. The chunk type is unused and therefore set to struct{}.
+	SystemOneSpan = Span[typesafe.SystemOneResponse, struct{}]
 	// MessageSpan represents an Anthropic messages request span.
 	MessageSpan = Span[anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeSpan represents a tokenize request span. The chunk type is unused and therefore set to struct{}.
@@ -187,6 +194,8 @@ type (
 	TranslationRecorder = SpanRecorder[openai.TranslationRequest, openai.TranslationResponse, struct{}]
 	// RerankRecorder records attributes to a span according to a semantic convention.
 	RerankRecorder = SpanRecorder[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
+	// SystemOneRecorder records attributes to a span according to a semantic convention.
+	SystemOneRecorder = SpanRecorder[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
 	// MessageRecorder records attributes to a span according to a semantic convention.
 	MessageRecorder = SpanRecorder[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeRecorder records attributes to a span according to a semantic convention.
@@ -283,6 +292,11 @@ func (NoopTracing) RerankTracer() RerankTracer {
 	return NoopRerankTracer{}
 }
 
+// SystemOneTracer implements Tracing.SystemOneTracer.
+func (NoopTracing) SystemOneTracer() SystemOneTracer {
+	return NoopSystemOneTracer{}
+}
+
 func (NoopTracing) MessageTracer() MessageTracer {
 	return NoopMessageTracer{}
 }
@@ -328,6 +342,8 @@ type (
 	NoopTranslationTracer = NoopTracer[openai.TranslationRequest, openai.TranslationResponse, struct{}]
 	// NoopRerankTracer implements RerankTracer.
 	NoopRerankTracer = NoopTracer[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
+	// NoopSystemOneTracer implements SystemOneTracer.
+	NoopSystemOneTracer = NoopTracer[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
 	// NoopMessageTracer implements MessageTracer.
 	NoopMessageTracer = NoopTracer[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// NoopTokenizeTracer implements TokenizeTracer.
