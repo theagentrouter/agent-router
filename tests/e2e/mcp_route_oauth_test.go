@@ -6,10 +6,14 @@
 package e2e
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -207,13 +211,58 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, wwwAuthHeader, "Bearer", "WWW-Authenticate header should contain Bearer scheme")
 
 		// Validate WWW-Authenticate header contains resource_metadata parameter.
-		require.Contains(t, wwwAuthHeader, `resource_metadata="https://foo.bar.com/.well-known/oauth-protected-resource/mcp"`,
+		// The identifier is derived from the request, so it names the port-forward address the
+		// client actually used rather than a statically configured hostname. On the 401 path the
+		// substitution is performed by Envoy, since the JWT filter rejects the request before it
+		// ever reaches the MCP proxy.
+		require.Contains(t, wwwAuthHeader,
+			fmt.Sprintf(`resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`, fwd.Address()),
 			"WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 
 		// Validate WWW-Authenticate header contains scope parameter.
 		require.Contains(t, wwwAuthHeader, `scope="echo sum countdown"`, "WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
+	})
+
+	// Both places the gateway advertises the resource identifier interpolate the request
+	// authority: the 401 challenge via an Envoy substitution format string, and the metadata
+	// document via the MCP proxy. Neither escapes, so both rest on Envoy rejecting an authority
+	// that could break out of the surrounding syntax. Pin that assumption rather than trust it:
+	// if it ever stops holding, a client-supplied Host could inject an auth-param into the
+	// challenge, or a JSON key such as authorization_servers into the document, which would
+	// point clients at an attacker-chosen authorization server.
+	t.Run("a Host that could break out of the advertised syntax is rejected", func(t *testing.T) {
+		// A quote is the character that matters: it terminates the quoted auth-param in
+		// WWW-Authenticate and the JSON string literal in the metadata document.
+		const craftedHost = `evil"injected`
+
+		for _, tc := range []struct {
+			name string
+			path string
+		}{
+			{"metadata document", "/.well-known/oauth-protected-resource/mcp"},
+			{"401 challenge", "/mcp"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				status, raw := rawRequestWithHost(t, fwd.Address(), tc.path, craftedHost)
+				t.Logf("status=%d response=%q", status, raw)
+
+				if status >= 400 && status < 500 {
+					// Expected: Envoy refused the authority before anything interpolated it.
+					return
+				}
+
+				// Anything else means the crafted authority reached the response. Fail with
+				// what came back, since the remedy differs depending on where it surfaced.
+				require.NotContains(t, raw, craftedHost,
+					"gateway accepted an authority containing a quote and reflected it; "+
+						"the advertised resource identifier is injectable and must be escaped "+
+						"rather than interpolated")
+				require.Failf(t, "unexpected status",
+					"expected the gateway to reject Host %q with 4xx, got %d", craftedHost, status)
+			})
+		}
 	})
 
 	t.Run("OAuth protected resource metadata endpoint", func(t *testing.T) {
@@ -248,8 +297,10 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, metadata, "bearer_methods_supported", "Metadata should contain bearer_methods_supported field")
 		require.Contains(t, metadata, "scopes_supported", "Metadata should contain scopes_supported field")
 
-		// Validate field values match expected configuration.
-		require.Equal(t, "https://foo.bar.com/mcp", metadata["resource"], "Resource should match configured value")
+		// Validate field values match expected configuration. resource is omitted from the
+		// MCPRoute, so it must name the address this request was made against.
+		require.Equal(t, fwd.Address()+"/mcp", metadata["resource"],
+			"Resource should be derived from the request")
 
 		authServers, ok := metadata["authorization_servers"].([]interface{})
 		require.True(t, ok, "authorization_servers should be an array")
@@ -382,7 +433,12 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, wwwAuthHeader, "Bearer", "WWW-Authenticate header should contain Bearer scheme")
 
 		// Validate WWW-Authenticate header contains resource_metadata parameter.
-		require.Contains(t, wwwAuthHeader, `resource_metadata="https://foo.bar.com/.well-known/oauth-protected-resource/mcp"`,
+		// The identifier is derived from the request, so it names the port-forward address the
+		// client actually used rather than a statically configured hostname. On the 401 path the
+		// substitution is performed by Envoy, since the JWT filter rejects the request before it
+		// ever reaches the MCP proxy.
+		require.Contains(t, wwwAuthHeader,
+			fmt.Sprintf(`resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`, fwd.Address()),
 			"WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 
@@ -390,4 +446,51 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, wwwAuthHeader, `scope="echo sum countdown"`, "WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 	})
+}
+
+// rawRequestWithHost writes a request over a plain TCP connection so that the Host header is
+// sent exactly as given. net/http validates outbound Host values, which would reject the
+// crafted authority client-side and mask what the gateway does with it — and the gateway's
+// behaviour is the whole point of the check.
+func rawRequestWithHost(t *testing.T, address, path, host string) (int, string) {
+	t.Helper()
+
+	u, err := url.Parse(address)
+	require.NoError(t, err)
+
+	conn, err := net.DialTimeout("tcp", u.Host, 15*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(30*time.Second)))
+
+	_, err = fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host)
+	require.NoError(t, err)
+
+	// Read the whole exchange first so the raw bytes are available for the assertion message
+	// even when the response is not parseable as HTTP.
+	rawBytes, err := io.ReadAll(conn)
+	var timedOut bool
+	if err != nil && !errors.Is(err, io.EOF) {
+		var netErr net.Error
+		timedOut = errors.As(err, &netErr) && netErr.Timeout()
+		// A reset after an error response is normal; report what arrived before it.
+		t.Logf("read error after %d bytes: %v", len(rawBytes), err)
+	}
+	raw := string(rawBytes)
+	if raw == "" {
+		// Distinguish a refusal from a hang. Closing the connection without replying is a
+		// rejection and counts as a pass, but timing out proves nothing either way and must
+		// not be mistaken for one.
+		require.Falsef(t, timedOut,
+			"gateway neither replied nor closed the connection for Host %q; result is inconclusive", host)
+		return http.StatusBadRequest, raw
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(raw)), nil)
+	if err != nil {
+		t.Logf("response was not parseable as HTTP: %v", err)
+		return 0, raw
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, raw
 }

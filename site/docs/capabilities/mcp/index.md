@@ -318,11 +318,61 @@ spec:
       audiences:
         - "https://api.example.com/mcp"
       protectedResourceMetadata:
-        resource: "https://api.example.com/mcp"
         scopesSupported:
           - "profile"
           - "email"
 ```
+
+#### The resource identifier
+
+RFC 9728 requires the gateway to advertise a `resource` identifier — the canonical URL of the
+protected MCP endpoint — both in the Protected Resource Metadata document and in the
+`WWW-Authenticate` challenges it returns. Clients compare that value against the URL they used,
+so it has to match exactly, down to the scheme and port.
+
+By default the gateway derives it per request, from the scheme (the forwarded protocol), the
+authority (host and port) and the path the client actually used. One MCPRoute therefore serves
+the correct identifier on every hostname and port it is reachable on, with nothing to configure
+and nothing to keep in sync when the gateway moves.
+
+Set `protectedResourceMetadata.resource` explicitly only when the externally visible URL cannot
+be recovered from the request — for example behind a CDN or reverse proxy that rewrites the
+authority without setting the forwarded headers. An explicit value always wins:
+
+```yaml
+protectedResourceMetadata:
+  resource: "https://api.example.com/mcp"
+```
+
+Because the identifier is resolved per request, the gateway trusts the `Host` and
+`X-Forwarded-Proto` headers it receives. Envoy overwrites `X-Forwarded-Proto` from the actual
+downstream connection, but it does **not** sanitize `Host` — it forwards the authority the
+client sent. A listener with no `hostname` accepts any authority, so on such a listener the
+advertised identifier reflects whatever the client asked for. Set a `hostname` on the listener,
+or `hostnames` on the MCPRoute, if you need the gateway to only answer for names you have
+declared.
+
+That constrains the host name, not the whole authority. Envoy ignores the port when matching a
+request against a listener but still forwards the `Host` header intact, so a request for
+`api.example.com:31337` reaches a listener declared for `api.example.com` and the port it
+carries ends up in the advertised identifier. A wildcard `hostname` such as `*.example.com`
+likewise admits any subdomain. Pin `protectedResourceMetadata.resource` if the identifier has
+to be exact.
+
+#### Audience validation
+
+`audiences` is matched against the `aud` claim of the incoming token, and it is configured
+statically. A client that follows RFC 8707 sends the advertised `resource` as the `resource`
+parameter when requesting a token, and the authorization server binds `aud` to that value — so
+a derived identifier and a static `audiences` list have to agree.
+
+Concretely: if the gateway is reached at `http://127.0.0.1:1975` the derived identifier is
+`http://127.0.0.1:1975/mcp`, a token minted for it carries that `aud`, and validation against
+`audiences: ["https://api.example.com/mcp"]` fails.
+
+So when `audiences` is set and `resource` is derived, list every address the route is reachable
+on, or pin `resource` instead. This only applies when both conditions hold: an authorization
+server that honours the `resource` parameter, and a non-empty `audiences`.
 
 The OAuth flow follows the MCP specification's authorization code flow with PKCE:
 

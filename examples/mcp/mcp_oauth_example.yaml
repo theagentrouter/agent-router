@@ -32,7 +32,10 @@ spec:
             kind: ConfigMap
             name: jwks-configmap
       protectedResourceMetadata:
-        resource: "https://foo.bar.com/mcp"
+        # resource is optional. When omitted, the gateway derives the resource identifier from
+        # the scheme, host and path each client used to reach this MCPRoute, so the same
+        # configuration works behind any hostname or port. Set it explicitly only if something
+        # in front of the gateway rewrites the externally visible URL without forwarding headers.
         scopesSupported:
           - "echo"
           - "sum"

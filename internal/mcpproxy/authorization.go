@@ -25,9 +25,8 @@ import (
 )
 
 type compiledAuthorization struct {
-	ResourceMetadataURL string
-	Rules               []compiledAuthorizationRule
-	DefaultAction       filterapi.AuthorizationAction
+	Rules         []compiledAuthorizationRule
+	DefaultAction filterapi.AuthorizationAction
 }
 
 type compiledAuthorizationRule struct {
@@ -45,7 +44,7 @@ func (a *compiledAuthorization) same(other *compiledAuthorization) bool {
 	if a == nil || other == nil {
 		return a == other
 	}
-	if a.ResourceMetadataURL != other.ResourceMetadataURL || a.DefaultAction != other.DefaultAction {
+	if a.DefaultAction != other.DefaultAction {
 		return false
 	}
 	return slices.EqualFunc(a.Rules, other.Rules, func(ra, rb compiledAuthorizationRule) bool {
@@ -83,8 +82,7 @@ func compileAuthorization(auth *filterapi.MCPRouteAuthorization) (*compiledAutho
 	}
 
 	compiled := &compiledAuthorization{
-		ResourceMetadataURL: auth.ResourceMetadataURL,
-		DefaultAction:       auth.DefaultAction,
+		DefaultAction: auth.DefaultAction,
 	}
 
 	for _, rule := range auth.Rules {

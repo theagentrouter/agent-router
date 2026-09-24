@@ -703,7 +703,13 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 			// Specify the minimum required scopes in the WWW-Authenticate header.
 			// Reference: https://mcp.mintlify.app/specification/2025-11-25/basic/authorization#runtime-insufficient-scope-errors
 			if len(requiredScopes) > 0 {
-				if challenge := buildInsufficientScopeHeader(requiredScopes, route.authorization.ResourceMetadataURL); challenge != "" {
+				// The resource_metadata URL is derived from this request so that it points at
+				// the host the client actually reached, whatever hostname or port that is.
+				var metadataURL string
+				if route.oauth != nil {
+					metadataURL = resourceMetadataURL(r, route.oauth, externalPath(r))
+				}
+				if challenge := buildInsufficientScopeHeader(requiredScopes, metadataURL); challenge != "" {
 					w.Header().Set("WWW-Authenticate", challenge)
 				}
 			}

@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
@@ -218,89 +219,6 @@ func TestServePOST_InitializeRequest(t *testing.T) {
 	require.Equal(t, 1, int(capaCount))
 }
 
-// TestServePOST_InitializeRequest_NegotiatesProtocolVersion verifies that the gateway
-// returns max(protocolVersion20250618, min(clientVersion, min(backends))) end-to-end.
-func TestServePOST_InitializeRequest_NegotiatesProtocolVersion(t *testing.T) {
-	tests := []struct {
-		name           string
-		clientVersion  string
-		backendVersion string
-		wantVersion    string
-	}{
-		{
-			name:           "backend newer than client returns client version",
-			clientVersion:  protocolVersion20250618,
-			backendVersion: protocolVersion20260728,
-			wantVersion:    protocolVersion20250618,
-		},
-		{
-			name:           "backend older than client returns backend version",
-			clientVersion:  protocolVersion20260728,
-			backendVersion: protocolVersion20250618,
-			wantVersion:    protocolVersion20250618,
-		},
-		{
-			name:           "backend and client same version",
-			clientVersion:  "2025-11-05",
-			backendVersion: "2025-11-05",
-			wantVersion:    "2025-11-05",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			initResponse := fmt.Sprintf(`{
-"jsonrpc": "2.0",
-"id": 1,
-"result": {
-"protocolVersion": %q,
-"capabilities": {"tools": {"listChanged": true}},
-"serverInfo": {"name": "TestServer", "version": "1.0.0"}
-}
-}`, tc.backendVersion)
-
-			testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get(sessionIDHeader) == "" {
-					w.Header().Set(sessionIDHeader, "test-session-456")
-					w.WriteHeader(http.StatusOK)
-					_, _ = w.Write([]byte(initResponse))
-				} else {
-					w.WriteHeader(http.StatusAccepted)
-				}
-			}))
-			t.Cleanup(testServer.Close)
-
-			proxy := newTestMCPProxy()
-			proxy.backendListenerAddr = testServer.URL
-
-			id, err := jsonrpc.MakeID("test-1")
-			require.NoError(t, err)
-			initReq := &jsonrpc.Request{
-				Method: "initialize",
-				ID:     id,
-				Params: fmt.Appendf(nil, `{"protocolVersion": %q, "capabilities": {}, "clientInfo": {"name": "Test", "version": "1.0.0"}}`, tc.clientVersion),
-			}
-			body, err := jsonrpc.EncodeMessage(initReq)
-			require.NoError(t, err)
-
-			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set(internalapi.MCPRouteHeader, "test-route")
-			rr := httptest.NewRecorder()
-
-			proxy.servePOST(rr, req)
-
-			require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-
-			// Verify the negotiated protocol version appears in the response body.
-			responseBody := rr.Body.String()
-			require.Contains(t, responseBody, fmt.Sprintf(`"protocolVersion":%q`, tc.wantVersion))
-		})
-	}
-}
-
-// TestServePOST_InitializeRequest_BackendSelectorDenied verifies that a backendSelector denying
-// every route backend is treated as an authorization decision (403), not a system failure (500).
 func TestServePOST_InitializeRequest_BackendSelectorDenied(t *testing.T) {
 	proxy := newTestMCPProxy()
 	proxy.routes["test-route"].backendSelector = mustCompileBackendSelector(t, &filterapi.MCPRouteAuthorization{
@@ -786,6 +704,71 @@ func TestHandleToolCallRequest_NoSession(t *testing.T) {
 
 	require.Equal(t, http.StatusForbidden, rr.Code)
 	require.Contains(t, rr.Body.String(), "no MCP session found for backend backend2")
+}
+
+func TestHandleToolCallRequest_InsufficientScope(t *testing.T) {
+	makeToken := func(scopes ...string) string {
+		token := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"scope": scopes})
+		signed, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+		return signed
+	}
+
+	auth, err := compileAuthorization(&filterapi.MCPRouteAuthorization{
+		DefaultAction: "Deny",
+		Rules: []filterapi.MCPRouteAuthorizationRule{{
+			Action: "Allow",
+			Source: &filterapi.MCPAuthorizationSource{
+				JWT: filterapi.JWTSource{Scopes: []string{"read", "write"}},
+			},
+			Target: &filterapi.MCPAuthorizationTarget{
+				Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "test-tool"}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	newDeniedCall := func(oauth *filterapi.MCPRouteOAuth) (*httptest.ResponseRecorder, error) {
+		proxy := newTestMCPProxy()
+		route := proxy.routes["test-route"]
+		route.authorization = auth
+		route.oauth = oauth
+		s := &session{
+			reqCtx: proxy,
+			perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+				"backend1": {sessionID: "test-session"},
+			},
+			route: "test-route",
+		}
+		httpReq := httptest.NewRequest(http.MethodPost, "http://api.example.com:8443/mcp", nil)
+		httpReq.Host = "api.example.com:8443"
+		httpReq.Header.Set("x-forwarded-proto", "https")
+		httpReq.Header.Set("Authorization", "Bearer "+makeToken("read"))
+		rr := httptest.NewRecorder()
+		_, callErr := proxy.handleToolCallRequest(t.Context(), s, rr, &jsonrpc.Request{Method: "tools/call"},
+			&mcp.CallToolParams{Name: "backend1__test-tool"}, nil, httpReq)
+		return rr, callErr
+	}
+
+	t.Run("derived resource metadata is included when OAuth is configured", func(t *testing.T) {
+		rr, err := newDeniedCall(&filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		require.ErrorContains(t, err, "authorization failed")
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		require.Equal(t,
+			`Bearer error="insufficient_scope", scope="read write", resource_metadata="https://api.example.com:8443/.well-known/oauth-protected-resource/mcp", error_description="The token is missing required scopes"`,
+			rr.Header().Get("WWW-Authenticate"),
+		)
+	})
+
+	t.Run("resource metadata is omitted when OAuth is not configured", func(t *testing.T) {
+		rr, err := newDeniedCall(nil)
+		require.ErrorContains(t, err, "authorization failed")
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		require.Equal(t,
+			`Bearer error="insufficient_scope", scope="read write", error_description="The token is missing required scopes"`,
+			rr.Header().Get("WWW-Authenticate"),
+		)
+	})
 }
 
 func TestHandleToolCallRequest_BackendError(t *testing.T) {

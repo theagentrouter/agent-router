@@ -56,7 +56,10 @@ spec:
         - claim: name
           header: x-jwt-claim-name
       protectedResourceMetadata:
-        resource: "https://foo.bar.com/mcp"
+        # resource is deliberately omitted: the gateway derives the identifier from the
+        # scheme, authority and path of each request. This test reaches the gateway through a
+        # port-forward on a port picked at run time, so no statically configured value could
+        # ever match. mcp_route_authorization.yaml pins resource to cover the override path.
         resourceName: "example-resource"
         scopesSupported:
           - "echo"
