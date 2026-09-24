@@ -83,6 +83,40 @@ func (c *MCPRouteController) Reconcile(ctx context.Context, req reconcile.Reques
 	return reconcile.Result{}, nil
 }
 
+// gatewayEventHandler returns an event handler for Gateway resources that enqueues
+// reconcile requests for all MCPRoutes that reference the Gateway.
+func (c *MCPRouteController) gatewayEventHandler(ctx context.Context, obj client.Object) []reconcile.Request {
+	gateway, ok := obj.(*gwapiv1.Gateway)
+	if !ok {
+		return nil
+	}
+
+	var routes aigv1b1.MCPRouteList
+	key := fmt.Sprintf("%s.%s", gateway.Name, gateway.Namespace)
+	if err := c.client.List(ctx, &routes, client.MatchingFields{
+		k8sClientIndexMCPRouteToAttachedGateway: key,
+	}); err != nil {
+		// Fall back to listing all routes and filtering by parentRefs if index lookup fails.
+		if listErr := c.client.List(ctx, &routes); listErr != nil {
+			c.logger.Error(listErr, "failed to list MCPRoutes for Gateway event", "gateway", gateway.Name)
+			return nil
+		}
+		routes.Items = filterMCPRoutesForGateway(routes.Items, gateway.Name, gateway.Namespace)
+	}
+
+	var requests []reconcile.Request
+	for i := range routes.Items {
+		route := &routes.Items[i]
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKey{
+				Name:      route.Name,
+				Namespace: route.Namespace,
+			},
+		})
+	}
+	return requests
+}
+
 // syncMCPRoute is the main logic for reconciling the MCPRoute resource.
 // This is decoupled from the Reconcile method to centralize the error handling and status updates.
 func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {

@@ -5208,8 +5208,8 @@ References:
 <ApiField
   name="resource"
   type="string"
-  required="true"
-  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`."
+  required="false"
+  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the controller automatically derives the resource identifier from the<br />hostname configured on the Route or parent Gateway/Listener, combined with the MCPRoute's path."
 /><ApiField
   name="resourceName"
   type="string"

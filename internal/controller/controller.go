@@ -233,6 +233,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	)
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.MCPRoute{}).
 		Owns(&gwapiv1.HTTPRoute{}).
+		Watches(&gwapiv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(mcpRouteC.gatewayEventHandler)).
 		WatchesRawSource(source.Channel(
 			mcpRouteEventChan,
 			&handler.EnqueueRequestForObject{},

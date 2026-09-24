@@ -3221,7 +3221,7 @@ func Test_mcpConfig_ToolSelectorExclude(t *testing.T) {
 		},
 	}
 
-	mc, effective := mcpConfig(mcpRoutes)
+	mc, effective := mcpConfig(t.Context(), nil, mcpRoutes)
 	require.True(t, effective)
 	require.NotNil(t, mc)
 	require.Len(t, mc.Routes, 1)
@@ -3252,7 +3252,7 @@ func Test_mcpConfig_PromptSelector(t *testing.T) {
 		},
 	}
 
-	mc, effective := mcpConfig(mcpRoutes)
+	mc, effective := mcpConfig(t.Context(), nil, mcpRoutes)
 	require.True(t, effective)
 	require.NotNil(t, mc)
 	require.Len(t, mc.Routes, 1)
@@ -3290,7 +3290,7 @@ func Test_mcpConfig_ForwardHeaders(t *testing.T) {
 		},
 	}
 
-	mc, effective := mcpConfig(mcpRoutes)
+	mc, effective := mcpConfig(t.Context(), nil, mcpRoutes)
 	require.True(t, effective)
 	require.NotNil(t, mc)
 	require.Len(t, mc.Routes, 1)
@@ -3320,7 +3320,7 @@ func Test_mcpConfig_BackendSelector(t *testing.T) {
 			},
 		}
 
-		mc, effective := mcpConfig(mcpRoutes)
+		mc, effective := mcpConfig(t.Context(), nil, mcpRoutes)
 		require.True(t, effective)
 		require.Nil(t, mc.Routes[0].BackendSelector)
 	})
@@ -3343,7 +3343,7 @@ func Test_mcpConfig_BackendSelector(t *testing.T) {
 			},
 		}
 
-		mc, effective := mcpConfig(mcpRoutes)
+		mc, effective := mcpConfig(t.Context(), nil, mcpRoutes)
 		require.True(t, effective)
 		sel := mc.Routes[0].BackendSelector
 		require.NotNil(t, sel)
@@ -3366,7 +3366,7 @@ func Test_mcpConfig_BackendSelector(t *testing.T) {
 			},
 		}
 
-		mc, _ := mcpConfig(mcpRoutes)
+		mc, _ := mcpConfig(t.Context(), nil, mcpRoutes)
 		require.Equal(t, filterapi.AuthorizationActionDeny, mc.Routes[0].BackendSelector.DefaultAction)
 		require.Empty(t, mc.Routes[0].BackendSelector.Rules)
 	})
@@ -3388,7 +3388,7 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 	}
 
 	t.Run("forwards the api-key client-id header to backends", func(t *testing.T) {
-		mc, effective := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+		mc, effective := mcpConfig(t.Context(), nil, newRoute(&aigv1b1.MCPRouteSecurityPolicy{
 			APIKeyAuth: &egv1a1.APIKeyAuth{ForwardClientIDHeader: ptr.To("x-mcp-client-id")},
 		}))
 		require.True(t, effective)
@@ -3399,7 +3399,7 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 	})
 
 	t.Run("no client-id header configured", func(t *testing.T) {
-		mc, effective := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+		mc, effective := mcpConfig(t.Context(), nil, newRoute(&aigv1b1.MCPRouteSecurityPolicy{
 			APIKeyAuth: &egv1a1.APIKeyAuth{},
 		}))
 		require.True(t, effective)
@@ -3408,7 +3408,7 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 	})
 
 	t.Run("empty client-id header is ignored", func(t *testing.T) {
-		mc, effective := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+		mc, effective := mcpConfig(t.Context(), nil, newRoute(&aigv1b1.MCPRouteSecurityPolicy{
 			APIKeyAuth: &egv1a1.APIKeyAuth{ForwardClientIDHeader: ptr.To("")},
 		}))
 		require.True(t, effective)
@@ -3417,14 +3417,14 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 	})
 
 	t.Run("no security policy", func(t *testing.T) {
-		mc, effective := mcpConfig(newRoute(nil))
+		mc, effective := mcpConfig(t.Context(), nil, newRoute(nil))
 		require.True(t, effective)
 		require.Len(t, mc.Routes, 1)
 		require.Empty(t, mc.Routes[0].ForwardHeaders)
 	})
 
 	t.Run("oauth and api-key both configured with the same header are not duplicated", func(t *testing.T) {
-		mc, effective := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+		mc, effective := mcpConfig(t.Context(), nil, newRoute(&aigv1b1.MCPRouteSecurityPolicy{
 			OAuth: &aigv1b1.MCPRouteOAuth{
 				ClaimToHeaders: []egv1a1.ClaimToHeader{
 					{Claim: "sub", Header: "x-mcp-client-id"},
@@ -3435,6 +3435,92 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 		require.True(t, effective)
 		require.Len(t, mc.Routes, 1)
 		require.Equal(t, []string{"x-mcp-client-id"}, mc.Routes[0].ForwardHeaders)
+	})
+}
+
+func Test_mcpConfig_OAuthResourceMetadataURL(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	ctx := t.Context()
+
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-gw", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			Listeners: []gwapiv1.Listener{
+				{
+					Name:     "https",
+					Protocol: gwapiv1.HTTPSProtocolType,
+					Hostname: (*gwapiv1.Hostname)(ptr.To("gw.example.com")),
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(ctx, gw))
+
+	t.Run("explicit resource", func(t *testing.T) {
+		route := aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					Authorization: &aigv1b1.MCPRouteAuthorization{},
+					OAuth: &aigv1b1.MCPRouteOAuth{
+						ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+							Resource: "https://api.example.com/mcp",
+						},
+					},
+				},
+			},
+		}
+		mc, effective := mcpConfig(ctx, fakeClient, []aigv1b1.MCPRoute{route})
+		require.True(t, effective)
+		require.Equal(t, "https://api.example.com/.well-known/oauth-protected-resource/mcp", mc.Routes[0].Authorization.ResourceMetadataURL)
+	})
+
+	t.Run("derived from route hostname", func(t *testing.T) {
+		route := aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r2", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"route.example.com"},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					Authorization: &aigv1b1.MCPRouteAuthorization{},
+					OAuth:         &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		mc, effective := mcpConfig(ctx, fakeClient, []aigv1b1.MCPRoute{route})
+		require.True(t, effective)
+		require.Equal(t, "https://route.example.com/.well-known/oauth-protected-resource/mcp", mc.Routes[0].Authorization.ResourceMetadataURL)
+	})
+
+	t.Run("derived from parent gateway", func(t *testing.T) {
+		route := aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r3", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{{Name: "test-gw"}},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					Authorization: &aigv1b1.MCPRouteAuthorization{},
+					OAuth:         &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		mc, effective := mcpConfig(ctx, fakeClient, []aigv1b1.MCPRoute{route})
+		require.True(t, effective)
+		require.Equal(t, "https://gw.example.com/.well-known/oauth-protected-resource/mcp", mc.Routes[0].Authorization.ResourceMetadataURL)
+	})
+
+	t.Run("ambiguous hostname leaves URL empty", func(t *testing.T) {
+		route := aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r4", Namespace: "default"},
+			Spec: aigv1b1.MCPRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"a.com", "b.com"},
+				SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+					Authorization: &aigv1b1.MCPRouteAuthorization{},
+					OAuth:         &aigv1b1.MCPRouteOAuth{},
+				},
+			},
+		}
+		mc, effective := mcpConfig(ctx, fakeClient, []aigv1b1.MCPRoute{route})
+		require.True(t, effective)
+		require.Empty(t, mc.Routes[0].Authorization.ResourceMetadataURL)
 	})
 }
 

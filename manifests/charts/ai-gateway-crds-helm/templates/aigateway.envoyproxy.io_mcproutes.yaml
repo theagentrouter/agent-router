@@ -12323,8 +12323,13 @@ spec:
                               Resource is the identifier of the protected resource.
                               This should match the MCPRoute's URL. For example, if the MCPRoute's URL is
                               "https://api.example.com/mcp", the Resource should be "https://api.example.com/mcp".
+                              When omitted, the controller automatically derives the resource identifier from the
+                              hostname configured on the Route or parent Gateway/Listener, combined with the MCPRoute's path.
                             format: uri
                             type: string
+                            x-kubernetes-validations:
+                            - message: resource must start with http:// or https://
+                              rule: self.startsWith('https://') || self.startsWith('http://')
                           resourceDocumentation:
                             description: ResourceDocumentation is a URL that provides
                               human-readable documentation for the resource.
@@ -12362,8 +12367,6 @@ spec:
                               type: string
                             maxItems: 32
                             type: array
-                        required:
-                        - resource
                         type: object
                     required:
                     - issuer
