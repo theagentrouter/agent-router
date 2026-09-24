@@ -66,7 +66,7 @@ func (r *ResponsesInputTokensRecorder) RecordResponse(span trace.Span, resp *ope
 
 // RecordResponseOnError implements the same method as defined in tracingapi.ResponsesInputTokensRecorder.
 func (r *ResponsesInputTokensRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
 
 // RecordResponseChunks implements SpanRecorder.RecordResponseChunks as a no-op (responses/input_tokens doesn't stream).

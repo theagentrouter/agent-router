@@ -60,7 +60,7 @@ func (r *TokenizeRecorder) RecordRequest(span trace.Span, tokenizeReq *tokenize.
 
 // RecordResponseOnError implements the same method as defined in tracingapi.TokenizeRecorder.
 func (r *TokenizeRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
 
 // RecordResponse implements the same method as defined in tracingapi.TokenizeRecorder.
