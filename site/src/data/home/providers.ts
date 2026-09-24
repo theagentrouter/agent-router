@@ -2,6 +2,7 @@
  * Supported LLM providers, shown as the homepage logo strip.
  * Keep alphabetical. status 'in-progress' renders a "coming soon" hint.
  */
+
 export type Provider = {
   name: string;
   logoUrl: string;
