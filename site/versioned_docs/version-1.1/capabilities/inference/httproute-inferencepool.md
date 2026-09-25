@@ -31,7 +31,7 @@ kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extens
 After installing InferencePool CRD, enable InferencePool support in Envoy Gateway, restart the deployment, and wait for it to be ready:
 
 <CodeBlock language="shell">
-{`kubectl apply -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/inference-pool/config.yaml
+{`kubectl apply -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/inference-pool/config.yaml
 
 kubectl rollout restart -n envoy-gateway-system deployment/envoy-gateway
 

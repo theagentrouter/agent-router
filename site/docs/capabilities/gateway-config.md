@@ -108,6 +108,26 @@ spec:
 
 If not specified, Kubernetes default resource allocations are used.
 
+### Metadata Forwarding Namespaces
+
+The `spec.extProc.metadataForwardingNamespaces` field lists the untyped dynamic metadata namespaces Envoy forwards to the external processor on this Gateway's AI traffic. It is required for [per-request credential override from dynamic metadata](./security/upstream-auth.mdx#from-dynamic-metadata-recommended): a `BackendSecurityPolicy` using `credentialOverride.fromDynamicMetadata` only receives its metadata when the namespace it reads from is declared here.
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GatewayConfig
+metadata:
+  name: my-gateway-config
+  namespace: default
+spec:
+  extProc:
+    metadataForwardingNamespaces:
+      - envoy.filters.http.ext_authz
+```
+
+These namespaces travel into the processor. The processor writes `io.envoy.ai_gateway` back to Envoy, which receives that namespace for token-based rate limiting and access logs.
+
+The list belongs to the Gateway that declares it and governs that Gateway's AI traffic, so attaching a route to a Gateway cannot widen what a different Gateway forwards. Under Envoy Gateway's `mergeGateways`, every Gateway in the class shares one Envoy, so a namespace any one of them declares is forwarded for all of their AI traffic. The per-Gateway isolation described above does not hold in that setup.
+
 ### Forward Proxy (Egress)
 
 The `spec.forwardProxy` field routes all upstream AI/LLM traffic from Gateways referencing this `GatewayConfig` through an HTTP CONNECT forward proxy. This is intended for data planes deployed in locked-down networks that have no direct outbound access to providers and require all egress to traverse a proxy.
@@ -270,4 +290,4 @@ Possible condition types:
 
 - [Tracing](./observability/tracing.md) - Configure distributed tracing for AI Gateway
 - [Metrics](./observability/metrics.md) - Configure metrics collection
-- [Examples](https://github.com/envoyproxy/ai-gateway/tree/main/examples/gateway-config) - Example YAML files
+- [Examples](https://github.com/theagentrouter/agent-router/tree/main/examples/gateway-config) - Example YAML files

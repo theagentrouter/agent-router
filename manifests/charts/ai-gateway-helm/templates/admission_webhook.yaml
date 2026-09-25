@@ -3,13 +3,12 @@
 # The full text of the Apache license is available in the LICENSE file at
 # the root of the repo.
 
+{{- if .Values.controller.mutatingWebhook.certManager.enable }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
-{{- if .Values.controller.mutatingWebhook.certManager.enable }}
   annotations:
     cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ .Values.controller.mutatingWebhook.certManager.certificateName}}
-{{- end }}
   name: envoy-ai-gateway-gateway-pod-mutator.{{ .Release.Namespace }}
 webhooks:
   - name:  {{ include "ai-gateway-helm.controller.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
@@ -37,7 +36,6 @@ webhooks:
     timeoutSeconds: 10
     failurePolicy: Fail
 ---
-{{- if .Values.controller.mutatingWebhook.certManager.enable }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -59,12 +57,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   selfSigned: {}
----
 {{- else }}
 {{- $caCrt := "" }}
 {{- $tlsCrt := "" }}
 {{- $tlsKey := "" }}
-{{/* Check fi the secret exists to avoid regenerating the certificate on upgrades */}}
+{{/* Reuse existing secret on upgrades to avoid rotating the webhook keypair. */}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace .Values.controller.mutatingWebhook.tlsCertSecretName }}
 {{- if $existing }}
   {{- $caCrt = index $existing.data .Values.controller.mutatingWebhook.caBundleName }}
@@ -94,4 +91,34 @@ data:
   {{ .Values.controller.mutatingWebhook.tlsCertName }}: {{ $tlsCrt }}
   {{ .Values.controller.mutatingWebhook.tlsKeyName }}: {{ $tlsKey }}
 ---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: envoy-ai-gateway-gateway-pod-mutator.{{ .Release.Namespace }}
+webhooks:
+  - name:  {{ include "ai-gateway-helm.controller.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+    clientConfig:
+      caBundle: {{ $caCrt }}
+      service:
+        name:  {{ include "ai-gateway-helm.controller.fullname" . }}
+        namespace: {{ .Release.Namespace }}
+        port: {{ .Values.controller.mutatingWebhook.port }}
+        path: /mutate
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+    {{- if .Values.controller.mutatingWebhook.objectSelector }}
+    objectSelector:
+      {{- toYaml .Values.controller.mutatingWebhook.objectSelector | nindent 6 }}
+    {{- end}}
+    {{- if .Values.controller.mutatingWebhook.namespaceSelector }}
+    namespaceSelector:
+      {{- toYaml .Values.controller.mutatingWebhook.namespaceSelector | nindent 6 }}
+    {{- end}}
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    timeoutSeconds: 10
+    failurePolicy: Fail
 {{- end }}

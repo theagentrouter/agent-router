@@ -1,0 +1,52 @@
+.section {
+  background: var(--ar-paper);
+  padding: 40px 0 104px;
+}
+:global([data-theme='dark']) .section { background: var(--ar-ink-800); }
+
+.rel {
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--ar-cream);
+  border-radius: var(--ar-radius-xl);
+  padding: 12px;
+  box-shadow: var(--ar-shadow-sm);
+}
+:global([data-theme='dark']) .rel { background: var(--ar-ink-900); }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 26px 30px;
+  background: var(--ar-paper);
+  border-radius: var(--ar-radius-lg);
+}
+:global([data-theme='dark']) .row { background: var(--ar-ink-800); }
+.row + .row { margin-top: 12px; }
+
+.planeImage {
+  height: 48px;
+  width: 60px;
+  object-fit: contain;
+  flex: none;
+}
+
+.planeName {
+  font: 700 var(--ar-text-lg) / 1.2 var(--ar-font-display);
+}
+
+.planeRole {
+  font-size: var(--ar-text-sm);
+  color: var(--ar-fg-muted);
+  margin-top: 4px;
+}
+
+.refrain {
+  text-align: center;
+  padding: 18px 10px 8px;
+  font: 600 var(--ar-text-base) / 1.4 var(--ar-font-ui);
+  color: var(--ar-on-cream-verdigris);
+}
+:global([data-theme='dark']) .refrain { color: var(--ar-verdigris-400); }
+.refrain b { color: var(--ar-fg); }

@@ -32,9 +32,11 @@ endpointConfig:
   #   openai: ""           # results in /v1/...
   #   cohere: "/cohere"   # results in /cohere/v2/...
   #   anthropic: "/anthropic" # results in /anthropic/v1/...
+  #   typesafe: "/typesafe"   # results in /typesafe/v1/...
   openai: ""
   cohere: "/cohere"
   anthropic: "/anthropic"
+  typesafe: "/typesafe"
 
 extProc:
   image:
@@ -147,6 +149,8 @@ controller:
     tag: ""
   imagePullPolicy: IfNotPresent
   replicaCount: 1
+  # Optional. Empty omits the field from the pod spec.
+  priorityClassName: ""
   imagePullSecrets: []
   podAnnotations: {}
   podLabels: {}

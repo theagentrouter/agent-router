@@ -367,6 +367,31 @@ spec:
                     maxItems: 32
                     type: array
                 type: object
+              backendTrafficPolicy:
+                description: |-
+                  BackendTrafficPolicy configures the auto-generated Envoy Gateway BackendTrafficPolicy
+                  resources for this MCPRoute, for example the OAuth protected resource metadata policy
+                  created when SecurityPolicy.OAuth is configured.
+                properties:
+                  mergeType:
+                    description: |-
+                      MergeType determines how the auto-generated BackendTrafficPolicy (for example, the
+                      OAuth protected resource metadata policy) is merged with other BackendTrafficPolicy
+                      configurations targeting the same route or a parent Gateway/Listener.
+
+                      When set, the auto-generated BackendTrafficPolicy will merge with the closest parent
+                      BackendTrafficPolicy in the route's attachment hierarchy instead of overriding it
+                      entirely, per Envoy Gateway's merge semantics.
+
+                      If unset, no merging occurs, and the auto-generated BackendTrafficPolicy fully
+                      overrides any other BackendTrafficPolicy targeting the same route.
+
+                      See: https://gateway.envoyproxy.io/docs/tasks/traffic/backend-traffic-policy/
+                    type: string
+                    x-kubernetes-validations:
+                    - message: Replace is not a valid MergeType for BackendTrafficPolicy
+                      rule: self != 'Replace'
+                type: object
               headers:
                 description: |-
                   Headers are HTTP headers that must match for this route to be selected.
@@ -4298,6 +4323,25 @@ spec:
                     - message: only one of grpc or http can be specified
                       rule: (has(self.grpc) && !has(self.http)) || (!has(self.grpc)
                         && has(self.http))
+                  mergeType:
+                    description: |-
+                      MergeType determines how the auto-generated SecurityPolicy for this MCPRoute (which
+                      enforces OAuth/JWT, API key, or external authorization) is merged with other
+                      SecurityPolicy configurations targeting the same route or a parent Gateway/Listener.
+
+                      When set, the auto-generated SecurityPolicy will merge with the closest parent
+                      SecurityPolicy in the route's attachment hierarchy (for example, one targeting a
+                      Gateway, Gateway listener, ListenerSet, or ListenerSet listener) instead of
+                      overriding it entirely, per Envoy Gateway's merge semantics.
+
+                      If unset, no merging occurs, and the auto-generated SecurityPolicy fully overrides
+                      any other SecurityPolicy targeting the same route.
+
+                      See: https://gateway.envoyproxy.io/docs/tasks/security/apikey-authn/
+                    type: string
+                    x-kubernetes-validations:
+                    - message: Replace is not a valid MergeType for SecurityPolicy
+                      rule: self != 'Replace'
                   oauth:
                     description: OAuth defines the configuration for the MCP spec
                       compatible OAuth authentication.
@@ -4311,6 +4355,22 @@ spec:
                           type: string
                         maxItems: 32
                         type: array
+                      authorizationServerMetadataUrl:
+                        description: |-
+                          AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization
+                          Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known
+                          URIs derived from Issuer.
+
+                          Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer
+                          of "https://example.com/api/idp/authn" whose document is served only at
+                          "https://example.com/api/idp/v4/authn/.well-known/openid-configuration".
+
+                          Issuer is unaffected by this field. It continues to identify the authorization server in the
+                          protected resource metadata the gateway publishes, and to derive the well-known URIs when this
+                          field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here.
+                        format: uri
+                        maxLength: 1024
+                        type: string
                       claimToHeaders:
                         description: |-
                           ClaimToHeaders specifies JWT claims to extract and forward as HTTP headers to backend MCP servers.
@@ -6288,6 +6348,66 @@ spec:
                       maximum: 65535
                       minimum: 1
                       type: integer
+                    prefixMode:
+                      description: |-
+                        PrefixMode controls how tool and prompt names from this backend are prefixed.
+                        Takes precedence over the route-level PrefixMode when set.
+                      enum:
+                      - Always
+                      - Never
+                      type: string
+                    promptSelector:
+                      description: |-
+                        PromptSelector filters the prompts exposed by this MCP server, analogous to ToolSelector.
+                        If not specified, all prompts from the MCP server are exposed.
+
+                        This is also used to determine which prompt names can be safely exposed unprefixed when
+                        this backend's effective PrefixMode is Never: only prompts named in Include are validated
+                        for cross-backend uniqueness and exposed bare. If unset while PrefixMode is Never, this
+                        backend's prompts are not exposed bare (they keep the `<backendName>__` prefix) because
+                        their names cannot be proven unique at admission time.
+                      properties:
+                        exclude:
+                          description: |-
+                            Exclude is a list of prompt names to exclude. The specified prompts will not be available.
+                            Exclude rules take precedence over include rules.
+                          items:
+                            type: string
+                          maxItems: 32
+                          type: array
+                        excludeRegex:
+                          description: |-
+                            ExcludeRegex is a list of RE2-compatible regular expressions that, when matched, exclude the prompt.
+                            Prompts matching these patterns will not be available. Exclude rules take precedence over include rules.
+                          items:
+                            type: string
+                          maxItems: 32
+                          type: array
+                        include:
+                          description: Include is a list of prompt names to include.
+                            Only the specified prompts will be available.
+                          items:
+                            type: string
+                          maxItems: 32
+                          type: array
+                        includeRegex:
+                          description: |-
+                            IncludeRegex is a list of RE2-compatible regular expressions that, when matched, include the prompt.
+                            Only prompts matching these patterns will be available.
+                          items:
+                            type: string
+                          maxItems: 32
+                          type: array
+                      type: object
+                      x-kubernetes-validations:
+                      - message: include and includeRegex are mutually exclusive
+                        rule: '!(has(self.include) && has(self.includeRegex))'
+                      - message: exclude and excludeRegex are mutually exclusive
+                        rule: '!(has(self.exclude) && has(self.excludeRegex))'
+                      - message: at least one of include, includeRegex, exclude, or
+                          excludeRegex must be specified
+                        rule: has(self.include) || has(self.includeRegex) || has(self.exclude)
+                          || has(self.excludeRegex)
                     securityPolicy:
                       description: SecurityPolicy is the security policy to apply
                         to this MCP server.
@@ -6305,6 +6425,21 @@ spec:
 
                                 Either one of Header or QueryParam can be specified to inject the API key.
                               minLength: 1
+                              type: string
+                            injectionPolicy:
+                              default: Always
+                              description: |-
+                                InjectionPolicy controls when the configured API key is written onto the target header.
+                                Always (the default) writes the credential, replacing any existing value, including
+                                values populated by forwardHeaders.
+                                IfNotPresent writes the API key only if the target header is absent, so a
+                                caller-supplied token forwarded onto the same header is preserved.
+
+                                InjectionPolicy applies only to header injection. It must not be set to IfNotPresent
+                                when queryParam is used, because query-parameter injection always rewrites the backend URL.
+                              enum:
+                              - Always
+                              - IfNotPresent
                               type: string
                             inline:
                               description: Inline contains the API key as an inline
@@ -6373,6 +6508,10 @@ spec:
                               && has(self.inline))
                           - message: only one of header or queryParam can be set
                             rule: '!(has(self.header) && has(self.queryParam))'
+                          - message: injectionPolicy cannot be IfNotPresent when queryParam
+                              is set
+                            rule: '!(has(self.queryParam) && has(self.injectionPolicy)
+                              && self.injectionPolicy == ''IfNotPresent'')'
                       type: object
                     toolSelector:
                       description: |-
@@ -6494,6 +6633,31 @@ spec:
                       type: object
                     maxItems: 32
                     type: array
+                type: object
+              backendTrafficPolicy:
+                description: |-
+                  BackendTrafficPolicy configures the auto-generated Envoy Gateway BackendTrafficPolicy
+                  resources for this MCPRoute, for example the OAuth protected resource metadata policy
+                  created when SecurityPolicy.OAuth is configured.
+                properties:
+                  mergeType:
+                    description: |-
+                      MergeType determines how the auto-generated BackendTrafficPolicy (for example, the
+                      OAuth protected resource metadata policy) is merged with other BackendTrafficPolicy
+                      configurations targeting the same route or a parent Gateway/Listener.
+
+                      When set, the auto-generated BackendTrafficPolicy will merge with the closest parent
+                      BackendTrafficPolicy in the route's attachment hierarchy instead of overriding it
+                      entirely, per Envoy Gateway's merge semantics.
+
+                      If unset, no merging occurs, and the auto-generated BackendTrafficPolicy fully
+                      overrides any other BackendTrafficPolicy targeting the same route.
+
+                      See: https://gateway.envoyproxy.io/docs/tasks/traffic/backend-traffic-policy/
+                    type: string
+                    x-kubernetes-validations:
+                    - message: Replace is not a valid MergeType for BackendTrafficPolicy
+                      rule: self != 'Replace'
                 type: object
               headers:
                 description: |-
@@ -6756,6 +6920,13 @@ spec:
                   Path is the HTTP endpoint path that serves MCP requests over the Streamable HTTP transport.
                   If not specified, the default is "/mcp".
                 maxLength: 1024
+                type: string
+              prefixMode:
+                description: PrefixMode controls how tool and prompt names from all
+                  backends on this route are prefixed.
+                enum:
+                - Always
+                - Never
                 type: string
               securityPolicy:
                 description: SecurityPolicy defines the security policy for this MCPRoute.
@@ -10426,6 +10597,25 @@ spec:
                     - message: only one of grpc or http can be specified
                       rule: (has(self.grpc) && !has(self.http)) || (!has(self.grpc)
                         && has(self.http))
+                  mergeType:
+                    description: |-
+                      MergeType determines how the auto-generated SecurityPolicy for this MCPRoute (which
+                      enforces OAuth/JWT, API key, or external authorization) is merged with other
+                      SecurityPolicy configurations targeting the same route or a parent Gateway/Listener.
+
+                      When set, the auto-generated SecurityPolicy will merge with the closest parent
+                      SecurityPolicy in the route's attachment hierarchy (for example, one targeting a
+                      Gateway, Gateway listener, ListenerSet, or ListenerSet listener) instead of
+                      overriding it entirely, per Envoy Gateway's merge semantics.
+
+                      If unset, no merging occurs, and the auto-generated SecurityPolicy fully overrides
+                      any other SecurityPolicy targeting the same route.
+
+                      See: https://gateway.envoyproxy.io/docs/tasks/security/apikey-authn/
+                    type: string
+                    x-kubernetes-validations:
+                    - message: Replace is not a valid MergeType for SecurityPolicy
+                      rule: self != 'Replace'
                   oauth:
                     description: OAuth defines the configuration for the MCP spec
                       compatible OAuth authentication.
@@ -10439,6 +10629,22 @@ spec:
                           type: string
                         maxItems: 32
                         type: array
+                      authorizationServerMetadataUrl:
+                        description: |-
+                          AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization
+                          Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known
+                          URIs derived from Issuer.
+
+                          Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer
+                          of "https://example.com/api/idp/authn" whose document is served only at
+                          "https://example.com/api/idp/v4/authn/.well-known/openid-configuration".
+
+                          Issuer is unaffected by this field. It continues to identify the authorization server in the
+                          protected resource metadata the gateway publishes, and to derive the well-known URIs when this
+                          field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here.
+                        format: uri
+                        maxLength: 1024
+                        type: string
                       claimToHeaders:
                         description: |-
                           ClaimToHeaders specifies JWT claims to extract and forward as HTTP headers to backend MCP servers.

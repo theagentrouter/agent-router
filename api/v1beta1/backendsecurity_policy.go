@@ -426,6 +426,10 @@ type CredentialOverrideFromDynamicMetadata struct {
 	// Namespace is the Envoy metadata namespace written by the trusted filter.
 	// Example: "envoy.filters.http.ext_authz"
 	//
+	// List the namespace in the Gateway's GatewayConfig under
+	// extProc.metadataForwardingNamespaces. Envoy forwards only the namespaces listed there,
+	// and only untyped metadata is read.
+	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Namespace string `json:"namespace"`

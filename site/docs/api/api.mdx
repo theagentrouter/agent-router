@@ -605,6 +605,7 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteauthorization)
 - [MCPRouteAuthorizationRule](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteauthorizationrule)
 - [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutebackendref)
+- [MCPRouteBackendTrafficPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutebackendtrafficpolicy)
 - [MCPRouteOAuth](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteoauth)
 - [MCPRouteSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutesecuritypolicy)
 - [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutespec)
@@ -932,6 +933,16 @@ APISchema defines the API schema.
   type="enum"
   required="false"
   description="APISchemaAWSAnthropic is the schema for Anthropic models hosted on AWS Bedrock.<br />Uses the native Anthropic Messages API format for requests and responses.<br />When used with /v1/chat/completions endpoint, translates OpenAI format to Anthropic.<br />When used with /v1/messages endpoint, passes through native Anthropic format.<br />https://aws.amazon.com/bedrock/anthropic/<br />https://docs.claude.com/en/api/claude-on-amazon-bedrock<br />"
+/><ApiField
+  name="AWSOpenAI"
+  type="enum"
+  required="false"
+  description="APISchemaAWSOpenAI is the OpenAI-compatible API schema provided by AWS.<br />"
+/><ApiField
+  name="TypeSafe"
+  type="enum"
+  required="false"
+  description="APISchemaTypeSafe is the native TypeSafe AI schema used by the Jev System One model.<br />Requests to /v1/systemone are passed through unchanged, and the version defaults to v1.<br />https://docs.typesafe.ai/api.md<br />"
 />
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-awscredentialsfile">AWSCredentialsFile</a>
 
@@ -2102,6 +2113,29 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutebackendtrafficpolicy">MCPRouteBackendTrafficPolicy</a>
+
+
+
+**Appears in:**
+- [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutespec)
+
+MCPRouteBackendTrafficPolicy configures how the Envoy Gateway BackendTrafficPolicy
+resources auto-generated for a MCPRoute interact with other BackendTrafficPolicy
+resources (e.g. an operator-defined rate limiting policy) targeting the same HTTPRoute.
+
+##### Fields
+
+
+
+<ApiField
+  name="mergeType"
+  type="[MergeType](#github-com-envoyproxy-gateway-api-v1alpha1-mergetype)"
+  required="false"
+  description="MergeType determines how the auto-generated BackendTrafficPolicy (for example, the<br />OAuth protected resource metadata policy) is merged with other BackendTrafficPolicy<br />configurations targeting the same route or a parent Gateway/Listener.<br />When set, the auto-generated BackendTrafficPolicy will merge with the closest parent<br />BackendTrafficPolicy in the route's attachment hierarchy instead of overriding it<br />entirely, per Envoy Gateway's merge semantics.<br />If unset, no merging occurs, and the auto-generated BackendTrafficPolicy fully<br />overrides any other BackendTrafficPolicy targeting the same route.<br />See: https://gateway.envoyproxy.io/docs/tasks/traffic/backend-traffic-policy/"
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteoauth">MCPRouteOAuth</a>
 
 
@@ -2124,13 +2158,18 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
 /><ApiField
   name="audiences"
   type="string array"
-  required="true"
+  required="false"
   description="Audiences is a list of JWT audiences allowed access.<br />It is recommended to set this field for token audience validation, as it is a security best practice to prevent token misuse.<br />Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-audience-binding-and-validation"
 /><ApiField
   name="jwks"
   type="[JWKS](#github-com-envoyproxy-ai-gateway-api-v1alpha1-jwks)"
   required="false"
   description="JWKS defines how a JSON Web Key Sets (JWKS) can be obtained to verify the access tokens presented by the clients.<br />If not specified, the JWKS URI will be discovered from the OAuth 2.0 Authorization Server Metadata<br />as per RFC 8414 by querying the `/.well-known/oauth-authorization-server` endpoint on the Issuer."
+/><ApiField
+  name="authorizationServerMetadataUrl"
+  type="string"
+  required="false"
+  description="AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization<br />Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known<br />URIs derived from Issuer.<br />Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer<br />of `https://example.com/api/idp/authn` whose document is served only at<br />`https://example.com/api/idp/v4/authn/.well-known/openid-configuration`.<br />Issuer is unaffected by this field. It continues to identify the authorization server in the<br />protected resource metadata the gateway publishes, and to derive the well-known URIs when this<br />field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here."
 /><ApiField
   name="protectedResourceMetadata"
   type="[ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1alpha1-protectedresourcemetadata)"
@@ -2177,6 +2216,11 @@ MCPRouteSecurityPolicy defines the security policy for a MCPRoute.
   type="[MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcprouteauthorization)"
   required="false"
   description="Authorization defines the configuration for the MCP spec compatible authorization."
+/><ApiField
+  name="mergeType"
+  type="[MergeType](#github-com-envoyproxy-gateway-api-v1alpha1-mergetype)"
+  required="false"
+  description="MergeType determines how the auto-generated SecurityPolicy for this MCPRoute (which<br />enforces OAuth/JWT, API key, or external authorization) is merged with other<br />SecurityPolicy configurations targeting the same route or a parent Gateway/Listener.<br />When set, the auto-generated SecurityPolicy will merge with the closest parent<br />SecurityPolicy in the route's attachment hierarchy (for example, one targeting a<br />Gateway, Gateway listener, ListenerSet, or ListenerSet listener) instead of<br />overriding it entirely, per Envoy Gateway's merge semantics.<br />If unset, no merging occurs, and the auto-generated SecurityPolicy fully overrides<br />any other SecurityPolicy targeting the same route.<br />See: https://gateway.envoyproxy.io/docs/tasks/security/apikey-authn/"
 />
 
 
@@ -2224,6 +2268,11 @@ MCPRouteSpec details the MCPRoute configuration.
   type="[MCPRouteSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutesecuritypolicy)"
   required="false"
   description="SecurityPolicy defines the security policy for this MCPRoute."
+/><ApiField
+  name="backendTrafficPolicy"
+  type="[MCPRouteBackendTrafficPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutebackendtrafficpolicy)"
+  required="false"
+  description="BackendTrafficPolicy configures the auto-generated Envoy Gateway BackendTrafficPolicy<br />resources for this MCPRoute, for example the OAuth protected resource metadata policy<br />created when SecurityPolicy.OAuth is configured."
 /><ApiField
   name="backendSelector"
   type="[MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselector)"
@@ -3134,14 +3183,18 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPAuthorizationSource](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpauthorizationsource)
 - [MCPAuthorizationTarget](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpauthorizationtarget)
 - [MCPBackendAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikey)
+- [MCPBackendAPIKeyInjectionPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikeyinjectionpolicy)
 - [MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy)
 - [MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)
 - [MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselectorrule)
 - [MCPHeaderForward](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpheaderforward)
+- [MCPPromptFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter)
 - [MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorization)
 - [MCPRouteAuthorizationRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorizationrule)
 - [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
+- [MCPRouteBackendTrafficPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendtrafficpolicy)
 - [MCPRouteOAuth](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteoauth)
+- [MCPRoutePrefixMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode)
 - [MCPRouteSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutesecuritypolicy)
 - [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutespec)
 - [MCPRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutestatus)
@@ -3465,6 +3518,16 @@ APISchema defines the API schema.
   type="enum"
   required="false"
   description="APISchemaAWSAnthropic is the schema for Anthropic models hosted on AWS Bedrock.<br />Uses the native Anthropic Messages API format for requests and responses.<br />When used with /v1/chat/completions endpoint, translates OpenAI format to Anthropic.<br />When used with /v1/messages endpoint, passes through native Anthropic format.<br />https://aws.amazon.com/bedrock/anthropic/<br />https://docs.claude.com/en/api/claude-on-amazon-bedrock<br />"
+/><ApiField
+  name="AWSOpenAI"
+  type="enum"
+  required="false"
+  description="APISchemaAWSOpenAI is the OpenAI-compatible API schema provided by AWS.<br />"
+/><ApiField
+  name="TypeSafe"
+  type="enum"
+  required="false"
+  description="APISchemaTypeSafe is the native TypeSafe AI schema used by the Jev System One model.<br />Requests to /v1/systemone are passed through unchanged, and the version defaults to v1.<br />https://docs.typesafe.ai/api.md<br />"
 />
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-awscredentialsfile">AWSCredentialsFile</a>
 
@@ -3959,7 +4022,7 @@ dynamic metadata produced by a trusted filter running earlier in the filter chai
   name="namespace"
   type="string"
   required="true"
-  description="Namespace is the Envoy metadata namespace written by the trusted filter.<br />Example: `envoy.filters.http.ext_authz`"
+  description="Namespace is the Envoy metadata namespace written by the trusted filter.<br />Example: `envoy.filters.http.ext_authz`<br />List the namespace in the Gateway's GatewayConfig under<br />extProc.metadataForwardingNamespaces. Envoy forwards only the namespaces listed there,<br />and only untyped metadata is read."
 /><ApiField
   name="key"
   type="string"
@@ -4123,7 +4186,7 @@ GCPCredentialsFile specifies the service account key json file to authenticate w
 **Appears in:**
 - [GatewayConfigSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigspec)
 
-GatewayConfigExtProc holds runtime-specific configuration for the external processor.
+GatewayConfigExtProc holds configuration for the external processor.
 
 ##### Fields
 
@@ -4134,6 +4197,11 @@ GatewayConfigExtProc holds runtime-specific configuration for the external proce
   type="[KubernetesContainerSpec](https://gateway.envoyproxy.io/docs/api/extension_types/#kubernetescontainerspec)"
   required="false"
   description="Kubernetes defines the configuration for running the external processor as a Kubernetes container."
+/><ApiField
+  name="metadataForwardingNamespaces"
+  type="string array"
+  required="false"
+  description="MetadataForwardingNamespaces lists the untyped dynamic metadata namespaces Envoy forwards<br />to the external processor for this Gateway's AI traffic. A BackendSecurityPolicy using<br />credentialOverride.fromDynamicMetadata receives metadata only from a namespace listed here.<br />Under Envoy Gateway's mergeGateways, every Gateway in the class shares one Envoy, so a<br />namespace any one of them declares is forwarded for all of their AI traffic."
 />
 
 
@@ -4564,9 +4632,39 @@ When both `header` and `queryParam` are unspecified, the API key will be injecte
   type="string"
   required="false"
   description="QueryParam is the HTTP query parameter to inject the API key into.<br />For example, if QueryParam is set to `api_key`, and the API key is `mysecretkey`, the request URL will be modified to include<br />`?api_key=mysecretkey`.<br />Either one of Header or QueryParam can be specified to inject the API key.<br />Note: Embedding credentials in URLs (including query parameters) is generally not recommended because URLs can be exposed in logs<br />and intermediary systems; prefer header-based injection when possible."
+/><ApiField
+  name="injectionPolicy"
+  type="[MCPBackendAPIKeyInjectionPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikeyinjectionpolicy)"
+  required="false"
+  defaultValue="Always"
+  description="InjectionPolicy controls when the configured API key is written onto the target header.<br />Always (the default) writes the credential, replacing any existing value, including<br />values populated by forwardHeaders.<br />IfNotPresent writes the API key only if the target header is absent, so a<br />caller-supplied token forwarded onto the same header is preserved.<br />InjectionPolicy applies only to header injection. It must not be set to IfNotPresent<br />when queryParam is used, because query-parameter injection always rewrites the backend URL."
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikeyinjectionpolicy">MCPBackendAPIKeyInjectionPolicy</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPBackendAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikey)
+
+MCPBackendAPIKeyInjectionPolicy controls when the configured API key is written onto the request.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="Always"
+  type="enum"
+  required="false"
+  description="MCPBackendAPIKeyInjectionAlways writes the configured key onto the target header,<br />replacing any existing value. This is the default and preserves existing behavior.<br />"
+/><ApiField
+  name="IfNotPresent"
+  type="enum"
+  required="false"
+  description="MCPBackendAPIKeyInjectionIfNotPresent writes the configured key only when the target<br />header is absent, so a value already set (for example by forwardHeaders) is preserved.<br />"
+/>
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy">MCPBackendSecurityPolicy</a>
 
 
@@ -4665,6 +4763,44 @@ MCPHeaderForward specifies a header to extract from the incoming request and for
   type="string"
   required="false"
   description="BackendHeader is the header name to use when forwarding to the backend.<br />If not specified, the original header name is used."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter">MCPPromptFilter</a>
+
+
+
+**Appears in:**
+- [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
+
+MCPPromptFilter filters prompts using include and exclude patterns with exact matches or regular expressions.
+Exclude rules take precedence over include rules (deny-wins). When both include and exclude are specified,
+a prompt must match an include rule AND not match any exclude rule to be allowed.
+
+##### Fields
+
+
+
+<ApiField
+  name="include"
+  type="string array"
+  required="false"
+  description="Include is a list of prompt names to include. Only the specified prompts will be available."
+/><ApiField
+  name="includeRegex"
+  type="string array"
+  required="false"
+  description="IncludeRegex is a list of RE2-compatible regular expressions that, when matched, include the prompt.<br />Only prompts matching these patterns will be available."
+/><ApiField
+  name="exclude"
+  type="string array"
+  required="false"
+  description="Exclude is a list of prompt names to exclude. The specified prompts will not be available.<br />Exclude rules take precedence over include rules."
+/><ApiField
+  name="excludeRegex"
+  type="string array"
+  required="false"
+  description="ExcludeRegex is a list of RE2-compatible regular expressions that, when matched, exclude the prompt.<br />Prompts matching these patterns will not be available. Exclude rules take precedence over include rules."
 />
 
 
@@ -4784,6 +4920,11 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   required="false"
   description="ToolSelector filters the tools exposed by this MCP server.<br />Supports exact matches and RE2-compatible regular expressions for both include and exclude patterns.<br />If not specified, all tools from the MCP server are exposed."
 /><ApiField
+  name="promptSelector"
+  type="[MCPPromptFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter)"
+  required="false"
+  description="PromptSelector filters the prompts exposed by this MCP server, analogous to ToolSelector.<br />If not specified, all prompts from the MCP server are exposed.<br />This is also used to determine which prompt names can be safely exposed unprefixed when<br />this backend's effective PrefixMode is Never: only prompts named in Include are validated<br />for cross-backend uniqueness and exposed bare. If unset while PrefixMode is Never, this<br />backend's prompts are not exposed bare (they keep the `<backendName>__` prefix) because<br />their names cannot be proven unique at admission time."
+/><ApiField
   name="securityPolicy"
   type="[MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy)"
   required="false"
@@ -4793,6 +4934,34 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   type="[MCPHeaderForward](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpheaderforward) array"
   required="false"
   description="ForwardHeaders specifies HTTP headers to extract from the incoming client request<br />and forward to this backend MCP server.<br />This enables per-user authentication passthrough (e.g., personal access tokens)<br />without requiring OAuth configuration.<br />Each entry specifies a header name to extract and an optional rename for the backend."
+/><ApiField
+  name="prefixMode"
+  type="[MCPRoutePrefixMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode)"
+  required="false"
+  description="PrefixMode controls how tool and prompt names from this backend are prefixed.<br />Takes precedence over the route-level PrefixMode when set."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendtrafficpolicy">MCPRouteBackendTrafficPolicy</a>
+
+
+
+**Appears in:**
+- [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutespec)
+
+MCPRouteBackendTrafficPolicy configures how the Envoy Gateway BackendTrafficPolicy
+resources auto-generated for a MCPRoute interact with other BackendTrafficPolicy
+resources (e.g. an operator-defined rate limiting policy) targeting the same HTTPRoute.
+
+##### Fields
+
+
+
+<ApiField
+  name="mergeType"
+  type="[MergeType](#github-com-envoyproxy-gateway-api-v1alpha1-mergetype)"
+  required="false"
+  description="MergeType determines how the auto-generated BackendTrafficPolicy (for example, the<br />OAuth protected resource metadata policy) is merged with other BackendTrafficPolicy<br />configurations targeting the same route or a parent Gateway/Listener.<br />When set, the auto-generated BackendTrafficPolicy will merge with the closest parent<br />BackendTrafficPolicy in the route's attachment hierarchy instead of overriding it<br />entirely, per Envoy Gateway's merge semantics.<br />If unset, no merging occurs, and the auto-generated BackendTrafficPolicy fully<br />overrides any other BackendTrafficPolicy targeting the same route.<br />See: https://gateway.envoyproxy.io/docs/tasks/traffic/backend-traffic-policy/"
 />
 
 
@@ -4818,13 +4987,18 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
 /><ApiField
   name="audiences"
   type="string array"
-  required="true"
+  required="false"
   description="Audiences is a list of JWT audiences allowed access.<br />It is recommended to set this field for token audience validation, as it is a security best practice to prevent token misuse.<br />Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-audience-binding-and-validation"
 /><ApiField
   name="jwks"
   type="[JWKS](#github-com-envoyproxy-ai-gateway-api-v1beta1-jwks)"
   required="false"
   description="JWKS defines how a JSON Web Key Sets (JWKS) can be obtained to verify the access tokens presented by the clients.<br />If not specified, the JWKS URI will be discovered from the OAuth 2.0 Authorization Server Metadata<br />as per RFC 8414 by querying the `/.well-known/oauth-authorization-server` endpoint on the Issuer."
+/><ApiField
+  name="authorizationServerMetadataUrl"
+  type="string"
+  required="false"
+  description="AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization<br />Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known<br />URIs derived from Issuer.<br />Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer<br />of `https://example.com/api/idp/authn` whose document is served only at<br />`https://example.com/api/idp/v4/authn/.well-known/openid-configuration`.<br />Issuer is unaffected by this field. It continues to identify the authorization server in the<br />protected resource metadata the gateway publishes, and to derive the well-known URIs when this<br />field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here."
 /><ApiField
   name="protectedResourceMetadata"
   type="[ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1beta1-protectedresourcemetadata)"
@@ -4838,6 +5012,40 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode">MCPRoutePrefixMode</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
+- [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutespec)
+
+MCPRoutePrefixMode controls how tool and prompt names are prefixed when exposed to clients.
+
+PrefixMode can be set at the route level (MCPRouteSpec) and overridden per backend
+(MCPRouteBackendRef); the per-backend value takes precedence when set. A single route can
+therefore mix Always and Never backends. This is intentional: it lets an operator keep the
+route-level default (Always is recommended for most routes, since it guarantees a collision-free
+catalog without any extra configuration) while opting specific, well-known backends into bare
+names, e.g. to match tool names an existing client or interactive MCP App already hardcodes.
+Per-backend override is meant as a targeted escape hatch, not a replacement for choosing one
+naming policy for the route as a whole.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="Always"
+  type="enum"
+  required="false"
+  description="MCPRoutePrefixModeAlways prefixes tool/prompt names with `<backendName>__`.<br />This is the default and preserves existing behavior.<br />"
+/><ApiField
+  name="Never"
+  type="enum"
+  required="false"
+  description="MCPRoutePrefixModeNever exposes tool/prompt names unprefixed.<br />Tool names must be unique across all Never-mode backends on the route.<br />"
+/>
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutesecuritypolicy">MCPRouteSecurityPolicy</a>
 
 
@@ -4871,6 +5079,11 @@ MCPRouteSecurityPolicy defines the security policy for a MCPRoute.
   type="[MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorization)"
   required="false"
   description="Authorization defines the configuration for the MCP spec compatible authorization."
+/><ApiField
+  name="mergeType"
+  type="[MergeType](#github-com-envoyproxy-gateway-api-v1alpha1-mergetype)"
+  required="false"
+  description="MergeType determines how the auto-generated SecurityPolicy for this MCPRoute (which<br />enforces OAuth/JWT, API key, or external authorization) is merged with other<br />SecurityPolicy configurations targeting the same route or a parent Gateway/Listener.<br />When set, the auto-generated SecurityPolicy will merge with the closest parent<br />SecurityPolicy in the route's attachment hierarchy (for example, one targeting a<br />Gateway, Gateway listener, ListenerSet, or ListenerSet listener) instead of<br />overriding it entirely, per Envoy Gateway's merge semantics.<br />If unset, no merging occurs, and the auto-generated SecurityPolicy fully overrides<br />any other SecurityPolicy targeting the same route.<br />See: https://gateway.envoyproxy.io/docs/tasks/security/apikey-authn/"
 />
 
 
@@ -4919,10 +5132,20 @@ MCPRouteSpec details the MCPRoute configuration.
   required="false"
   description="SecurityPolicy defines the security policy for this MCPRoute."
 /><ApiField
+  name="backendTrafficPolicy"
+  type="[MCPRouteBackendTrafficPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendtrafficpolicy)"
+  required="false"
+  description="BackendTrafficPolicy configures the auto-generated Envoy Gateway BackendTrafficPolicy<br />resources for this MCPRoute, for example the OAuth protected resource metadata policy<br />created when SecurityPolicy.OAuth is configured."
+/><ApiField
   name="backendSelector"
   type="[MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)"
   required="false"
   description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered."
+/><ApiField
+  name="prefixMode"
+  type="[MCPRoutePrefixMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode)"
+  required="false"
+  description="PrefixMode controls how tool and prompt names from all backends on this route are prefixed."
 />
 
 

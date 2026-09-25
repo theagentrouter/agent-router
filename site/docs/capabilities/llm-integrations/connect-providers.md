@@ -6,7 +6,7 @@ sidebar_position: 10
 
 # Connecting to AI Providers
 
-Envoy AI Gateway provides a unified interface for connecting to multiple AI providers through a standardized configuration approach. This page explains the fundamental concepts, resources, and relationships required to establish connectivity with any supported AI provider.
+Agent Router provides a unified interface for connecting to multiple AI providers through a standardized configuration approach. This page explains the fundamental concepts, resources, and relationships required to establish connectivity with any supported AI provider.
 
 ## Overview
 
@@ -193,7 +193,7 @@ ADC automatically supports GKE Workload Identity, the `GOOGLE_APPLICATION_CREDEN
 2. Service Account Key Files:
    A service account key file is a JSON file containing a private key that authenticates as a service account.
    You create a service account in GCP, generate a key file, download it, and then store it in the k8s secret referenced by BackendSecurityPolicy.
-   Envoy AI Gateway uses this key file to generate an access token and authenticate with GCP Vertex AI.
+   Agent Router uses this key file to generate an access token and authenticate with GCP Vertex AI.
 
 ```yaml
 apiVersion: aigateway.envoyproxy.io/v1beta1

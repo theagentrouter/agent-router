@@ -61,7 +61,7 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 
 		case event.ContentBlockDelta != nil:
 			idx := event.ContentBlockDelta.Index
-			if idx < len(response.Content) {
+			if idx >= 0 && idx < len(response.Content) {
 				block := &response.Content[idx]
 				delta := event.ContentBlockDelta.Delta
 

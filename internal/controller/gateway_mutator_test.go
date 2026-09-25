@@ -424,16 +424,6 @@ func TestGatewayMutator_mutatePod(t *testing.T) {
 					require.NoError(t, idxErr)
 					_, err = g.kube.CoreV1().Secrets("test-namespace").Create(t.Context(),
 						&corev1.Secret{
-							ObjectMeta: metav1.ObjectMeta{Name: legacyFilterConfigSecretName(
-								gwName, gwNamespace,
-							), Namespace: "test-namespace"},
-							Data: map[string][]byte{
-								FilterConfigKeyInSecret: []byte("version: dev\n"),
-							},
-						}, metav1.CreateOptions{})
-					require.NoError(t, err)
-					_, err = g.kube.CoreV1().Secrets("test-namespace").Create(t.Context(),
-						&corev1.Secret{
 							ObjectMeta: metav1.ObjectMeta{Name: FilterConfigBundleIndexSecretName(
 								gwName, gwNamespace,
 							), Namespace: "test-namespace"},
@@ -468,7 +458,6 @@ func TestGatewayMutator_mutatePod(t *testing.T) {
 
 					require.Equal(t, "ai-gateway-extproc", extProcContainer.Name)
 					require.Contains(t, extProcContainer.Args, "-configBundlePath")
-					require.NotContains(t, extProcContainer.Args, "-configPath")
 					tt.extprocTest(t, extProcContainer)
 					if tt.podTest != nil {
 						tt.podTest(t, *pod)
@@ -531,56 +520,6 @@ func TestGatewayMutator_mutatePod_BundleOnly(t *testing.T) {
 
 	extProcContainer := pod.Spec.Containers[1]
 	require.Contains(t, extProcContainer.Args, "-configBundlePath")
-	require.NotContains(t, extProcContainer.Args, "-configPath")
-
-	legacySecretName := legacyFilterConfigSecretName(gwName, gwNamespace)
-	for i := range pod.Spec.Volumes {
-		v := pod.Spec.Volumes[i]
-		if v.Secret != nil {
-			require.NotEqual(t, legacySecretName, v.Secret.SecretName)
-		}
-	}
-}
-
-func TestGatewayMutator_mutatePod_LegacyOnly(t *testing.T) {
-	fakeClient := requireNewFakeClientWithIndexes(t)
-	fakeKube := fake2.NewClientset()
-	g := newTestGatewayMutator(fakeClient, fakeKube, nil, nil, nil, nil, "", "", "", false)
-
-	const gwName, gwNamespace = "test-gateway", "test-namespace"
-	err := fakeClient.Create(t.Context(), &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNamespace},
-		Spec: aigv1b1.AIGatewayRouteSpec{
-			ParentRefs: []gwapiv1a2.ParentReference{
-				{
-					Name:  gwName,
-					Kind:  ptr.To(gwapiv1a2.Kind("Gateway")),
-					Group: ptr.To(gwapiv1a2.Group("gateway.networking.k8s.io")),
-				},
-			},
-			Rules: []aigv1b1.AIGatewayRouteRule{{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}}}},
-		},
-	})
-	require.NoError(t, err)
-
-	_, err = g.kube.CoreV1().Secrets(gwNamespace).Create(t.Context(),
-		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: legacyFilterConfigSecretName(gwName, gwNamespace), Namespace: gwNamespace},
-			Data:       map[string][]byte{FilterConfigKeyInSecret: []byte("version: dev\n")},
-		}, metav1.CreateOptions{})
-	require.NoError(t, err)
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-pod", Namespace: gwNamespace},
-		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
-	}
-	err = g.mutatePod(t.Context(), pod, gwName, gwNamespace)
-	require.NoError(t, err)
-	require.Len(t, pod.Spec.Containers, 2)
-
-	extProcContainer := pod.Spec.Containers[1]
-	require.Contains(t, extProcContainer.Args, "-configPath")
-	require.NotContains(t, extProcContainer.Args, "-configBundlePath")
 }
 
 func strPtr(value string) *string {
