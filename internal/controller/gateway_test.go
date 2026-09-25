@@ -3245,7 +3245,7 @@ func Test_mcpConfig_ToolIntegrity(t *testing.T) {
 							Name: gwapiv1.ObjectName("backend"),
 						},
 						ToolIntegrity: &aigv1b1.MCPToolIntegrity{
-							Digests:    map[string]string{"toolA": strings.Repeat("a", 64)},
+							Digests:    map[string]aigv1b1.MCPToolIntegrityDigest{"toolA": aigv1b1.MCPToolIntegrityDigest(strings.Repeat("a", 64))},
 							OnMismatch: &deny,
 						},
 					}},
@@ -3274,7 +3274,7 @@ func Test_mcpConfig_ToolIntegrity(t *testing.T) {
 							Name: gwapiv1.ObjectName("backend"),
 						},
 						ToolIntegrity: &aigv1b1.MCPToolIntegrity{
-							Digests: map[string]string{"toolA": strings.Repeat("a", 64)},
+							Digests: map[string]aigv1b1.MCPToolIntegrityDigest{"toolA": aigv1b1.MCPToolIntegrityDigest(strings.Repeat("a", 64))},
 						},
 					}},
 				},

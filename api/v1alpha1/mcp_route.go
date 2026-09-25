@@ -214,6 +214,19 @@ const (
 	MCPToolIntegrityActionDeny MCPToolIntegrityAction = "Deny"
 )
 
+// MCPToolIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.
+//
+// This is its own named type, rather than a plain string with an x-kubernetes-validations
+// CEL rule on the containing map, because the Kubernetes API server statically estimates
+// the worst-case cost of every CEL rule at admission time. A rule that loops over a map
+// with a regex match per element (`self.all(k, self[k].matches(...))`) is charged as if
+// every value could be unbounded in length, which blows the per-schema CEL cost budget long
+// before MaxProperties=512 is even reached. A native `pattern` on a fixed-length named type
+// costs nothing extra at admission time and is exactly as strict.
+//
+// +kubebuilder:validation:Pattern="^[0-9a-f]{64}$"
+type MCPToolIntegrityDigest string
+
 // MCPToolIntegrity configures opt-in content-digest verification of a backend's tool
 // definitions before they are forwarded to callers.
 //
@@ -234,8 +247,7 @@ type MCPToolIntegrity struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinProperties=1
 	// +kubebuilder:validation:MaxProperties=512
-	// +kubebuilder:validation:XValidation:rule="self.all(k, self[k].matches('^[0-9a-f]{64}$'))", message="each digest must be a 64-character lowercase hex-encoded SHA-256 digest"
-	Digests map[string]string `json:"digests"`
+	Digests map[string]MCPToolIntegrityDigest `json:"digests"`
 
 	// OnMismatch controls what happens when a tool's observed digest does not match its
 	// expected digest. If not specified, defaults to Drop.

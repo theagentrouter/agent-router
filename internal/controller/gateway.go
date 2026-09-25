@@ -13,7 +13,6 @@ import (
 	stdjson "encoding/json" //nolint: depguard // byte-stable hashing; sonic does not guarantee stable field order.
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -650,8 +649,12 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			}
 			if b.ToolIntegrity != nil {
 				onMismatch := ptr.Deref(b.ToolIntegrity.OnMismatch, aigv1b1.MCPToolIntegrityActionDrop)
+				digests := make(map[string]string, len(b.ToolIntegrity.Digests))
+				for tool, digest := range b.ToolIntegrity.Digests {
+					digests[tool] = string(digest)
+				}
 				mcpBackend.ToolIntegrity = &filterapi.MCPToolIntegrity{
-					Digests:    maps.Clone(b.ToolIntegrity.Digests),
+					Digests:    digests,
 					OnMismatch: filterapi.ToolIntegrityAction(onMismatch),
 				}
 			}

@@ -613,6 +613,7 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [MCPToolFilter](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolfilter)
 - [MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrity)
 - [MCPToolIntegrityAction](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrityaction)
+- [MCPToolIntegrityDigest](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegritydigest)
 - [PerModelQuota](#github-com-envoyproxy-ai-gateway-api-v1alpha1-permodelquota)
 - [ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1alpha1-protectedresourcemetadata)
 - [QuotaBucketMode](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotabucketmode)
@@ -2368,7 +2369,7 @@ whether and how to invoke the tool. It intentionally excludes envelope/metadata 
 
 <ApiField
   name="digests"
-  type="object (keys:string, values:string)"
+  type="object (keys:string, values:[MCPToolIntegrityDigest](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegritydigest))"
   required="true"
   description="Digests maps a tool name, as the backend itself names it (before any<br />backend-name prefixing the gateway applies), to the expected digest of that tool's<br />canonical definition, as a 64-character lowercase hex-encoded SHA-256 digest."
 /><ApiField
@@ -2405,6 +2406,26 @@ does not match its configured expected digest.
   required="false"
   description="MCPToolIntegrityActionDeny drops every tool from the backend the moment any one of<br />its digest-covered tools mismatches, treating an unexpected change as a signal that<br />the whole backend may be compromised or misconfigured rather than an isolated issue.<br />"
 />
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegritydigest">MCPToolIntegrityDigest</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrity)
+
+MCPToolIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.
+
+This is its own named type, rather than a plain string with an x-kubernetes-validations
+CEL rule on the containing map, because the Kubernetes API server statically estimates
+the worst-case cost of every CEL rule at admission time. A rule that loops over a map
+with a regex match per element (`self.all(k, self[k].matches(...))`) is charged as if
+every value could be unbounded in length, which blows the per-schema CEL cost budget long
+before MaxProperties=512 is even reached. A native `pattern` on a fixed-length named type
+costs nothing extra at admission time and is exactly as strict.
+
+
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-permodelquota">PerModelQuota</a>
 
 
@@ -3266,6 +3287,7 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPToolFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolfilter)
 - [MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrity)
 - [MCPToolIntegrityAction](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrityaction)
+- [MCPToolIntegrityDigest](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegritydigest)
 - [ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1beta1-protectedresourcemetadata)
 - [ToolCall](#github-com-envoyproxy-ai-gateway-api-v1beta1-toolcall)
 - [VersionedAPISchema](#github-com-envoyproxy-ai-gateway-api-v1beta1-versionedapischema)
@@ -5301,7 +5323,7 @@ whether and how to invoke the tool. It intentionally excludes envelope/metadata 
 
 <ApiField
   name="digests"
-  type="object (keys:string, values:string)"
+  type="object (keys:string, values:[MCPToolIntegrityDigest](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegritydigest))"
   required="true"
   description="Digests maps a tool name, as the backend itself names it (before any<br />backend-name prefixing the gateway applies), to the expected digest of that tool's<br />canonical definition, as a 64-character lowercase hex-encoded SHA-256 digest."
 /><ApiField
@@ -5338,6 +5360,26 @@ does not match its configured expected digest.
   required="false"
   description="MCPToolIntegrityActionDeny drops every tool from the backend the moment any one of<br />its digest-covered tools mismatches, treating an unexpected change as a signal that<br />the whole backend may be compromised or misconfigured rather than an isolated issue.<br />"
 />
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegritydigest">MCPToolIntegrityDigest</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrity)
+
+MCPToolIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.
+
+This is its own named type, rather than a plain string with an x-kubernetes-validations
+CEL rule on the containing map, because the Kubernetes API server statically estimates
+the worst-case cost of every CEL rule at admission time. A rule that loops over a map
+with a regex match per element (`self.all(k, self[k].matches(...))`) is charged as if
+every value could be unbounded in length, which blows the per-schema CEL cost budget long
+before MaxProperties=512 is even reached. A native `pattern` on a fixed-length named type
+costs nothing extra at admission time and is exactly as strict.
+
+
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-protectedresourcemetadata">ProtectedResourceMetadata</a>
 
 

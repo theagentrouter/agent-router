@@ -1782,7 +1782,7 @@ func (in *MCPToolIntegrity) DeepCopyInto(out *MCPToolIntegrity) {
 	*out = *in
 	if in.Digests != nil {
 		in, out := &in.Digests, &out.Digests
-		*out = make(map[string]string, len(*in))
+		*out = make(map[string]MCPToolIntegrityDigest, len(*in))
 		for key, val := range *in {
 			(*out)[key] = val
 		}
