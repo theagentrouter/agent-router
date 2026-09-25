@@ -2480,3 +2480,61 @@ func mustCompileCEL(t *testing.T, expr string) cel.Program {
 	require.NoError(t, err)
 	return prog
 }
+
+// TestBuildDynamicMetadata_CacheCreationTTL exercises the whole cost pipeline
+// for a cached request: token usage in, CEL evaluated, cost out as metadata.
+//
+// It pins the reason the TTL breakdown was added. Anthropic charges 2x the base
+// input rate to create a one hour cache entry against 1.25x for five minutes, so
+// pricing both from the combined cache_creation_input_tokens under-charges the
+// longer-lived one.
+func TestBuildDynamicMetadata_CacheCreationTTL(t *testing.T) {
+	// Sonnet-like rates in units of 1e-9 USD per token: input 2.20/M,
+	// 5 minute write 2.75/M, 1 hour write 4.40/M.
+	prog, err := llmcostcel.NewProgram(
+		"cache_creation_5m_input_tokens * 2750u + cache_creation_1h_input_tokens * 4400u")
+	require.NoError(t, err)
+
+	costs := []filterapi.RuntimeRequestCost{{
+		CELProg: prog,
+		LLMRequestCost: &filterapi.LLMRequestCost{
+			RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCEL, MetadataKey: "cost",
+		},
+	}}
+
+	for _, tc := range []struct {
+		name            string
+		fiveMinutes     uint32
+		oneHour         uint32
+		expectedCost    float64
+		combinedIsWrong bool
+	}{
+		{name: "five minute write", fiveMinutes: 10_000, expectedCost: 27_500_000},
+		{name: "one hour write", oneHour: 10_000, expectedCost: 44_000_000, combinedIsWrong: true},
+		{name: "mixed", fiveMinutes: 4_000, oneHour: 6_000, expectedCost: 37_400_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var usage metrics.TokenUsage
+			usage.SetCacheCreationInputTokens(tc.fiveMinutes + tc.oneHour)
+			usage.SetCacheCreation5mInputTokens(tc.fiveMinutes)
+			usage.SetCacheCreation1hInputTokens(tc.oneHour)
+
+			md, err := buildDynamicMetadata(nil, costs, &usage,
+				map[string]string{internalapi.ModelNameHeaderKeyDefault: "claude-sonnet-5"},
+				"some_backend", "some_route", "claude-sonnet-5")
+			require.NoError(t, err)
+
+			got := md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+				GetStructValue().Fields["cost"].GetNumberValue()
+			require.Equal(t, tc.expectedCost, got)
+
+			if tc.combinedIsWrong {
+				// What the same traffic would have cost when only the combined
+				// figure was available and everything was priced at 5 minutes.
+				atFiveMinuteRate := float64(tc.oneHour) * 2750
+				require.Less(t, atFiveMinuteRate, got,
+					"pricing a one hour write at the five minute rate under-charges")
+			}
+		})
+	}
+}

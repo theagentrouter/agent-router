@@ -22,9 +22,16 @@ const (
 	celInputTokensKey              = "input_tokens"
 	celCachedInputTokensKey        = "cached_input_tokens"         // #nosec G101
 	celCacheCreationInputTokensKey = "cache_creation_input_tokens" // #nosec G101
-	celOutputTokensKey             = "output_tokens"
-	celTotalTokensKey              = "total_tokens"
-	celReasoningTokensKey          = "reasoning_tokens"
+	// Breakdown of cache_creation_input_tokens by cache TTL. Providers price
+	// the two differently -- Anthropic charges 2x the base input rate for a
+	// 1 hour cache write against 1.25x for 5 minutes -- so an expression that
+	// sees only the combined figure cannot price a cached request correctly.
+	// Both are 0 on backends that do not report the breakdown.
+	celCacheCreation5mInputTokensKey = "cache_creation_5m_input_tokens" // #nosec G101
+	celCacheCreation1hInputTokensKey = "cache_creation_1h_input_tokens" // #nosec G101
+	celOutputTokensKey               = "output_tokens"
+	celTotalTokensKey                = "total_tokens"
+	celReasoningTokensKey            = "reasoning_tokens"
 )
 
 var env *cel.Env
@@ -38,6 +45,8 @@ func init() {
 		cel.Variable(celInputTokensKey, cel.UintType),
 		cel.Variable(celCachedInputTokensKey, cel.UintType),
 		cel.Variable(celCacheCreationInputTokensKey, cel.UintType),
+		cel.Variable(celCacheCreation5mInputTokensKey, cel.UintType),
+		cel.Variable(celCacheCreation1hInputTokensKey, cel.UintType),
 		cel.Variable(celOutputTokensKey, cel.UintType),
 		cel.Variable(celTotalTokensKey, cel.UintType),
 		cel.Variable(celReasoningTokensKey, cel.UintType),
@@ -60,7 +69,7 @@ func NewProgram(expr string) (prog cel.Program, err error) {
 	}
 
 	// Sanity check by evaluating the expression with some dummy values.
-	_, err = EvaluateProgram(prog, "dummy", "dummy", "dummy", 0, 0, 0, 0, 0, 0)
+	_, err = EvaluateProgram(prog, "dummy", "dummy", "dummy", 0, 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to evaluate CEL expression: %w", err)
 	}
@@ -68,17 +77,19 @@ func NewProgram(expr string) (prog cel.Program, err error) {
 }
 
 // EvaluateProgram evaluates the given CEL program with the given variables.
-func EvaluateProgram(prog cel.Program, modelName, backend, routeName string, inputTokens, cachedInputTokens, cacheCreationInputTokens, outputTokens, totalTokens, reasoningTokens uint32) (uint64, error) {
+func EvaluateProgram(prog cel.Program, modelName, backend, routeName string, inputTokens, cachedInputTokens, cacheCreationInputTokens, cacheCreation5mInputTokens, cacheCreation1hInputTokens, outputTokens, totalTokens, reasoningTokens uint32) (uint64, error) {
 	out, _, err := prog.Eval(map[string]any{
-		celModelNameKey:                modelName,
-		celBackendKey:                  backend,
-		celRouteNameKey:                routeName,
-		celInputTokensKey:              inputTokens,
-		celCachedInputTokensKey:        cachedInputTokens,
-		celCacheCreationInputTokensKey: cacheCreationInputTokens,
-		celOutputTokensKey:             outputTokens,
-		celTotalTokensKey:              totalTokens,
-		celReasoningTokensKey:          reasoningTokens,
+		celModelNameKey:                  modelName,
+		celBackendKey:                    backend,
+		celRouteNameKey:                  routeName,
+		celInputTokensKey:                inputTokens,
+		celCachedInputTokensKey:          cachedInputTokens,
+		celCacheCreationInputTokensKey:   cacheCreationInputTokens,
+		celCacheCreation5mInputTokensKey: cacheCreation5mInputTokens,
+		celCacheCreation1hInputTokensKey: cacheCreation1hInputTokens,
+		celOutputTokensKey:               outputTokens,
+		celTotalTokensKey:                totalTokens,
+		celReasoningTokensKey:            reasoningTokens,
 	})
 	if err != nil || out == nil {
 		return 0, fmt.Errorf("failed to evaluate CEL expression: %w", err)

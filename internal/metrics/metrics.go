@@ -151,10 +151,20 @@ type TokenUsage struct {
 	cachedInputTokens uint32
 	// CacheCreationInputTokens is the total number of tokens written to cache.
 	cacheCreationInputTokens uint32
+	// cacheCreation5mInputTokens is the number of tokens written to a cache
+	// entry with a 5 minute TTL. Part of cacheCreationInputTokens.
+	cacheCreation5mInputTokens uint32
+	// cacheCreation1hInputTokens is the number of tokens written to a cache
+	// entry with a 1 hour TTL. Part of cacheCreationInputTokens.
+	//
+	// Providers price the two differently, so a cost expression needs the
+	// breakdown and not just the total.
+	cacheCreation1hInputTokens uint32
 	// ReasoningTokens is the number of reasoning tokens consumed.
 	reasoningTokens uint32
 
 	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet, reasoningTokenSet bool
+	cacheCreation5mInputTokenSet, cacheCreation1hInputTokenSet                                                       bool
 }
 
 // InputTokens returns the number of input tokens and whether it was set.
@@ -204,6 +214,32 @@ func (u *TokenUsage) SetTotalTokens(tokens uint32) {
 func (u *TokenUsage) SetCachedInputTokens(tokens uint32) {
 	u.cachedInputTokens = tokens
 	u.cachedInputTokenSet = true
+}
+
+// CacheCreation5mInputTokens returns the number of tokens written to a cache
+// entry with a 5 minute TTL and whether it was set.
+func (u *TokenUsage) CacheCreation5mInputTokens() (uint32, bool) {
+	return u.cacheCreation5mInputTokens, u.cacheCreation5mInputTokenSet
+}
+
+// CacheCreation1hInputTokens returns the number of tokens written to a cache
+// entry with a 1 hour TTL and whether it was set.
+func (u *TokenUsage) CacheCreation1hInputTokens() (uint32, bool) {
+	return u.cacheCreation1hInputTokens, u.cacheCreation1hInputTokenSet
+}
+
+// SetCacheCreation5mInputTokens sets the number of 5 minute TTL cache creation
+// tokens and marks the field as set.
+func (u *TokenUsage) SetCacheCreation5mInputTokens(tokens uint32) {
+	u.cacheCreation5mInputTokens = tokens
+	u.cacheCreation5mInputTokenSet = true
+}
+
+// SetCacheCreation1hInputTokens sets the number of 1 hour TTL cache creation
+// tokens and marks the field as set.
+func (u *TokenUsage) SetCacheCreation1hInputTokens(tokens uint32) {
+	u.cacheCreation1hInputTokens = tokens
+	u.cacheCreation1hInputTokenSet = true
 }
 
 // SetCacheCreationInputTokens sets the number of cache creation input tokens and marks the field as set.
@@ -256,7 +292,8 @@ func (u *TokenUsage) AddReasoningTokens(tokens uint32) {
 // IsZero reports whether no token usage field has been set.
 func (u *TokenUsage) IsZero() bool {
 	return !u.inputTokenSet && !u.outputTokenSet && !u.totalTokenSet &&
-		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet
+		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet &&
+		!u.cacheCreation5mInputTokenSet && !u.cacheCreation1hInputTokenSet
 }
 
 // Override updates the TokenUsage fields with values from another TokenUsage instance.
@@ -282,6 +319,14 @@ func (u *TokenUsage) Override(other TokenUsage) {
 		u.cacheCreationInputTokens = other.cacheCreationInputTokens
 		u.cacheCreationInputTokenSet = true
 	}
+	if other.cacheCreation5mInputTokenSet {
+		u.cacheCreation5mInputTokens = other.cacheCreation5mInputTokens
+		u.cacheCreation5mInputTokenSet = true
+	}
+	if other.cacheCreation1hInputTokenSet {
+		u.cacheCreation1hInputTokens = other.cacheCreation1hInputTokens
+		u.cacheCreation1hInputTokenSet = true
+	}
 	if other.reasoningTokenSet {
 		u.reasoningTokens = other.reasoningTokens
 		u.reasoningTokenSet = true
@@ -296,11 +341,25 @@ func (u *TokenUsage) Override(other TokenUsage) {
 // This function works for both streaming and non-streaming responses by accepting
 // the common usage fields that exist from anthropic or AWS bedrock usage structures.
 func ExtractTokenUsageFromExplicitCaching(inputTokens, outputTokens int64, cacheReadTokens, cacheCreationTokens *int64) TokenUsage {
+	return ExtractTokenUsageFromExplicitCachingWithTTL(inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, nil, nil)
+}
+
+// ExtractTokenUsageFromExplicitCachingWithTTL is ExtractTokenUsageFromExplicitCaching
+// with the optional breakdown of cache creation tokens by cache TTL, which
+// providers price differently. Pass nil for either when the backend does not
+// report it; the totals are unaffected.
+func ExtractTokenUsageFromExplicitCachingWithTTL(inputTokens, outputTokens int64, cacheReadTokens, cacheCreationTokens, cacheCreation5mTokens, cacheCreation1hTokens *int64) TokenUsage {
 	var usage TokenUsage
 	totalInputTokens := inputTokens
 	if cacheCreationTokens != nil {
 		totalInputTokens += *cacheCreationTokens
 		usage.SetCacheCreationInputTokens(uint32(*cacheCreationTokens)) //nolint:gosec
+	}
+	if cacheCreation5mTokens != nil {
+		usage.SetCacheCreation5mInputTokens(uint32(*cacheCreation5mTokens)) //nolint:gosec
+	}
+	if cacheCreation1hTokens != nil {
+		usage.SetCacheCreation1hInputTokens(uint32(*cacheCreation1hTokens)) //nolint:gosec
 	}
 	if cacheReadTokens != nil {
 		totalInputTokens += *cacheReadTokens
