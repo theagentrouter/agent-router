@@ -67,6 +67,37 @@ func TestMessagesResponseFromStream_doesNotMutateInput(t *testing.T) {
 	require.Empty(t, chunks[1].ContentBlockStart.ContentBlock.Text.Text)
 }
 
+func TestMessagesResponseFromStream_usageDoesNotMutateInput(t *testing.T) {
+	for _, withStart := range []bool{false, true} {
+		name := "without message start"
+		if withStart {
+			name = "with message start"
+		}
+		t.Run(name, func(t *testing.T) {
+			chunks := []*MessagesStreamChunk{}
+			startUsage := &Usage{InputTokens: 10, OutputTokens: 1}
+			if withStart {
+				chunks = append(chunks, &MessagesStreamChunk{
+					MessageStart: (*MessagesStreamChunkMessageStart)(&MessagesResponse{Usage: startUsage}),
+				})
+			}
+			chunks = append(chunks,
+				&MessagesStreamChunk{MessageDelta: &MessagesStreamChunkMessageDelta{Usage: Usage{OutputTokens: 4}}},
+				&MessagesStreamChunk{MessageDelta: &MessagesStreamChunkMessageDelta{Usage: Usage{OutputTokens: 7}}},
+			)
+
+			complete := MessagesResponseFromStream(chunks)
+			require.Equal(t, float64(7), complete.Usage.OutputTokens)
+			require.Equal(t, float64(1), startUsage.OutputTokens)
+			require.Equal(t, float64(4), chunks[len(chunks)-2].MessageDelta.Usage.OutputTokens)
+
+			prefix := MessagesResponseFromStream(chunks[:len(chunks)-1])
+			require.Equal(t, float64(4), prefix.Usage.OutputTokens)
+			require.Equal(t, float64(7), complete.Usage.OutputTokens)
+		})
+	}
+}
+
 func TestMessagesResponseFromStream_boundaries(t *testing.T) {
 	tests := []struct {
 		name   string
