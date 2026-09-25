@@ -15,7 +15,7 @@ package v1alpha1
 type VersionedAPISchema struct {
 	// Name is the name of the API schema of the AIGatewayRoute or AIServiceBackend.
 	//
-	// +kubebuilder:validation:Enum=OpenAI;Cohere;AWSBedrock;AzureOpenAI;GCPVertexAI;GCPAnthropic;Anthropic;AWSAnthropic
+	// +kubebuilder:validation:Enum=OpenAI;Cohere;AWSBedrock;AzureOpenAI;GCPVertexAI;GCPAnthropic;Anthropic;AWSAnthropic;AWSOpenAI;TypeSafe
 	Name APISchema `json:"name"`
 
 	// Version is the version of the API schema.
@@ -89,6 +89,13 @@ const (
 	// https://aws.amazon.com/bedrock/anthropic/
 	// https://docs.claude.com/en/api/claude-on-amazon-bedrock
 	APISchemaAWSAnthropic APISchema = "AWSAnthropic"
+	// APISchemaAWSOpenAI is the OpenAI-compatible API schema provided by AWS.
+	APISchemaAWSOpenAI APISchema = "AWSOpenAI"
+	// APISchemaTypeSafe is the native TypeSafe AI schema used by the Jev System One model.
+	// Requests to /v1/systemone are passed through unchanged, and the version defaults to v1.
+	//
+	// https://docs.typesafe.ai/api.md
+	APISchemaTypeSafe APISchema = "TypeSafe"
 )
 
 const (

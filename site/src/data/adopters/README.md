@@ -1,14 +1,14 @@
 # Adopters Data
 
-This directory contains the adopters data for organizations that support Envoy AI Gateway.
+This directory contains the adopters data for organizations that support Agent Router.
 
 ## Adding Your Organization
 
-We've made it super easy to add your organization! Just click the "Add Your Organization" button on the [homepage](https://aigateway.envoyproxy.io/) or follow the link below.
+We've made it super easy to add your organization! Just click the "Add Your Organization" button on the [homepage](https://theagentrouter.ai/) or follow the link below.
 
 ### Quick Add (Recommended)
 
-**[Edit adopters.json on GitHub →](https://github.com/envoyproxy/ai-gateway/edit/main/site/src/data/adopters/adopters.json)**
+**[Edit adopters.json on GitHub →](https://github.com/theagentrouter/agent-router/edit/main/site/src/data/adopters/adopters.json)**
 
 This will open the GitHub editor in your browser where you can:
 
@@ -70,7 +70,7 @@ If you prefer to host the logo locally:
   "name": "Acme Corporation",
   "logoUrl": "https://acme.com/logo.svg",
   "url": "https://acme.com",
-  "description": "Using Envoy AI Gateway for multi-model AI routing"
+  "description": "Using Agent Router for multi-model AI routing"
 }
 ```
 
@@ -82,7 +82,7 @@ Adopters are displayed alphabetically by organization name, so your position wil
 
 If you have questions about adding your organization:
 
-- Ask in [GitHub Discussions](https://github.com/envoyproxy/ai-gateway/discussions)
-- Join our [Slack community](https://envoyproxy.slack.com/archives/C07Q4N24VAA)
+- Ask in [GitHub Discussions](https://github.com/theagentrouter/agent-router/discussions)
+- Join our [Discord community](https://discord.gg/xuxtPq43gZ)
 
-Thank you for supporting Envoy AI Gateway!
+Thank you for supporting Agent Router!

@@ -4,13 +4,13 @@ title: Model Context Protocol (MCP) Gateway
 sidebar_position: 8
 ---
 
-Envoy AI Gateway provides first-class support for [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), enabling AI agents to securely connect to external tools and data sources.
+Agent Router provides first-class support for [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), enabling AI agents to securely connect to external tools and data sources.
 
 This guide provides an overview of the MCP Gateway capabilities and how to configure routing to MCP servers using the `MCPRoute` API.
 
 ## Overview
 
-Envoy AI Gateway's MCP support allows you to:
+Agent Router's MCP support allows you to:
 
 - **Aggregate multiple MCP servers** into a single unified endpoint
 - **Apply security policies** including OAuth authentication, fine-grained access control over the tool access, and upstream API key injection
@@ -32,12 +32,12 @@ The MCP Gateway acts as a transparent proxy between MCP clients (AI agents like 
 
 ## Architecture
 
-The MCP Gateway is implemented as a lightweight proxy component within the Envoy AI Gateway sidecar, leveraging Envoy's battle-tested networking stack for all connection handling.
+The MCP Gateway is implemented as a lightweight proxy component within the Agent Router sidecar, leveraging Envoy's battle-tested networking stack for all connection handling.
 
 ```mermaid
 sequenceDiagram
     participant Client as MCP Client<br/>(AI Agent)
-    participant Gateway as Envoy AI Gateway
+    participant Gateway as Agent Router
     participant MCP1 as MCP Server 1
     participant MCP2 as MCP Server 2
 
@@ -67,7 +67,7 @@ sequenceDiagram
 - **Notification Handling**: Long-lived SSE streams from multiple MCP servers are merged into a single stream for clients, with proper event ID reconstruction.
 - **Request Routing**: Tool names are automatically prefixed with the backend name (e.g., `github__issue_read`) to route calls to the correct upstream server.
 
-For detailed architecture and design decisions, see the [MCP Gateway proposal](https://github.com/envoyproxy/ai-gateway/tree/main/docs/proposals/006-mcp-gateway).
+For detailed architecture and design decisions, see the [MCP Gateway proposal](https://github.com/theagentrouter/agent-router/tree/main/docs/proposals/006-mcp-gateway).
 
 ## Trying it out
 
@@ -318,7 +318,7 @@ sequenceDiagram
 
 ### Authorization Policies
 
-Envoy AI Gateway supports fine-grained access control over tool access using a combination of:
+Agent Router supports fine-grained access control over tool access using a combination of:
 
 - **JWT Scopes & Claims**: Validate standard OAuth2 scopes and custom claims
 - **Tool Selection**: Restrict access to specific tools
@@ -411,7 +411,7 @@ authorization:
 
 ## See Also
 
-- [MCP Gateway Proposal](https://github.com/envoyproxy/ai-gateway/tree/main/docs/proposals/006-mcp-gateway) - Detailed architecture and design decisions
+- [MCP Gateway Proposal](https://github.com/theagentrouter/agent-router/tree/main/docs/proposals/006-mcp-gateway) - Detailed architecture and design decisions
 - [MCP Specification](https://modelcontextprotocol.io/specification/2025-06-18) - Official Model Context Protocol documentation
-- [MCP Example](https://github.com/envoyproxy/ai-gateway/tree/main/examples/mcp) - Complete working example
+- [MCP Example](https://github.com/theagentrouter/agent-router/tree/main/examples/mcp) - Complete working example
 - [CLI MCP Configuration](/docs/cli/aigwrun#mcp-configuration) - Using MCP with `aigw run` standalone mode

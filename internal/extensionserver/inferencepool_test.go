@@ -28,7 +28,7 @@ func TestPortForInferencePool_EdgeCases(t *testing.T) {
 			Namespace: "my-ns",
 		},
 		Spec: gwaiev1.InferencePoolSpec{
-			EndpointPickerRef: gwaiev1.EndpointPickerRef{
+			EndpointPickerRef: &gwaiev1.EndpointPickerRef{
 				Name: "my-picker",
 				Port: ptr.To(gwaiev1.Port{Number: 8080}),
 			},
@@ -59,7 +59,7 @@ func TestBuildAndParseMetadata_RoundTrip(t *testing.T) {
 			},
 		},
 		Spec: gwaiev1.InferencePoolSpec{
-			EndpointPickerRef: gwaiev1.EndpointPickerRef{
+			EndpointPickerRef: &gwaiev1.EndpointPickerRef{
 				Name: "test-picker",
 				Port: ptr.To(gwaiev1.Port{Number: 9090}),
 			},
@@ -141,7 +141,7 @@ func TestBuildHTTPFilterForInferencePool_Defaults(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: gwaiev1.InferencePoolSpec{
-			EndpointPickerRef: gwaiev1.EndpointPickerRef{Name: "default-picker"},
+			EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "default-picker"},
 		},
 	}
 

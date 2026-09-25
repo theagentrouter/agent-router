@@ -149,3 +149,48 @@ func TestNewSession_BackendSelector(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectBackends(t *testing.T) {
+	jwtSelector := mustCompileBackendSelector(t, &filterapi.MCPRouteAuthorization{
+		DefaultAction: filterapi.AuthorizationActionDeny,
+		Rules: []filterapi.MCPRouteAuthorizationRule{
+			{
+				Action: filterapi.AuthorizationActionAllow,
+				CEL:    ptr.To(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`),
+			},
+		},
+	})
+
+	t.Run("no selector returns all route backends", func(t *testing.T) {
+		proxy := newTestMCPProxy()
+		proxy.requestHeaders = http.Header{}
+		got, err := proxy.selectAuthorizedBackends("test-route", proxy.routes["test-route"])
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		require.Contains(t, got, filterapi.MCPBackendName("backend1"))
+		require.Contains(t, got, filterapi.MCPBackendName("backend2"))
+	})
+
+	t.Run("JWT selector returns the claimed subset", func(t *testing.T) {
+		proxy := newTestMCPProxy()
+		proxy.requestHeaders = http.Header{
+			"Authorization": []string{"Bearer " + bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
+		}
+		proxy.routes["test-route"].backendSelector = jwtSelector
+		got, err := proxy.selectAuthorizedBackends("test-route", proxy.routes["test-route"])
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		require.Contains(t, got, filterapi.MCPBackendName("backend2"))
+	})
+
+	t.Run("no match returns errNoMatchingBackendSelector", func(t *testing.T) {
+		proxy := newTestMCPProxy()
+		proxy.requestHeaders = http.Header{}
+		proxy.routes["test-route"].backendSelector = mustCompileBackendSelector(t, &filterapi.MCPRouteAuthorization{
+			DefaultAction: filterapi.AuthorizationActionDeny,
+		})
+		got, err := proxy.selectAuthorizedBackends("test-route", proxy.routes["test-route"])
+		require.ErrorIs(t, err, errNoMatchingBackendSelector)
+		require.Nil(t, got)
+	})
+}

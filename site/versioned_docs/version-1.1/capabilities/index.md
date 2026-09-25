@@ -1,12 +1,12 @@
 ---
 id: capabilities
 title: Capabilities
-sidebar_position: 3
+sidebar_position: 5
 ---
 
-# Envoy AI Gateway Capabilities
+# Agent Router Capabilities
 
-Welcome to the Envoy AI Gateway capabilities documentation! This section provides detailed information about the various features and capabilities that Envoy AI Gateway offers to help you manage and optimize your AI/LLM traffic.
+Welcome to the Agent Router capabilities documentation! This section provides detailed information about the various features and capabilities that Agent Router offers to help you manage and optimize your AI/LLM traffic.
 
 ## LLM Providers Integrations
 

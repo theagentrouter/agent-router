@@ -8,7 +8,7 @@ sidebar_position: 1
 
 Each release includes the binaries for the `aigw` CLI build for different platforms.<br/>
 They can be downloaded directly from the corresponding release in the
-[GitHub releases page](https://github.com/envoyproxy/ai-gateway/releases).
+[GitHub releases page](https://github.com/theagentrouter/agent-router/releases).
 
 ## Using the Docker image
 
@@ -30,7 +30,7 @@ docker run --rm -p 1975:1975 -e OPENAI_API_KEY=OPENAI_API_KEY envoyproxy/ai-gate
 To use the latest version, you can use the following commands to clone the repo and build the CLI:
 
 ```shell
-git clone https://github.com/envoyproxy/ai-gateway.git
+git clone https://github.com/theagentrouter/agent-router.git
 cd ai-gateway
 go install ./cmd/aigw
 ```

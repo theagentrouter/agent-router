@@ -387,14 +387,12 @@ func (runCtx *runCmdContext) mustStartExtProc(
 	if err != nil {
 		panic(fmt.Sprintf("BUG: failed to marshal filter config: %v", err))
 	}
-	configPath := filepath.Join(runCtx.tmpdir, "extproc-config.yaml")
-	_ = os.Remove(configPath)
-	err = os.WriteFile(configPath, marshaled, 0o600)
-	if err != nil {
-		panic(fmt.Sprintf("BUG: failed to write extension proc config: %v", err))
+	configBundlePath := filepath.Join(runCtx.tmpdir, "extproc-config-bundle")
+	if err = writeExtProcConfigBundle(configBundlePath, marshaled); err != nil {
+		panic(fmt.Sprintf("BUG: failed to write extension proc config bundle: %v", err))
 	}
 	args := []string{
-		"--configPath", configPath,
+		"--configBundlePath", configBundlePath,
 		"--extProcAddr", fmt.Sprintf("unix://%s", runCtx.udsPath),
 		"--adminPort", fmt.Sprintf("%d", runCtx.adminPort),
 		"--mcpAddr", ":" + strconv.Itoa(internalapi.MCPProxyPort),
@@ -428,6 +426,29 @@ func (runCtx *runCmdContext) mustStartExtProc(
 		close(done)
 	}()
 	return done
+}
+
+func writeExtProcConfigBundle(bundlePath string, raw []byte) error {
+	part := filterapi.ConfigBundlePart{
+		Name:      "extproc-config",
+		Path:      filterapi.ConfigBundlePartPath(0),
+		SizeBytes: len(raw),
+	}
+	partPath := filepath.Join(bundlePath, filepath.FromSlash(part.Path))
+	if err := os.MkdirAll(filepath.Dir(partPath), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(partPath, raw, 0o600); err != nil {
+		return err
+	}
+	indexRaw, err := filterapi.MarshalConfigBundleIndex(&filterapi.ConfigBundleIndex{
+		Checksum: filterapi.ConfigBundleChecksum(raw),
+		Parts:    []filterapi.ConfigBundlePart{part},
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(bundlePath, filterapi.ConfigBundleIndexFileName), indexRaw, 0o600)
 }
 
 func envOptional(name string) *string {

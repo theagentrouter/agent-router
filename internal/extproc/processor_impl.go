@@ -635,7 +635,11 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		u.metrics.RecordTokenUsage(ctx, u.costs, u.requestHeaders)
 	}
 
-	if body.EndOfStream && (len(u.parent.config.GlobalRequestCosts) > 0 || len(u.parent.config.RequestCosts) > 0) {
+	// Build dynamic metadata as soon as the accumulated usage changes (i.e. the chunk that carries
+	// the usage payload), not only at end-of-stream. This ensures the access log still captures usage
+	// even if the downstream client disconnects right after the terminal chunk, before EndOfStream
+	// is observed by the extproc. The EndOfStream write below remains as the final refresh.
+	if (body.EndOfStream || !tokenUsage.IsZero()) && (len(u.parent.config.GlobalRequestCosts) > 0 || len(u.parent.config.RequestCosts) > 0) {
 		metadata, err := buildDynamicMetadata(u.parent.config.GlobalRequestCosts, u.parent.config.RequestCosts, &u.costs, u.requestHeaders, u.backendName, u.routeName, responseModel)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build dynamic metadata: %w", err)
@@ -917,8 +921,9 @@ func evalRuntimeRequestCost(rc *filterapi.RuntimeRequestCost, costs *metrics.Tok
 }
 
 // buildDynamicMetadata creates metadata for rate limiting and cost tracking.
-// This function is called by the upstream filter only at the end of the stream (body.EndOfStream=true)
-// when the response is successfully completed. It is not called for failed requests or partial responses.
+// This function is called by the upstream filter at the end of the stream (body.EndOfStream=true), and,
+// for streaming responses, also as soon as a chunk carries new usage so the access log still captures it
+// if the downstream client disconnects before EndOfStream is observed. It is not called for failed requests.
 // The metadata includes token usage costs and model information for downstream processing.
 // Two-tier precedence: for each metadataKey, check route-scoped requestCosts first (matching RouteName == routeName).
 // If found, use it. Otherwise, fall back to globalRequestCosts. If neither exists, the key is not emitted.

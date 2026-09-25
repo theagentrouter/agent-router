@@ -22,6 +22,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
@@ -352,6 +353,25 @@ func TestNewRerankTracer_BuildsGenericRequestTracer(t *testing.T) {
 	require.IsType(t, (*rerankSpan)(nil), s)
 }
 
+func TestNewSystemOneTracer_BuildsGenericRequestTracer(t *testing.T) {
+	tp := trace.NewTracerProvider()
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	headerAttrs := map[string]string{"agent-session-id": "session.id"}
+
+	tracer := newSystemOneTracer(tp.Tracer("test"), autoprop.NewTextMapPropagator(), testSystemOneTracerRecorder{}, headerAttrs)
+	impl, ok := tracer.(*requestTracerImpl[
+		typesafe.SystemOneRequest,
+		typesafe.SystemOneResponse,
+		struct{},
+	])
+	require.True(t, ok)
+	require.Equal(t, headerAttrs, impl.headerAttributes)
+	require.NotNil(t, impl.newSpan)
+	s := tracer.StartSpanAndInjectHeaders(context.Background(), nil, propagation.MapCarrier{}, &typesafe.SystemOneRequest{Model: "jev-latest"}, []byte("{}"))
+	require.IsType(t, (*systemOneSpan)(nil), s)
+}
+
 func TestNewImageGenerationTracer_BuildsGenericRequestTracer(t *testing.T) {
 	tp := trace.NewTracerProvider()
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
@@ -549,6 +569,26 @@ func (r testImageGenerationRecorder) RecordResponseOnError(span oteltrace.Span, 
 		attribute.Int("statusCode", statusCode),
 		attribute.String("errorBody", string(body)),
 	)
+}
+
+type testSystemOneTracerRecorder struct {
+	tracingapi.NoopChunkRecorder[struct{}]
+}
+
+func (testSystemOneTracerRecorder) StartParams(*typesafe.SystemOneRequest, []byte) (string, []oteltrace.SpanStartOption) {
+	return "SystemOne", []oteltrace.SpanStartOption{oteltrace.WithSpanKind(oteltrace.SpanKindServer)}
+}
+
+func (testSystemOneTracerRecorder) RecordRequest(span oteltrace.Span, req *typesafe.SystemOneRequest, _ []byte) {
+	span.SetAttributes(attribute.String("model", req.Model))
+}
+
+func (testSystemOneTracerRecorder) RecordResponseOnError(span oteltrace.Span, statusCode int, _ []byte) {
+	span.SetAttributes(attribute.Int("status", statusCode))
+}
+
+func (testSystemOneTracerRecorder) RecordResponse(span oteltrace.Span, resp *typesafe.SystemOneResponse) {
+	span.SetAttributes(attribute.String("response_model", resp.Model))
 }
 
 type testRerankTracerRecorder struct {

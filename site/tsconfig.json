@@ -1,11 +1,24 @@
 {
-  // This file is not used in compilation. It is here just for a nice editor experience.
-  "extends": "@docusaurus/tsconfig",
+  // This file is not used in compilation. It is here just for a nice editor experience
+  // and for `npm run typecheck`.
+  //
+  // The options below mirror @docusaurus/tsconfig, minus `baseUrl`, which TypeScript 7
+  // removed. The shared preset still sets it, so extending it makes `tsc` fail before it
+  // checks a single file. `paths` resolve relative to this file, so `@site/*` keeps working.
   "compilerOptions": {
-    "baseUrl": ".",
-    "jsx": "react-jsx",
+    "allowJs": true,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "jsx": "react-jsx",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "noEmit": true,
+    "paths": {
+      "@site/*": ["./*"]
+    },
+    "skipLibCheck": true
   },
-  "exclude": [".docusaurus", "build"]
+  "exclude": [".docusaurus", "build", "tools"]
 }
