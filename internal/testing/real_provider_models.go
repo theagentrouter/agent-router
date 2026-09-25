@@ -35,6 +35,8 @@ const (
 	SambaNovaModelName = "Meta-Llama-3.1-8B-Instruct"
 	// DeepInfraModelName is the DeepInfra chat completion model.
 	DeepInfraModelName = "meta-llama/Meta-Llama-3-8B-Instruct"
+	// OpenRouterModelName is the OpenRouter chat completion model.
+	OpenRouterModelName = "openai/gpt-4o-mini"
 
 	// Embeddings models (one per real provider that supports embeddings).
 
