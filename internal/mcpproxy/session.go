@@ -761,19 +761,18 @@ func (c clientToGatewaySessionID) backendSessionIDs() (perBackendSessionIDs map[
 	}
 	backendSessions := id[lastAt+1:]
 	prefix := id[:lastAt] // "{routeName}@{subject}" — subject may itself contain '@'
-	firstAt := strings.Index(prefix, "@")
-	if firstAt < 0 {
-		return nil, "", "", fmt.Errorf("invalid session ID: missing '@' separator")
-	}
-	route = prefix[:firstAt]
 	// The subject is retained inside the encrypted session ID for anti-hijacking purposes.
 	// It is returned to the caller so it can be compared against the current request's
 	// authenticated subject; see the doc comment above.
-	subject = prefix[firstAt+1:]
+	var found bool
+	route, subject, found = strings.Cut(prefix, "@")
+	if !found {
+		return nil, "", "", fmt.Errorf("invalid session ID: missing '@' separator")
+	}
 
 	// Each backend segment format: {backendName}:{base64(sessionID)}:{capHex}
 	// The capHex field is optional for backward compatibility with old session IDs.
-	for _, part := range strings.Split(backendSessions, ",") {
+	for part := range strings.SplitSeq(backendSessions, ",") {
 		// Split into at most 3 fields: backendName, base64SessionID, capHex.
 		fields := strings.SplitN(part, ":", 3)
 		if len(fields) < 2 {
