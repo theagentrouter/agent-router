@@ -160,6 +160,83 @@ func TestMergeToolsList_AuthorizationFiltering(t *testing.T) {
 	}
 }
 
+func TestMergeToolsList_ToolIntegrityFiltering(t *testing.T) {
+	goodTool := func() *mcp.Tool { return &mcp.Tool{Name: "trusted-tool", Description: "does something safe"} }
+	goodDigest, err := toolDigest(goodTool())
+	require.NoError(t, err)
+	tamperedTool := func() *mcp.Tool { return &mcp.Tool{Name: "trusted-tool", Description: "does something else entirely"} }
+	otherTool := func() *mcp.Tool {
+		return &mcp.Tool{Name: "untracked-tool", Description: "no digest configured for this one"}
+	}
+
+	// mergeToolsList prefixes tool.Name in place, so every subtest and every call within a
+	// subtest needs its own *mcp.Tool instances -- reusing one across calls would see it
+	// re-prefixed each time.
+	newResponses := func(tools ...*mcp.Tool) []broadCastResponse[mcp.ListToolsResult] {
+		return []broadCastResponse[mcp.ListToolsResult]{{backendName: "backend1", res: mcp.ListToolsResult{Tools: tools}}}
+	}
+
+	t.Run("matching digest is exposed, tool without a configured digest passes through", func(t *testing.T) {
+		proxy := newTestMCPProxy()
+		proxy.routes["test-route"].toolSelectors = nil
+		proxy.routes["test-route"].toolIntegrity = map[filterapi.MCPBackendName]*compiledToolIntegrity{
+			"backend1": compileToolIntegrity(&filterapi.MCPToolIntegrity{Digests: map[string]string{"trusted-tool": goodDigest}}),
+		}
+		session := &session{route: "test-route"}
+
+		result := proxy.mergeToolsList(session, newResponses(goodTool(), otherTool()))
+		names := make([]string, len(result.Tools))
+		for i, tool := range result.Tools {
+			names[i] = tool.Name
+		}
+		require.ElementsMatch(t, []string{"backend1__trusted-tool", "backend1__untracked-tool"}, names)
+	})
+
+	t.Run("OnMismatch=Drop omits only the mismatched tool", func(t *testing.T) {
+		proxy := newTestMCPProxy()
+		proxy.routes["test-route"].toolSelectors = nil
+		proxy.routes["test-route"].toolIntegrity = map[filterapi.MCPBackendName]*compiledToolIntegrity{
+			"backend1": compileToolIntegrity(&filterapi.MCPToolIntegrity{
+				Digests:    map[string]string{"trusted-tool": goodDigest},
+				OnMismatch: filterapi.ToolIntegrityActionDrop,
+			}),
+		}
+		session := &session{route: "test-route"}
+
+		result := proxy.mergeToolsList(session, newResponses(tamperedTool(), otherTool()))
+		names := make([]string, len(result.Tools))
+		for i, tool := range result.Tools {
+			names[i] = tool.Name
+		}
+		require.ElementsMatch(t, []string{"backend1__untracked-tool"}, names)
+	})
+
+	t.Run("OnMismatch=Deny drops every tool from the backend", func(t *testing.T) {
+		proxy := newTestMCPProxy()
+		proxy.routes["test-route"].toolSelectors = nil
+		proxy.routes["test-route"].toolIntegrity = map[filterapi.MCPBackendName]*compiledToolIntegrity{
+			"backend1": compileToolIntegrity(&filterapi.MCPToolIntegrity{
+				Digests:    map[string]string{"trusted-tool": goodDigest},
+				OnMismatch: filterapi.ToolIntegrityActionDeny,
+			}),
+		}
+		session := &session{route: "test-route"}
+
+		result := proxy.mergeToolsList(session, newResponses(tamperedTool(), otherTool()))
+		require.Empty(t, result.Tools)
+	})
+
+	t.Run("backend without ToolIntegrity configured is unaffected", func(t *testing.T) {
+		proxy := newTestMCPProxy()
+		proxy.routes["test-route"].toolSelectors = nil
+		session := &session{route: "test-route"}
+
+		result := proxy.mergeToolsList(session, newResponses(tamperedTool()))
+		require.Len(t, result.Tools, 1)
+		require.Equal(t, "backend1__trusted-tool", result.Tools[0].Name)
+	})
+}
+
 func TestMergeToolsList_MetaResourceURIRewrite(t *testing.T) {
 	responses := []broadCastResponse[mcp.ListToolsResult]{
 		{

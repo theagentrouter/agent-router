@@ -611,6 +611,8 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutespec)
 - [MCPRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutestatus)
 - [MCPToolFilter](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolfilter)
+- [MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrity)
+- [MCPToolIntegrityAction](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrityaction)
 - [PerModelQuota](#github-com-envoyproxy-ai-gateway-api-v1alpha1-permodelquota)
 - [ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1alpha1-protectedresourcemetadata)
 - [QuotaBucketMode](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotabucketmode)
@@ -2105,6 +2107,11 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   type="[MCPHeaderForward](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpheaderforward) array"
   required="false"
   description="ForwardHeaders specifies HTTP headers to extract from the incoming client request<br />and forward to this backend MCP server.<br />This enables per-user authentication passthrough (e.g., personal access tokens)<br />without requiring OAuth configuration.<br />Each entry specifies a header name to extract and an optional rename for the backend."
+/><ApiField
+  name="toolIntegrity"
+  type="[MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrity)"
+  required="false"
+  description="ToolIntegrity enables opt-in content-digest verification of this backend's tool<br />definitions. The MCP tools/list response carries no built-in integrity guarantee<br />(per the MCP spec, callers must `consider tool data untrusted unless it comes from<br />a trusted server`); this closes that gap for callers who need it by letting the<br />gateway verify a tool's definition against an operator-supplied digest before ever<br />exposing it downstream.<br />If not specified, no integrity verification is performed for this backend's tools."
 />
 
 
@@ -2335,6 +2342,69 @@ a tool must match an include rule AND not match any exclude rule to be allowed.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrity">MCPToolIntegrity</a>
+
+
+
+**Appears in:**
+- [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutebackendref)
+
+MCPToolIntegrity configures opt-in content-digest verification of a backend's tool
+definitions before they are forwarded to callers.
+
+Verification is opt-in per tool: only tool names present in Digests are checked; any
+other tool the backend exposes is passed through unverified. This lets an operator pin
+digests for a sensitive subset of tools (or all of them) without having to track every
+tool a backend happens to expose.
+
+The digest covers the tool's name, description, input schema, output schema, and
+annotations -- the full set of fields a caller (or the LLM behind it) uses to decide
+whether and how to invoke the tool. It intentionally excludes envelope/metadata fields
+(e.g. "_meta") that can vary across otherwise-identical responses.
+
+##### Fields
+
+
+
+<ApiField
+  name="digests"
+  type="object (keys:string, values:string)"
+  required="true"
+  description="Digests maps a tool name, as the backend itself names it (before any<br />backend-name prefixing the gateway applies), to the expected digest of that tool's<br />canonical definition, as a 64-character lowercase hex-encoded SHA-256 digest."
+/><ApiField
+  name="onMismatch"
+  type="[MCPToolIntegrityAction](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrityaction)"
+  required="false"
+  defaultValue="Drop"
+  description="OnMismatch controls what happens when a tool's observed digest does not match its<br />expected digest. If not specified, defaults to Drop."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrityaction">MCPToolIntegrityAction</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegrity)
+
+MCPToolIntegrityAction controls what happens to a tool whose observed content digest
+does not match its configured expected digest.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="Drop"
+  type="enum"
+  required="false"
+  description="MCPToolIntegrityActionDrop silently omits the mismatched tool from tools/list and<br />refuses tools/call for it, without affecting the rest of the backend's tools. This<br />is the default.<br />"
+/><ApiField
+  name="Deny"
+  type="enum"
+  required="false"
+  description="MCPToolIntegrityActionDeny drops every tool from the backend the moment any one of<br />its digest-covered tools mismatches, treating an unexpected change as a signal that<br />the whole backend may be compromised or misconfigured rather than an isolated issue.<br />"
+/>
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-permodelquota">PerModelQuota</a>
 
 
@@ -3194,6 +3264,8 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutespec)
 - [MCPRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutestatus)
 - [MCPToolFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolfilter)
+- [MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrity)
+- [MCPToolIntegrityAction](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrityaction)
 - [ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1beta1-protectedresourcemetadata)
 - [ToolCall](#github-com-envoyproxy-ai-gateway-api-v1beta1-toolcall)
 - [VersionedAPISchema](#github-com-envoyproxy-ai-gateway-api-v1beta1-versionedapischema)
@@ -4929,6 +5001,11 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   type="[MCPRoutePrefixMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode)"
   required="false"
   description="PrefixMode controls how tool and prompt names from this backend are prefixed.<br />Takes precedence over the route-level PrefixMode when set."
+/><ApiField
+  name="toolIntegrity"
+  type="[MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrity)"
+  required="false"
+  description="ToolIntegrity enables opt-in content-digest verification of this backend's tool<br />definitions. The MCP tools/list response carries no built-in integrity guarantee<br />(per the MCP spec, callers must `consider tool data untrusted unless it comes from<br />a trusted server`); this closes that gap for callers who need it by letting the<br />gateway verify a tool's definition against an operator-supplied digest before ever<br />exposing it downstream.<br />If not specified, no integrity verification is performed for this backend's tools."
 />
 
 
@@ -5198,6 +5275,69 @@ a tool must match an include rule AND not match any exclude rule to be allowed.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrity">MCPToolIntegrity</a>
+
+
+
+**Appears in:**
+- [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
+
+MCPToolIntegrity configures opt-in content-digest verification of a backend's tool
+definitions before they are forwarded to callers.
+
+Verification is opt-in per tool: only tool names present in Digests are checked; any
+other tool the backend exposes is passed through unverified. This lets an operator pin
+digests for a sensitive subset of tools (or all of them) without having to track every
+tool a backend happens to expose.
+
+The digest covers the tool's name, description, input schema, output schema, and
+annotations -- the full set of fields a caller (or the LLM behind it) uses to decide
+whether and how to invoke the tool. It intentionally excludes envelope/metadata fields
+(e.g. "_meta") that can vary across otherwise-identical responses.
+
+##### Fields
+
+
+
+<ApiField
+  name="digests"
+  type="object (keys:string, values:string)"
+  required="true"
+  description="Digests maps a tool name, as the backend itself names it (before any<br />backend-name prefixing the gateway applies), to the expected digest of that tool's<br />canonical definition, as a 64-character lowercase hex-encoded SHA-256 digest."
+/><ApiField
+  name="onMismatch"
+  type="[MCPToolIntegrityAction](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrityaction)"
+  required="false"
+  defaultValue="Drop"
+  description="OnMismatch controls what happens when a tool's observed digest does not match its<br />expected digest. If not specified, defaults to Drop."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrityaction">MCPToolIntegrityAction</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPToolIntegrity](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegrity)
+
+MCPToolIntegrityAction controls what happens to a tool whose observed content digest
+does not match its configured expected digest.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="Drop"
+  type="enum"
+  required="false"
+  description="MCPToolIntegrityActionDrop silently omits the mismatched tool from tools/list and<br />refuses tools/call for it, without affecting the rest of the backend's tools. This<br />is the default.<br />"
+/><ApiField
+  name="Deny"
+  type="enum"
+  required="false"
+  description="MCPToolIntegrityActionDeny drops every tool from the backend the moment any one of<br />its digest-covered tools mismatches, treating an unexpected change as a signal that<br />the whole backend may be compromised or misconfigured rather than an isolated issue.<br />"
+/>
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-protectedresourcemetadata">ProtectedResourceMetadata</a>
 
 

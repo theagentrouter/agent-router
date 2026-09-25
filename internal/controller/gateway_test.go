@@ -3233,6 +3233,77 @@ func Test_mcpConfig_ToolSelectorExclude(t *testing.T) {
 	require.Equal(t, []string{"^secret.*"}, ts.ExcludeRegex)
 }
 
+func Test_mcpConfig_ToolIntegrity(t *testing.T) {
+	t.Run("explicit OnMismatch is propagated", func(t *testing.T) {
+		deny := aigv1b1.MCPToolIntegrityActionDeny
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{
+							Name: gwapiv1.ObjectName("backend"),
+						},
+						ToolIntegrity: &aigv1b1.MCPToolIntegrity{
+							Digests:    map[string]string{"toolA": strings.Repeat("a", 64)},
+							OnMismatch: &deny,
+						},
+					}},
+				},
+			},
+		}
+
+		mc, effective := mcpConfig(mcpRoutes)
+		require.True(t, effective)
+		require.NotNil(t, mc)
+		require.Len(t, mc.Routes, 1)
+		require.Len(t, mc.Routes[0].Backends, 1)
+		ti := mc.Routes[0].Backends[0].ToolIntegrity
+		require.NotNil(t, ti)
+		require.Equal(t, map[string]string{"toolA": strings.Repeat("a", 64)}, ti.Digests)
+		require.Equal(t, filterapi.ToolIntegrityActionDeny, ti.OnMismatch)
+	})
+
+	t.Run("unset OnMismatch defaults to Drop", func(t *testing.T) {
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{
+							Name: gwapiv1.ObjectName("backend"),
+						},
+						ToolIntegrity: &aigv1b1.MCPToolIntegrity{
+							Digests: map[string]string{"toolA": strings.Repeat("a", 64)},
+						},
+					}},
+				},
+			},
+		}
+
+		mc, _ := mcpConfig(mcpRoutes)
+		require.Equal(t, filterapi.ToolIntegrityActionDrop, mc.Routes[0].Backends[0].ToolIntegrity.OnMismatch)
+	})
+
+	t.Run("unset ToolIntegrity leaves it nil", func(t *testing.T) {
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{
+							Name: gwapiv1.ObjectName("backend"),
+						},
+					}},
+				},
+			},
+		}
+
+		mc, _ := mcpConfig(mcpRoutes)
+		require.Nil(t, mc.Routes[0].Backends[0].ToolIntegrity)
+	})
+}
+
 func Test_mcpConfig_PromptSelector(t *testing.T) {
 	mcpRoutes := []aigv1b1.MCPRoute{
 		{

@@ -246,6 +246,43 @@ spec:
                           - message: only one of header or queryParam can be set
                             rule: '!(has(self.header) && has(self.queryParam))'
                       type: object
+                    toolIntegrity:
+                      description: |-
+                        ToolIntegrity enables opt-in content-digest verification of this backend's tool
+                        definitions. The MCP tools/list response carries no built-in integrity guarantee
+                        (per the MCP spec, callers must "consider tool data untrusted unless it comes from
+                        a trusted server"); this closes that gap for callers who need it by letting the
+                        gateway verify a tool's definition against an operator-supplied digest before ever
+                        exposing it downstream.
+
+                        If not specified, no integrity verification is performed for this backend's tools.
+                      properties:
+                        digests:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Digests maps a tool name, as the backend itself names it (before any
+                            backend-name prefixing the gateway applies), to the expected digest of that tool's
+                            canonical definition, as a 64-character lowercase hex-encoded SHA-256 digest.
+                          maxProperties: 512
+                          minProperties: 1
+                          type: object
+                          x-kubernetes-validations:
+                          - message: each digest must be a 64-character lowercase
+                              hex-encoded SHA-256 digest
+                            rule: self.all(k, self[k].matches('^[0-9a-f]{64}$'))
+                        onMismatch:
+                          default: Drop
+                          description: |-
+                            OnMismatch controls what happens when a tool's observed digest does not match its
+                            expected digest. If not specified, defaults to Drop.
+                          enum:
+                          - Drop
+                          - Deny
+                          type: string
+                      required:
+                      - digests
+                      type: object
                     toolSelector:
                       description: |-
                         ToolSelector filters the tools exposed by this MCP server.
@@ -6512,6 +6549,43 @@ spec:
                               is set
                             rule: '!(has(self.queryParam) && has(self.injectionPolicy)
                               && self.injectionPolicy == ''IfNotPresent'')'
+                      type: object
+                    toolIntegrity:
+                      description: |-
+                        ToolIntegrity enables opt-in content-digest verification of this backend's tool
+                        definitions. The MCP tools/list response carries no built-in integrity guarantee
+                        (per the MCP spec, callers must "consider tool data untrusted unless it comes from
+                        a trusted server"); this closes that gap for callers who need it by letting the
+                        gateway verify a tool's definition against an operator-supplied digest before ever
+                        exposing it downstream.
+
+                        If not specified, no integrity verification is performed for this backend's tools.
+                      properties:
+                        digests:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Digests maps a tool name, as the backend itself names it (before any
+                            backend-name prefixing the gateway applies), to the expected digest of that tool's
+                            canonical definition, as a 64-character lowercase hex-encoded SHA-256 digest.
+                          maxProperties: 512
+                          minProperties: 1
+                          type: object
+                          x-kubernetes-validations:
+                          - message: each digest must be a 64-character lowercase
+                              hex-encoded SHA-256 digest
+                            rule: self.all(k, self[k].matches('^[0-9a-f]{64}$'))
+                        onMismatch:
+                          default: Drop
+                          description: |-
+                            OnMismatch controls what happens when a tool's observed digest does not match its
+                            expected digest. If not specified, defaults to Drop.
+                          enum:
+                          - Drop
+                          - Deny
+                          type: string
+                      required:
+                      - digests
                       type: object
                     toolSelector:
                       description: |-
