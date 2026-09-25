@@ -51,6 +51,47 @@ func cutSSEDataPrefix(line []byte) ([]byte, bool) {
 	return cutSSEFieldPrefix(line, sseDataPrefix)
 }
 
+// isSSELineEnding reports whether r terminates an SSE line. The spec allows
+// CRLF, LF, or CR:
+// https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream
+func isSSELineEnding(r rune) bool {
+	return r == '\n' || r == '\r'
+}
+
+// cutSSEEvent splits buf at the first SSE event boundary (an empty line) and
+// returns the event, the remaining bytes and whether a boundary was found.
+// Lines may end with LF, CRLF, or CR. A trailing lone CR is left in rest since
+// it may be the first byte of a CRLF that has not arrived yet.
+func cutSSEEvent(buf []byte) (event, rest []byte, found bool) {
+	pos := 0
+	for pos < len(buf) {
+		i := bytes.IndexAny(buf[pos:], "\r\n")
+		if i == -1 {
+			break
+		}
+		lineEnd := pos + i
+		next := lineEnd + 1
+		if buf[lineEnd] == '\r' {
+			if next == len(buf) {
+				break
+			}
+			if buf[next] == '\n' {
+				next++
+			}
+		}
+		if lineEnd == pos {
+			return buf[:pos], buf[next:], true
+		}
+		pos = next
+	}
+	return nil, buf, false
+}
+
+// sseLines splits an SSE event into its lines, accepting any line ending.
+func sseLines(event []byte) [][]byte {
+	return bytes.FieldsFunc(event, isSSELineEnding)
+}
+
 // regDataURI follows the web uri regex definition.
 // https://developer.mozilla.org/en-US/docs/Web/URI/Schemes/data#syntax
 var regDataURI = regexp.MustCompile(`\Adata:(.+?)?(;base64)?,`)

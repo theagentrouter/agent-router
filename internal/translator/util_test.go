@@ -115,3 +115,55 @@ func TestCutSSEDataPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestCutSSEEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		buf   string
+		event string
+		rest  string
+		found bool
+	}{
+		{name: "LF", buf: "data: a\n\ndata: b\n\n", event: "data: a\n", rest: "data: b\n\n", found: true},
+		{name: "CRLF", buf: "data: a\r\n\r\ndata: b\r\n\r\n", event: "data: a\r\n", rest: "data: b\r\n\r\n", found: true},
+		{name: "CR", buf: "data: a\r\rdata: b\r\r", event: "data: a\r", rest: "data: b\r\r", found: true},
+		{name: "mixed CRLF then LF", buf: "data: a\r\n\n", event: "data: a\r\n", rest: "", found: true},
+		{name: "multi-line event", buf: "event: x\r\ndata: a\r\n\r\n", event: "event: x\r\ndata: a\r\n", rest: "", found: true},
+		{name: "leading blank line", buf: "\ndata: a\n\n", event: "", rest: "data: a\n\n", found: true},
+		{name: "no boundary yet", buf: "data: a\n", rest: "data: a\n", found: false},
+		{name: "single line ending only", buf: "data: a\r\n", rest: "data: a\r\n", found: false},
+		{name: "trailing lone CR waits for more data", buf: "data: a\r\n\r", rest: "data: a\r\n\r", found: false},
+		{name: "empty", buf: "", rest: "", found: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event, rest, found := cutSSEEvent([]byte(tc.buf))
+			require.Equal(t, tc.found, found)
+			require.Equal(t, tc.rest, string(rest))
+			if tc.found {
+				require.Equal(t, tc.event, string(event))
+			}
+		})
+	}
+}
+
+func TestSSELines(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		event    string
+		expected []string
+	}{
+		{name: "LF", event: "event: x\ndata: a\n", expected: []string{"event: x", "data: a"}},
+		{name: "CRLF", event: "event: x\r\ndata: a\r\n", expected: []string{"event: x", "data: a"}},
+		{name: "CR", event: "event: x\rdata: a\r", expected: []string{"event: x", "data: a"}},
+		{name: "no trailing line ending", event: "data: a", expected: []string{"data: a"}},
+		{name: "empty", event: "", expected: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			for _, line := range sseLines([]byte(tc.event)) {
+				got = append(got, string(line))
+			}
+			require.Equal(t, tc.expected, got)
+		})
+	}
+}
