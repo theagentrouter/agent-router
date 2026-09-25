@@ -264,6 +264,47 @@ func TestMCPRouteController_SharedBackendPerNamespace(t *testing.T) {
 	require.True(t, apierrors.IsNotFound(err), "shared Backend should be deleted after the last MCPRoute in the namespace is removed")
 }
 
+func TestMCPRouteController_cleanupSharedMCPProxyBackend_doesNotDeleteSuccessorBackend(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewMCPRouteController(fakeClient, fakekube.NewClientset(), ctrl.Log, eventCh.Ch)
+
+	require.NoError(t, fakeClient.Create(t.Context(), &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "gw1", Namespace: "default"}}))
+	routeA := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route-a", Namespace: "default", UID: "uid-a"},
+		Spec: aigv1b1.MCPRouteSpec{
+			ParentRefs:  []gwapiv1.ParentReference{{Name: "gw1"}},
+			BackendRefs: []aigv1b1.MCPRouteBackendRef{{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc-a", Namespace: ptr.To(gwapiv1.Namespace("default"))}}},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), routeA))
+	_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "route-a"}})
+	require.NoError(t, err)
+
+	require.NoError(t, fakeClient.Delete(t.Context(), routeA))
+	var deleting aigv1b1.MCPRoute
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: "route-a", Namespace: "default"}, &deleting))
+
+	require.NoError(t, c.cleanupSharedMCPProxyBackend(t.Context(), &deleting))
+	var backend egv1a1.Backend
+	require.True(t, apierrors.IsNotFound(fakeClient.Get(t.Context(), client.ObjectKey{Name: mcpProxySharedBackendName, Namespace: "default"}, &backend)))
+
+	routeB := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route-b", Namespace: "default", UID: "uid-b"},
+		Spec: aigv1b1.MCPRouteSpec{
+			ParentRefs:  []gwapiv1.ParentReference{{Name: "gw1"}},
+			BackendRefs: []aigv1b1.MCPRouteBackendRef{{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc-b", Namespace: ptr.To(gwapiv1.Namespace("default"))}}},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), routeB))
+	_, err = c.ensureMCPProxyBackend(t.Context(), "default")
+	require.NoError(t, err)
+
+	require.NoError(t, c.cleanupSharedMCPProxyBackend(t.Context(), &deleting))
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: mcpProxySharedBackendName, Namespace: "default"}, &backend),
+		"successor Backend must survive a retried last-route cleanup")
+}
+
 // TestMCPRouteController_SharedBackend_PreservesUnmanagedBackend verifies that a Backend which
 // happens to share the fixed name but was not created by us (no managed-by label) is neither
 // modified on ensure nor deleted when the last MCPRoute in the namespace is removed.

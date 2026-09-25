@@ -56,6 +56,7 @@ const (
 // Exported for testing purposes.
 type BackendSecurityPolicyController struct {
 	client                    client.Client
+	apiReader                 client.Reader
 	kube                      kubernetes.Interface
 	logger                    logr.Logger
 	aiServiceBackendEventChan chan event.GenericEvent
@@ -65,6 +66,7 @@ type BackendSecurityPolicyController struct {
 func NewBackendSecurityPolicyController(client client.Client, kube kubernetes.Interface, logger logr.Logger, aiServiceBackendEventChan chan event.GenericEvent, inferencePoolEventChan chan event.GenericEvent) *BackendSecurityPolicyController {
 	return &BackendSecurityPolicyController{
 		client:                    client,
+		apiReader:                 client,
 		kube:                      kube,
 		logger:                    logger,
 		aiServiceBackendEventChan: aiServiceBackendEventChan,
@@ -88,8 +90,10 @@ func (c *BackendSecurityPolicyController) Reconcile(ctx context.Context, req ctr
 	res, err = c.reconcile(ctx, &bsp)
 	if err != nil {
 		c.logger.Error(err, "failed to reconcile backend security policy", "namespace", req.Namespace, "name", req.Name)
-		c.updateBackendSecurityPolicyStatus(ctx, &bsp, aigv1b1.ConditionTypeNotAccepted, err.Error())
-	} else {
+		if bsp.DeletionTimestamp.IsZero() {
+			c.updateBackendSecurityPolicyStatus(ctx, &bsp, aigv1b1.ConditionTypeNotAccepted, err.Error())
+		}
+	} else if bsp.DeletionTimestamp.IsZero() {
 		c.updateBackendSecurityPolicyStatus(ctx, &bsp, aigv1b1.ConditionTypeAccepted, "BackendSecurityPolicy reconciled successfully")
 	}
 	return
@@ -97,7 +101,11 @@ func (c *BackendSecurityPolicyController) Reconcile(ctx context.Context, req ctr
 
 // reconcile reconciles BackendSecurityPolicy but extracted from Reconcile to centralize error handling.
 func (c *BackendSecurityPolicyController) reconcile(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy) (res ctrl.Result, err error) {
-	if handleFinalizer(ctx, c.client, c.logger, bsp, c.syncBackendSecurityPolicy) { // Propagate the bsp deletion all the way to relevant Gateways.
+	onDelete, err := handleFinalizer(ctx, c.client, c.apiReader, bsp, c.syncBackendSecurityPolicy)
+	if err != nil {
+		return res, err
+	}
+	if onDelete {
 		return res, nil
 	}
 	// Determine if credential rotation is needed
@@ -347,7 +355,9 @@ func (c *BackendSecurityPolicyController) syncBackendSecurityPolicy(ctx context.
 				continue
 			}
 			c.logger.Info("Syncing AIServiceBackend", "namespace", aiBackend.Namespace, "name", aiBackend.Name)
-			c.aiServiceBackendEventChan <- event.GenericEvent{Object: &aiBackend}
+			if err := enqueueGenericEvent(c.aiServiceBackendEventChan, &aiBackend); err != nil {
+				return err
+			}
 		case targetRef.Group == inferencePoolGroup && targetRef.Kind == inferencePoolKind:
 			var inferencePool gwaiev1.InferencePool
 			err := c.client.Get(ctx, client.ObjectKey{
@@ -362,7 +372,9 @@ func (c *BackendSecurityPolicyController) syncBackendSecurityPolicy(ctx context.
 				continue
 			}
 			c.logger.Info("Syncing InferencePool", "namespace", inferencePool.Namespace, "name", inferencePool.Name)
-			c.inferencePoolEventChan <- event.GenericEvent{Object: &inferencePool}
+			if err := enqueueGenericEvent(c.inferencePoolEventChan, &inferencePool); err != nil {
+				return err
+			}
 		}
 	}
 

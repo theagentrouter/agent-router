@@ -56,9 +56,10 @@ const (
 //
 // Exported for testing purposes.
 type AIGatewayRouteController struct {
-	client client.Client
-	kube   kubernetes.Interface
-	logger logr.Logger
+	client    client.Client
+	apiReader client.Reader
+	kube      kubernetes.Interface
+	logger    logr.Logger
 	// gatewayEventChan is a channel to send events to the gateway controller.
 	gatewayEventChan chan event.GenericEvent
 	// rootPrefix is the prefix for the root path of the AI Gateway.
@@ -75,6 +76,7 @@ func NewAIGatewayRouteController(
 ) *AIGatewayRouteController {
 	return &AIGatewayRouteController{
 		client:                  client,
+		apiReader:               client,
 		kube:                    kube,
 		logger:                  logger,
 		gatewayEventChan:        gatewayEventChan,
@@ -99,10 +101,14 @@ func (c *AIGatewayRouteController) Reconcile(ctx context.Context, req reconcile.
 
 	if err := c.syncAIGatewayRoute(ctx, &aiGatewayRoute); err != nil {
 		c.logger.Error(err, "failed to sync AIGatewayRoute")
-		c.updateAIGatewayRouteStatus(ctx, &aiGatewayRoute, aigv1b1.ConditionTypeNotAccepted, err.Error())
+		if aiGatewayRoute.DeletionTimestamp.IsZero() {
+			c.updateAIGatewayRouteStatus(ctx, &aiGatewayRoute, aigv1b1.ConditionTypeNotAccepted, err.Error())
+		}
 		return ctrl.Result{}, err
 	}
-	c.updateAIGatewayRouteStatus(ctx, &aiGatewayRoute, aigv1b1.ConditionTypeAccepted, "AI Gateway Route reconciled successfully")
+	if aiGatewayRoute.DeletionTimestamp.IsZero() {
+		c.updateAIGatewayRouteStatus(ctx, &aiGatewayRoute, aigv1b1.ConditionTypeAccepted, "AI Gateway Route reconciled successfully")
+	}
 	return reconcile.Result{}, nil
 }
 
@@ -159,7 +165,11 @@ func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.
 // syncAIGatewayRoute is the main logic for reconciling the AIGatewayRoute resource.
 // This is decoupled from the Reconcile method to centralize the error handling and status updates.
 func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
-	if handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.syncGateways) { // Propagate the AIGatewayRoute deletion all the way up to relevant Gateways.
+	onDelete, err := handleFinalizer(ctx, c.client, c.apiReader, aiGatewayRoute, c.syncGateways)
+	if err != nil {
+		return err
+	}
+	if onDelete {
 		return nil
 	}
 
@@ -167,8 +177,8 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 	filters := generateHTTPRouteFilters(aiGatewayRoute)
 	for _, base := range filters {
 		var f egv1a1.HTTPRouteFilter
-		if err := c.client.Get(ctx, client.ObjectKey{Name: base.Name, Namespace: base.Namespace}, &f); err != nil {
-			if apierrors.IsNotFound(err) {
+		if getErr := c.client.Get(ctx, client.ObjectKey{Name: base.Name, Namespace: base.Namespace}, &f); getErr != nil {
+			if apierrors.IsNotFound(getErr) {
 				if err = ctrlutil.SetControllerReference(aiGatewayRoute, base, c.client.Scheme()); err != nil {
 					panic(fmt.Errorf("BUG: failed to set controller reference for HTTPRouteFilter: %w", err))
 				}
@@ -178,7 +188,7 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 				}
 				c.logger.Info("Created HTTPRouteFilter", "name", base.Name, "namespace", base.Namespace)
 			} else {
-				return fmt.Errorf("failed to get HTTPRouteFilter %s: %w", base.Name, err)
+				return fmt.Errorf("failed to get HTTPRouteFilter %s: %w", base.Name, getErr)
 			}
 		}
 	}
@@ -186,7 +196,7 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 	// Check if the HTTPRoute exists.
 	c.logger.Info("syncing AIGatewayRoute", "namespace", aiGatewayRoute.Namespace, "name", aiGatewayRoute.Name)
 	var httpRoute gwapiv1.HTTPRoute
-	err := c.client.Get(ctx, client.ObjectKey{Name: aiGatewayRoute.Name, Namespace: aiGatewayRoute.Namespace}, &httpRoute)
+	err = c.client.Get(ctx, client.ObjectKey{Name: aiGatewayRoute.Name, Namespace: aiGatewayRoute.Namespace}, &httpRoute)
 	existingRoute := err == nil
 	if apierrors.IsNotFound(err) {
 		// This means that this AIGatewayRoute is a new one.
@@ -400,8 +410,7 @@ func (c *AIGatewayRouteController) syncGateway(ctx context.Context, namespace, n
 		return fmt.Errorf("failed to get Gateway %s/%s: %w", namespace, name, err)
 	}
 	c.logger.Info("syncing Gateway", "namespace", gw.Namespace, "name", gw.Name)
-	c.gatewayEventChan <- event.GenericEvent{Object: &gw}
-	return nil
+	return enqueueGenericEvent(c.gatewayEventChan, &gw)
 }
 
 func (c *AIGatewayRouteController) backend(ctx context.Context, namespace, name string) (*aigv1b1.AIServiceBackend, error) {
