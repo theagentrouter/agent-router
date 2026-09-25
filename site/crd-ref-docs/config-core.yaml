@@ -36,40 +36,40 @@ render:
     # Gateway API
     - name: BackendObjectReference
       package: sigs.k8s.io/gateway-api/apis/v1
-      link: https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.BackendObjectReference
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendobjectreference
     - name: Duration
       package: sigs.k8s.io/gateway-api/apis/v1
-      link: https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.Duration
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#duration
     - name: HTTPHeader
       package: sigs.k8s.io/gateway-api/apis/v1
-      link: https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheader
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheader
     - name: HTTPHeaderMatch
       package: sigs.k8s.io/gateway-api/apis/v1
-      link: https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheadermatch
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheadermatch
     - name: HTTPRouteTimeouts
       package: sigs.k8s.io/gateway-api/apis/v1
-      link: https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httproutetimeouts
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproutetimeouts
     - name: LocalObjectReference
       package: sigs.k8s.io/gateway-api/apis/v1
-      link: https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#localobjectreference
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#localobjectreference
     - name: LocalPolicyTargetReference
       package: sigs.k8s.io/gateway-api/apis/v1alpha2
-      link: https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1alpha2.LocalPolicyTargetReference
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#localpolicytargetreference
     - name: LocalPolicyTargetReferenceWithSectionName
       package: sigs.k8s.io/gateway-api/apis/v1alpha2
-      link: https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1alpha2.LocalPolicyTargetReferenceWithSectionName
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#localpolicytargetreferencewithsectionname
     - name: Namespace
       package: sigs.k8s.io/gateway-api/apis/v1
-      link: https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#namespace
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#namespace
     - name: ParentReference
       package: sigs.k8s.io/gateway-api/apis/v1
-      link: https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#parentreference
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#parentreference
     - name: PolicyStatus
       package: sigs.k8s.io/gateway-api/apis/v1alpha2
-      link: https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1alpha2.PolicyStatus
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#policystatus
     - name: SecretObjectReference
       package: sigs.k8s.io/gateway-api/apis/v1
-      link: https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference
+      link: https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference
 
 navigation:
   includeTOC: true
