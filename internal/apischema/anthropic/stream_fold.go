@@ -33,6 +33,11 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 			clear(textBuffers)
 			clear(thinkingBuffers)
 			response = *(*MessagesResponse)(event.MessageStart)
+			// Subsequent deltas must not update the originating chunk's usage.
+			if response.Usage != nil {
+				usage := *response.Usage
+				response.Usage = &usage
+			}
 			// Ensure Content is initialized if nil.
 			if response.Content == nil {
 				response.Content = []MessagesContentBlock{}
@@ -41,7 +46,8 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 		case event.MessageDelta != nil:
 			delta := event.MessageDelta
 			if response.Usage == nil {
-				response.Usage = &delta.Usage
+				usage := delta.Usage
+				response.Usage = &usage
 			} else {
 				// Usage is cumulative for output tokens in message_delta.
 				// Input tokens are usually in message_start.
