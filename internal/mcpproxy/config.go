@@ -40,14 +40,33 @@ type (
 	}
 
 	mcpProxyConfigRoute struct {
-		backends      map[filterapi.MCPBackendName]filterapi.MCPBackend
-		toolSelectors map[filterapi.MCPBackendName]*toolSelector
-		authorization *compiledAuthorization
+		backends        map[filterapi.MCPBackendName]filterapi.MCPBackend
+		toolSelectors   map[filterapi.MCPBackendName]*toolSelector
+		promptSelectors map[filterapi.MCPBackendName]*toolSelector
+		authorization   *compiledAuthorization
 		// backendSelector reuses the same compiledAuthorization machinery as authorization
 		// above, but is evaluated once per candidate backend in newSession() instead of
 		// per JSON-RPC method call.
 		backendSelector *compiledAuthorization
 		forwardHeaders  []string
+		// routePrefixMode is the route-level fallback when a backend has no per-backend PrefixMode set.
+		routePrefixMode filterapi.PrefixMode
+
+		// neverModeToolIndex maps a bare tool name to the backend that owns it, for every backend
+		// whose effective PrefixMode is Never. It is computed once here, at config load, from each
+		// such backend's declared toolSelector.include (admission-time validation requires this to
+		// be set and unique across backends for Never-mode backends — see validatePerBackendPrefixMode
+		// in internal/controller/mcp_route.go). Because it lives on the route config rather than on
+		// a per-client session, tool-call routing can resolve bare names directly from here without
+		// depending on session state that doesn't survive across the separate HTTP requests a real
+		// MCP session is made of.
+		neverModeToolIndex map[string]string
+
+		// neverModePromptIndex is the prompt equivalent of neverModeToolIndex, populated only for
+		// backends that opt in by declaring promptSelector.include. Never-mode backends that don't
+		// declare a promptSelector keep their prompts prefixed (see mergePromptsList) since there is
+		// no admission-validated, unique set of names to expose bare for them.
+		neverModePromptIndex map[string]string
 	}
 
 	// toolSelector filters tools using include and exclude patterns with exact matches or regular expressions.
@@ -85,6 +104,16 @@ func (m *mcpProxyConfig) sameTools(other *mcpProxyConfig) bool {
 	})
 }
 
+// effectivePrefixMode returns the effective PrefixMode for the given backend.
+// Per-backend PrefixMode takes precedence; falls back to route-level PrefixMode.
+// An empty string (zero value) for either field is treated as Always (the default).
+func (m *mcpProxyConfigRoute) effectivePrefixMode(backendName filterapi.MCPBackendName) filterapi.PrefixMode {
+	if backend, ok := m.backends[backendName]; ok && backend.PrefixMode != "" {
+		return backend.PrefixMode
+	}
+	return m.routePrefixMode
+}
+
 func (m *mcpProxyConfigRoute) sameTools(other *mcpProxyConfigRoute) bool {
 	if m == nil || other == nil {
 		return m == other
@@ -93,6 +122,20 @@ func (m *mcpProxyConfigRoute) sameTools(other *mcpProxyConfigRoute) bool {
 		return false
 	}
 	if !m.authorization.same(other.authorization) {
+		return false
+	}
+	// neverModeToolIndex/neverModePromptIndex catch PrefixMode and include-list changes that
+	// don't touch toolSelectors/promptSelectors directly, so reload correctly signals
+	// notifications/tools(prompts)/list_changed for those too.
+	if !maps.Equal(m.neverModeToolIndex, other.neverModeToolIndex) {
+		return false
+	}
+	if !maps.Equal(m.neverModePromptIndex, other.neverModePromptIndex) {
+		return false
+	}
+	if !maps.EqualFunc(m.promptSelectors, other.promptSelectors, func(a, b *toolSelector) bool {
+		return a.sameTools(b)
+	}) {
 		return false
 	}
 	return maps.EqualFunc(m.toolSelectors, other.toolSelectors, func(a, b *toolSelector) bool {
@@ -104,6 +147,33 @@ var sortRegexpAsString = func(a, b *regexp.Regexp) int { return strings.Compare(
 
 func equalKeys[K comparable, V any](m1, m2 map[K]V) bool {
 	return maps.EqualFunc(m1, m2, func(_, _ V) bool { return true })
+}
+
+// buildSelector compiles a toolSelector from raw include/exclude patterns shared by
+// MCPToolSelector and MCPPromptSelector. includeKind/excludeKind are used only to make compile
+// errors legible (e.g. "include", "prompt exclude").
+func buildSelector(include, includeRegex, exclude, excludeRegex []string, includeKind, excludeKind string, backendName filterapi.MCPBackendName, routeName filterapi.MCPRouteName) (*toolSelector, error) {
+	ts := &toolSelector{
+		include: make(map[string]struct{}, len(include)),
+		exclude: make(map[string]struct{}, len(exclude)),
+	}
+	for _, name := range include {
+		ts.include[name] = struct{}{}
+	}
+	includeRegexps, err := compileRegexps(includeRegex, includeKind, backendName, routeName)
+	if err != nil {
+		return nil, err
+	}
+	ts.includeRegexps = includeRegexps
+	for _, name := range exclude {
+		ts.exclude[name] = struct{}{}
+	}
+	excludeRegexps, err := compileRegexps(excludeRegex, excludeKind, backendName, routeName)
+	if err != nil {
+		return nil, err
+	}
+	ts.excludeRegexps = excludeRegexps
+	return ts, nil
 }
 
 func compileRegexps(exprs []string, kind string, backendName filterapi.MCPBackendName, routeName filterapi.MCPRouteName) ([]*regexp.Regexp, error) {
@@ -210,36 +280,68 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 		r := &mcpProxyConfigRoute{
 			backends:        make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(route.Backends)),
 			toolSelectors:   make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
+			promptSelectors: make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
 			authorization:   compiledAuth,
 			backendSelector: compiledBackendSel,
 			forwardHeaders:  route.ForwardHeaders,
+			routePrefixMode: route.PrefixMode,
 		}
 		for _, backend := range route.Backends {
 			r.backends[backend.Name] = backend
 			if s := backend.ToolSelector; s != nil {
-				ts := &toolSelector{
-					include: make(map[string]struct{}),
-					exclude: make(map[string]struct{}),
-				}
-				for _, tool := range s.Include {
-					ts.include[tool] = struct{}{}
-				}
-				includeRegexps, err := compileRegexps(s.IncludeRegex, "include", backend.Name, route.Name)
+				ts, err := buildSelector(s.Include, s.IncludeRegex, s.Exclude, s.ExcludeRegex, "include", "exclude", backend.Name, route.Name)
 				if err != nil {
 					return err
 				}
-				ts.includeRegexps = includeRegexps
-				for _, tool := range s.Exclude {
-					ts.exclude[tool] = struct{}{}
-				}
-				excludeRegexps, err := compileRegexps(s.ExcludeRegex, "exclude", backend.Name, route.Name)
-				if err != nil {
-					return err
-				}
-				ts.excludeRegexps = excludeRegexps
 				r.toolSelectors[backend.Name] = ts
 			}
+			if s := backend.PromptSelector; s != nil {
+				ps, err := buildSelector(s.Include, s.IncludeRegex, s.Exclude, s.ExcludeRegex, "prompt include", "prompt exclude", backend.Name, route.Name)
+				if err != nil {
+					return err
+				}
+				r.promptSelectors[backend.Name] = ps
+			}
 		}
+
+		// Build the static Never-mode indexes now that backends/routePrefixMode are populated,
+		// since effectivePrefixMode needs both. Collisions are already rejected at admission time
+		// (validatePerBackendPrefixMode), so a collision here indicates the running config diverged
+		// from what was validated; log and keep the first claim rather than failing config load.
+		r.neverModeToolIndex = make(map[string]string)
+		r.neverModePromptIndex = make(map[string]string)
+		for _, backend := range route.Backends {
+			if r.effectivePrefixMode(backend.Name) != filterapi.PrefixModeNever {
+				continue
+			}
+			if ts := r.toolSelectors[backend.Name]; ts != nil {
+				for name := range ts.include {
+					if !ts.allows(name) {
+						continue
+					}
+					if existing, collision := r.neverModeToolIndex[name]; collision {
+						p.l.Warn("BUG: prefixMode=Never tool name collision survived admission validation, keeping first claim",
+							slog.String("tool", name), slog.String("backend1", existing), slog.String("backend2", backend.Name))
+						continue
+					}
+					r.neverModeToolIndex[name] = backend.Name
+				}
+			}
+			if ps := r.promptSelectors[backend.Name]; ps != nil {
+				for name := range ps.include {
+					if !ps.allows(name) {
+						continue
+					}
+					if existing, collision := r.neverModePromptIndex[name]; collision {
+						p.l.Warn("BUG: prefixMode=Never prompt name collision survived admission validation, keeping first claim",
+							slog.String("prompt", name), slog.String("backend1", existing), slog.String("backend2", backend.Name))
+						continue
+					}
+					r.neverModePromptIndex[name] = backend.Name
+				}
+			}
+		}
+
 		newConfig.routes[route.Name] = r
 	}
 

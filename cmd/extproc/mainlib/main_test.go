@@ -253,7 +253,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 			{
 				name:          "invalid endpoint prefixes - unknown key",
 				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-endpointPrefixes", "foo:/x"},
-				expectedError: "failed to parse endpoint prefixes: unknown endpointPrefixes key \"foo\" at position 1 (allowed: openai, cohere, anthropic)",
+				expectedError: "failed to parse endpoint prefixes: unknown endpointPrefixes key \"foo\" at position 1 (allowed: openai, cohere, anthropic, typesafe)",
 			},
 			{
 				name:          "invalid endpoint prefixes - missing colon",

@@ -101,6 +101,8 @@ func (b *metricsImpl) SetBackend(backend *filterapi.Backend) {
 		b.backend = genaiProviderAnthropic
 	case filterapi.APISchemaCohere:
 		b.backend = genaiProviderCohere
+	case filterapi.APISchemaTypeSafe:
+		b.backend = genaiProviderTypeSafe
 	default:
 		b.backend = backend.Name
 	}

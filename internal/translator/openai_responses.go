@@ -30,11 +30,22 @@ func NewResponsesOpenAIToOpenAITranslator(prefix string, modelNameOverride inter
 	}
 }
 
+// NewResponsesOpenAIToAWSOpenAITranslator implements [OpenAIResponsesTranslator] for OpenAI to AWS OpenAI-compatible translation.
+// The request body is always returned so that AWS SigV4 authentication signs the body Envoy sends upstream.
+func NewResponsesOpenAIToAWSOpenAITranslator(prefix string, modelNameOverride internalapi.ModelNameOverride) OpenAIResponsesTranslator {
+	return &openAIToOpenAITranslatorV1Responses{
+		modelNameOverride:        modelNameOverride,
+		path:                     path.Join("/", prefix, "responses"),
+		forceRequestBodyMutation: true,
+	}
+}
+
 // openAIToOpenAITranslatorV1Responses is a passthrough translator for OpenAI Responses API.
 // May apply model overrides but otherwise preserves the OpenAI format:
 // https://platform.openai.com/docs/api-reference/responses/create
 type openAIToOpenAITranslatorV1Responses struct {
-	modelNameOverride internalapi.ModelNameOverride
+	modelNameOverride        internalapi.ModelNameOverride
+	forceRequestBodyMutation bool
 	// The path of the responses endpoint to be used for the request. It is prefixed with the OpenAI path prefix.
 	path string
 	// stream indicates whether the request is for streaming.
@@ -69,7 +80,7 @@ func (o *openAIToOpenAITranslatorV1Responses) RequestBody(original []byte, req *
 	// Always set the path header to the responses endpoint so that the request is routed correctly.
 	newHeaders = []internalapi.Header{{pathHeaderName, o.path}}
 
-	newBody = forceOriginalBodyIfEmpty(forceBodyMutation, newBody, original)
+	newBody = forceOriginalBodyIfEmpty(forceBodyMutation || o.forceRequestBodyMutation, newBody, original)
 
 	if len(newBody) > 0 {
 		newHeaders = append(newHeaders, internalapi.Header{contentLengthHeaderName, strconv.Itoa(len(newBody))})
@@ -126,12 +137,12 @@ func (o *openAIToOpenAITranslatorV1Responses) handleNonStreamingResponse(body io
 	responseModel = cmp.Or(resp.Model, o.requestModel)
 
 	if resp.Usage != nil {
-		tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                                         // #nosec G115
-		tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                                       // #nosec G115
-		tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                                         // #nosec G115
-		tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens))               // #nosec G115
-		tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.InputTokensDetails.CacheCreationTokens)) // #nosec G115
-		tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens))             // #nosec G115
+		tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                                             // #nosec G115
+		tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                                           // #nosec G115
+		tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                                             // #nosec G115
+		tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens))                   // #nosec G115
+		tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.InputTokensDetails.CacheWriteTokensValue())) // #nosec G115
+		tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens))                 // #nosec G115
 	}
 
 	// Record non-streaming response to span if tracing is enabled.
@@ -147,13 +158,12 @@ func setTokenUsageFromResponse(tokenUsage *metrics.TokenUsage, resp *openai.Resp
 	if resp == nil || resp.Usage == nil {
 		return
 	}
-	tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                           // #nosec G115
-	tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                         // #nosec G115
-	tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                           // #nosec G115
-	tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens)) // #nosec G115
-	// Openai does not support cache creation response.
-	tokenUsage.SetCacheCreationInputTokens(uint32(0))                                     // #nosec G115
-	tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens)) // #nosec G115
+	tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                                             // #nosec G115
+	tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                                           // #nosec G115
+	tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                                             // #nosec G115
+	tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens))                   // #nosec G115
+	tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.InputTokensDetails.CacheWriteTokensValue())) // #nosec G115
+	tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens))                 // #nosec G115
 }
 
 // extractUsageFromBufferEvent extracts the token usage and model from the buffered SSE events.

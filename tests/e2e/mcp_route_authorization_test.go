@@ -325,6 +325,7 @@ func makeSignedJWT(t *testing.T, scopes ...string) string {
 func makeSignedJWTWithClaims(t *testing.T, claims jwt.MapClaims, scopes ...string) string {
 	t.Helper()
 
+	claims["iss"] = "https://auth-server.example.com"
 	if len(scopes) > 0 {
 		claims["scope"] = strings.Join(scopes, " ")
 		claims["exp"] = time.Now().Add(30 * time.Minute).Unix()

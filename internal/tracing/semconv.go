@@ -14,6 +14,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/openai"
+	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/otelgenai"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
@@ -38,6 +39,7 @@ type recorderSet struct {
 	transcription   tracingapi.TranscriptionRecorder
 	translation     tracingapi.TranslationRecorder
 	rerank          tracingapi.RerankRecorder
+	systemOne       tracingapi.SystemOneRecorder
 	message         tracingapi.MessageRecorder
 	tokenize        tracingapi.TokenizeRecorder
 
@@ -112,6 +114,7 @@ func newOpenInferenceRecorders() recorderSet {
 		transcription:   openai.NewTranscriptionRecorder(cfg),
 		translation:     openai.NewTranslationRecorder(cfg),
 		rerank:          cohere.NewRerankRecorder(cfg),
+		systemOne:       typesafe.NewSystemOneRecorder(cfg),
 		message:         anthropic.NewMessageRecorder(cfg),
 		tokenize:        openai.NewTokenizeRecorder(cfg),
 
@@ -140,6 +143,7 @@ func newOTelGenAIRecorders() recorderSet {
 		transcription:   otelgenai.NewTranscriptionRecorder(cfg),
 		translation:     otelgenai.NewTranslationRecorder(cfg),
 		rerank:          otelgenai.NewRerankRecorder(cfg),
+		systemOne:       otelgenai.NewSystemOneRecorder(cfg),
 		message:         otelgenai.NewMessageRecorder(cfg),
 		tokenize:        otelgenai.NewTokenizeRecorder(cfg),
 

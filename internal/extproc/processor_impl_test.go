@@ -532,6 +532,48 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 		require.Equal(t, 3, mm.cachedInputTokenCount)
 		require.Equal(t, 21, mm.cacheCreationInputTokenCount)
 	})
+
+	// Verify dynamic metadata (used for the access log) is populated as soon as a chunk carries
+	// usage, even if the stream never reaches EndOfStream (e.g. the downstream client disconnects
+	// right after the terminal SSE frame, before Envoy observes end of stream).
+	t.Run("streaming usage chunk without EndOfStream still sets dynamic metadata", func(t *testing.T) {
+		mm := &mockMetrics{}
+		mt := &mockTranslator{t: t}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator:      mt,
+			metrics:         mm,
+			responseHeaders: map[string]string{":status": "200"},
+			parent: &chatCompletionProcessorRouterFilter{
+				stream: true,
+				config: &filterapi.RuntimeConfig{
+					RequestCosts: []filterapi.RuntimeRequestCost{
+						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeOutputToken, MetadataKey: "output_token_usage"}},
+					},
+				},
+			},
+			routeName: "some_route",
+		}
+
+		// First chunk carries no usage: dynamic metadata must not be set yet.
+		chunk := &extprocv3.HttpBody{Body: []byte("chunk-1"), EndOfStream: false}
+		mt.expResponseBody = chunk
+		mt.retUsedToken = metrics.TokenUsage{}
+		res, err := p.ProcessResponseBody(t.Context(), chunk)
+		require.NoError(t, err)
+		require.Nil(t, res.DynamicMetadata)
+
+		// The chunk carrying the terminal usage payload is not EndOfStream (the client disconnected
+		// right after reading it), but dynamic metadata must be populated from this chunk anyway.
+		usageChunk := &extprocv3.HttpBody{Body: []byte("chunk-usage"), EndOfStream: false}
+		mt.expResponseBody = usageChunk
+		mt.retUsedToken.SetOutputTokens(138)
+		res, err = p.ProcessResponseBody(t.Context(), usageChunk)
+		require.NoError(t, err)
+		md := res.DynamicMetadata
+		require.NotNil(t, md)
+		require.Equal(t, float64(138), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+			GetStructValue().Fields["output_token_usage"].GetNumberValue())
+	})
 }
 
 func bodyFromModel(t *testing.T, model string, stream bool, streamOptions *openai.StreamOptions) []byte {

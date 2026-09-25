@@ -119,18 +119,18 @@ func parseURL(baseURL string) (*parsedURL, error) {
 		return nil, fmt.Errorf("invalid base URL: missing hostname")
 	}
 	hostname, ip := splitHost(host)
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("invalid base URL: unsupported scheme %q", u.Scheme)
+	}
 
 	// Determine port
 	portStr := u.Port()
 	var port int
 	if portStr == "" {
-		switch u.Scheme {
-		case "https":
+		if u.Scheme == "https" {
 			port = 443
-		case "http":
+		} else {
 			port = 80
-		default:
-			return nil, fmt.Errorf("invalid base URL: unsupported scheme %q", u.Scheme)
 		}
 	} else {
 		var err error

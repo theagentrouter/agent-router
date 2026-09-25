@@ -677,6 +677,11 @@ func TestSetBackendProviderName(t *testing.T) {
 			expectedProvider: "cohere",
 		},
 		{
+			name:             "TypeSafe schema",
+			schema:           filterapi.APISchemaTypeSafe,
+			expectedProvider: "typesafe",
+		},
+		{
 			name:             "Unknown schema falls back to backend name",
 			schema:           "UnknownSchema",
 			backendName:      "my-custom-backend",

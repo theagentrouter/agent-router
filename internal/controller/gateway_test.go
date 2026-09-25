@@ -16,6 +16,7 @@ import (
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/require"
@@ -432,7 +433,7 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 	for range 2 { // Reconcile twice to make sure the secret update path is working.
 		const someNamespace = "some-namespace"
 		configName := FilterConfigBundleIndexSecretName("gw", gwNamespace)
-		effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil)
+		effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil, nil)
 		require.NoError(t, err)
 		require.True(t, effective, "expected filter config to be effective")
 
@@ -565,7 +566,7 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 	}
 
 	const someNamespace = "some-namespace"
-	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw-hostname", gwNamespace, someNamespace, routes, nil, "foouuid", nil)
+	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw-hostname", gwNamespace, someNamespace, routes, nil, "foouuid", nil, nil)
 	require.NoError(t, err)
 	require.True(t, effective, "expected filter config to be effective")
 
@@ -629,7 +630,7 @@ func TestGatewayController_reconcileFilterConfigSecret_AllUnscopedRoutesLeaveUns
 	}))
 
 	const someNamespace = "some-namespace"
-	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw-unscoped-only", gwNamespace, someNamespace, routes, nil, "foouuid", nil)
+	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw-unscoped-only", gwNamespace, someNamespace, routes, nil, "foouuid", nil, nil)
 	require.NoError(t, err)
 	require.True(t, effective)
 
@@ -703,7 +704,7 @@ func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostA
 
 	const someNamespace = "some-namespace"
 
-	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil)
+	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil, nil)
 	require.NoError(t, err)
 	require.True(t, effective, "expected filter config to be effective")
 	fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", gwNamespace)
@@ -772,7 +773,7 @@ func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostA
 	require.NoError(t, err)
 
 	const someNamespace = "some-namespace"
-	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil)
+	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil, nil)
 	require.NoError(t, err)
 	require.True(t, effective, "expected filter config to be effective")
 
@@ -823,7 +824,7 @@ func TestGatewayController_reconcileFilterConfigSecret_InvalidCELExpression(t *t
 	require.NoError(t, err)
 
 	const someNamespace = "some-namespace"
-	_, err = c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil)
+	_, err = c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid CEL expression")
 }
@@ -917,7 +918,7 @@ func TestGatewayController_reconcileFilterConfigSecret_SkipsDeletedRoutes(t *tes
 	configName := FilterConfigBundleIndexSecretName("gw", gwNamespace)
 
 	// Reconcile filter config secret.
-	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil)
+	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil, nil)
 	require.NoError(t, err)
 	require.True(t, effective, "expected filter config to be effective")
 
@@ -1601,7 +1602,7 @@ func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextCanceled(t 
 		}},
 	}}
 
-	_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, configNamespace, routes, nil, "uuid", nil)
+	_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, configNamespace, routes, nil, "uuid", nil, nil)
 	require.ErrorIs(t, err, context.Canceled)
 
 	_, getErr := kube.CoreV1().Secrets(configNamespace).Get(t.Context(),
@@ -1643,7 +1644,7 @@ func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextDeadlineRea
 		}},
 	}}
 
-	_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, configNamespace, routes, nil, "uuid", nil)
+	_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, configNamespace, routes, nil, "uuid", nil, nil)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	_, getErr := kube.CoreV1().Secrets(configNamespace).Get(t.Context(),
@@ -2878,6 +2879,25 @@ func Test_schemaToFilterAPI(t *testing.T) {
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSBedrock},
 		},
 		{
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaAWSOpenAI},
+			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI, Prefix: "openai/v1"},
+		},
+		{
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaTypeSafe},
+			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe, Version: "v1"},
+		},
+		{
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaTypeSafe, Version: ptr.To("v2")},
+			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe, Version: "v2"},
+		},
+		{
+			in: aigv1b1.VersionedAPISchema{
+				Name:   aigv1b1.APISchemaAWSOpenAI,
+				Prefix: ptr.To("custom/v1"),
+			},
+			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI, Prefix: "custom/v1"},
+		},
+		{
 			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaAnthropic},
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAnthropic, Prefix: "v1"},
 		},
@@ -3083,10 +3103,10 @@ func TestGatewayController_reconcileFilterMCPConfigSecret(t *testing.T) {
 	const someNamespace = "some-namespace"
 	configName := FilterConfigBundleIndexSecretName("gw", gwNamespace)
 
-	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, nil, nil, "mcp-uuid", nil)
+	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, nil, nil, "mcp-uuid", nil, nil)
 	require.NoError(t, err)
 	require.False(t, effective) // No MCP routes, so not effective.
-	effective, err = c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, nil, mcpRoutes, "mcp-uuid", nil)
+	effective, err = c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, nil, mcpRoutes, "mcp-uuid", nil, nil)
 	require.NoError(t, err)
 	require.True(t, effective)
 
@@ -3211,6 +3231,37 @@ func Test_mcpConfig_ToolSelectorExclude(t *testing.T) {
 	require.Equal(t, []string{"toolA"}, ts.Include)
 	require.Equal(t, []string{"toolB"}, ts.Exclude)
 	require.Equal(t, []string{"^secret.*"}, ts.ExcludeRegex)
+}
+
+func Test_mcpConfig_PromptSelector(t *testing.T) {
+	mcpRoutes := []aigv1b1.MCPRoute{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+			Spec: aigv1b1.MCPRouteSpec{
+				BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+					BackendObjectReference: gwapiv1.BackendObjectReference{
+						Name: gwapiv1.ObjectName("backend"),
+					},
+					PromptSelector: &aigv1b1.MCPPromptFilter{
+						Include:      []string{"greeting"},
+						Exclude:      []string{"farewell"},
+						ExcludeRegex: []string{"^secret.*"},
+					},
+				}},
+			},
+		},
+	}
+
+	mc, effective := mcpConfig(mcpRoutes)
+	require.True(t, effective)
+	require.NotNil(t, mc)
+	require.Len(t, mc.Routes, 1)
+	require.Len(t, mc.Routes[0].Backends, 1)
+	ps := mc.Routes[0].Backends[0].PromptSelector
+	require.NotNil(t, ps)
+	require.Equal(t, []string{"greeting"}, ps.Include)
+	require.Equal(t, []string{"farewell"}, ps.Exclude)
+	require.Equal(t, []string{"^secret.*"}, ps.ExcludeRegex)
 }
 
 func Test_mcpConfig_ForwardHeaders(t *testing.T) {
@@ -3763,7 +3814,7 @@ func TestGatewayController_reconcileFilterConfigSecret_GlobalDefaults(t *testing
 			require.NoError(t, err)
 
 			const someNamespace = "some-namespace"
-			effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, tt.routes, nil, "test-uuid", tt.globalCosts)
+			effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, tt.routes, nil, "test-uuid", tt.globalCosts, nil)
 			require.NoError(t, err)
 			require.True(t, effective)
 
@@ -4006,4 +4057,74 @@ func TestGatewayController_getObjectsForGatewaySameNamespace(t *testing.T) {
 	require.Equal(t, ns, namespace)
 	require.Len(t, pods, 1)
 	require.Len(t, deployments, 1)
+}
+
+func TestGatewayController_stampGatewayConfigHash(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	c := newTestGatewayController(fakeClient, fake2.NewClientset(), logr.Discard(), "ns", "img", "info", false, nil, true)
+	gw := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
+	require.NoError(t, fakeClient.Create(t.Context(), gw))
+
+	gwConfig := &aigv1b1.GatewayConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gwconfig", Namespace: "ns"},
+		Spec: aigv1b1.GatewayConfigSpec{
+			ExtProc: &aigv1b1.GatewayConfigExtProc{
+				MetadataForwardingNamespaces: []string{"envoy.filters.http.ext_authz"},
+			},
+		},
+	}
+	require.NoError(t, c.stampGatewayConfigHash(t.Context(), gw, gwConfig))
+	var stored gwapiv1.Gateway
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(gw), &stored))
+	first := stored.Annotations[gatewayConfigHashAnnotationKey]
+	require.Len(t, first, 16)
+
+	// Same spec: no change.
+	require.NoError(t, c.stampGatewayConfigHash(t.Context(), &stored, gwConfig))
+	var again gwapiv1.Gateway
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(gw), &again))
+	require.Equal(t, first, again.Annotations[gatewayConfigHashAnnotationKey])
+
+	// Spec change: hash changes, so Envoy Gateway sees a Gateway update and re-translates.
+	gwConfig.Spec.ExtProc.MetadataForwardingNamespaces = []string{"other.ns"}
+	require.NoError(t, c.stampGatewayConfigHash(t.Context(), &again, gwConfig))
+	var changed gwapiv1.Gateway
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(gw), &changed))
+	require.NotEqual(t, first, changed.Annotations[gatewayConfigHashAnnotationKey])
+
+	// Config no longer referenced: annotation removed.
+	require.NoError(t, c.stampGatewayConfigHash(t.Context(), &changed, nil))
+	var cleared gwapiv1.Gateway
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(gw), &cleared))
+	require.NotContains(t, cleared.Annotations, gatewayConfigHashAnnotationKey)
+}
+
+func TestGatewayController_warnUndeclaredMetadataNamespaces(t *testing.T) {
+	var logged []string
+	logger := funcr.New(func(_, args string) { logged = append(logged, args) }, funcr.Options{})
+	c := newTestGatewayController(requireNewFakeClientWithIndexes(t), fake2.NewClientset(), logger, "ns", "img", "info", false, nil, true)
+	ec := &filterapi.Config{Backends: []filterapi.Backend{
+		{Name: "no-auth"},
+		{Name: "declared", Auth: &filterapi.BackendAuth{CredentialOverride: &filterapi.CredentialOverride{DynamicMetadataNamespace: "declared.ns"}}},
+		{Name: "undeclared-a", Auth: &filterapi.BackendAuth{CredentialOverride: &filterapi.CredentialOverride{DynamicMetadataNamespace: "missing.ns"}}},
+		// Same namespace again: one line, naming both backends.
+		{Name: "undeclared-b", Auth: &filterapi.BackendAuth{CredentialOverride: &filterapi.CredentialOverride{DynamicMetadataNamespace: "missing.ns"}}},
+		{Name: "undeclared-c", Auth: &filterapi.BackendAuth{CredentialOverride: &filterapi.CredentialOverride{DynamicMetadataNamespace: "other-missing.ns"}}},
+		// A header-sourced override has no namespace to declare.
+		{Name: "header", Auth: &filterapi.BackendAuth{CredentialOverride: &filterapi.CredentialOverride{HeaderName: "x-tenant-key"}}},
+	}}
+
+	c.warnUndeclaredMetadataNamespaces(ec, []string{"declared.ns"}, "gw", "ns")
+	require.Len(t, logged, 2)
+	require.Contains(t, logged[0], `"namespace"="missing.ns"`)
+	// Every backend reading the namespace is named, not just the first.
+	require.Contains(t, logged[0], "undeclared-a")
+	require.Contains(t, logged[0], "undeclared-b")
+	require.Contains(t, logged[1], `"namespace"="other-missing.ns"`)
+	require.Contains(t, logged[1], "undeclared-c")
+
+	// Everything declared: silent.
+	logged = nil
+	c.warnUndeclaredMetadataNamespaces(ec, []string{"declared.ns", "missing.ns", "other-missing.ns"}, "gw", "ns")
+	require.Empty(t, logged)
 }

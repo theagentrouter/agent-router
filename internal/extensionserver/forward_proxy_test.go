@@ -111,7 +111,7 @@ func TestMaybeModifyCluster_forwardProxy(t *testing.T) {
 		s := newServerWithForwardProxy(t, "proxy.corp:3128")
 		cluster := clusterWithTLSMatch(t, "api.openai.com")
 
-		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster))
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
 
 		wrapper := unwrapHTTP11Proxy(t, cluster.TransportSocketMatches[0].TransportSocket)
 		requireProxyAddress(t, wrapper, "proxy.corp", 3128)
@@ -129,7 +129,7 @@ func TestMaybeModifyCluster_forwardProxy(t *testing.T) {
 		cluster.TransportSocket = tlsTransportSocket(t, "api.openai.com")
 		cluster.TransportSocketMatches = nil
 
-		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster))
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
 
 		wrapper := unwrapHTTP11Proxy(t, cluster.TransportSocket)
 		requireProxyAddress(t, wrapper, "10.0.0.9", 8080)
@@ -140,7 +140,7 @@ func TestMaybeModifyCluster_forwardProxy(t *testing.T) {
 		s := newServerWithForwardProxy(t, "") // GatewayConfig without forwardProxy.
 		cluster := clusterWithTLSMatch(t, "api.openai.com")
 
-		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster))
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
 
 		require.Equal(t, tlsTransportSocketName, cluster.TransportSocketMatches[0].TransportSocket.Name)
 	})
@@ -339,6 +339,6 @@ func TestResolveForwardProxyAddr_getError(t *testing.T) {
 
 func TestMaybeModifyCluster_forwardProxyInvalidAddress(t *testing.T) {
 	s := newServerWithForwardProxy(t, "missing-port") // not host:port.
-	err := s.maybeModifyCluster(t.Context(), clusterWithTLSMatch(t, "api.openai.com"))
+	err := s.maybeModifyCluster(t.Context(), clusterWithTLSMatch(t, "api.openai.com"), nil)
 	require.ErrorContains(t, err, "forward proxy")
 }

@@ -75,10 +75,9 @@ jobs:
         with:
           fail_ci_if_error: true
           files: ./out/go-test-coverage.out
-          name: codecov-envoy-ai-gateway
+          name: codecov-envoy-agent-router
           verbose: true
-          # https://github.com/codecov/codecov-action/issues/1594#issuecomment-2394913029
-          use_oidc: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) }}
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   test_crdcel:
     needs: changes
@@ -162,6 +161,7 @@ jobs:
           TEST_OPENAI_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_OPENAI_API_KEY }}
           TEST_GEMINI_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_GEMINI_API_KEY }}
           TEST_COHERE_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_COHERE_API_KEY }}
+          TEST_TYPESAFE_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_TYPESAFE_API_KEY }}
           TEST_GROQ_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_GROQ_API_KEY }}
           TEST_GROK_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_GROK_API_KEY }}
           TEST_SAMBANOVA_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_SAMBANOVA_API_KEY }}
@@ -212,10 +212,10 @@ jobs:
         include:
           - name: latest
             envoy_gateway_version: v0.0.0-latest
-          - name: v1.9.0
-            envoy_gateway_version: v1.9.0
-          - name: v1.8.1
-            envoy_gateway_version: v1.8.1
+          - name: v1.9.1
+            envoy_gateway_version: v1.9.1
+          - name: v1.8.4
+            envoy_gateway_version: v1.8.4
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
@@ -239,6 +239,7 @@ jobs:
           TEST_ANTHROPIC_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_ANTHROPIC_API_KEY }}
           TEST_GEMINI_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_GEMINI_API_KEY }}
           TEST_COHERE_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_COHERE_API_KEY }}
+          TEST_TYPESAFE_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_TYPESAFE_API_KEY }}
         run: make test-e2e
 
   test_e2e_upgrade:

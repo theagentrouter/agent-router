@@ -1,3 +1,7 @@
+announcements:
+  label: Announcements
+  permalink: /announcements
+  description: Project Announcements
 news:
   label: News
   permalink: /news
@@ -13,7 +17,7 @@ releases:
 features:
   label: Features
   permalink: /features
-  description: Articles about Envoy AI Gateway Features
+  description: Articles about Agent Router features
 reference:
   label: Reference
   permalink: /reference
@@ -21,4 +25,4 @@ reference:
 adopters:
   label: Adopters
   permalink: /adopters
-  description: Articles about Envoy AI Gateway Adopters
+  description: Articles about Agent Router adopters

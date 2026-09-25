@@ -469,3 +469,11 @@ func TestNewMeterFromEnv_OTLPHeaders(t *testing.T) {
 
 	require.Equal(t, expectedAuthorization, <-actualAuthorization)
 }
+
+func TestTokenUsage_IsZero(t *testing.T) {
+	var u TokenUsage
+	require.True(t, u.IsZero())
+
+	u.SetOutputTokens(1)
+	require.False(t, u.IsZero())
+}

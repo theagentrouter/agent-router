@@ -6,7 +6,7 @@ sidebar_position: 6
 
 # Quota Policy
 
-`QuotaPolicy` enables token-based quota management for AI inference services in Envoy AI Gateway.
+`QuotaPolicy` enables token-based quota management for AI inference services in Agent Router.
 When all related backend's quota are exceeded, requests are rejected with a `429 Too Many Requests` status code.
 
 :::note QuotaPolicy vs. Rate Limiting
@@ -38,7 +38,7 @@ Key features of QuotaPolicy:
 :::tip Prerequisites
 Quota enforcement uses the same infrastructure as usage-based rate limiting:
 
-1. **Redis Deployment**: A Redis instance for storing quota counters. See the [redis.yaml example](https://github.com/envoyproxy/ai-gateway/blob/main/examples/token_ratelimit/redis.yaml) for a simple deployment.
+1. **Redis Deployment**: A Redis instance for storing quota counters. See the [redis.yaml example](https://github.com/theagentrouter/agent-router/blob/main/examples/token_ratelimit/redis.yaml) for a simple deployment.
 2. **Envoy Gateway Configuration**: Envoy Gateway must be configured at installation time to enable rate limiting and point to your Redis instance. See the [Envoy Gateway Installation Guide](../../getting-started/prerequisites.md#additional-features-rate-limiting-inferencepool-etc).
 
 See [Usage-based Rate Limiting](./usage-based-ratelimiting.md) for more detail on the rate limit infrastructure that QuotaPolicy builds on.

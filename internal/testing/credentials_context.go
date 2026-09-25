@@ -40,18 +40,22 @@ const (
 	RequiredCredentialAnthropic
 	// RequiredCredentialCohere is the bit flag for the Cohere API key.
 	RequiredCredentialCohere
+	// RequiredCredentialTypeSafe is the bit flag for the TypeSafe API key.
+	RequiredCredentialTypeSafe
 )
 
 // CredentialsContext holds the context for the credentials used in the tests.
 type CredentialsContext struct {
 	// OpenAIValid, AWSValid, AzureValid, etc. are true if the credentials are set and ready to use the real services.
-	OpenAIValid, AWSValid, AzureValid, GeminiValid, GroqValid, GrokValid, SambaNovaValid, DeepInfraValid, AnthropicValid, CohereValid bool
+	OpenAIValid, AWSValid, AzureValid, GeminiValid, GroqValid, GrokValid, SambaNovaValid, DeepInfraValid, AnthropicValid, CohereValid, TypeSafeValid bool
 	// OpenAIAPIKey is the OpenAI API key. This defaults to "dummy-openai-api-key" if not set.
 	OpenAIAPIKey string
 	// AnthropicAPIKey is the Anthropic API key. This defaults to "dummy-anthropic-api-key" if not set.
 	AnthropicAPIKey string
 	// CohereAPIKey is the Cohere API key. This defaults to "dummy-cohere-api-key" if not set.
 	CohereAPIKey string
+	// TypeSafeAPIKey is the TypeSafe API key. This defaults to "dummy-typesafe-api-key" if not set.
+	TypeSafeAPIKey string
 	// AWSFileLiteral contains the AWS credentials in the format of a file literal.
 	AWSFileLiteral     string
 	AWSAccessKeyID     string
@@ -101,6 +105,9 @@ func (c CredentialsContext) MaybeSkip(t testing.TB, required RequiredCredential)
 	}
 	if required&RequiredCredentialCohere != 0 && !c.CohereValid {
 		t.Skip("skipping test as Cohere API key is not set in TEST_COHERE_API_KEY")
+	}
+	if required&RequiredCredentialTypeSafe != 0 && !c.TypeSafeValid {
+		t.Skip("skipping test as TypeSafe API key is not set in TEST_TYPESAFE_API_KEY")
 	}
 }
 
@@ -167,5 +174,9 @@ func RequireNewCredentialsContext() (ctx CredentialsContext) {
 	cohereAPIKeyEnv := os.Getenv("TEST_COHERE_API_KEY")
 	ctx.CohereValid = cohereAPIKeyEnv != ""
 	ctx.CohereAPIKey = cmp.Or(cohereAPIKeyEnv, "dummy-cohere-api-key")
+	// Set up credential for TypeSafe.
+	typeSafeAPIKeyEnv := os.Getenv("TEST_TYPESAFE_API_KEY")
+	ctx.TypeSafeValid = typeSafeAPIKeyEnv != ""
+	ctx.TypeSafeAPIKey = cmp.Or(typeSafeAPIKeyEnv, "dummy-typesafe-api-key")
 	return
 }

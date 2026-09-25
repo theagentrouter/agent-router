@@ -11,6 +11,30 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+// MCPRoutePrefixMode controls how tool and prompt names are prefixed when exposed to clients.
+//
+// PrefixMode can be set at the route level (MCPRouteSpec) and overridden per backend
+// (MCPRouteBackendRef); the per-backend value takes precedence when set. A single route can
+// therefore mix Always and Never backends. This is intentional: it lets an operator keep the
+// route-level default (Always is recommended for most routes, since it guarantees a collision-free
+// catalog without any extra configuration) while opting specific, well-known backends into bare
+// names, e.g. to match tool names an existing client or interactive MCP App already hardcodes.
+// Per-backend override is meant as a targeted escape hatch, not a replacement for choosing one
+// naming policy for the route as a whole.
+//
+// +kubebuilder:validation:Enum=Always;Never
+type MCPRoutePrefixMode string
+
+const (
+	// MCPRoutePrefixModeAlways prefixes tool/prompt names with `<backendName>__`.
+	// This is the default and preserves existing behavior.
+	MCPRoutePrefixModeAlways MCPRoutePrefixMode = "Always"
+
+	// MCPRoutePrefixModeNever exposes tool/prompt names unprefixed.
+	// Tool names must be unique across all Never-mode backends on the route.
+	MCPRoutePrefixModeNever MCPRoutePrefixMode = "Never"
+)
+
 // MCPRoute defines how to route MCP requests to the backend MCP servers.
 //
 // This serves as a way to define a "unified" AI API for a Gateway which allows downstream
@@ -103,6 +127,14 @@ type MCPRouteSpec struct {
 	// +optional
 	SecurityPolicy *MCPRouteSecurityPolicy `json:"securityPolicy,omitempty"`
 
+	// BackendTrafficPolicy configures the auto-generated Envoy Gateway BackendTrafficPolicy
+	// resources for this MCPRoute, for example the OAuth protected resource metadata policy
+	// created when SecurityPolicy.OAuth is configured.
+	//
+	// +kubebuilder:validation:Optional
+	// +optional
+	BackendTrafficPolicy *MCPRouteBackendTrafficPolicy `json:"backendTrafficPolicy,omitempty"`
+
 	// BackendSelector restricts which of this route's backends a given request may fan
 	// out to, evaluated once per candidate backend when a client session is initialized.
 	// If unspecified, all backends on the route are considered.
@@ -110,6 +142,34 @@ type MCPRouteSpec struct {
 	// +kubebuilder:validation:Optional
 	// +optional
 	BackendSelector *MCPBackendSelector `json:"backendSelector,omitempty"`
+
+	// PrefixMode controls how tool and prompt names from all backends on this route are prefixed.
+	//
+	// +kubebuilder:validation:Optional
+	// +optional
+	PrefixMode *MCPRoutePrefixMode `json:"prefixMode,omitempty"`
+}
+
+// MCPRouteBackendTrafficPolicy configures how the Envoy Gateway BackendTrafficPolicy
+// resources auto-generated for a MCPRoute interact with other BackendTrafficPolicy
+// resources (e.g. an operator-defined rate limiting policy) targeting the same HTTPRoute.
+type MCPRouteBackendTrafficPolicy struct {
+	// MergeType determines how the auto-generated BackendTrafficPolicy (for example, the
+	// OAuth protected resource metadata policy) is merged with other BackendTrafficPolicy
+	// configurations targeting the same route or a parent Gateway/Listener.
+	//
+	// When set, the auto-generated BackendTrafficPolicy will merge with the closest parent
+	// BackendTrafficPolicy in the route's attachment hierarchy instead of overriding it
+	// entirely, per Envoy Gateway's merge semantics.
+	//
+	// If unset, no merging occurs, and the auto-generated BackendTrafficPolicy fully
+	// overrides any other BackendTrafficPolicy targeting the same route.
+	//
+	// See: https://gateway.envoyproxy.io/docs/tasks/traffic/backend-traffic-policy/
+	//
+	// +kubebuilder:validation:XValidation:rule="self != 'Replace'",message="Replace is not a valid MergeType for BackendTrafficPolicy"
+	// +optional
+	MergeType *egv1a1.MergeType `json:"mergeType,omitempty"`
 }
 
 // MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP server.
@@ -133,7 +193,20 @@ type MCPRouteBackendRef struct {
 	// +optional
 	ToolSelector *MCPToolFilter `json:"toolSelector,omitempty"`
 
-	// TODO: we can add resource and prompt selectors in the future.
+	// PromptSelector filters the prompts exposed by this MCP server, analogous to ToolSelector.
+	// If not specified, all prompts from the MCP server are exposed.
+	//
+	// This is also used to determine which prompt names can be safely exposed unprefixed when
+	// this backend's effective PrefixMode is Never: only prompts named in Include are validated
+	// for cross-backend uniqueness and exposed bare. If unset while PrefixMode is Never, this
+	// backend's prompts are not exposed bare (they keep the `<backendName>__` prefix) because
+	// their names cannot be proven unique at admission time.
+	//
+	// +kubebuilder:validation:Optional
+	// +optional
+	PromptSelector *MCPPromptFilter `json:"promptSelector,omitempty"`
+
+	// TODO: we can add resource selectors in the future.
 
 	// SecurityPolicy is the security policy to apply to this MCP server.
 	//
@@ -151,6 +224,13 @@ type MCPRouteBackendRef struct {
 	// +kubebuilder:validation:MaxItems=32
 	// +optional
 	ForwardHeaders []MCPHeaderForward `json:"forwardHeaders,omitempty"`
+
+	// PrefixMode controls how tool and prompt names from this backend are prefixed.
+	// Takes precedence over the route-level PrefixMode when set.
+	//
+	// +kubebuilder:validation:Optional
+	// +optional
+	PrefixMode *MCPRoutePrefixMode `json:"prefixMode,omitempty"`
 }
 
 // MCPHeaderForward specifies a header to extract from the incoming request and forward to a backend.
@@ -210,6 +290,46 @@ type MCPToolFilter struct {
 	ExcludeRegex []string `json:"excludeRegex,omitempty"`
 }
 
+// MCPPromptFilter filters prompts using include and exclude patterns with exact matches or regular expressions.
+// Exclude rules take precedence over include rules (deny-wins). When both include and exclude are specified,
+// a prompt must match an include rule AND not match any exclude rule to be allowed.
+//
+// +kubebuilder:validation:XValidation:rule="!(has(self.include) && has(self.includeRegex))", message="include and includeRegex are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!(has(self.exclude) && has(self.excludeRegex))", message="exclude and excludeRegex are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="has(self.include) || has(self.includeRegex) || has(self.exclude) || has(self.excludeRegex)", message="at least one of include, includeRegex, exclude, or excludeRegex must be specified"
+type MCPPromptFilter struct {
+	// Include is a list of prompt names to include. Only the specified prompts will be available.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Include []string `json:"include,omitempty"`
+
+	// IncludeRegex is a list of RE2-compatible regular expressions that, when matched, include the prompt.
+	// Only prompts matching these patterns will be available.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	IncludeRegex []string `json:"includeRegex,omitempty"`
+
+	// Exclude is a list of prompt names to exclude. The specified prompts will not be available.
+	// Exclude rules take precedence over include rules.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Exclude []string `json:"exclude,omitempty"`
+
+	// ExcludeRegex is a list of RE2-compatible regular expressions that, when matched, exclude the prompt.
+	// Prompts matching these patterns will not be available. Exclude rules take precedence over include rules.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	ExcludeRegex []string `json:"excludeRegex,omitempty"`
+}
+
 // MCPBackendSecurityPolicy defines the security policy for a backend MCP server.
 type MCPBackendSecurityPolicy struct {
 	// APIKey is a mechanism to access a backend. The API key will be injected into the request headers.
@@ -217,11 +337,27 @@ type MCPBackendSecurityPolicy struct {
 	APIKey *MCPBackendAPIKey `json:"apiKey,omitempty"`
 }
 
+// MCPBackendAPIKeyInjectionPolicy controls when the configured API key is written onto the request.
+//
+// +kubebuilder:validation:Enum=Always;IfNotPresent
+type MCPBackendAPIKeyInjectionPolicy string
+
+const (
+	// MCPBackendAPIKeyInjectionAlways writes the configured key onto the target header,
+	// replacing any existing value. This is the default and preserves existing behavior.
+	MCPBackendAPIKeyInjectionAlways MCPBackendAPIKeyInjectionPolicy = "Always"
+
+	// MCPBackendAPIKeyInjectionIfNotPresent writes the configured key only when the target
+	// header is absent, so a value already set (for example by forwardHeaders) is preserved.
+	MCPBackendAPIKeyInjectionIfNotPresent MCPBackendAPIKeyInjectionPolicy = "IfNotPresent"
+)
+
 // MCPBackendAPIKey defines the configuration for the API Key Authentication to a backend.
 // When both `header` and `queryParam` are unspecified, the API key will be injected into the "Authorization" header by default.
 //
 // +kubebuilder:validation:XValidation:rule="(has(self.secretRef) && !has(self.inline)) || (!has(self.secretRef) && has(self.inline))", message="exactly one of secretRef or inline must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.header) && has(self.queryParam))", message="only one of header or queryParam can be set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.queryParam) && has(self.injectionPolicy) && self.injectionPolicy == 'IfNotPresent')", message="injectionPolicy cannot be IfNotPresent when queryParam is set"
 type MCPBackendAPIKey struct {
 	// secretRef is the Kubernetes secret which contains the API keys.
 	// The key of the secret should be "apiKey".
@@ -258,6 +394,19 @@ type MCPBackendAPIKey struct {
 	// +kubebuilder:validation:MinLength=1
 	// +optional
 	QueryParam *string `json:"queryParam,omitempty"`
+
+	// InjectionPolicy controls when the configured API key is written onto the target header.
+	// Always (the default) writes the credential, replacing any existing value, including
+	// values populated by forwardHeaders.
+	// IfNotPresent writes the API key only if the target header is absent, so a
+	// caller-supplied token forwarded onto the same header is preserved.
+	//
+	// InjectionPolicy applies only to header injection. It must not be set to IfNotPresent
+	// when queryParam is used, because query-parameter injection always rewrites the backend URL.
+	//
+	// +kubebuilder:default=Always
+	// +optional
+	InjectionPolicy *MCPBackendAPIKeyInjectionPolicy `json:"injectionPolicy,omitempty"`
 }
 
 // MCPRouteSecurityPolicy defines the security policy for a MCPRoute.
@@ -283,6 +432,24 @@ type MCPRouteSecurityPolicy struct {
 	//
 	// +optional
 	Authorization *MCPRouteAuthorization `json:"authorization,omitempty"`
+
+	// MergeType determines how the auto-generated SecurityPolicy for this MCPRoute (which
+	// enforces OAuth/JWT, API key, or external authorization) is merged with other
+	// SecurityPolicy configurations targeting the same route or a parent Gateway/Listener.
+	//
+	// When set, the auto-generated SecurityPolicy will merge with the closest parent
+	// SecurityPolicy in the route's attachment hierarchy (for example, one targeting a
+	// Gateway, Gateway listener, ListenerSet, or ListenerSet listener) instead of
+	// overriding it entirely, per Envoy Gateway's merge semantics.
+	//
+	// If unset, no merging occurs, and the auto-generated SecurityPolicy fully overrides
+	// any other SecurityPolicy targeting the same route.
+	//
+	// See: https://gateway.envoyproxy.io/docs/tasks/security/apikey-authn/
+	//
+	// +kubebuilder:validation:XValidation:rule="self != 'Replace'",message="Replace is not a valid MergeType for SecurityPolicy"
+	// +optional
+	MergeType *egv1a1.MergeType `json:"mergeType,omitempty"`
 }
 
 // MCPRouteOAuth defines a MCP spec compatible OAuth authentication configuration for a MCPRoute.
@@ -300,6 +467,7 @@ type MCPRouteOAuth struct {
 	//
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=32
+	// +optional
 	Audiences []string `json:"audiences"`
 
 	// JWKS defines how a JSON Web Key Sets (JWKS) can be obtained to verify the access tokens presented by the clients.
@@ -309,6 +477,24 @@ type MCPRouteOAuth struct {
 	//
 	// +optional
 	JWKS *JWKS `json:"jwks,omitempty"`
+
+	// AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization
+	// Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known
+	// URIs derived from Issuer.
+	//
+	// Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer
+	// of "https://example.com/api/idp/authn" whose document is served only at
+	// "https://example.com/api/idp/v4/authn/.well-known/openid-configuration".
+	//
+	// Issuer is unaffected by this field. It continues to identify the authorization server in the
+	// protected resource metadata the gateway publishes, and to derive the well-known URIs when this
+	// field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Format=uri
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	AuthorizationServerMetadataURL *string `json:"authorizationServerMetadataUrl,omitempty"`
 
 	// ProtectedResourceMetadata defines the OAuth 2.0 Resource Server Metadata as per RFC 8414.
 	// This is used to expose the metadata endpoint for mcp clients to discover the authorization servers,

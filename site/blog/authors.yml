@@ -1,6 +1,6 @@
 missberg:
   name: Erica Hughberg
-  title: Envoy AI Gateway Maintainer - Tetrate
+  title: Agent Router Maintainer - Tetrate
   url: https://github.com/missBerg
   image_url: https://github.com/missBerg.png
   page: true
@@ -18,7 +18,7 @@ alexagriffith:
     linkedin: https://www.linkedin.com/in/alexa-griffith/
 dansun:
   name: Dan Sun
-  title: Envoy AI Gateway Maintainer - Bloomberg
+  title: Agent Router Maintainer - Bloomberg
   url: https://github.com/yuzisun
   image_url: https://github.com/yuzisun.png
   page: true
@@ -27,7 +27,7 @@ dansun:
     linkedin: https://www.linkedin.com/in/dan-sun-44a21b5/
 aaronchoo:
   name: Aaron Choo
-  title: Envoy AI Gateway Maintainer - Bloomberg
+  title: Agent Router Maintainer - Bloomberg
   url: https://github.com/aabchoo
   image_url: https://github.com/aabchoo.png
   page: true
@@ -36,7 +36,7 @@ aaronchoo:
     linkedin: https://www.linkedin.com/in/aaron-choo/
 yaoweng:
   name: Yao Weng
-  title: Envoy AI Gateway Maintainer - Bloomberg
+  title: Agent Router Maintainer - Bloomberg
   url: https://github.com/wengyao04
   image_url: https://github.com/wengyao04.png
   page: true
@@ -45,7 +45,7 @@ yaoweng:
     linkedin: https://www.linkedin.com/in/yao-weng-ab091442/
 mathetake:
   name: Takeshi Yoneda
-  title: Envoy AI Gateway Maintainer - Netflix
+  title: Agent Router Maintainer - Netflix
   url: https://github.com/mathetake
   image_url: https://github.com/mathetake.png
   page: true
@@ -54,7 +54,7 @@ mathetake:
     linkedin: https://www.linkedin.com/in/mathetake/
 xunzhuo:
   name: Xunzhuo (Bit) Liu
-  title: Envoy AI Gateway Maintainer - AMD
+  title: Agent Router Maintainer - AMD
   url: https://github.com/Xunzhuo
   image_url: https://github.com/Xunzhuo.png
   page: true
@@ -90,7 +90,7 @@ hrushikeshpatil:
     linkedin: https://www.linkedin.com/in/hrushikesh-patil-345a1219a/
 johnugeorge:
   name: Johnu George
-  title: Envoy AI Gateway Maintainer - Nutanix
+  title: Agent Router Maintainer - Nutanix
   url: https://github.com/johnugeorge
   image_url: https://github.com/johnugeorge.png
   page: true
@@ -99,7 +99,7 @@ johnugeorge:
     linkedin: https://www.linkedin.com/in/johnu-george
 gavrissh:
   name: Gavrish Prabhu
-  title: Envoy AI Gateway Maintainer - Nutanix
+  title: Agent Router Maintainer - Nutanix
   url: https://github.com/gavrissh
   image_url: https://github.com/gavrissh.png
   page: true
@@ -115,3 +115,11 @@ mohitgurnani:
   socials:
     github: mohitgurnani
     linkedin: https://www.linkedin.com/in/mohitgurnani94/
+maintainers:
+  name: Agent Router Maintainers
+  title: The Agent Router maintainer team
+  url: https://github.com/theagentrouter/agent-router/blob/main/CODEOWNERS
+  image_url: /img/brand/ar-mark-marquee.svg
+  page: false
+  socials:
+    github: theagentrouter

@@ -403,6 +403,7 @@ func Test_newHTTPRoute_MCPOauth(t *testing.T) {
 		Spec: aigv1b1.MCPRouteSpec{
 			SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{OAuth: &aigv1b1.MCPRouteOAuth{}},
 			Path:           ptr.To("/mcp"),
+			Headers:        []gwapiv1.HTTPHeaderMatch{{Name: "x-match", Value: "yes"}},
 			ParentRefs:     []gwapiv1.ParentReference{{Name: gwapiv1.ObjectName("gw")}},
 			BackendRefs:    []aigv1b1.MCPRouteBackendRef{{}},
 		},
@@ -419,6 +420,9 @@ func Test_newHTTPRoute_MCPOauth(t *testing.T) {
 	require.Equal(t, "/.well-known/oauth-protected-resource/mcp", ptr.Deref(oauthRules[0].Matches[0].Path.Value, ""))
 	require.Equal(t, "/.well-known/oauth-authorization-server/mcp", ptr.Deref(oauthRules[1].Matches[0].Path.Value, ""))
 	require.Equal(t, "/.well-known/openid-configuration/mcp", ptr.Deref(oauthRules[2].Matches[0].Path.Value, ""))
+	for _, rule := range oauthRules {
+		require.Equal(t, mcpRoute.Spec.Headers, rule.Matches[0].Headers)
+	}
 }
 
 func Test_newHTTPRoute_MCP_Hostnames(t *testing.T) {
@@ -504,10 +508,14 @@ func TestMCPRouteController_mcpRuleWithAPIKeyBackendSecurity(t *testing.T) {
 		name string
 		key  *aigv1b1.MCPBackendAPIKey
 		// expCredentialValue is the expected value stored in the credential secret's InjectedCredentialKey key.
-		// When set, the HTTPRouteFilter is expected to have credentialInjection configured (secretRef path).
+		// When set, the HTTPRouteFilter is expected to have credentialInjection configured
+		// (secretRef, or inline with injectionPolicy IfNotPresent).
 		expCredentialValue string
 		// expCredentialHeader is the expected header for the credential injection filter (secretRef path).
 		expCredentialHeader *string
+		// expOverwrite is the expected HTTPCredentialInjectionFilter.overwrite value.
+		// When nil and expCredentialValue is set, overwrite is expected to be true.
+		expOverwrite *bool
 		// expInlineHeader is the expected RequestHeaderModifier header/value (inline path).
 		expInlineHeader *internalapi.Header
 		// expFilterCount is the expected number of filters on the HTTPRouteRule.
@@ -530,6 +538,37 @@ func TestMCPRouteController_mcpRuleWithAPIKeyBackendSecurity(t *testing.T) {
 			expPath:         "/mcp",
 		},
 		{
+			name:            "inline API key injectionPolicy Always keeps RequestHeaderModifier",
+			key:             &aigv1b1.MCPBackendAPIKey{Inline: ptr.To("inline-key"), InjectionPolicy: ptr.To(aigv1b1.MCPBackendAPIKeyInjectionAlways)},
+			expInlineHeader: &internalapi.Header{"Authorization", "Bearer inline-key"},
+			expFilterCount:  3,
+			expPath:         "/mcp",
+		},
+		{
+			name:            "inline API key injectionPolicy Always custom header",
+			key:             &aigv1b1.MCPBackendAPIKey{Inline: ptr.To("inline-key"), Header: ptr.To("X-Api-Key"), InjectionPolicy: ptr.To(aigv1b1.MCPBackendAPIKeyInjectionAlways)},
+			expInlineHeader: &internalapi.Header{"X-Api-Key", "inline-key"},
+			expFilterCount:  3,
+			expPath:         "/mcp",
+		},
+		{
+			name:               "inline API key injectionPolicy IfNotPresent uses credentialInjection",
+			key:                &aigv1b1.MCPBackendAPIKey{Inline: ptr.To("inline-key"), InjectionPolicy: ptr.To(aigv1b1.MCPBackendAPIKeyInjectionIfNotPresent)},
+			expCredentialValue: "Bearer inline-key",
+			expOverwrite:       ptr.To(false),
+			expFilterCount:     2,
+			expPath:            "/mcp",
+		},
+		{
+			name:                "inline API key injectionPolicy IfNotPresent custom header",
+			key:                 &aigv1b1.MCPBackendAPIKey{Inline: ptr.To("inline-key"), Header: ptr.To("X-API-KEY"), InjectionPolicy: ptr.To(aigv1b1.MCPBackendAPIKeyInjectionIfNotPresent)},
+			expCredentialValue:  "inline-key",
+			expCredentialHeader: ptr.To("X-API-KEY"),
+			expOverwrite:        ptr.To(false),
+			expFilterCount:      2,
+			expPath:             "/mcp",
+		},
+		{
 			name:               "secret ref API key default header",
 			key:                &aigv1b1.MCPBackendAPIKey{SecretRef: &gwapiv1.SecretObjectReference{Name: "some-secret"}},
 			expCredentialValue: "Bearer secretvalue",
@@ -538,8 +577,48 @@ func TestMCPRouteController_mcpRuleWithAPIKeyBackendSecurity(t *testing.T) {
 			expPath:            "/some/path",
 		},
 		{
+			name:                "secret ref API key custom header",
+			key:                 &aigv1b1.MCPBackendAPIKey{SecretRef: &gwapiv1.SecretObjectReference{Name: "some-secret"}, Header: ptr.To("X-Api-Key")},
+			expCredentialValue:  "secretvalue",
+			expCredentialHeader: ptr.To("X-Api-Key"),
+			expFilterCount:      2,
+			expPath:             "/mcp",
+		},
+		{
+			name:                "secret ref API key injectionPolicy Always custom header",
+			key:                 &aigv1b1.MCPBackendAPIKey{SecretRef: &gwapiv1.SecretObjectReference{Name: "some-secret"}, Header: ptr.To("X-GitHub-Token"), InjectionPolicy: ptr.To(aigv1b1.MCPBackendAPIKeyInjectionAlways)},
+			expCredentialValue:  "secretvalue",
+			expCredentialHeader: ptr.To("X-GitHub-Token"),
+			expOverwrite:        ptr.To(true),
+			expFilterCount:      2,
+			expPath:             "/mcp",
+		},
+		{
+			name:               "secret ref API key injectionPolicy IfNotPresent",
+			key:                &aigv1b1.MCPBackendAPIKey{SecretRef: &gwapiv1.SecretObjectReference{Name: "some-secret"}, InjectionPolicy: ptr.To(aigv1b1.MCPBackendAPIKeyInjectionIfNotPresent)},
+			expCredentialValue: "Bearer secretvalue",
+			expOverwrite:       ptr.To(false),
+			expFilterCount:     2,
+			expPath:            "/mcp",
+		},
+		{
+			name:                "secret ref API key injectionPolicy IfNotPresent custom header",
+			key:                 &aigv1b1.MCPBackendAPIKey{SecretRef: &gwapiv1.SecretObjectReference{Name: "some-secret"}, Header: ptr.To("X-API-KEY"), InjectionPolicy: ptr.To(aigv1b1.MCPBackendAPIKeyInjectionIfNotPresent)},
+			expCredentialValue:  "secretvalue",
+			expCredentialHeader: ptr.To("X-API-KEY"),
+			expOverwrite:        ptr.To(false),
+			expFilterCount:      2,
+			expPath:             "/mcp",
+		},
+		{
 			name:           "query param API key",
 			key:            &aigv1b1.MCPBackendAPIKey{Inline: ptr.To("inline-key"), QueryParam: ptr.To("api_key")},
+			expFilterCount: 2,
+			expPath:        "/mcp?api_key=inline-key",
+		},
+		{
+			name:           "query param API key ignores injectionPolicy Always",
+			key:            &aigv1b1.MCPBackendAPIKey{Inline: ptr.To("inline-key"), QueryParam: ptr.To("api_key"), InjectionPolicy: ptr.To(aigv1b1.MCPBackendAPIKeyInjectionAlways)},
 			expFilterCount: 2,
 			expPath:        "/mcp?api_key=inline-key",
 		},
@@ -592,7 +671,7 @@ func TestMCPRouteController_mcpRuleWithAPIKeyBackendSecurity(t *testing.T) {
 				credSecretName := string(httpFilter.Spec.CredentialInjection.Credential.ValueRef.Name)
 				require.Equal(t, mcpCredentialSecretName(mcpRoute, "svc-a"), credSecretName)
 				require.Equal(t, tt.expCredentialHeader, httpFilter.Spec.CredentialInjection.Header)
-				require.True(t, *httpFilter.Spec.CredentialInjection.Overwrite)
+				require.Equal(t, ptr.Deref(tt.expOverwrite, true), *httpFilter.Spec.CredentialInjection.Overwrite)
 
 				credSecret, getSecretErr := kubeClient.CoreV1().Secrets("default").Get(t.Context(), credSecretName, metav1.GetOptions{})
 				require.NoError(t, getSecretErr)
@@ -600,11 +679,7 @@ func TestMCPRouteController_mcpRuleWithAPIKeyBackendSecurity(t *testing.T) {
 
 				// No plaintext should appear in any RequestHeaderModifier filter.
 				for _, f := range httpRule.Filters {
-					if f.RequestHeaderModifier != nil {
-						for _, h := range f.RequestHeaderModifier.Set {
-							require.NotContains(t, h.Value, "secretvalue", "plaintext API key must not appear in HTTPRoute")
-						}
-					}
+					require.Nil(t, f.RequestHeaderModifier, "credentialInjection path must not use RequestHeaderModifier")
 				}
 			case tt.expInlineHeader != nil:
 				// Inline path: RequestHeaderModifier, no credentialInjection, no credential Secret.
@@ -688,6 +763,88 @@ func TestMCPRouteController_staleCredentialSecretCleanup(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMCPRouteController_inlineAPIKeyIfNotPresentTransition(t *testing.T) {
+	tests := []struct {
+		name          string
+		header        *string
+		backendName   gwapiv1.ObjectName
+		wantSecretVal string
+		wantSetHeader gwapiv1.HTTPHeader
+	}{
+		{
+			name:          "default Authorization header prefixes Bearer",
+			backendName:   "svc-c",
+			wantSecretVal: "Bearer inline-key",
+			wantSetHeader: gwapiv1.HTTPHeader{Name: "Authorization", Value: "Bearer inline-key"},
+		},
+		{
+			name:          "custom header injects the key verbatim",
+			header:        ptr.To("X-Api-Key"),
+			backendName:   "svc-d",
+			wantSecretVal: "inline-key",
+			wantSetHeader: gwapiv1.HTTPHeader{Name: "X-Api-Key", Value: "inline-key"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := requireNewFakeClientWithIndexesForMCP(t)
+			eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+			kubeClient := fakekube.NewClientset()
+			ctrlr := NewMCPRouteController(c, kubeClient, logr.Discard(), eventCh.Ch)
+
+			mcpRoute := &aigv1b1.MCPRoute{ObjectMeta: metav1.ObjectMeta{Name: "route-inline-if-not-present", Namespace: "default"}}
+			backendRef := &aigv1b1.MCPRouteBackendRef{
+				BackendObjectReference: gwapiv1.BackendObjectReference{
+					Name:      tt.backendName,
+					Namespace: ptr.To(gwapiv1.Namespace("default")),
+				},
+				SecurityPolicy: &aigv1b1.MCPBackendSecurityPolicy{
+					APIKey: &aigv1b1.MCPBackendAPIKey{Inline: ptr.To("inline-key"), Header: tt.header, InjectionPolicy: ptr.To(aigv1b1.MCPBackendAPIKeyInjectionIfNotPresent)},
+				},
+			}
+
+			httpRule, err := ctrlr.mcpBackendRefToHTTPRouteRule(t.Context(), mcpRoute, backendRef)
+			require.NoError(t, err)
+
+			credSecretName := mcpCredentialSecretName(mcpRoute, tt.backendName)
+			credSecret, err := kubeClient.CoreV1().Secrets("default").Get(t.Context(), credSecretName, metav1.GetOptions{})
+			require.NoError(t, err)
+			require.Equal(t, tt.wantSecretVal, string(credSecret.Data[egv1a1.InjectedCredentialKey]))
+			for _, f := range httpRule.Filters {
+				require.Nil(t, f.RequestHeaderModifier, "injectionPolicy IfNotPresent inline keys must not use RequestHeaderModifier")
+			}
+
+			var httpFilter egv1a1.HTTPRouteFilter
+			err = c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: mcpBackendRefFilterName(mcpRoute, tt.backendName)}, &httpFilter)
+			require.NoError(t, err)
+			require.NotNil(t, httpFilter.Spec.CredentialInjection)
+			require.False(t, *httpFilter.Spec.CredentialInjection.Overwrite)
+			require.Equal(t, tt.header, httpFilter.Spec.CredentialInjection.Header)
+
+			backendRef.SecurityPolicy.APIKey.InjectionPolicy = ptr.To(aigv1b1.MCPBackendAPIKeyInjectionAlways)
+			httpRule, err = ctrlr.mcpBackendRefToHTTPRouteRule(t.Context(), mcpRoute, backendRef)
+			require.NoError(t, err)
+
+			_, err = kubeClient.CoreV1().Secrets("default").Get(t.Context(), credSecretName, metav1.GetOptions{})
+			require.True(t, apierrors.IsNotFound(err), "expected credential secret to be deleted after switching to injectionPolicy Always")
+
+			found := false
+			for _, f := range httpRule.Filters {
+				if f.RequestHeaderModifier == nil {
+					continue
+				}
+				for _, h := range f.RequestHeaderModifier.Set {
+					if h.Name == tt.wantSetHeader.Name && h.Value == tt.wantSetHeader.Value {
+						found = true
+					}
+				}
+			}
+			require.Truef(t, found, "injectionPolicy Always inline keys should use RequestHeaderModifier %v", tt.wantSetHeader)
+		})
+	}
+}
+
 func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 	c := requireNewFakeClientWithIndexesForMCP(t)
 	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
@@ -708,7 +865,7 @@ func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 	filterName := mcpBackendRefFilterName(mcpRoute, "some-name")
 
 	t.Run("without credential injection", func(t *testing.T) {
-		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, "", nil)
+		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, "", nil, true)
 		require.NoError(t, err)
 
 		var httpFilter egv1a1.HTTPRouteFilter
@@ -720,7 +877,7 @@ func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 
 	t.Run("with credential injection", func(t *testing.T) {
 		customHeader := "X-Custom-Key"
-		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, "managed-ref-primary", &customHeader)
+		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, "managed-ref-primary", &customHeader, true)
 		require.NoError(t, err)
 
 		var httpFilter egv1a1.HTTPRouteFilter
@@ -733,6 +890,34 @@ func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 		require.Equal(t, gwapiv1.ObjectName("managed-ref-primary"), httpFilter.Spec.CredentialInjection.Credential.ValueRef.Name)
 	})
 
+	t.Run("with credential injection overwrite false", func(t *testing.T) {
+		customHeader := "Authorization"
+		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, "managed-ref-no-overwrite", &customHeader, false)
+		require.NoError(t, err)
+
+		var httpFilter egv1a1.HTTPRouteFilter
+		err = c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: filterName}, &httpFilter)
+		require.NoError(t, err)
+		require.NotNil(t, httpFilter.Spec.CredentialInjection)
+		require.Equal(t, &customHeader, httpFilter.Spec.CredentialInjection.Header)
+		require.False(t, *httpFilter.Spec.CredentialInjection.Overwrite)
+		require.Equal(t, gwapiv1.ObjectName("managed-ref-no-overwrite"), httpFilter.Spec.CredentialInjection.Credential.ValueRef.Name)
+	})
+
+	t.Run("with credential injection overwrite false custom header", func(t *testing.T) {
+		customHeader := "X-Api-Key"
+		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, "managed-ref-no-overwrite-custom", &customHeader, false)
+		require.NoError(t, err)
+
+		var httpFilter egv1a1.HTTPRouteFilter
+		err = c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: filterName}, &httpFilter)
+		require.NoError(t, err)
+		require.NotNil(t, httpFilter.Spec.CredentialInjection)
+		require.Equal(t, &customHeader, httpFilter.Spec.CredentialInjection.Header)
+		require.False(t, *httpFilter.Spec.CredentialInjection.Overwrite)
+		require.Equal(t, gwapiv1.ObjectName("managed-ref-no-overwrite-custom"), httpFilter.Spec.CredentialInjection.Credential.ValueRef.Name)
+	})
+
 	t.Run("deletes stale secret when transitioning away from credential injection", func(t *testing.T) {
 		staleRefName := "stale-managed-ref"
 		_, createErr := kubeClient.CoreV1().Secrets("default").Create(t.Context(), &corev1.Secret{
@@ -742,10 +927,10 @@ func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 		require.NoError(t, createErr)
 
 		authorizationHeader := "Authorization"
-		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, staleRefName, &authorizationHeader)
+		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, staleRefName, &authorizationHeader, true)
 		require.NoError(t, err)
 
-		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, "", nil)
+		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, "", nil, true)
 		require.NoError(t, err)
 
 		_, getErr := kubeClient.CoreV1().Secrets("default").Get(t.Context(), staleRefName, metav1.GetOptions{})
@@ -762,10 +947,10 @@ func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 		require.NoError(t, createErr)
 
 		customHeader := "X-Custom-Key"
-		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, oldRefName, &customHeader)
+		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, oldRefName, &customHeader, true)
 		require.NoError(t, err)
 
-		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, newRefName, &customHeader)
+		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, newRefName, &customHeader, true)
 		require.NoError(t, err)
 
 		_, getErr := kubeClient.CoreV1().Secrets("default").Get(t.Context(), oldRefName, metav1.GetOptions{})
@@ -830,6 +1015,18 @@ func TestMCPRouteController_credentialHelpers(t *testing.T) {
 		credSecret, getErr = kubeClient.CoreV1().Secrets("default").Get(t.Context(), "managed-ref-inline", metav1.GetOptions{})
 		require.NoError(t, getErr)
 		require.Equal(t, "inline-key", string(credSecret.Data[egv1a1.InjectedCredentialKey]))
+
+		customHeader := "X-GitHub-Token"
+		secretRefCustomHeader := &aigv1b1.MCPBackendAPIKey{
+			SecretRef: &gwapiv1.SecretObjectReference{Name: "api-secret"},
+			Header:    &customHeader,
+		}
+		err = ctrlr.ensureCredentialSecret(t.Context(), "managed-ref-custom-header", mcpRoute, secretRefCustomHeader)
+		require.NoError(t, err)
+
+		credSecret, getErr = kubeClient.CoreV1().Secrets("default").Get(t.Context(), "managed-ref-custom-header", metav1.GetOptions{})
+		require.NoError(t, getErr)
+		require.Equal(t, "rotated-key", string(credSecret.Data[egv1a1.InjectedCredentialKey]))
 	})
 
 	t.Run("readAPIKey", func(t *testing.T) {
@@ -1025,5 +1222,162 @@ func TestMCPRouteController_Reconcile_DeletionWithMissingGateway(t *testing.T) {
 		require.NotContains(t, current.Finalizers, aiGatewayControllerFinalizer)
 	} else {
 		require.True(t, apierrors.IsNotFound(err))
+	}
+}
+
+func TestValidatePerBackendPrefixMode(t *testing.T) {
+	always := aigv1b1.MCPRoutePrefixModeAlways
+	never := aigv1b1.MCPRoutePrefixModeNever
+
+	backendRef := func(name string, prefixMode *aigv1b1.MCPRoutePrefixMode, include ...string) aigv1b1.MCPRouteBackendRef {
+		ref := aigv1b1.MCPRouteBackendRef{
+			BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName(name)},
+			PrefixMode:             prefixMode,
+		}
+		if len(include) > 0 {
+			ref.ToolSelector = &aigv1b1.MCPToolFilter{Include: include}
+		}
+		return ref
+	}
+
+	backendRefWithPrompts := func(name string, prefixMode *aigv1b1.MCPRoutePrefixMode, toolInclude, promptInclude []string) aigv1b1.MCPRouteBackendRef {
+		ref := backendRef(name, prefixMode, toolInclude...)
+		ref.PromptSelector = &aigv1b1.MCPPromptFilter{Include: promptInclude}
+		return ref
+	}
+
+	tests := []struct {
+		name        string
+		routeMode   *aigv1b1.MCPRoutePrefixMode
+		backendRefs []aigv1b1.MCPRouteBackendRef
+		wantErr     string // empty means no error expected
+	}{
+		{
+			name:        "no prefixMode anywhere defaults to Always: no validation required",
+			routeMode:   nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{backendRef("a", nil), backendRef("b", nil)},
+		},
+		{
+			name:        "per-backend Never without toolSelector.include: rejected",
+			routeMode:   nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{backendRef("a", &never)},
+			wantErr:     `prefixMode Never requires backend "a" to explicitly enumerate its tools via toolSelector.include`,
+		},
+		{
+			name:      "per-backend Never with unique tools: accepted",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &never, "search"),
+				backendRef("b", &never, "list"),
+			},
+		},
+		{
+			name:      "per-backend Never with colliding tools: rejected",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &never, "search"),
+				backendRef("b", &never, "search"),
+			},
+			wantErr: `prefixMode Never requires tool names to be unique across backends, but "search" is declared by both "a" and "b"`,
+		},
+		{
+			// Route-level PrefixMode=Never must fall back onto backends that don't set their
+			// own PrefixMode, mirroring effectivePrefixMode's runtime resolution. Without this,
+			// a route-level Never route with no per-backend override would bypass validation
+			// entirely, even though every backend behaves as Never at request time.
+			name:        "route-level Never inherited by backend without own PrefixMode: still requires toolSelector.include",
+			routeMode:   &never,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{backendRef("a", nil)},
+			wantErr:     `prefixMode Never requires backend "a" to explicitly enumerate its tools via toolSelector.include`,
+		},
+		{
+			name:      "route-level Never inherited by two backends with colliding tools: rejected",
+			routeMode: &never,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", nil, "search"),
+				backendRef("b", nil, "search"),
+			},
+			wantErr: `prefixMode Never requires tool names to be unique across backends, but "search" is declared by both "a" and "b"`,
+		},
+		{
+			name:      "route-level Never inherited by backends with unique tools: accepted",
+			routeMode: &never,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", nil, "search"),
+				backendRef("b", nil, "list"),
+			},
+		},
+		{
+			// Per-backend PrefixMode takes precedence over the route-level default, so a
+			// backend explicitly opting back into Always is exempt from the Never validation
+			// even though the route default is Never.
+			name:      "per-backend Always overrides route-level Never: exempt from validation",
+			routeMode: &never,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &always), // no toolSelector.include, would fail if treated as Never.
+			},
+		},
+		{
+			name:      "route-level Always (explicit) with no per-backend override: no validation required",
+			routeMode: &always,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", nil),
+			},
+		},
+		{
+			// promptSelector is opt-in: a Never-mode backend that only declares toolSelector
+			// (no promptSelector) is still accepted, because it just means the backend's
+			// prompts stay prefixed (see mcpproxy.mergePromptsList) rather than being rejected.
+			name:      "per-backend Never with tools but no promptSelector: accepted",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &never, "search"),
+			},
+		},
+		{
+			name:      "per-backend Never with unique promptSelector.include across backends: accepted",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRefWithPrompts("a", &never, []string{"search"}, []string{"greeting"}),
+				backendRefWithPrompts("b", &never, []string{"list"}, []string{"farewell"}),
+			},
+		},
+		{
+			name:      "per-backend Never with colliding promptSelector.include: rejected",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRefWithPrompts("a", &never, []string{"search"}, []string{"greeting"}),
+				backendRefWithPrompts("b", &never, []string{"list"}, []string{"greeting"}),
+			},
+			wantErr: `prefixMode Never requires prompt names to be unique across backends, but "greeting" is declared by both "a" and "b"`,
+		},
+		{
+			// Tool and prompt names live in separate namespaces (tools/call vs prompts/get), so
+			// the same literal name declared as a tool by one backend and a prompt by another
+			// must not be treated as a collision.
+			name:      "per-backend Never with same name as tool on one backend and prompt on another: accepted",
+			routeMode: nil,
+			backendRefs: []aigv1b1.MCPRouteBackendRef{
+				backendRef("a", &never, "shared-name"),
+				backendRefWithPrompts("b", &never, []string{"list"}, []string{"shared-name"}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			route := &aigv1b1.MCPRoute{
+				Spec: aigv1b1.MCPRouteSpec{
+					PrefixMode:  tt.routeMode,
+					BackendRefs: tt.backendRefs,
+				},
+			}
+			err := validatePerBackendPrefixMode(route)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tt.wantErr)
+			}
+		})
 	}
 }
