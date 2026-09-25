@@ -54,10 +54,21 @@ func TestMCP_standalone(t *testing.T) {
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/mcp", 1975)
 	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "public-mcp-client", Version: "0.1.0"}, &mcp.ClientOptions{})
-	session, err := mcpClient.Connect(t.Context(), &mcp.StreamableClientTransport{
-		Endpoint: url,
-	}, nil)
-	require.NoError(t, err)
+	// Retry the connect: initialize opens sessions to the public backends (kiwi,
+	// and github when configured), and a transient blip reaching them would
+	// otherwise fail the whole test before any assertions run.
+	var session *mcp.ClientSession
+	require.Eventually(t, func() bool {
+		var err error
+		session, err = mcpClient.Connect(t.Context(), &mcp.StreamableClientTransport{
+			Endpoint: url,
+		}, nil)
+		if err != nil {
+			t.Logf("failed to connect to MCP server: %v", err)
+			return false
+		}
+		return true
+	}, 60*time.Second, 2*time.Second, "failed to connect to MCP server")
 	t.Cleanup(func() { _ = session.Close() })
 
 	t.Run("tools/list", func(t *testing.T) {
@@ -186,13 +197,22 @@ func TestMCP_standalone_oauth(t *testing.T) {
 		}
 		// Create an MCP client and connect to the server over Streamable HTTP.
 		mcpClient := mcp.NewClient(&mcp.Implementation{Name: "public-mcp-client", Version: "0.1.0"}, &mcp.ClientOptions{})
-		session, err := mcpClient.Connect(t.Context(), &mcp.StreamableClientTransport{
-			Endpoint: url,
-			// Use HTTP client that adds Authorization header.
-			HTTPClient: authHTTPClient,
-		}, nil)
-
-		require.NoError(t, err)
+		// Retry the connect to absorb transient failures reaching the public
+		// backend (kiwi) during initialize.
+		var session *mcp.ClientSession
+		require.Eventually(t, func() bool {
+			var err error
+			session, err = mcpClient.Connect(t.Context(), &mcp.StreamableClientTransport{
+				Endpoint: url,
+				// Use HTTP client that adds Authorization header.
+				HTTPClient: authHTTPClient,
+			}, nil)
+			if err != nil {
+				t.Logf("failed to connect to MCP server: %v", err)
+				return false
+			}
+			return true
+		}, 60*time.Second, 2*time.Second, "failed to connect to MCP server")
 		t.Cleanup(func() { _ = session.Close() })
 
 		// List tools to verify authenticated connection works.
