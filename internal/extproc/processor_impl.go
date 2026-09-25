@@ -335,6 +335,13 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) onRetry() bo
 	return u.parent.upstreamFilterCount > 1
 }
 
+// streamsDecompressedBody reports whether the response reaches the client as a decompressed
+// stream. Streamed response headers are sent before the body phase runs, so content-encoding
+// has to be dropped while they are still mutable, and the body has to follow suit.
+func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) streamsDecompressedBody() bool {
+	return u.parent.stream && u.responseEncoding != "" && u.responseHeaders[":status"] == "200"
+}
+
 // ProcessRequestHeaders implements [Processor.ProcessRequestHeaders].
 //
 // At the upstream filter, we already have the original request body at request headers phase.
@@ -519,6 +526,10 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 	if mode != nil {
 		headerMutation.RemoveHeaders = append(headerMutation.RemoveHeaders, "content-length")
 	}
+	// The decompressed body no longer matches the encoding the upstream declared.
+	if u.streamsDecompressedBody() {
+		headerMutation.RemoveHeaders = append(headerMutation.RemoveHeaders, "content-encoding")
+	}
 	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseHeaders{
 		ResponseHeaders: &extprocv3.HeadersResponse{
 			Response: &extprocv3.CommonResponse{HeaderMutation: headerMutation},
@@ -595,14 +606,30 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		}, nil
 	}
 
+	// The client was told the response is not encoded, so the decompressed bytes have to be
+	// sent even when the translator passes the body through unchanged.
+	var decompressed []byte
+	if u.streamsDecompressedBody() {
+		decompressed, err = io.ReadAll(decodingResult.reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read decompressed body: %w", err)
+		}
+		decodingResult.reader = bytes.NewReader(decompressed)
+	}
+
 	newHeaders, newBody, tokenUsage, responseModel, err := u.translator.ResponseBody(u.responseHeaders, decodingResult.reader, body.EndOfStream, u.parent.span)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transform response: %w", err)
 	}
+	if newBody == nil {
+		newBody = decompressed
+	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
 
-	// Remove content-encoding header if original body encoded but was mutated in the processor.
-	headerMutation = removeContentEncodingIfNeeded(headerMutation, bodyMutation, decodingResult.isEncoded)
+	if !u.streamsDecompressedBody() {
+		// Remove content-encoding header if original body encoded but was mutated in the processor.
+		headerMutation = removeContentEncodingIfNeeded(headerMutation, bodyMutation, decodingResult.isEncoded)
+	}
 
 	resp := &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_ResponseBody{
