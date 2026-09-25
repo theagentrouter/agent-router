@@ -1,0 +1,50 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+{{- if .Values.rateLimiter.enabled }}
+# Rate limit service that reads QuotaPolicy configs via xDS from the AI Gateway controller
+# and enforces quota-based rate limiting for upstream clusters.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.rateLimiter.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.rateLimiter.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.rateLimiter.name }}
+    spec:
+      containers:
+        - name: ratelimit
+          command:
+            - /bin/ratelimit
+          image: "{{ .Values.rateLimiter.image.repository }}:{{ .Values.rateLimiter.image.tag }}"
+          imagePullPolicy: {{ .Values.rateLimiter.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.rateLimiter.port }}
+              name: grpc
+          env:
+            {{- tpl (toYaml .Values.rateLimiter.env) $ | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.rateLimiter.name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: {{ .Values.rateLimiter.name }}
+  ports:
+    - name: grpc
+      protocol: TCP
+      port: {{ .Values.rateLimiter.port }}
+      targetPort: {{ .Values.rateLimiter.port }}
+  type: ClusterIP
+{{- end }}
