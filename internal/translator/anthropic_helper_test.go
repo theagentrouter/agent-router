@@ -19,6 +19,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
@@ -126,6 +127,61 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 					},
 				},
 			},
+		},
+		{
+			name: "eager_input_streaming true is forwarded",
+			openAIReq: &openai.ChatCompletionRequest{
+				Tools: []openai.Tool{
+					{
+						Type: "function",
+						Function: &openai.FunctionDefinition{
+							Name:                "get_weather",
+							EagerInputStreaming: ptr.To(true),
+						},
+					},
+				},
+			},
+			expectedTools: []anthropic.ToolUnionParam{
+				{
+					OfTool: &anthropic.ToolParam{
+						Name:                "get_weather",
+						Description:         anthropic.String(""),
+						EagerInputStreaming: anthropic.Bool(true),
+					},
+				},
+			},
+		},
+		{
+			// An explicit false must survive as false rather than collapse into unset, since
+			// Anthropic reads it as "keep buffering" even when the legacy beta header is on.
+			name: "eager_input_streaming false is forwarded, not dropped",
+			openAIReq: &openai.ChatCompletionRequest{
+				Tools: []openai.Tool{
+					{
+						Type: "function",
+						Function: &openai.FunctionDefinition{
+							Name:                "get_weather",
+							EagerInputStreaming: ptr.To(false),
+						},
+					},
+				},
+			},
+			expectedTools: []anthropic.ToolUnionParam{
+				{
+					OfTool: &anthropic.ToolParam{
+						Name:                "get_weather",
+						Description:         anthropic.String(""),
+						EagerInputStreaming: anthropic.Bool(false),
+					},
+				},
+			},
+		},
+		{
+			name: "eager_input_streaming omitted stays unset",
+			openAIReq: &openai.ChatCompletionRequest{
+				Tools: openaiTestTool,
+			},
+			expectedTools: anthropicTestTool,
 		},
 		{
 			name: "tool_definition_with_required_field",
@@ -759,6 +815,30 @@ func TestOutputConfigAvailable(t *testing.T) {
 			model:     "claude-fable-5",
 			expected:  false,
 		},
+		{
+			name:      "claude-opus-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-opus-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-opus-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-opus-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-opus-5-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-opus-5-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-opus-5-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-opus-5-5",
+			expected:  false,
+		},
 		// Unsupported models on either backend.
 		{
 			name:      "claude-3-sonnet not supported on GCP",
@@ -1171,6 +1251,16 @@ func TestEffortAvailable(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "claude-opus-5 supported",
+			model:    "claude-opus-5",
+			expected: true,
+		},
+		{
+			name:     "claude-opus-5-5 supported",
+			model:    "claude-opus-5-5",
+			expected: true,
+		},
+		{
 			name:     "claude-sonnet-4-5-20250514 not supported",
 			model:    "claude-sonnet-4-5-20250514",
 			expected: false,
@@ -1442,6 +1532,36 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 		require.NotNil(t, params.OutputConfig.Format.Schema)
 		require.Equal(t, constant.JSONSchema("json_schema"), params.OutputConfig.Format.Type)
 	})
+}
+
+func TestBuildAnthropicParamsPreservesStructuredOutputPropertyOrder(t *testing.T) {
+	rawSchema := json.RawMessage(`{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"},"middle":{"type":"boolean"}},"required":["zeta","alpha","middle"]}`)
+	request := &openai.ChatCompletionRequest{
+		Model:               "claude-sonnet-4-6",
+		MaxCompletionTokens: ptr.To(int64(1024)),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			{OfUser: &openai.ChatCompletionUserMessageParam{
+				Role:    "user",
+				Content: openai.StringOrUserRoleContentUnion{Value: "test"},
+			}},
+		},
+		ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
+			OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+				Type: "json_schema",
+				JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+					Name:   "ordered_schema",
+					Schema: rawSchema,
+				},
+			},
+		},
+	}
+
+	params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(params)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"schema":`+string(rawSchema))
 }
 
 func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
@@ -1908,4 +2028,79 @@ data:{"type":"message_stop"}
 	output, ok := tokenUsage.OutputTokens()
 	require.True(t, ok, "output tokens were not extracted")
 	require.Equal(t, uint32(16), output)
+}
+
+// TestAnthropicStreamParser_ThinkingDelta asserts that extended thinking
+// content reaches the OpenAI stream. text_delta and thinking_delta are
+// separate variants of RawContentBlockDeltaUnion and carry their payload
+// in different fields, so reading .Text for both streams every thinking
+// token as an empty string.
+func TestAnthropicStreamParser_ThinkingDelta(t *testing.T) {
+	p := newAnthropicStreamParser("claude-sonnet-4-5")
+
+	const stream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me work through it. "}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Two plus two is four."}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"c2ln"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"4"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":16}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+	_, body, _, _, err := p.Process(strings.NewReader(stream), true, nil)
+	require.NoError(t, err)
+
+	contents := streamedContent(t, body)
+	require.Equal(t, []string{
+		"Let me work through it. ",
+		"Two plus two is four.",
+		"4",
+	}, contents, "thinking content is dropped: every thinking_delta arrives as an empty string")
+}
+
+// streamedContent collects the non-empty delta.content values from an
+// OpenAI SSE stream, in order.
+func streamedContent(t *testing.T, body []byte) []string {
+	t.Helper()
+	var out []string
+	for line := range strings.SplitSeq(string(body), "\n") {
+		payload, ok := strings.CutPrefix(line, "data: ")
+		if !ok || payload == "[DONE]" {
+			continue
+		}
+		var chunk openai.ChatCompletionResponseChunk
+		require.NoError(t, json.Unmarshal([]byte(payload), &chunk), "payload: %s", payload)
+		for _, c := range chunk.Choices {
+			if c.Delta != nil && c.Delta.Content != nil && *c.Delta.Content != "" {
+				out = append(out, *c.Delta.Content)
+			}
+		}
+	}
+	return out
 }

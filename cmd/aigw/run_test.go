@@ -107,15 +107,31 @@ func TestRunCmdContext_writeEnvoyResourcesAndRunExtProc_noListeners(t *testing.T
 
 func Test_mustStartExtProc(t *testing.T) {
 	mockErr := errors.New("mock extproc error")
+	var capturedArgs []string
 	runCtx := &runCmdContext{
-		stderrLogger:    slog.New(slog.DiscardHandler),
-		stderr:          io.Discard,
-		tmpdir:          t.TempDir(),
-		adminPort:       1064,
-		extProcLauncher: func(context.Context, []string, io.Writer) error { return mockErr },
+		stderrLogger: slog.New(slog.DiscardHandler),
+		stderr:       io.Discard,
+		tmpdir:       t.TempDir(),
+		adminPort:    1064,
+		extProcLauncher: func(_ context.Context, args []string, _ io.Writer) error {
+			capturedArgs = args
+			return mockErr
+		},
 	}
 	done := runCtx.mustStartExtProc(t.Context(), &filterapi.Config{Version: version.Parse()})
 	require.ErrorIs(t, <-done, mockErr)
+
+	bundlePath := findFlagValue(capturedArgs, "--configBundlePath")
+	require.NotEmpty(t, bundlePath)
+	indexRaw, err := os.ReadFile(filepath.Join(bundlePath, filterapi.ConfigBundleIndexFileName))
+	require.NoError(t, err)
+	index, err := filterapi.UnmarshalConfigBundleIndex(indexRaw)
+	require.NoError(t, err)
+	cfg, err := filterapi.ReassembleBundleConfig(index, func(part filterapi.ConfigBundlePart) ([]byte, error) {
+		return os.ReadFile(filepath.Join(bundlePath, filepath.FromSlash(part.Path)))
+	})
+	require.NoError(t, err)
+	require.Equal(t, version.Parse(), cfg.Version)
 }
 
 func Test_mustStartExtProc_defaultHeaderAttributes(t *testing.T) {

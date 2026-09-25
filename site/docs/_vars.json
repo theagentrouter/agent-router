@@ -3,5 +3,6 @@
   "aigwGitRef": "main",
   "egVersion": "0.0.0-latest",
   "egMinVersion": "1.8.1",
-  "k8sMinVersion": "1.32"
+  "k8sMinVersion": "1.32",
+  "gaieVersion": "v1.6.0"
 }

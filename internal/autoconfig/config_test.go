@@ -70,6 +70,9 @@ var (
 	//go:embed testdata/anthropic.yaml
 	anthropicYAML string
 
+	//go:embed testdata/anthropic-prefix.yaml
+	anthropicPrefixYAML string
+
 	//go:embed testdata/openai-otel.yaml
 	openaiOTELYAML string
 
@@ -454,6 +457,26 @@ func TestWriteConfig(t *testing.T) {
 			},
 			expected: anthropicYAML,
 		},
+		{
+			name: "Anthropic (path prefix)",
+			input: ConfigData{
+				Backends: []Backend{
+					{
+						Name:     "anthropic",
+						Hostname: "api.anthropic.com",
+						Port:     443,
+						NeedsTLS: true,
+					},
+				},
+				Anthropic: &AnthropicConfig{
+					BackendName: "anthropic",
+					SchemaName:  "Anthropic",
+					Version:     "api/v1",
+				},
+				OTELLog: &otelLogConfig{Exporter: "console"},
+			},
+			expected: anthropicPrefixYAML,
+		},
 	}
 
 	for _, tt := range tests {
@@ -535,6 +558,11 @@ func TestParseURL(t *testing.T) {
 		{
 			name:          "unsupported scheme",
 			baseURL:       "ftp://example.com",
+			expectedError: fmt.Errorf("invalid base URL: unsupported scheme \"ftp\""),
+		},
+		{
+			name:          "unsupported scheme with explicit port",
+			baseURL:       "ftp://example.com:21",
 			expectedError: fmt.Errorf("invalid base URL: unsupported scheme \"ftp\""),
 		},
 	}

@@ -41,6 +41,9 @@ const (
 	MCPBackendHeader = EnvoyAIGatewayHeaderPrefix + "mcp-backend"
 	// MCPRouteHeader is the special header key used to identify the mcp route.
 	MCPRouteHeader = EnvoyAIGatewayHeaderPrefix + "mcp-route"
+	// MCPSubjectHeader carries the authenticated subject (the JWT "sub" claim) as extracted
+	// and verified by Envoy's JWT filter via a claimToHeaders mapping.
+	MCPSubjectHeader = EnvoyAIGatewayHeaderPrefix + "mcp-subject"
 	// MCPBackendSubsetHeader is the trusted, shim-supplied comma-separated backend subset a request may fan out to.
 	MCPBackendSubsetHeader = EnvoyAIGatewayHeaderPrefix + "mcp-backend-subset"
 	// MCPBackendSubsetMetadataKey is the dynamic metadata key the shim sets; Envoy renders it into MCPBackendSubsetHeader.
@@ -267,6 +270,8 @@ type EndpointPrefixes struct {
 	Cohere string
 	// Anthropic defaults to "/anthropic"
 	Anthropic string
+	// TypeSafe defaults to "/typesafe"
+	TypeSafe string
 }
 
 // ParseEndpointPrefixes parses a comma-separated list of key:value pairs to populate EndpointPrefixes.
@@ -275,10 +280,11 @@ type EndpointPrefixes struct {
 //   - openai
 //   - cohere
 //   - anthropic
+//   - typesafe
 //
 // Format example:
 //
-//	"openai:/,cohere:/cohere,anthropic:/anthropic"
+//	"openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe"
 //
 // Unknown keys cause an error; values must be non-empty.
 func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
@@ -286,6 +292,7 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 		OpenAI:    "/",
 		Cohere:    "/cohere",
 		Anthropic: "/anthropic",
+		TypeSafe:  "/typesafe",
 	}
 	if s == "" {
 		return out, nil
@@ -313,8 +320,10 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 			out.Cohere = value
 		case "anthropic":
 			out.Anthropic = value
+		case "typesafe":
+			out.TypeSafe = value
 		default:
-			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic)", key, i+1)
+			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic, typesafe)", key, i+1)
 		}
 	}
 	return out, nil

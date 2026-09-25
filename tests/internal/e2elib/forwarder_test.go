@@ -152,7 +152,7 @@ func TestPortForwarder_Post(t *testing.T) {
 		},
 		{
 			name: "empty 500 with retry",
-			podBehavior: (func() http.HandlerFunc {
+			podBehavior: func() http.HandlerFunc {
 				var postCount atomic.Int32
 				return func(w http.ResponseWriter, r *http.Request) {
 					if r.Method == http.MethodPost {
@@ -165,7 +165,7 @@ func TestPortForwarder_Post(t *testing.T) {
 					w.WriteHeader(http.StatusOK)
 					_, _ = w.Write([]byte("success"))
 				}
-			})(),
+			}(),
 			expectedStarts:   2,
 			expectedResponse: "success",
 		},

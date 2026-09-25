@@ -36,6 +36,9 @@ spec:
       {{- if .Values.controller.hostNetwork }}
       dnsPolicy: ClusterFirstWithHostNet
       {{- end }}
+      {{- with .Values.controller.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.controller.podSecurityContext | nindent 8 }}
       containers:
@@ -87,6 +90,10 @@ spec:
               {{- $anthropic := .Values.endpointConfig.anthropic -}}
               {{- $endpointPrefixes = append $endpointPrefixes (printf "anthropic:%s" $anthropic) -}}
             {{- end -}}
+            {{- if hasKey .Values.endpointConfig "typesafe" -}}
+              {{- $typesafe := .Values.endpointConfig.typesafe -}}
+              {{- $endpointPrefixes = append $endpointPrefixes (printf "typesafe:%s" $typesafe) -}}
+            {{- end -}}
             {{- if $endpointPrefixes }}
             - "--endpointPrefixes={{ join "," $endpointPrefixes }}"
             {{- end }}
@@ -115,6 +122,12 @@ spec:
             - --mcpFallbackSessionEncryptionSeed={{ .Values.controller.mcp.sessionEncryption.fallback.seed }}
             - --mcpFallbackSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.fallback.iterations }}
             {{- end }}
+          # Allow the default two-minute cache sync timeout plus startup overhead.
+          startupProbe:
+            grpc:
+              port: 1063
+            failureThreshold: 75
+            periodSeconds: 2
           livenessProbe:
             grpc:
               port: 1063

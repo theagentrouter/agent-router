@@ -4,11 +4,11 @@ title: Supported API Endpoints
 sidebar_position: 9
 ---
 
-The Envoy AI Gateway provides OpenAI-compatible API endpoints as well as the Anthropic-compatible API for routing and managing LLM/AI traffic. This page documents which OpenAI API endpoints and Anthropic-compatible API endpoints are currently supported and their capabilities.
+The Agent Router provides OpenAI-compatible API endpoints as well as the Anthropic-compatible API for routing and managing LLM/AI traffic. This page documents which OpenAI API endpoints and Anthropic-compatible API endpoints are currently supported and their capabilities.
 
 ## Overview
 
-The Envoy AI Gateway acts as a proxy that accepts OpenAI-compatible and Anthropic-compatible requests and routes them to various AI providers. While it maintains compatibility with the OpenAI API specification, it currently supports a subset of the full OpenAI API.
+The Agent Router acts as a proxy that accepts OpenAI-compatible and Anthropic-compatible requests and routes them to various AI providers. While it maintains compatibility with the OpenAI API specification, it currently supports a subset of the full OpenAI API.
 
 ## Supported Endpoints
 
@@ -574,7 +574,7 @@ The following table summarizes which providers support which endpoints:
 | [Anthropic](https://docs.claude.com/en/home)                                                          |        ✅        |     ❌      |     ❌     |        ❌        |         ✅         |      ✅      |   ❌   |    ❌    | Via OpenAI-compatible API and Native Anthropic API                                                                   |
 | [vLLM](https://docs.vllm.ai/en/latest/)                                                               |        ✅        |     ✅      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |    ✅    | Via OpenAI-compatible API; native `/tokenize` support                                                                |
 
-- ✅ - Supported and Tested on Envoy AI Gateway CI
+- ✅ - Supported and Tested on Agent Router CI
 - ⚠️️ - Expected to work based on provider documentation, but not tested on the CI.
 - ❌ - Not supported according to provider documentation.
 - 🚧 - Unimplemented, or under active development but planned for future releases
@@ -619,11 +619,11 @@ Notes:
 
 ## What's Next
 
-To learn more about configuring and using the Envoy AI Gateway with these endpoints:
+To learn more about configuring and using the Agent Router with these endpoints:
 
 - **[Supported Providers](./supported-providers.md)** - Complete list of supported AI providers and their configurations
 - **[Usage-Based Rate Limiting](../traffic/usage-based-ratelimiting.md)** - Configure token-based rate limiting and cost controls
 - **[Provider Fallback](../traffic/provider-fallback.md)** - Set up automatic failover between providers for high availability
 - **[Metrics and Monitoring](../observability/metrics.md)** - Monitor usage, costs, and performance metrics
 
-[issue#609]: https://github.com/envoyproxy/ai-gateway/issues/609
+[issue#609]: https://github.com/theagentrouter/agent-router/issues/609

@@ -9,7 +9,7 @@ import vars from '../../\_vars.json';
 
 # Connect GCP VertexAI
 
-This guide will help you configure Envoy AI Gateway to work with GCP VertexAI's Gemini and Anthropic models.
+This guide will help you configure Agent Router to work with GCP VertexAI's Gemini and Anthropic models.
 
 ## Prerequisites
 
@@ -21,7 +21,7 @@ Before you begin, you'll need:
 
 ## Authentication Options
 
-Envoy AI Gateway supports three authentication methods for GCP VertexAI:
+Agent Router supports three authentication methods for GCP VertexAI:
 
 1. **Application Default Credentials (ADC)** - Recommended for GKE with Workload Identity
 2. **Service Account Key Files** - For explicit JSON credentials
@@ -66,7 +66,7 @@ Service account key files should be avoided in production when possible. Use ADC
 ### 1. Download configuration template
 
 <CodeBlock language="shell">
-{`curl -O https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/basic/gcp_vertex.yaml`}
+{`curl -O https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/basic/gcp_vertex.yaml`}
 </CodeBlock>
 
 ### 2. Configure GCP Credentials

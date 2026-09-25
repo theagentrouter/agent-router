@@ -440,13 +440,13 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) ResponseBody(_ map[string
 		}
 		if bedrockResp.Usage.CacheWriteInputTokens != nil {
 			tokenUsage.SetCacheCreationInputTokens(uint32(*bedrockResp.Usage.CacheWriteInputTokens)) //nolint:gosec
-			openAIResp.Usage.PromptTokensDetails.CacheCreationTokens = int(*bedrockResp.Usage.CacheWriteInputTokens)
+			openAIResp.Usage.PromptTokensDetails.CacheWriteTokens = int(*bedrockResp.Usage.CacheWriteInputTokens)
 		}
 	}
 
 	// AWS Bedrock Converse API does not support N(multiple choices) > 0, so there could be only one choice.
 	choice := openai.ChatCompletionResponseChoice{
-		Index: (int64)(0),
+		Index: int64(0),
 		Message: openai.ChatCompletionResponseChoiceMessage{
 			Role: bedrockResp.Output.Message.Role,
 		},
@@ -578,7 +578,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) convertEvent(event *awsbe
 			chunk.Usage.PromptTokensDetails.CachedTokens = int(*event.Usage.CacheReadInputTokens)
 		}
 		if event.Usage.CacheWriteInputTokens != nil {
-			chunk.Usage.PromptTokensDetails.CacheCreationTokens = int(*event.Usage.CacheWriteInputTokens)
+			chunk.Usage.PromptTokensDetails.CacheWriteTokens = int(*event.Usage.CacheWriteInputTokens)
 		}
 	// messageStart event.
 	case awsbedrock.ConverseStreamEventTypeMessageStart.String():

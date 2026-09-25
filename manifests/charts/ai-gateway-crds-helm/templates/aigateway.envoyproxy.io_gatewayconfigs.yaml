@@ -1296,6 +1296,23 @@ spec:
                     x-kubernetes-validations:
                     - message: Either image or imageRepository can be set.
                       rule: '!has(self.image) || !has(self.imageRepository)'
+                  metadataForwardingNamespaces:
+                    description: |-
+                      MetadataForwardingNamespaces lists the untyped dynamic metadata namespaces Envoy forwards
+                      to the external processor for this Gateway's AI traffic. A BackendSecurityPolicy using
+                      credentialOverride.fromDynamicMetadata receives metadata only from a namespace listed here.
+
+                      Under Envoy Gateway's mergeGateways, every Gateway in the class shares one Envoy, so a
+                      namespace any one of them declares is forwarded for all of their AI traffic.
+                    items:
+                      maxLength: 256
+                      type: string
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-validations:
+                    - message: metadata namespaces may only contain letters, digits,
+                        '.', '_', '/' and '-'
+                      rule: self.all(n, n.matches('^[A-Za-z0-9._/-]+$'))
                 type: object
               forwardProxy:
                 description: |-
