@@ -130,10 +130,10 @@ func (m *mcpRequestContext) serveGET(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing session ID", http.StatusBadRequest)
 		return
 	}
-	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(lastEventID))
+	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(lastEventID), extractSubject(r))
 	if err != nil {
 		m.l.Error("invalid session ID in GET request", slog.String("session_id", sessionID), slog.String("error", err.Error()))
-		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), sessionErrorStatus(err))
 		return
 	}
 	if m.l.Enabled(r.Context(), slog.LevelDebug) {
@@ -164,10 +164,10 @@ func (m *mcpRequestContext) serverDELETE(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// we didn't care about last event id in DELETE.
-	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), "")
+	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), "", extractSubject(r))
 	if err != nil {
 		m.l.Error("invalid session ID in DELETE request", slog.String("session_id", sessionID), slog.String("error", err.Error()))
-		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), sessionErrorStatus(err))
 		return
 	}
 	_ = s.Close() // Ignore error as it's not recoverable here. Errors per backend are logged in Close().
@@ -213,11 +213,11 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 		})
 	}()
 	if sessionID := r.Header.Get(sessionIDHeader); sessionID != "" {
-		s, err = m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(r.Header.Get(lastEventIDHeader)))
+		s, err = m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(r.Header.Get(lastEventIDHeader)), extractSubject(r))
 		if err != nil {
 			errType = metrics.MCPErrorInvalidSessionID
 			m.l.Error("invalid session ID in POST request", slog.String("session_id", sessionID), slog.String("error", err.Error()))
-			http.Error(w, fmt.Sprintf("invalid session ID: %v", err), http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("invalid session ID: %v", err), sessionErrorStatus(err))
 			return
 		}
 	}
@@ -1559,6 +1559,17 @@ func (m *mcpRequestContext) handleSetLoggingLevel(ctx context.Context, s *sessio
 // the subject is only used as an anti-hijacking discriminator in the session ID, not for authorization.
 func extractSubject(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get(internalapi.MCPSubjectHeader))
+}
+
+// sessionErrorStatus maps an error from sessionFromID to the HTTP status code that should be
+// returned to the client. A subject mismatch is an authorization failure (the caller is
+// authenticated but is not the subject the session was created for), so it is reported as 401
+// rather than the generic 400 used for malformed/undecryptable session IDs.
+func sessionErrorStatus(err error) int {
+	if errors.Is(err, errSessionSubjectMismatch) {
+		return http.StatusUnauthorized
+	}
+	return http.StatusBadRequest
 }
 
 // parseParamsAndMaybeStartSpan parses the params from the JSON-RPC request and starts a tracing span if params is non-nil.

@@ -283,9 +283,10 @@ func TestBackendSessionIDs_Success(t *testing.T) {
 	idB := "session-b"
 	routeName := "some-route"
 	composite := clientToGatewaySessionID(routeName + "@" + "subject" + "@" + backendA + ":" + base64.StdEncoding.EncodeToString([]byte(idA)) + "," + backendB + ":" + base64.StdEncoding.EncodeToString([]byte(idB)))
-	m, route, err := composite.backendSessionIDs()
+	m, route, subject, err := composite.backendSessionIDs()
 	require.NoError(t, err)
 	require.Equal(t, routeName, route)
+	require.Equal(t, "subject", subject)
 	require.Equal(t, idA, string(m[backendA].sessionID))
 	require.Equal(t, idB, string(m[backendB].sessionID))
 	// Old format without capability hex should default to all capabilities.
@@ -311,9 +312,10 @@ func TestBackendSessionIDs_WithCapabilities(t *testing.T) {
 			"backendA:" + base64.StdEncoding.EncodeToString([]byte("sid-a")) + ":" + capHex + "," +
 			"backendB:" + base64.StdEncoding.EncodeToString([]byte("sid-b")) + ":000",
 	)
-	m, route, err := composite.backendSessionIDs()
+	m, route, subject, err := composite.backendSessionIDs()
 	require.NoError(t, err)
 	require.Equal(t, routeName, route)
+	require.Equal(t, "subject", subject)
 	require.Equal(t, "sid-a", string(m["backendA"].sessionID))
 	require.Equal(t, "sid-b", string(m["backendB"].sessionID))
 	// backendA should have tools + logging.
@@ -339,9 +341,10 @@ func TestClientToGatewaySessionIDFromEntries_WithCapabilities(t *testing.T) {
 	id := clientToGatewaySessionIDFromEntries("subj", entries, "route1")
 
 	// Parse it back.
-	m, route, err := id.backendSessionIDs()
+	m, route, subject, err := id.backendSessionIDs()
 	require.NoError(t, err)
 	require.Equal(t, "route1", route)
+	require.Equal(t, "subj", subject)
 	require.Equal(t, "sid-1", string(m["b1"].sessionID))
 	require.Equal(t, "sid-2", string(m["b2"].sessionID))
 
@@ -376,9 +379,10 @@ func TestBackendSessionIDs_EmailSubject(t *testing.T) {
 					backendA + ":" + base64.StdEncoding.EncodeToString([]byte(idA)) + "," +
 					backendB + ":" + base64.StdEncoding.EncodeToString([]byte(idB)),
 			)
-			m, route, err := composite.backendSessionIDs()
+			m, route, gotSubject, err := composite.backendSessionIDs()
 			require.NoError(t, err)
 			require.Equal(t, routeName, route)
+			require.Equal(t, subject, gotSubject)
 			require.Equal(t, idA, string(m[backendA].sessionID))
 			require.Equal(t, idB, string(m[backendB].sessionID))
 		})
@@ -401,7 +405,7 @@ func TestBackendSessionIDs_Errors(t *testing.T) {
 		{input: "@@backend:not-base64", expErr: `invalid session ID: failed to base64 decode session ID in part "backend:not-base64"`},
 	} {
 		t.Run(string(tc.input), func(t *testing.T) {
-			_, _, err := tc.input.backendSessionIDs()
+			_, _, _, err := tc.input.backendSessionIDs()
 			require.ErrorContains(t, err, tc.expErr)
 		})
 	}

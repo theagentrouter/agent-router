@@ -37,6 +37,15 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/version"
 )
 
+// defaultInsecureMCPSessionEncryptionSeed is the well-known, publicly documented default value
+// for --mcpSessionEncryptionSeed (also the default shipped by the Helm chart's
+// controller.mcp.sessionEncryption.seed value). Anyone who knows this default can derive the
+// AES-GCM key used to encrypt/decrypt MCP session IDs (see internal/mcpproxy/crypto.go), and so
+// can decrypt observed session IDs or mint arbitrary ones. It MUST be overridden with a secret,
+// randomly-generated value in any deployment that is reachable by untrusted or multi-tenant
+// clients.
+const defaultInsecureMCPSessionEncryptionSeed = "default-insecure-seed"
+
 // extProcFlags is the struct that holds the flags passed to the external processor.
 type extProcFlags struct {
 	configBundlePath                       string        // path to the sharded configuration bundle directory.
@@ -143,7 +152,7 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 		"Maximum message size in bytes that the gRPC server can receive. Default is unlimited since the flow control should be handled by Envoy.",
 	)
 	fs.StringVar(&flags.mcpAddr, "mcpAddr", "", "the address (TCP or UDS) for the MCP proxy server, such as :1063 or unix:///tmp/ext_proc.sock. Optional.")
-	fs.StringVar(&flags.mcpSessionEncryptionSeed, "mcpSessionEncryptionSeed", "default-insecure-seed",
+	fs.StringVar(&flags.mcpSessionEncryptionSeed, "mcpSessionEncryptionSeed", defaultInsecureMCPSessionEncryptionSeed,
 		"Seed used to derive the MCP session encryption key. This should be changed and set to a secure value.")
 	fs.IntVar(&flags.mcpSessionEncryptionIterations, "mcpSessionEncryptionIterations", 100_000,
 		"Number of iterations to use for PBKDF2 key derivation for MCP session encryption.")
@@ -355,6 +364,13 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 
 	var mcpServer *http.Server
 	if mcpLis != nil {
+		if flags.mcpSessionEncryptionSeed == defaultInsecureMCPSessionEncryptionSeed {
+			l.Warn("MCP session encryption seed is set to the well-known default value; " +
+				"this allows anyone who knows this public default to decrypt and forge MCP session IDs " +
+				"(including the anti-hijacking subject embedded in them). Set --mcpSessionEncryptionSeed " +
+				"(or the Helm value controller.mcp.sessionEncryption.seed) to a secret, randomly-generated " +
+				"value before exposing this gateway to untrusted or multi-tenant clients.")
+		}
 		mcpSessionCrypto := mcpproxy.NewPBKDF2AesGcmSessionCrypto(flags.mcpSessionEncryptionSeed, flags.mcpSessionEncryptionIterations)
 		if flags.mcpFallbackSessionEncryptionSeed != "" {
 			mcpSessionCrypto = &mcpproxy.FallbackEnabledSessionCrypto{
