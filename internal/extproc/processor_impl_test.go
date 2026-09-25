@@ -470,10 +470,12 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 		mt.retUsedToken.SetInputTokens(1)
 		mt.retUsedToken.SetCachedInputTokens(1)
 		mt.retUsedToken.SetCacheCreationInputTokens(3)
+		mt.retUsedToken.SetCacheCreation5mInputTokens(2)
+		mt.retUsedToken.SetCacheCreation1hInputTokens(1)
 
 		celProgInt, err := llmcostcel.NewProgram("54321")
 		require.NoError(t, err)
-		celProgUint, err := llmcostcel.NewProgram("uint(9999)")
+		celProgUint, err := llmcostcel.NewProgram("cache_creation_5m_input_tokens * 100u + cache_creation_1h_input_tokens * 1000u")
 		require.NoError(t, err)
 		p := &chatCompletionProcessorUpstreamFilter{
 			translator: mt,
@@ -486,6 +488,8 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeInputToken, MetadataKey: "input_token_usage"}},
 						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCachedInputToken, MetadataKey: "cached_input_token_usage"}},
 						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCacheCreationInputToken, MetadataKey: "cache_creation_input_token_usage"}},
+						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCacheCreation5mInputToken, MetadataKey: "cache_creation_5m_input_token_usage"}},
+						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCacheCreation1hInputToken, MetadataKey: "cache_creation_1h_input_token_usage"}},
 						{
 							CELProg:        celProgInt,
 							LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCEL, MetadataKey: "cel_int"},
@@ -524,9 +528,13 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 			GetStructValue().Fields["cached_input_token_usage"].GetNumberValue())
 		require.Equal(t, float64(3), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
 			GetStructValue().Fields["cache_creation_input_token_usage"].GetNumberValue())
+		require.Equal(t, float64(2), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+			GetStructValue().Fields["cache_creation_5m_input_token_usage"].GetNumberValue())
+		require.Equal(t, float64(1), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+			GetStructValue().Fields["cache_creation_1h_input_token_usage"].GetNumberValue())
 		require.Equal(t, float64(54321), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
 			GetStructValue().Fields["cel_int"].GetNumberValue())
-		require.Equal(t, float64(9999), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+		require.Equal(t, float64(1200), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
 			GetStructValue().Fields["cel_uint"].GetNumberValue())
 		require.Equal(t, "ai_gateway_llm", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["model_name_override"].GetStringValue())
 		require.Equal(t, "some_backend", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["ai_service_backend_name"].GetStringValue())
@@ -676,6 +684,18 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 		require.Equal(t, float64(138), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
 			GetStructValue().Fields["output_token_usage"].GetNumberValue())
 	})
+}
+
+func TestEvalCostDoesNotInferAnthropicCacheLifetime(t *testing.T) {
+	var usage metrics.TokenUsage
+	usage.SetCacheCreationInputTokens(7)
+
+	cost5m, err := evalCost(filterapi.LLMRequestCostTypeCacheCreation5mInputToken, nil, &usage, nil, "", "")
+	require.NoError(t, err)
+	require.Zero(t, cost5m)
+	cost1h, err := evalCost(filterapi.LLMRequestCostTypeCacheCreation1hInputToken, nil, &usage, nil, "", "")
+	require.NoError(t, err)
+	require.Zero(t, cost1h)
 }
 
 func bodyFromModel(t *testing.T, model string, stream bool, streamOptions *openai.StreamOptions) []byte {

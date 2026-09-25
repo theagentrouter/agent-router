@@ -112,9 +112,10 @@ type LLMRequestCost struct {
 	MetadataKey string `json:"metadataKey"`
 	// Type specifies the type of the request cost. The default is "OutputToken",
 	// and it uses "output token" as the cost. The other types are "InputToken", "TotalToken",
-	// "CachedInputToken", "CacheCreationInputToken", "ReasoningToken", and "CEL".
+	// "CachedInputToken", "CacheCreationInputToken", "CacheCreation5mInputToken",
+	// "CacheCreation1hInputToken", "ReasoningToken", and "CEL".
 	//
-	// +kubebuilder:validation:Enum=OutputToken;InputToken;CachedInputToken;CacheCreationInputToken;TotalToken;ReasoningToken;CEL
+	// +kubebuilder:validation:Enum=OutputToken;InputToken;CachedInputToken;CacheCreationInputToken;CacheCreation5mInputToken;CacheCreation1hInputToken;TotalToken;ReasoningToken;CEL
 	Type LLMRequestCostType `json:"type"`
 	// CEL is the CEL expression to calculate the cost of the request.
 	// The CEL expression must return a signed or unsigned integer. If the
@@ -127,6 +128,8 @@ type LLMRequestCost struct {
 	//	* input_tokens: the number of input tokens. Type: unsigned integer.
 	//	* cached_input_tokens: the number of cached read input tokens. Type: unsigned integer.
 	//	* cache_creation_input_tokens: the number of cache creation input tokens. Type: unsigned integer.
+	//	* cache_creation_5m_input_tokens: the number of input tokens written to a five-minute cache. For Anthropic-compatible responses, a combined cache creation count without a valid TTL split uses the five-minute lifetime as a fallback. Type: unsigned integer.
+	//	* cache_creation_1h_input_tokens: the number of input tokens written to a one-hour cache. Type: unsigned integer.
 	//	* output_tokens: the number of output tokens. Type: unsigned integer.
 	//	* total_tokens: the total number of tokens. Type: unsigned integer.
 	//	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.
@@ -135,7 +138,7 @@ type LLMRequestCost struct {
 	//
 	// 	* "model == 'llama' ?  input_tokens + output_token * 0.5 : total_tokens"
 	//	* "backend == 'foo.default' ?  input_tokens + output_tokens : total_tokens"
-	//	* "backend == 'bar.default' ?  (input_tokens - cached_input_tokens) + cached_input_tokens * 0.1 + cache_creation_input_tokens * 1.25 + output_tokens : total_tokens"
+	//	* "backend == 'bar.default' ? (input_tokens - cached_input_tokens - cache_creation_input_tokens) + cached_input_tokens + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens * 2u + output_tokens : total_tokens"
 	//	* "input_tokens + output_tokens + total_tokens"
 	//	* "input_tokens * output_tokens"
 	//
@@ -151,8 +154,12 @@ const (
 	LLMRequestCostTypeInputToken LLMRequestCostType = "InputToken"
 	// LLMRequestCostTypeCachedInputToken is the cost type of the cached input token.
 	LLMRequestCostTypeCachedInputToken LLMRequestCostType = "CachedInputToken"
-	// LLMRequestCostTypeCacheCreationInputToken is the cost type of the cached input token.
+	// LLMRequestCostTypeCacheCreationInputToken is the cost type of all cache creation input tokens.
 	LLMRequestCostTypeCacheCreationInputToken LLMRequestCostType = "CacheCreationInputToken"
+	// LLMRequestCostTypeCacheCreation5mInputToken is the cost type of input tokens written to a five-minute cache.
+	LLMRequestCostTypeCacheCreation5mInputToken LLMRequestCostType = "CacheCreation5mInputToken"
+	// LLMRequestCostTypeCacheCreation1hInputToken is the cost type of input tokens written to a one-hour cache.
+	LLMRequestCostTypeCacheCreation1hInputToken LLMRequestCostType = "CacheCreation1hInputToken"
 	// LLMRequestCostTypeOutputToken is the cost type of the output token.
 	LLMRequestCostTypeOutputToken LLMRequestCostType = "OutputToken"
 	// LLMRequestCostTypeTotalToken is the cost type of the total token.
