@@ -1,0 +1,35 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# Positive control: the same backendSelector rule as backend_selector_jwt_without_oauth.yaml
+# is valid once oauth is configured, since Envoy's jwt_authn filter then validates the
+# bearer token before request.auth.jwt is populated.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: backend-selector-jwt-with-oauth
+  namespace: default
+spec:
+  parentRefs:
+    - name: some-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-service
+      kind: Service
+      port: 80
+  securityPolicy:
+    oauth:
+      issuer: https://auth.example.com/
+      jwks:
+        remoteJWKS:
+          uri: https://auth.example.com/jwks.json
+      protectedResourceMetadata:
+        resource: https://api.example.com/mcp
+  backendSelector:
+    defaultAction: Deny
+    rules:
+      - cel: 'request.mcp.backend in request.auth.jwt.claims.mcp_backends'
+        action: Allow

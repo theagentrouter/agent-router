@@ -1,0 +1,28 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# This should fail validation: backendSelector rules have no structured JWT
+# source, only CEL, so this rule reads request.auth.jwt directly. Without oauth
+# configured, no upstream filter ever validates the bearer token, so the claims
+# fed into this CEL expression could come from an anonymous or forged JWT.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: backend-selector-jwt-without-oauth
+  namespace: default
+spec:
+  parentRefs:
+    - name: some-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-service
+      kind: Service
+      port: 80
+  backendSelector:
+    defaultAction: Deny
+    rules:
+      - cel: 'request.mcp.backend in request.auth.jwt.claims.mcp_backends'
+        action: Allow
