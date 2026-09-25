@@ -396,6 +396,8 @@ helm-test: helm-package  ## Test the helm chart with a dummy version.
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "extProcLogFormat=text"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.logFormat=json --set extProc.logFormat=json | grep -q -- "-logFormat=json"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.logFormat=json --set extProc.logFormat=json | grep -q -- "extProcLogFormat=json"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "startupProbe:"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "failureThreshold: 75"
 
 # This pushes the helm chart to the OCI registry, requiring the access to the registry endpoint.
 .PHONY: helm-push

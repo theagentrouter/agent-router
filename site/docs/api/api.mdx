@@ -2161,6 +2161,11 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
   required="false"
   description="JWKS defines how a JSON Web Key Sets (JWKS) can be obtained to verify the access tokens presented by the clients.<br />If not specified, the JWKS URI will be discovered from the OAuth 2.0 Authorization Server Metadata<br />as per RFC 8414 by querying the `/.well-known/oauth-authorization-server` endpoint on the Issuer."
 /><ApiField
+  name="authorizationServerMetadataUrl"
+  type="string"
+  required="false"
+  description="AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization<br />Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known<br />URIs derived from Issuer.<br />Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer<br />of `https://example.com/api/idp/authn` whose document is served only at<br />`https://example.com/api/idp/v4/authn/.well-known/openid-configuration`.<br />Issuer is unaffected by this field. It continues to identify the authorization server in the<br />protected resource metadata the gateway publishes, and to derive the well-known URIs when this<br />field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here."
+/><ApiField
   name="protectedResourceMetadata"
   type="[ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1alpha1-protectedresourcemetadata)"
   required="true"
@@ -4979,6 +4984,11 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
   type="[JWKS](#github-com-envoyproxy-ai-gateway-api-v1beta1-jwks)"
   required="false"
   description="JWKS defines how a JSON Web Key Sets (JWKS) can be obtained to verify the access tokens presented by the clients.<br />If not specified, the JWKS URI will be discovered from the OAuth 2.0 Authorization Server Metadata<br />as per RFC 8414 by querying the `/.well-known/oauth-authorization-server` endpoint on the Issuer."
+/><ApiField
+  name="authorizationServerMetadataUrl"
+  type="string"
+  required="false"
+  description="AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization<br />Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known<br />URIs derived from Issuer.<br />Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer<br />of `https://example.com/api/idp/authn` whose document is served only at<br />`https://example.com/api/idp/v4/authn/.well-known/openid-configuration`.<br />Issuer is unaffected by this field. It continues to identify the authorization server in the<br />protected resource metadata the gateway publishes, and to derive the well-known URIs when this<br />field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here."
 /><ApiField
   name="protectedResourceMetadata"
   type="[ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1beta1-protectedresourcemetadata)"

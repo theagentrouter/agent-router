@@ -5,7 +5,11 @@
 
 package anthropic
 
-import "github.com/envoyproxy/ai-gateway/internal/json"
+import (
+	"strings"
+
+	"github.com/envoyproxy/ai-gateway/internal/json"
+)
 
 // MessagesResponseFromStream folds a complete stream of chunks back into the
 // MessagesResponse the provider sent, so a streamed response can be recorded
@@ -16,6 +20,9 @@ import "github.com/envoyproxy/ai-gateway/internal/json"
 func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse {
 	var response MessagesResponse
 	toolInputs := make(map[int]string)
+	textBuffers := make(map[int]*strings.Builder)
+	thinkingBuffers := make(map[int]*strings.Builder)
+	toolBuffers := make(map[int]*strings.Builder)
 
 	for _, event := range chunks {
 		if event == nil {
@@ -23,6 +30,8 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 		}
 		switch {
 		case event.MessageStart != nil:
+			clear(textBuffers)
+			clear(thinkingBuffers)
 			response = *(*MessagesResponse)(event.MessageStart)
 			// Ensure Content is initialized if nil.
 			if response.Content == nil {
@@ -58,6 +67,8 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 			// append to it in place, which would otherwise mutate the input and
 			// make a second fold of the same chunks produce doubled content.
 			response.Content[idx] = copyContentBlock(event.ContentBlockStart.ContentBlock)
+			delete(textBuffers, idx)
+			delete(thinkingBuffers, idx)
 
 		case event.ContentBlockDelta != nil:
 			idx := event.ContentBlockDelta.Index
@@ -66,14 +77,14 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 				delta := event.ContentBlockDelta.Delta
 
 				if block.Text != nil && delta.Text != "" {
-					block.Text.Text += delta.Text
+					block.Text.Text = appendStreamText(textBuffers, idx, block.Text.Text, delta.Text)
 				}
 				if block.Tool != nil && delta.PartialJSON != "" {
-					toolInputs[idx] += delta.PartialJSON
+					toolInputs[idx] = appendStreamText(toolBuffers, idx, toolInputs[idx], delta.PartialJSON)
 				}
 				if block.Thinking != nil {
 					if delta.Thinking != "" {
-						block.Thinking.Thinking += delta.Thinking
+						block.Thinking.Thinking = appendStreamText(thinkingBuffers, idx, block.Thinking.Thinking, delta.Thinking)
 					}
 					if delta.Signature != "" {
 						block.Thinking.Signature = delta.Signature
@@ -91,6 +102,7 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 					}
 				}
 				delete(toolInputs, idx)
+				delete(toolBuffers, idx)
 			}
 
 		case event.MessageStop != nil:
@@ -98,6 +110,19 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 		}
 	}
 	return &response
+}
+
+// Keep one buffer per interleaved block so appending a delta does not copy the
+// entire accumulated prefix. Builders are pointers because they cannot be copied.
+func appendStreamText(buffers map[int]*strings.Builder, idx int, initial, delta string) string {
+	buffer := buffers[idx]
+	if buffer == nil {
+		buffer = &strings.Builder{}
+		buffer.WriteString(initial)
+		buffers[idx] = buffer
+	}
+	buffer.WriteString(delta)
+	return buffer.String()
 }
 
 // copyContentBlock deep-copies the fields the fold mutates, so folding does not
