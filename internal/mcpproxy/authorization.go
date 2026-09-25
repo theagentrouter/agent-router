@@ -202,8 +202,15 @@ func (m *mcpRequestContext) authorizeRequestWith(authorization *compiledAuthoriz
 			}
 			match, err := m.evalRuleCEL(rule, celActivation)
 			if err != nil {
-				m.l.Error("failed to evaluate authorization CEL", slog.String("error", err.Error()), slog.String("expression", rule.celExpression))
-				continue
+				// Fail closed: a CEL runtime error (e.g. an attacker-supplied request shape
+				// that causes a missing-key/type error during evaluation) means we cannot
+				// determine whether this rule's condition holds. Treating that the same as
+				// "condition not met" (as a bare `continue` would) lets a request fall through
+				// to a later rule or the route's DefaultAction, silently bypassing Deny rules
+				// that depend on CEL. Deny the whole request instead so evaluation errors can
+				// never be leveraged to bypass authorization.
+				m.l.Error("authorization CEL evaluation error, denying request", slog.String("error", err.Error()), slog.String("expression", rule.celExpression))
+				return false, nil
 			}
 			if !match {
 				continue
