@@ -18,13 +18,11 @@ import (
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	egextension "github.com/envoyproxy/gateway/proto/extension"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
-	mutation_rulesv3 "github.com/envoyproxy/go-control-plane/envoy/config/common/mutation_rules/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
-	header_mutationv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_mutation/v3"
 	upstream_codecv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/upstream_codec/v3"
 	httpconnectionmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
@@ -498,9 +496,10 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	}
 	extProcConfig.ProcessingMode = &extprocv3.ProcessingMode{
 		RequestHeaderMode: extprocv3.ProcessingMode_SEND,
-		// At the upstream filter, it can access the original body in its memory, so it can perform the translation
-		// as well as the authentication at the request headers. Hence, there's no need to send the request body to the extproc.
-		RequestBodyMode: extprocv3.ProcessingMode_NONE,
+		// Use BUFFERED mode so the upstream filter receives the actual request body
+		// (after all HTTP-level filters have processed it) and can apply
+		// modelNameOverride and httpBodyMutation incrementally.
+		RequestBodyMode: extprocv3.ProcessingMode_BUFFERED,
 		// Response will be handled at the router filter level so that we could avoid the shenanigans around the retry+the upstream filter.
 		ResponseHeaderMode: extprocv3.ProcessingMode_SKIP,
 		ResponseBodyMode:   extprocv3.ProcessingMode_NONE,
@@ -524,39 +523,13 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 		ConfigType: &httpconnectionmanagerv3.HttpFilter_TypedConfig{TypedConfig: ecAny},
 	}
 
-	hmAny, err := toAny(&header_mutationv3.HeaderMutation{
-		Mutations: &header_mutationv3.Mutations{
-			RequestMutations: []*mutation_rulesv3.HeaderMutation{
-				{
-					Action: &mutation_rulesv3.HeaderMutation_Append{
-						Append: &corev3.HeaderValueOption{
-							AppendAction: corev3.HeaderValueOption_ADD_IF_ABSENT,
-							Header: &corev3.HeaderValue{
-								Key:   "content-length",
-								Value: `%DYNAMIC_METADATA(` + aigv1b1.AIGatewayFilterMetadataNamespace + `:content_length)%`,
-							},
-						},
-					},
-				},
-			},
-		},
-	})
-	if err != nil {
-		s.log.Error(err, "failed to marshal HeaderMutation to Any", "cluster_name", cluster.Name)
-		return fmt.Errorf("failed to marshal HeaderMutation to Any: %w", err)
-	}
-	headerMutFilter := &httpconnectionmanagerv3.HttpFilter{
-		Name:       aiGatewayHeaderMutationName,
-		ConfigType: &httpconnectionmanagerv3.HttpFilter_TypedConfig{TypedConfig: hmAny},
-	}
-
 	if len(po.HttpFilters) > 0 {
 		// Insert the ext_proc filter before the last filter since the last one is always the upstream codec filter.
 		last := po.HttpFilters[len(po.HttpFilters)-1]
 		po.HttpFilters = po.HttpFilters[:len(po.HttpFilters)-1]
-		po.HttpFilters = append(po.HttpFilters, extProcFilter, headerMutFilter, last)
+		po.HttpFilters = append(po.HttpFilters, extProcFilter, last)
 	} else {
-		po.HttpFilters = append(po.HttpFilters, extProcFilter, headerMutFilter)
+		po.HttpFilters = append(po.HttpFilters, extProcFilter)
 		// We always need the upstream_code filter as a last filter.
 		upstreamCodec := &httpconnectionmanagerv3.HttpFilter{}
 		upstreamCodec.Name = "envoy.filters.http.upstream_codec"

@@ -274,7 +274,6 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 
 	if mutatedOriginalBody != nil {
 		r.originalRequestBodyRaw = mutatedOriginalBody
-		r.forceBodyMutation = true
 	} else {
 		r.originalRequestBodyRaw = rawBody.Body
 	}
@@ -319,12 +318,24 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		rawBody.Body,
 	)
 
+	var bodyMutation *extprocv3.BodyMutation
+	status := extprocv3.CommonResponse_CONTINUE
+	if mutatedOriginalBody != nil {
+		bodyMutation = &extprocv3.BodyMutation{
+			Mutation: &extprocv3.BodyMutation_Body{Body: mutatedOriginalBody},
+		}
+		status = extprocv3.CommonResponse_CONTINUE_AND_REPLACE
+		setHeader(headerMutation, "content-length", strconv.Itoa(len(mutatedOriginalBody)))
+	}
+
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_RequestBody{
 			RequestBody: &extprocv3.BodyResponse{
 				Response: &extprocv3.CommonResponse{
 					HeaderMutation:  headerMutation,
-					ClearRouteCache: true,
+					ClearRouteCache:  true,
+					BodyMutation:     bodyMutation,
+					Status:           status,
 				},
 			},
 		},
@@ -337,10 +348,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) onRetry() bo
 
 // ProcessRequestHeaders implements [Processor.ProcessRequestHeaders].
 //
-// At the upstream filter, we already have the original request body at request headers phase.
-// So, we simply do the translation and upstream auth at this stage, and send them back to Envoy
-// with the status CONTINUE_AND_REPLACE. This allows Envoy to not send the request body again
-// to the extproc.
+// At the upstream filter, header-level mutations (path rewrite, auth, route
+// header mutations) are performed here, and body-level mutations
+// (modelNameOverride, httpBodyMutation) are deferred to ProcessRequestBody.
 func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequestHeaders(ctx context.Context, _ *corev3.HeaderMap) (res *extprocv3.ProcessingResponse, err error) {
 	defer func() {
 		if err != nil {
@@ -356,22 +366,21 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	reqModel := cmp.Or(u.requestHeaders[internalapi.ModelNameHeaderKeyDefault], u.parent.originalModel)
 	u.metrics.SetRequestModel(reqModel)
 
-	// We force the body mutation in the following cases:
-	// * The request is a retry request because the body mutation might have happened the previous iteration.
-	// * The request is a streaming request, and the IncludeUsage option is set to false since we need to ensure that
-	//	the token usage is calculated correctly without being bypassed.
+	// Determine forceBodyMutation for later use in ProcessRequestBody.
 	forceBodyMutation := u.onRetry() || u.parent.forceBodyMutation
-	newHeaders, newBody, err := u.translator.RequestBody(u.parent.originalRequestBodyRaw, u.parent.originalRequestBody, forceBodyMutation)
+
+	// Compute header mutations from the translator. The actual body mutation
+	// is deferred to ProcessRequestBody where we have the real body from Envoy.
+	newHeaders, _, err := u.translator.RequestBody(u.parent.originalRequestBodyRaw, u.parent.originalRequestBody, forceBodyMutation)
 	if err != nil {
 		if userFacingErr := internalapi.GetUserFacingError(err); userFacingErr != nil {
-			// return to user as 422 -  e.g., "invalid request body: tool_choice type not supported"
 			u.logger.Info("returning user-facing error for invalid request", slog.String("error", err.Error()))
 			return u.respondLocally(ctx, 422, "UnprocessableEntity", userFacingErr.Error()), nil
 		}
 		return nil, fmt.Errorf("failed to transform request: %w", err)
 	}
 
-	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
+	headerMutation, _ := mutationsFromTranslationResult(newHeaders, nil)
 
 	// Apply header mutations from the route and also restore original headers on retry.
 	if h := u.headerMutator; h != nil {
@@ -388,23 +397,10 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 		}
 	}
 
-	// Decide whether the upstream filter should replace the request body at
-	// all. If the translator emitted no body, no backend HTTPBodyMutation is
-	// configured, and we're not forcing body replay (retry or
-	// streaming-without-usage), then issuing CONTINUE_AND_REPLACE with the
-	// captured original body would clobber any body mutation applied by an
-	// earlier ext_proc filter in the chain.
+	// Remove content-length when we will mutate the body in ProcessRequestBody.
 	mutatorHasMutations := u.bodyMutator != nil && u.bodyMutator.HasMutations()
-	wantBodyReplace := bodyMutation != nil || forceBodyMutation || mutatorHasMutations
-
-	if wantBodyReplace {
-		// Apply body mutations from the route and also restore original body on retry.
-		bodyMutation = applyBodyMutation(u.bodyMutator, bodyMutation, u.parent.originalRequestBodyRaw, u.logger)
-	}
-
-	// Ensure bodyMutation is not nil for subsequent processing
-	if bodyMutation == nil {
-		bodyMutation = &extprocv3.BodyMutation{}
+	if u.modelNameOverride != "" || forceBodyMutation || mutatorHasMutations {
+		headerMutation.RemoveHeaders = append(headerMutation.RemoveHeaders, "content-length")
 	}
 
 	for _, h := range headerMutation.SetHeaders {
@@ -412,13 +408,72 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	}
 
 	// x-ai-eg-upstream-host is an internal, controller-derived value consumed by backend auth handlers
-	// (e.g. the AWS handler, via the upstream-host metadata attribute). Strip any copy — including one a
-	// downstream client spoofed — so it never egresses to the upstream provider.
+	// (e.g. the AWS handler, via the upstream-host metadata attribute). Strip any copy - including one a
+	// downstream client spoofed - so it never egresses to the upstream provider.
 	headerMutation.RemoveHeaders = append(headerMutation.RemoveHeaders, internalapi.UpstreamHostHeader)
 
+	return &extprocv3.ProcessingResponse{
+		Response: &extprocv3.ProcessingResponse_RequestHeaders{
+			RequestHeaders: &extprocv3.HeadersResponse{
+				Response: &extprocv3.CommonResponse{
+					HeaderMutation: headerMutation,
+					Status:         extprocv3.CommonResponse_CONTINUE,
+				},
+			},
+		},
+		DynamicMetadata: mergeDynamicMetadata(
+			buildBackendDynamicMetadata(u.backendName),
+			buildRequestHeaderDynamicMetadata(u.requestHeaders),
+		),
+	}, nil
+}
+
+// ProcessRequestBody implements [Processor.ProcessRequestBody].
+// In BUFFERED mode, this receives the actual request body after all previous
+// HTTP-level filters have processed it. ModelNameOverride and httpBodyMutation
+// are applied on top of this body.
+func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequestBody(ctx context.Context, rawBody *extprocv3.HttpBody) (res *extprocv3.ProcessingResponse, err error) {
+	defer func() {
+		if err != nil {
+			u.metrics.RecordRequestCompletion(ctx, false, u.requestHeaders)
+		}
+	}()
+
+	// Determine forceBodyMutation: on retry we must replay the body.
+	forceBodyMutation := u.onRetry() || u.parent.forceBodyMutation
+
+	// Apply the translator's RequestBody on the actual body from Envoy.
+	newHeaders, newBody, err := u.translator.RequestBody(rawBody.Body, u.parent.originalRequestBody, forceBodyMutation)
+	if err != nil {
+		if userFacingErr := internalapi.GetUserFacingError(err); userFacingErr != nil {
+			u.logger.Info("returning user-facing error for invalid request", slog.String("error", err.Error()))
+			return u.respondLocally(ctx, 422, "UnprocessableEntity", userFacingErr.Error()), nil
+		}
+		return nil, fmt.Errorf("failed to transform request body: %w", err)
+	}
+
+	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
+
+	// Apply backend httpBodyMutation on top of the translator's body (if any).
+	mutatorHasMutations := u.bodyMutator != nil && u.bodyMutator.HasMutations()
+	if bodyMutation != nil || mutatorHasMutations || forceBodyMutation {
+		bodyMutation = applyBodyMutation(u.bodyMutator, bodyMutation, rawBody.Body, u.logger)
+	}
+
+	// The body that will be sent upstream: the mutated body if present,
+	// otherwise the original body from Envoy.
+	var upstreamBody []byte
+	if bodyMutation != nil && bodyMutation.GetBody() != nil {
+		upstreamBody = bodyMutation.GetBody()
+	} else {
+		upstreamBody = rawBody.Body
+	}
+
+	// Perform backend auth. The auth handler needs the final body for
+	// signing (e.g. AWS SigV4 payload hash).
 	if h := u.handler; h != nil {
 		var hdrs []internalapi.Header
-		hdrs, err = h.Do(ctx, u.requestHeaders, bodyMutation.GetBody())
+		hdrs, err = h.Do(ctx, u.requestHeaders, upstreamBody)
 		if err != nil {
 			if errors.Is(err, backendauth.ErrCredentialMissing) {
 				return u.respondLocally(ctx, 401, "Unauthorized", "missing upstream credential"), nil
@@ -433,47 +488,49 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 		}
 	}
 
-	if !wantBodyReplace {
-		// No body change -> no content-length restamp; emit CONTINUE so Envoy
-		// keeps whatever body the previous filter in the chain produced.
+	// If no body mutation is needed, return CONTINUE.
+	if bodyMutation == nil || bodyMutation.GetBody() == nil {
 		return &extprocv3.ProcessingResponse{
-			Response: &extprocv3.ProcessingResponse_RequestHeaders{
-				RequestHeaders: &extprocv3.HeadersResponse{
+			Response: &extprocv3.ProcessingResponse_RequestBody{
+				RequestBody: &extprocv3.BodyResponse{
 					Response: &extprocv3.CommonResponse{
 						HeaderMutation: headerMutation,
 						Status:         extprocv3.CommonResponse_CONTINUE,
 					},
 				},
 			},
-			DynamicMetadata: mergeDynamicMetadata(
-				buildBackendDynamicMetadata(u.backendName),
-				buildRequestHeaderDynamicMetadata(u.requestHeaders),
-			),
 		}, nil
 	}
 
-	var dm *structpb.Struct
-	if bm := bodyMutation.GetBody(); bm != nil {
-		dm = buildContentLengthDynamicMetadataOnRequest(len(bm))
+	// Set content-length to match the mutated body size.
+	if headerMutation == nil {
+		headerMutation = &extprocv3.HeaderMutation{}
 	}
+	headerMutation.SetHeaders = append(headerMutation.SetHeaders, &corev3.HeaderValueOption{
+		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		Header: &corev3.HeaderValue{
+			Key:      "content-length",
+			RawValue: []byte(strconv.Itoa(len(bodyMutation.GetBody()))),
+		},
+	})
+
+	var dm *structpb.Struct
+	dm = buildContentLengthDynamicMetadataOnRequest(len(bodyMutation.GetBody()))
 	dm = mergeDynamicMetadata(dm, buildBackendDynamicMetadata(u.backendName))
 	dm = mergeDynamicMetadata(dm, buildRequestHeaderDynamicMetadata(u.requestHeaders))
+
 	return &extprocv3.ProcessingResponse{
-		Response: &extprocv3.ProcessingResponse_RequestHeaders{
-			RequestHeaders: &extprocv3.HeadersResponse{
+		Response: &extprocv3.ProcessingResponse_RequestBody{
+			RequestBody: &extprocv3.BodyResponse{
 				Response: &extprocv3.CommonResponse{
-					HeaderMutation: headerMutation, BodyMutation: bodyMutation,
-					Status: extprocv3.CommonResponse_CONTINUE_AND_REPLACE,
+					HeaderMutation: headerMutation,
+					BodyMutation:   bodyMutation,
+					Status:         extprocv3.CommonResponse_CONTINUE,
 				},
 			},
 		},
 		DynamicMetadata: dm,
 	}, nil
-}
-
-// ProcessRequestBody implements [Processor.ProcessRequestBody].
-func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequestBody(context.Context, *extprocv3.HttpBody) (res *extprocv3.ProcessingResponse, err error) {
-	panic("BUG: ProcessRequestBody should not be called in the upstream filter")
 }
 
 // ProcessResponseHeaders implements [Processor.ProcessResponseHeaders].
