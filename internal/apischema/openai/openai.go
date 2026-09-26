@@ -1215,6 +1215,12 @@ type ChatCompletionRequest struct {
 
 	// Thinking: The thinking config for reasoning models
 	Thinking *ThinkingUnion `json:"thinking,omitzero"`
+
+	// IncludeThoughts opts into returning the model's thought summary (surfaced as
+	// reasoning_content) for backends that support it, e.g. GCP Vertex Gemini. It is
+	// independent of reasoning_effort/thinking depth and is consumed by the gateway,
+	// not forwarded upstream.
+	IncludeThoughts *bool `json:"include_thoughts,omitzero"`
 }
 
 // StructuredOutputs mirrors vLLM's StructuredOutputsParams (v0.12.0+). Only JSON, Regex,
