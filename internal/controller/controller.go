@@ -548,8 +548,8 @@ func referenceGrantToTargetKindIndexFunc(o client.Object) []string {
 //
 // Currently, we only set one condition at a time either "Accepted" or "NotAccepted".
 // In the future, if we can have multiple conditions like multiple errors, we can make changes here.
-func newConditions(conditionType, message string) []metav1.Condition {
-	condition := metav1.Condition{Message: message, LastTransitionTime: metav1.Now()}
+func newConditions(conditionType, message string) []aigv1b1.Condition {
+	condition := aigv1b1.Condition{Message: message, LastTransitionTime: metav1.Now()}
 	// Note: we use the fixed reason for now since the message is enough to describe the error and
 	// reason doesn't fit the entire message.
 	switch conditionType {
@@ -562,7 +562,23 @@ func newConditions(conditionType, message string) []metav1.Condition {
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "ReconciliationFailed"
 	}
-	return []metav1.Condition{condition}
+	return []aigv1b1.Condition{condition}
+}
+
+// newConditionsV1Alpha1 creates new conditions for v1alpha1 resources.
+func newConditionsV1Alpha1(conditionType, message string) []aigv1a1.Condition {
+	condition := aigv1a1.Condition{Message: message, LastTransitionTime: metav1.Now()}
+	switch conditionType {
+	case aigv1a1.ConditionTypeAccepted:
+		condition.Type = aigv1a1.ConditionTypeAccepted
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = "ReconciliationSucceeded"
+	case aigv1a1.ConditionTypeNotAccepted:
+		condition.Type = aigv1a1.ConditionTypeNotAccepted
+		condition.Status = metav1.ConditionFalse
+		condition.Reason = "ReconciliationFailed"
+	}
+	return []aigv1a1.Condition{condition}
 }
 
 // aiGatewayControllerFinalizer is the name of the finalizer added to various AI Gateway resources.

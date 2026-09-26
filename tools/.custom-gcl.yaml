@@ -1,0 +1,16 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# Custom golangci-lint build configuration for kube-api-linter.
+#
+# This builds a custom golangci-lint binary that includes the kube-api-linter
+# plugin. The custom binary is used to lint CRDs for Kubernetes API convention
+# compliance without affecting the main golangci-lint version used elsewhere.
+version: v2.13.2
+name: golangci-kube-api-linter
+destination: ./tmp/bin/
+plugins:
+  - module: "sigs.k8s.io/kube-api-linter"
+    version: v0.0.0-20260716143926-092fe0c72997

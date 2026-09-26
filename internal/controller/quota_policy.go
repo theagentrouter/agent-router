@@ -257,7 +257,7 @@ func (c *QuotaPolicyController) updateQuotaPolicyStatus(ctx context.Context, pol
 			}
 			return err
 		}
-		policy.Status.Conditions = newConditions(conditionType, message)
+		policy.Status.Conditions = newConditionsV1Alpha1(conditionType, message)
 		return c.client.Status().Update(ctx, policy)
 	})
 	if err != nil {
