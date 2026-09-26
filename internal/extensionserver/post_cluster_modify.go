@@ -46,18 +46,16 @@ func (s *Server) PostClusterModify(_ context.Context, req *egextension.PostClust
 	// referenced in the AIGatewayRoute's BackendRefs with non-empty Group and Kind fields.
 	// If we found an InferencePool, configure the cluster for ORIGINAL_DST.
 	if inferencePools := s.constructInferencePoolsFrom(req.PostClusterContext.BackendExtensionResources); inferencePools != nil {
-		if len(inferencePools) != 1 {
-			return nil, fmt.Errorf("BUG: at most one inferencepool can be referenced per route rule")
+		for _, pool := range inferencePools {
+			if pool.Spec.EndpointPickerRef == nil {
+				// No endpoint picker configured for this InferencePool (spec.endpointPickerRef is
+				// optional as of Gateway API Inference Extension v1.5.0). We don't yet support
+				// routing traffic without one, so leave the cluster as Envoy Gateway generated it
+				// rather than wiring up EPP config that would panic on the nil reference.
+				return &egextension.PostClusterModifyResponse{Cluster: req.Cluster}, nil
+			}
 		}
-		pool := inferencePools[0]
-		if pool.Spec.EndpointPickerRef == nil {
-			// No endpoint picker configured for this InferencePool (spec.endpointPickerRef is
-			// optional as of Gateway API Inference Extension v1.5.0). We don't yet support
-			// routing traffic without one, so leave the cluster as Envoy Gateway generated it
-			// rather than wiring up EPP config that would panic on the nil reference.
-			return &egextension.PostClusterModifyResponse{Cluster: req.Cluster}, nil
-		}
-		if err := s.handleInferencePoolCluster(req.Cluster, inferencePools[0]); err != nil {
+		if err := s.handleInferencePoolCluster(req.Cluster, inferencePools); err != nil {
 			return nil, err
 		}
 	}
@@ -74,7 +72,7 @@ func (s *Server) PostClusterModify(_ context.Context, req *egextension.PostClust
 //
 // The ORIGINAL_DST cluster type tells Envoy to route requests to the destination specified
 // in the x-gateway-destination-endpoint header, enabling dynamic endpoint selection by the EPP.
-func (s *Server) handleInferencePoolCluster(cluster *clusterv3.Cluster, inferencePool *gwaiev1.InferencePool) error {
+func (s *Server) handleInferencePoolCluster(cluster *clusterv3.Cluster, inferencePools []*gwaiev1.InferencePool) error {
 	// Configure cluster for ORIGINAL_DST with header-based load balancing.
 	// ORIGINAL_DST type allows Envoy to route to destinations specified in HTTP headers.
 	cluster.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_ORIGINAL_DST}
@@ -105,13 +103,18 @@ func (s *Server) handleInferencePoolCluster(cluster *clusterv3.Cluster, inferenc
 	// InferencePool's spec.appProtocol. This cluster's backend is a Pod, not a Kubernetes
 	// Service, so Envoy Gateway has no appProtocol hint to translate on its own; without this,
 	// Envoy always defaults to HTTP/1.1 and requests to h2c-only backends fail.
-	protocolOptions, err := httpProtocolOptionsForInferencePoolBackend(inferencePool)
+	//
+	// When multiple InferencePools are merged into this single cluster (weighted routing
+	// across pools), the cluster's upstream protocol is necessarily shared, so we derive it
+	// from the first pool. Mixing pools with different appProtocols on the same rule isn't
+	// supported.
+	protocolOptions, err := httpProtocolOptionsForInferencePoolBackend(inferencePools[0])
 	if err != nil {
 		return err
 	}
 	cluster.TypedExtensionProtocolOptions = protocolOptions
 
 	// Add InferencePool metadata to the cluster for reference by other components.
-	buildEPPMetadataForCluster(cluster, inferencePool)
+	buildEPPMetadataForCluster(cluster, inferencePools)
 	return nil
 }
