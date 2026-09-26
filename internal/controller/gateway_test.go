@@ -3724,6 +3724,81 @@ func Test_bodyMutationToFilterAPI(t *testing.T) {
 	}
 }
 
+func Test_modelTranslationHintsForModel(t *testing.T) {
+	opusHints := aigv1b1.ModelTranslationHints{
+		MaxOutputTokens:            ptr.To(int64(32000)),
+		SupportsResponseJSONSchema: ptr.To(true),
+		SupportsReasoningEffort:    ptr.To(true),
+		SupportsOutputConfig:       ptr.To(false),
+	}
+	geminiHints := aigv1b1.ModelTranslationHints{
+		MaxOutputTokens: ptr.To(int64(65536)),
+	}
+	entries := []aigv1b1.ModelTranslationHintsEntry{
+		{ModelNameOverride: "claude-opus-4-6@20250514", ModelTranslationHints: opusHints},
+		{ModelNameOverride: "gemini-3-pro", ModelTranslationHints: geminiHints},
+	}
+
+	tests := []struct {
+		name              string
+		entries           []aigv1b1.ModelTranslationHintsEntry
+		modelNameOverride string
+		expected          *filterapi.ModelTranslationHints
+	}{
+		{
+			name:              "empty modelNameOverride",
+			entries:           entries,
+			modelNameOverride: "",
+			expected:          nil,
+		},
+		{
+			name:              "no entries",
+			entries:           nil,
+			modelNameOverride: "claude-opus-4-6@20250514",
+			expected:          nil,
+		},
+		{
+			name:              "no matching entry",
+			entries:           entries,
+			modelNameOverride: "claude-sonnet-4-6@20250514",
+			expected:          nil,
+		},
+		{
+			name:              "matches the first entry among multiple",
+			entries:           entries,
+			modelNameOverride: "claude-opus-4-6@20250514",
+			expected: &filterapi.ModelTranslationHints{
+				MaxOutputTokens:            ptr.To(int64(32000)),
+				SupportsResponseJSONSchema: ptr.To(true),
+				SupportsReasoningEffort:    ptr.To(true),
+				SupportsOutputConfig:       ptr.To(false),
+			},
+		},
+		{
+			name:              "matches a later entry among multiple",
+			entries:           entries,
+			modelNameOverride: "gemini-3-pro",
+			expected: &filterapi.ModelTranslationHints{
+				MaxOutputTokens: ptr.To(int64(65536)),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := modelTranslationHintsForModel(tt.entries, tt.modelNameOverride)
+			if tt.expected == nil {
+				require.Nil(t, result)
+				return
+			}
+			require.NotNil(t, result)
+			if d := cmp.Diff(tt.expected, result); d != "" {
+				t.Errorf("modelTranslationHintsForModel() mismatch (-expected +got):\n%s", d)
+			}
+		})
+	}
+}
+
 // TestGatewayController_reconcileFilterConfigSecret_GlobalDefaults tests that
 // global LLM request costs from GatewayConfig are properly included in the filter config
 // when no routes override them.

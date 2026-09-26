@@ -310,6 +310,61 @@ spec:
                     - name
                     x-kubernetes-list-type: map
                 type: object
+              modelTranslationHints:
+                description: |-
+                  ModelTranslationHints declares translation hints for models routed through this backend,
+                  keyed by the exact ModelNameOverride used in an AIGatewayRouteRuleBackendRef that targets
+                  this backend. This is the single source of truth for a model's hints on this backend: any
+                  AIGatewayRoute, in any namespace, that references this backend with a matching
+                  ModelNameOverride picks up these hints without repeating them.
+
+                  Since an AIServiceBackend has exactly one Schema, hints declared here are inherently scoped
+                  to that provider — the same logical model hosted on a different AIServiceBackend (e.g. the
+                  same Claude model on AWS Bedrock vs. GCP Vertex AI) is configured as a separate entry on
+                  that other backend, which is correct because providers can genuinely support different
+                  features for what is nominally the same model.
+                items:
+                  description: |-
+                    ModelTranslationHintsEntry associates ModelTranslationHints with a specific model routed
+                    through this backend.
+                  properties:
+                    maxOutputTokens:
+                      description: |-
+                        MaxOutputTokens is the maximum number of tokens the model can produce in a single response.
+                        When set, translators use this as the default max_tokens value for APIs that require it
+                        (e.g., the Anthropic Messages API) when the client request omits max_tokens.
+                      format: int64
+                      minimum: 1
+                      type: integer
+                    modelNameOverride:
+                      description: |-
+                        ModelNameOverride identifies which model these hints apply to. Must match the
+                        ModelNameOverride configured on an AIGatewayRouteRuleBackendRef that targets this backend
+                        for the hints to take effect.
+                      minLength: 1
+                      type: string
+                    supportsOutputConfig:
+                      description: |-
+                        SupportsOutputConfig indicates whether the model accepts an Anthropic-style output_config
+                        field for structured output (e.g., Claude Opus/Sonnet 4.5 and later).
+                      type: boolean
+                    supportsReasoningEffort:
+                      description: |-
+                        SupportsReasoningEffort indicates whether the model accepts a reasoning effort parameter
+                        (Gemini thinking level / Anthropic output_config.effort).
+                      type: boolean
+                    supportsResponseJsonSchema:
+                      description: |-
+                        SupportsResponseJSONSchema indicates whether the model accepts a JSON Schema object in
+                        response_format (as opposed to only {"type": "json_object"}).
+                      type: boolean
+                  required:
+                  - modelNameOverride
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - modelNameOverride
+                x-kubernetes-list-type: map
               schema:
                 description: |-
                   APISchema specifies the API schema of the output format of requests from
@@ -779,6 +834,61 @@ spec:
                 type: array
                 x-kubernetes-list-map-keys:
                 - name
+                x-kubernetes-list-type: map
+              modelTranslationHints:
+                description: |-
+                  ModelTranslationHints declares translation hints for models routed through this backend,
+                  keyed by the exact ModelNameOverride used in an AIGatewayRouteRuleBackendRef that targets
+                  this backend. This is the single source of truth for a model's hints on this backend: any
+                  AIGatewayRoute, in any namespace, that references this backend with a matching
+                  ModelNameOverride picks up these hints without repeating them.
+
+                  Since an AIServiceBackend has exactly one Schema, hints declared here are inherently scoped
+                  to that provider — the same logical model hosted on a different AIServiceBackend (e.g. the
+                  same Claude model on AWS Bedrock vs. GCP Vertex AI) is configured as a separate entry on
+                  that other backend, which is correct because providers can genuinely support different
+                  features for what is nominally the same model.
+                items:
+                  description: |-
+                    ModelTranslationHintsEntry associates ModelTranslationHints with a specific model routed
+                    through this backend.
+                  properties:
+                    maxOutputTokens:
+                      description: |-
+                        MaxOutputTokens is the maximum number of tokens the model can produce in a single response.
+                        When set, translators use this as the default max_tokens value for APIs that require it
+                        (e.g., the Anthropic Messages API) when the client request omits max_tokens.
+                      format: int64
+                      minimum: 1
+                      type: integer
+                    modelNameOverride:
+                      description: |-
+                        ModelNameOverride identifies which model these hints apply to. Must match the
+                        ModelNameOverride configured on an AIGatewayRouteRuleBackendRef that targets this backend
+                        for the hints to take effect.
+                      minLength: 1
+                      type: string
+                    supportsOutputConfig:
+                      description: |-
+                        SupportsOutputConfig indicates whether the model accepts an Anthropic-style output_config
+                        field for structured output (e.g., Claude Opus/Sonnet 4.5 and later).
+                      type: boolean
+                    supportsReasoningEffort:
+                      description: |-
+                        SupportsReasoningEffort indicates whether the model accepts a reasoning effort parameter
+                        (Gemini thinking level / Anthropic output_config.effort).
+                      type: boolean
+                    supportsResponseJsonSchema:
+                      description: |-
+                        SupportsResponseJSONSchema indicates whether the model accepts a JSON Schema object in
+                        response_format (as opposed to only {"type": "json_object"}).
+                      type: boolean
+                  required:
+                  - modelNameOverride
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - modelNameOverride
                 x-kubernetes-list-type: map
               schema:
                 description: |-

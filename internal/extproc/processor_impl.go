@@ -713,7 +713,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	}
 	u.parent = rp // Set parent before GetTranslator so it can access rp.eh
 
-	u.translator, err = u.parent.eh.GetTranslator(backend.Backend.Schema, u.modelNameOverride)
+	u.translator, err = u.parent.eh.GetTranslator(backend.Backend)
 	if err != nil {
 		return fmt.Errorf("failed to create translator for backend %s: %w", backend.Backend.Name, err)
 	}

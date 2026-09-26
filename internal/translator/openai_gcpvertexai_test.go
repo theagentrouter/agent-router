@@ -32,7 +32,7 @@ import (
 // GCP Vertex AI uses deterministic model mapping without virtualization
 func TestResponseModel_GCPVertexAIStreaming(t *testing.T) {
 	modelName := "gemini-1.5-pro-002"
-	translator := NewChatCompletionOpenAIToGCPVertexAITranslator(modelName).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+	translator := NewChatCompletionOpenAIToGCPVertexAITranslator(modelName, nil).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
 
 	// Initialize translator with streaming request
 	req := &openai.ChatCompletionRequest{
@@ -784,7 +784,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			translator := NewChatCompletionOpenAIToGCPVertexAITranslator(tc.modelNameOverride)
+			translator := NewChatCompletionOpenAIToGCPVertexAITranslator(tc.modelNameOverride, nil)
 			headerMut, bodyMut, err := translator.RequestBody(nil, &tc.input, tc.onRetry)
 			if tc.wantError {
 				assert.Error(t, err)
@@ -839,7 +839,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_ResponseHeaders(t *testin
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			translator := NewChatCompletionOpenAIToGCPVertexAITranslator(tc.modelName)
+			translator := NewChatCompletionOpenAIToGCPVertexAITranslator(tc.modelName, nil)
 			_, err := translator.ResponseHeaders(tc.headers)
 			if tc.wantError {
 				assert.Error(t, err)
@@ -1652,7 +1652,7 @@ func TestExtractToolCallsFromGeminiPartsStream(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+			o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001", nil).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
 			calls, _, err := o.extractToolCallsFromGeminiPartsStream(toolCalls, tt.input, json.MarshalForDeterministicTesting)
 
 			if tt.wantErr {
@@ -1687,7 +1687,7 @@ func TestExtractToolCallsStreamVsNonStream(t *testing.T) {
 			},
 		},
 	}
-	o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+	o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001", nil).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
 
 	// Get results from both functions
 	streamCalls, _, err := o.extractToolCallsFromGeminiPartsStream(toolCallsStream, parts, json.MarshalForDeterministicTesting)
@@ -1752,7 +1752,7 @@ func TestExtractToolCallsStreamIndexing(t *testing.T) {
 			},
 		},
 	}
-	o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+	o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001", nil).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
 
 	calls, _, err := o.extractToolCallsFromGeminiPartsStream(toolCalls, parts, json.MarshalForDeterministicTesting)
 	require.NoError(t, err)
@@ -1785,7 +1785,7 @@ func TestExtractToolCallsStreamIndexing(t *testing.T) {
 }
 
 func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingParallelToolIndex(t *testing.T) {
-	translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+	translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001", nil).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
 	// Mock multiple GCP streaming response with parallel tool calls
 	gcpToolCallsChunk := `data: {
     "candidates": [
@@ -1893,7 +1893,7 @@ data: {"candidates": [
 // TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingToolCallWithSignature tests that
 // streaming tool calls with thought signatures are correctly translated.
 func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingToolCallWithSignature(t *testing.T) {
-	translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+	translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001", nil).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
 
 	// GCP streaming response with thinking followed by tool call with signature
 	gcpStreamingChunk := `data: {"candidates":[{"content":{"parts":[{"text":"let me think about this.", "thought": true}]}}]}
@@ -1954,7 +1954,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingToolCallSplitFin
 	// must still be "tool_calls", not "stop". (Older Gemini models carried both in
 	// a single chunk; that case is covered by
 	// TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingToolCallWithSignature.)
-	translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-3.5-flash").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+	translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-3.5-flash", nil).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
 
 	gcpStreamingChunk := `data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"location":"Paris"}},"thoughtSignature":"dG9vbGNhbGxzaWduYXR1cmU="}]}}],"usageMetadata":{"trafficType":"ON_DEMAND"}}
 
@@ -2000,7 +2000,7 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishRe
 }
 
 func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingEndOfStream(t *testing.T) {
-	translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+	translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001", nil).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
 
 	// Test end of stream marker.
 	_, body, _, _, err := translator.handleStreamingResponse(
@@ -2492,7 +2492,7 @@ Details: [
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+			translator := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001", nil).(*openAIToGCPVertexAITranslatorV1ChatCompletion)
 
 			body := strings.NewReader(tt.body)
 
@@ -2550,7 +2550,7 @@ func bodyMutTransformer(_ *testing.T) cmp.Option {
 // TestResponseModel_GCPVertexAI tests that GCP Vertex AI returns the request model (no response field)
 func TestResponseModel_GCPVertexAI(t *testing.T) {
 	modelName := "gemini-1.5-pro-002"
-	translator := NewChatCompletionOpenAIToGCPVertexAITranslator(modelName)
+	translator := NewChatCompletionOpenAIToGCPVertexAITranslator(modelName, nil)
 
 	// Initialize translator with the model
 	req := &openai.ChatCompletionRequest{

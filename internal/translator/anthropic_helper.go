@@ -673,7 +673,13 @@ var gcpOutputConfigModels = []string{
 	"mythos-preview", // Claude Mythos Preview
 }
 
-func outputConfigAvailable(apiSchema filterapi.APISchemaName, model internalapi.RequestModel) bool {
+// outputConfigAvailable reports whether the model supports Anthropic structured output.
+// An explicit backend-scoped hint is authoritative; otherwise the provider-specific
+// model-name heuristic preserves backward compatibility.
+func outputConfigAvailable(apiSchema filterapi.APISchemaName, model internalapi.RequestModel, hints *filterapi.ModelTranslationHints) bool {
+	if hints != nil && hints.SupportsOutputConfig != nil {
+		return *hints.SupportsOutputConfig
+	}
 	switch apiSchema {
 	case filterapi.APISchemaGCPAnthropic:
 		return modelContainsAny(model, gcpOutputConfigModels)
@@ -704,7 +710,13 @@ var effortModels = []string{
 	"mythos-preview", // Claude Mythos Preview
 }
 
-func effortAvailable(model internalapi.RequestModel) bool {
+// effortAvailable reports whether the model supports the output_config.effort parameter.
+// When hints declare SupportsReasoningEffort, that value is authoritative; otherwise it falls back
+// to the model-name heuristic for backward compatibility.
+func effortAvailable(model internalapi.RequestModel, hints *filterapi.ModelTranslationHints) bool {
+	if hints != nil && hints.SupportsReasoningEffort != nil {
+		return *hints.SupportsReasoningEffort
+	}
 	return modelContainsAny(model, effortModels)
 }
 
@@ -731,13 +743,16 @@ func mapReasoningEffortToOutputConfigEffort(reasonEffort openai.ReasoningEffort)
 // into the parameter struct required by the Anthropic SDK.
 // The apiSchema parameter indicates the backend API schema (e.g., APISchemaAWSAnthropic,
 // APISchemaGCPAnthropic) and is used to gate backend-specific feature support.
-func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema filterapi.APISchemaName, modelNameOverride internalapi.ModelNameOverride) (params *anthropic.MessageNewParams, err error) {
+func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema filterapi.APISchemaName, modelNameOverride internalapi.ModelNameOverride, hints *filterapi.ModelTranslationHints) (params *anthropic.MessageNewParams, err error) {
 	// 1. Handle simple parameters.
 	// max_tokens is required by the Anthropic API but optional in the OpenAI API.
-	// If not set, pass 0 and let the Anthropic API reject the request.
+	// If the client omits it, default to the model's declared max output tokens when hints provide
+	// it; otherwise pass 0 and let the Anthropic API reject the request (existing behavior).
 	var maxTokensVal int64
 	if maxTokens := cmp.Or(openAIReq.MaxCompletionTokens, openAIReq.MaxTokens); maxTokens != nil {
 		maxTokensVal = *maxTokens
+	} else if hints != nil && hints.MaxOutputTokens != nil {
+		maxTokensVal = *hints.MaxOutputTokens
 	}
 
 	// Translate openAI contents to anthropic params.
@@ -771,7 +786,7 @@ func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema fil
 	if modelNameOverride != "" {
 		featureCheckModel = modelNameOverride
 	}
-	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil && outputConfigAvailable(apiSchema, featureCheckModel) {
+	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil && outputConfigAvailable(apiSchema, featureCheckModel, hints) {
 		// Validate that the OpenAI JSON schema is an object while retaining its
 		// original bytes. Anthropic's SDK sorts map keys when marshaling, which
 		// would otherwise change the property order seen by Claude.
@@ -793,7 +808,7 @@ func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema fil
 	}
 
 	// Map OpenAI reasoning_effort to Anthropic output_config.effort.
-	if openAIReq.ReasoningEffort != "" && effortAvailable(featureCheckModel) {
+	if openAIReq.ReasoningEffort != "" && effortAvailable(featureCheckModel, hints) {
 		effort, effortErr := mapReasoningEffortToOutputConfigEffort(openAIReq.ReasoningEffort)
 		if effortErr != nil {
 			return nil, effortErr

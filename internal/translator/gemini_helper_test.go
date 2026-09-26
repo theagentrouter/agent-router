@@ -20,9 +20,33 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
+
+// TestGeminiFeatureGatesWithHints verifies that translation hints override the model-name heuristics.
+func TestGeminiFeatureGatesWithHints(t *testing.T) {
+	t.Run("responseJSONSchemaAvailable", func(t *testing.T) {
+		// Hint true forces support even for a model the heuristic would reject (e.g. gemini-4).
+		require.True(t, responseJSONSchemaAvailable("gemini-4-pro", &filterapi.ModelTranslationHints{SupportsResponseJSONSchema: ptr.To(true)}))
+		// Hint false forces no support even for a model the heuristic would accept.
+		require.False(t, responseJSONSchemaAvailable("gemini-2.5-pro", &filterapi.ModelTranslationHints{SupportsResponseJSONSchema: ptr.To(false)}))
+		// Nil field falls back to the heuristic.
+		require.True(t, responseJSONSchemaAvailable("gemini-2.5-pro", &filterapi.ModelTranslationHints{}))
+		require.False(t, responseJSONSchemaAvailable("gemini-4-pro", nil))
+	})
+	t.Run("reasoningEffortAvailable", func(t *testing.T) {
+		require.True(t, reasoningEffortAvailable("gemini-4-pro", &filterapi.ModelTranslationHints{SupportsReasoningEffort: ptr.To(true)}))
+		require.False(t, reasoningEffortAvailable("gemini-3-pro", &filterapi.ModelTranslationHints{SupportsReasoningEffort: ptr.To(false)}))
+		require.True(t, reasoningEffortAvailable("gemini-3-pro", nil))
+	})
+	t.Run("mediaResolutionAvailable", func(t *testing.T) {
+		require.True(t, mediaResolutionAvailable("gemini-4-pro", &filterapi.ModelTranslationHints{SupportsReasoningEffort: ptr.To(true)}))
+		require.False(t, mediaResolutionAvailable("gemini-3-pro", &filterapi.ModelTranslationHints{SupportsReasoningEffort: ptr.To(false)}))
+		require.True(t, mediaResolutionAvailable("gemini-3-pro", nil))
+	})
+}
 
 func TestOpenAIMessagesToGeminiContents(t *testing.T) {
 	tests := []struct {
@@ -124,7 +148,7 @@ func TestOpenAIMessagesToGeminiContents(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			contents, systemInstruction, err := openAIMessagesToGeminiContents(tc.messages, "gemini-3-pro")
+			contents, systemInstruction, err := openAIMessagesToGeminiContents(tc.messages, "gemini-3-pro", nil)
 
 			if tc.expectedErrorMsg != "" || err != nil {
 				require.Error(t, err)
@@ -1227,7 +1251,7 @@ func TestUserMsgToGeminiParts(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			parts, err := userMsgToGeminiParts(tc.msg, "gemini-3-pro")
+			parts, err := userMsgToGeminiParts(tc.msg, "gemini-3-pro", nil)
 
 			if tc.expectedErrMsg != "" || err != nil {
 				require.Error(t, err)
@@ -1589,7 +1613,7 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, responseMode, err := openAIReqToGeminiGenerationConfig(tc.input, tc.requestModel)
+			got, responseMode, err := openAIReqToGeminiGenerationConfig(tc.input, tc.requestModel, nil)
 			if tc.expectedErrMsg != "" {
 				require.ErrorContains(t, err, tc.expectedErrMsg)
 			} else {
@@ -3316,7 +3340,7 @@ func TestOpenAIReqToGeminiGenerationConfigWithJsonSchemaToGemini(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, responseMode, err := openAIReqToGeminiGenerationConfig(tc.input, tc.requestModel)
+			got, responseMode, err := openAIReqToGeminiGenerationConfig(tc.input, tc.requestModel, nil)
 			if tc.expectedErrMsg != "" {
 				require.ErrorContains(t, err, tc.expectedErrMsg)
 			} else {

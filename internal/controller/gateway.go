@@ -235,6 +235,29 @@ func bodyMutationToFilterAPI(m *aigv1b1.HTTPBodyMutation) *filterapi.HTTPBodyMut
 	return ret
 }
 
+// modelTranslationHintsForModel finds the ModelTranslationHintsEntry in entries whose
+// ModelNameOverride exactly matches modelNameOverride and converts it to filterapi.ModelTranslationHints.
+// Returns nil if modelNameOverride is empty or no entry matches, in which case translators fall
+// back to their built-in heuristics.
+func modelTranslationHintsForModel(entries []aigv1b1.ModelTranslationHintsEntry, modelNameOverride string) *filterapi.ModelTranslationHints {
+	if modelNameOverride == "" {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.ModelNameOverride != modelNameOverride {
+			continue
+		}
+		h := entry.ModelTranslationHints
+		return &filterapi.ModelTranslationHints{
+			MaxOutputTokens:            h.MaxOutputTokens,
+			SupportsResponseJSONSchema: h.SupportsResponseJSONSchema,
+			SupportsReasoningEffort:    h.SupportsReasoningEffort,
+			SupportsOutputConfig:       h.SupportsOutputConfig,
+		}
+	}
+	return nil
+}
+
 // validateCELExpression validates and returns a CEL expression for cost calculation.
 func validateCELExpression(cost aigv1b1.LLMRequestCost) (string, error) {
 	if cost.CEL == nil {
@@ -529,6 +552,8 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 					// Merge with route-level taking precedence over backend-level
 					mergedBodyMutation := mergeBodyMutations(routeBodyMutation, backendBodyMutation)
 					b.BodyMutation = bodyMutationToFilterAPI(mergedBodyMutation)
+
+					b.TranslationHints = modelTranslationHintsForModel(backendObj.Spec.ModelTranslationHints, backendRef.ModelNameOverride)
 
 					b.Schema = schemaToFilterAPI(backendObj.Spec.APISchema)
 					b.HeaderValueFilters = headerValueFiltersToFilterAPI(backendObj.Spec.HeaderValueFilters)

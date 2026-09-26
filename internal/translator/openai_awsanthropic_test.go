@@ -111,7 +111,7 @@ func wrapAnthropicSSEInEventStream(sseData string) ([]byte, error) {
 // AWS Anthropic uses deterministic model mapping without virtualization
 func TestResponseModel_AWSAnthropic(t *testing.T) {
 	modelName := "anthropic.claude-sonnet-4-20250514-v1:0"
-	translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", modelName)
+	translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", modelName, nil)
 
 	// Initialize translator with the model
 	req := &openai.ChatCompletionRequest{
@@ -179,7 +179,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 	}
 
 	t.Run("AWS Bedrock InvokeModel Values Configured Correctly", func(t *testing.T) {
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil)
 		hm, body, err := translator.RequestBody(nil, openAIReq, false)
 		require.NoError(t, err)
 		require.NotNil(t, hm)
@@ -202,7 +202,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 	t.Run("Model Name Override", func(t *testing.T) {
 		overrideModelName := "anthropic.claude-3-haiku-20240307-v1:0"
 		// Instantiate the translator with the model name override.
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", overrideModelName)
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", overrideModelName, nil)
 
 		// Call RequestBody with the original request, which has a different model name.
 		hm, _, err := translator.RequestBody(nil, openAIReq, false)
@@ -218,7 +218,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 
 	t.Run("Model Name with ARN (URL encoding)", func(t *testing.T) {
 		arnModelName := "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-opus-20240229-v1:0"
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", arnModelName)
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", arnModelName, nil)
 
 		hm, _, err := translator.RequestBody(nil, openAIReq, false)
 		require.NoError(t, err)
@@ -240,7 +240,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 			MaxTokens: ptr.To(int64(100)),
 			Stream:    true,
 		}
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil)
 		hm, body, err := translator.RequestBody(nil, streamReq, false)
 		require.NoError(t, err)
 		require.NotNil(t, hm)
@@ -261,7 +261,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 	t.Run("API Version Override", func(t *testing.T) {
 		customAPIVersion := "bedrock-2024-01-01"
 		// Instantiate the translator with the custom API version.
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator(customAPIVersion, "")
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator(customAPIVersion, "", nil)
 
 		// Call RequestBody with a standard request.
 		_, body, err := translator.RequestBody(nil, openAIReq, false)
@@ -279,7 +279,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 			MaxTokens:   ptr.To(int64(100)),
 			Temperature: ptr.To(2.5),
 		}
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil)
 		_, _, err := translator.RequestBody(nil, invalidTempReq, false)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), fmt.Sprintf(tempNotSupportedError, *invalidTempReq.Temperature))
@@ -290,7 +290,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 			Model:    "anthropic.claude-3-opus-20240229-v1:0",
 			Messages: []openai.ChatCompletionMessageParamUnion{},
 		}
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil)
 		_, body, err := translator.RequestBody(nil, missingTokensReq, false)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), gjson.GetBytes(body, "max_tokens").Int())
@@ -299,7 +299,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 
 func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.T) {
 	t.Run("invalid json body", func(t *testing.T) {
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil)
 		_, _, _, _, err := translator.ResponseBody(map[string]string{statusHeaderName: "200"}, bytes.NewBufferString("invalid json"), true, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "failed to unmarshal body")
@@ -400,7 +400,7 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 			body, err := json.Marshal(tt.inputResponse)
 			require.NoError(t, err, "Test setup failed: could not marshal input struct")
 
-			translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+			translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil)
 			hm, body, usedToken, _, err := translator.ResponseBody(tt.respHeaders, bytes.NewBuffer(body), true, nil)
 
 			require.NoError(t, err, "Translator returned an unexpected internal error")
@@ -545,7 +545,7 @@ data: {"type": "message_stop"}
 		MaxTokens: new(int64),
 	}
 
-	translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "").(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
+	translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil).(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
 	_, _, err = translator.RequestBody(nil, openAIReq, false)
 	require.NoError(t, err)
 
@@ -598,7 +598,7 @@ data: {"type": "message_stop"}
 			Model:     "test-model",
 			MaxTokens: new(int64),
 		}
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "").(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil).(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
 		_, _, err = translator.RequestBody(nil, openAIReq, false)
 		require.NoError(t, err)
 
@@ -650,7 +650,7 @@ data: {"type": "message_stop"}
 		require.NoError(t, err)
 
 		openAIReq := &openai.ChatCompletionRequest{Stream: true, Model: "test-model", MaxTokens: new(int64)}
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "").(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil).(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
 		_, _, err = translator.RequestBody(nil, openAIReq, false)
 		require.NoError(t, err)
 
@@ -705,7 +705,7 @@ data: {"type":"message_stop"}
 		require.NoError(t, err)
 
 		openAIReq := &openai.ChatCompletionRequest{Stream: true, Model: "test-model", MaxTokens: new(int64)}
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "").(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil).(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
 		_, _, err = translator.RequestBody(nil, openAIReq, false)
 		require.NoError(t, err)
 
@@ -728,7 +728,7 @@ func TestAWSAnthropicStreamParser_ErrorHandling(t *testing.T) {
 		require.NoError(t, err)
 
 		openAIReq := &openai.ChatCompletionRequest{Stream: true, Model: "test-model", MaxTokens: new(int64)}
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "").(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "", nil).(*openAIToAWSAnthropicTranslatorV1ChatCompletion)
 		_, _, err = translator.RequestBody(nil, openAIReq, false)
 		require.NoError(t, err)
 
@@ -801,7 +801,7 @@ func TestOpenAIToAWSAnthropicTranslator_EdgeCases(t *testing.T) {
 	t.Run("response with model field from API", func(t *testing.T) {
 		// AWS Anthropic may return model field in response
 		modelName := "custom-override-model"
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", modelName)
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", modelName, nil)
 
 		req := &openai.ChatCompletionRequest{
 			Model:     "original-model",
@@ -838,7 +838,7 @@ func TestOpenAIToAWSAnthropicTranslator_EdgeCases(t *testing.T) {
 	t.Run("response without model field", func(t *testing.T) {
 		// AWS Anthropic typically doesn't return model field
 		modelName := "anthropic.claude-3-haiku-20240307-v1:0"
-		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", modelName)
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", modelName, nil)
 
 		req := &openai.ChatCompletionRequest{
 			Model:     "original-model",
