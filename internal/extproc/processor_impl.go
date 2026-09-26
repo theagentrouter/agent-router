@@ -933,10 +933,7 @@ func buildDynamicMetadata(globalRequestCosts []filterapi.RuntimeGlobalRequestCos
 	// Track which metadata keys have been populated by route-scoped costs.
 	populatedKeys := make(map[string]struct{})
 
-	shortBackend := backendName
-	if parts := strings.SplitN(backendName, "/", 3); len(parts) >= 2 {
-		shortBackend = parts[0] + "/" + parts[1]
-	}
+	shortBackend := internalapi.AIServiceBackendName(backendName)
 
 	actualModel := requestHeaders[internalapi.ModelNameHeaderKeyDefault]
 
@@ -980,16 +977,9 @@ func buildDynamicMetadata(globalRequestCosts []filterapi.RuntimeGlobalRequestCos
 		// backend_name itself is emitted by buildBackendDynamicMetadata in the request
 		// headers phase, so it is already on the stream by the time this runs.
 		//
-		// ai_service_backend_name stores the short "namespace/name" format extracted
-		// from the full PerRouteRuleRefBackendName ("{namespace}/{name}/route/...").
-		// This is used by the quota rate limit descriptor actions to match the
-		// rate limit service config which keys on "namespace/backendName".
-		parts := strings.SplitN(backendName, "/", 3)
-		shortName := backendName
-		if len(parts) >= 2 {
-			shortName = parts[0] + "/" + parts[1]
-		}
-		metadata["ai_service_backend_name"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: shortName}}
+		// ai_service_backend_name stores the short "namespace/name" format, which the quota
+		// rate limit descriptor actions match against the rate limit service config.
+		metadata["ai_service_backend_name"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: shortBackend}}
 	}
 	if routeName != "" {
 		metadata["route_name"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: routeName}}
