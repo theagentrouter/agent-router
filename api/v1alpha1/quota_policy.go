@@ -165,9 +165,9 @@ type QuotaRule struct {
 type QuotaValue struct {
 	// The limit alloted for a specified time window.
 	Limit uint `json:"limit"`
-	// Time window. Must be exactly one of: "1s" (1 second), "1m" (1 minute), "1h" (1 hour), or "1d" (1 day).
+	// Time window. Must be exactly one of: "1s" (1 second), "1m" (1 minute), "1h" (1 hour), "1d" (1 day), "1w" (1 week), "1mo" (1 month), or "1y" (1 year).
 	//
-	// +kubebuilder:validation:Enum="1s";"1m";"1h";"1d"
+	// +kubebuilder:validation:Enum="1s";"1m";"1h";"1d";"1w";"1mo";"1y"
 	Duration string `json:"duration"`
 }
 
