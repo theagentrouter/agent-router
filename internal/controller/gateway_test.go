@@ -547,6 +547,23 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 				},
 			},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "hidden-alias-route", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"api.example.com"},
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs:               []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}},
+						ExcludeFromModelsEndpoint: true,
+						Matches: []aigv1b1.AIGatewayRouteRuleMatch{
+							{Headers: []gwapiv1.HTTPHeaderMatch{
+								{Name: internalapi.ModelNameHeaderKeyDefault, Value: "hidden-alias"},
+							}},
+						},
+					},
+				},
+			},
+		},
 	}
 	for _, b := range []*aigv1b1.AIServiceBackend{
 		{
@@ -590,6 +607,14 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 		gotHostModels = append(gotHostModels, m.Name)
 	}
 	require.ElementsMatch(t, []string{"scoped-model", "unscoped-model"}, gotHostModels)
+
+	// The hidden alias must keep its backend config so requests can still be routed.
+	hiddenAliasBackendName := internalapi.PerRouteRuleRefBackendName(gwNamespace, "apple", "hidden-alias-route", 0, 0)
+	backendNames := make([]string, 0, len(fc.Backends))
+	for _, backend := range fc.Backends {
+		backendNames = append(backendNames, backend.Name)
+	}
+	require.Contains(t, backendNames, hiddenAliasBackendName)
 }
 
 // TestGatewayController_reconcileFilterConfigSecret_AllUnscopedRoutesLeaveUnscopedModelsEmpty
@@ -3307,6 +3332,57 @@ func Test_mcpConfig_ForwardHeaders(t *testing.T) {
 	require.Empty(t, backendB.ForwardHeaders)
 }
 
+// Test_mcpConfig_Authorization_VerifiedJWT is a regression test for GHSA-9mp9-4hr2-835f
+// (MCPRoute CEL Authorization Bypass via Unverified JWT Claims). The CRD's XValidation rule
+// only requires oauth when a rule's source.jwt is set; a CEL expression referencing
+// request.auth.jwt.claims/scopes is accepted without oauth configured. mcpConfig must still
+// mark the resulting filterapi.MCPRouteAuthorization as VerifiedJWT: false in that case, so
+// the mcpproxy never trusts an attacker-forged bearer JWT for such a rule.
+func Test_mcpConfig_Authorization_VerifiedJWT(t *testing.T) {
+	newRoutes := func(oauth *aigv1b1.MCPRouteOAuth) []aigv1b1.MCPRoute {
+		return []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+					}},
+					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+						OAuth: oauth,
+						Authorization: &aigv1b1.MCPRouteAuthorization{
+							DefaultAction: ptr.To(egv1a1.AuthorizationActionDeny),
+							Rules: []aigv1b1.MCPRouteAuthorizationRule{
+								{CEL: ptr.To(`request.auth.jwt.claims["role"] == "admin"`)},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("VerifiedJWT is false when oauth is not configured (the vulnerable configuration)", func(t *testing.T) {
+		mc, effective := mcpConfig(newRoutes(nil))
+		require.True(t, effective)
+		auth := mc.Routes[0].Authorization
+		require.NotNil(t, auth)
+		require.False(t, auth.VerifiedJWT, "VerifiedJWT must be false when securityPolicy.oauth is not configured")
+	})
+
+	t.Run("VerifiedJWT is true when oauth is configured", func(t *testing.T) {
+		mc, effective := mcpConfig(newRoutes(&aigv1b1.MCPRouteOAuth{
+			Issuer: "https://issuer.example.com",
+			ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+				Resource: "https://api.example.com/mcp",
+			},
+		}))
+		require.True(t, effective)
+		auth := mc.Routes[0].Authorization
+		require.NotNil(t, auth)
+		require.True(t, auth.VerifiedJWT, "VerifiedJWT must be true when securityPolicy.oauth is configured")
+	})
+}
+
 func Test_mcpConfig_BackendSelector(t *testing.T) {
 	t.Run("unset means no selector", func(t *testing.T) {
 		mcpRoutes := []aigv1b1.MCPRoute{
@@ -3351,6 +3427,42 @@ func Test_mcpConfig_BackendSelector(t *testing.T) {
 		require.Len(t, sel.Rules, 1)
 		require.Equal(t, filterapi.AuthorizationActionAllow, sel.Rules[0].Action) // Action defaults to Allow.
 		require.Equal(t, `request.mcp.backend in request.auth.jwt.claims.mcp_backends`, *sel.Rules[0].CEL)
+		// A CEL rule referencing request.auth.jwt.claims must never be treated as verified when
+		// securityPolicy.oauth is absent, even though the CRD accepts this configuration without error.
+		require.False(t, sel.VerifiedJWT, "VerifiedJWT must be false when securityPolicy.oauth is not configured")
+	})
+
+	t.Run("VerifiedJWT is true when oauth is configured", func(t *testing.T) {
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+					}},
+					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+						OAuth: &aigv1b1.MCPRouteOAuth{
+							Issuer: "https://issuer.example.com",
+							ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+								Resource: "https://api.example.com/mcp",
+							},
+						},
+					},
+					BackendSelector: &aigv1b1.MCPBackendSelector{
+						DefaultAction: ptr.To(egv1a1.AuthorizationActionDeny),
+						Rules: []aigv1b1.MCPBackendSelectorRule{
+							{CEL: ptr.To(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`)},
+						},
+					},
+				},
+			},
+		}
+
+		mc, effective := mcpConfig(mcpRoutes)
+		require.True(t, effective)
+		sel := mc.Routes[0].BackendSelector
+		require.NotNil(t, sel)
+		require.True(t, sel.VerifiedJWT, "VerifiedJWT must be true when securityPolicy.oauth is configured")
 	})
 
 	t.Run("defaultAction defaults to deny when unset", func(t *testing.T) {

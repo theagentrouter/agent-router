@@ -92,6 +92,9 @@ func TestMergeToolsList_AuthorizationFiltering(t *testing.T) {
 
 	auth := &filterapi.MCPRouteAuthorization{
 		DefaultAction: filterapi.AuthorizationActionDeny,
+		// Models a route with securityPolicy.oauth configured, so Envoy has already verified
+		// the bearer JWT before this request reached the proxy.
+		VerifiedJWT: true,
 		Rules: []filterapi.MCPRouteAuthorizationRule{
 			{
 				Action: filterapi.AuthorizationActionAllow,
