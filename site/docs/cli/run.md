@@ -198,14 +198,24 @@ The full endpoint URL for the MCP server, including protocol, hostname, and path
 
 **`headers`** (object, optional)
 
-HTTP headers to send with requests to the MCP server. Authorization headers with Bearer tokens are automatically extracted and injected as API keys.
+HTTP headers to send with requests to the MCP server. A single header is treated as the server's credential and injected into every upstream request:
 
-Example:
+- `Authorization: Bearer <token>` is extracted and re-injected into the `Authorization` header with the `Bearer ` prefix, as before.
+- Any other single header (for example, Composio's `x-consumer-api-key`) is extracted and re-injected into that same header name, unprefixed.
+
+Example using a Bearer token:
 
 ```json
 "headers": {
-  "Authorization": "Bearer ${GITHUB_TOKEN}",
-  "X-Custom-Header": "value"
+  "Authorization": "Bearer ${GITHUB_TOKEN}"
+}
+```
+
+Example using a custom auth header:
+
+```json
+"headers": {
+  "x-consumer-api-key": "${COMPOSIO_API_KEY}"
 }
 ```
 

@@ -72,8 +72,13 @@ type MCPServer struct {
 // If the input is nil or empty, this function does nothing (safe to call).
 //
 // Headers are parsed intelligently:
-//   - "Authorization: Bearer <token>" → extracted as APIKey (preserving ${VAR} envsubst syntax)
-//   - Other headers → stored in Headers map for headerMutation
+//   - "Authorization: Bearer <token>" → extracted as APIKey, injected into the default
+//     "Authorization" header with a "Bearer " prefix (preserving ${VAR} envsubst syntax)
+//   - A single non-Authorization header → extracted as APIKey with APIKeyHeader set to that
+//     header's name, so the value is injected into that same header on the upstream request.
+//     This supports MCP servers that require a custom auth header, e.g. Composio's
+//     "x-consumer-api-key".
+//   - Any headers not consumed by the above → stored in Headers map, currently unused
 //
 // Bearer tokens and other header values preserve envsubst syntax (e.g., "${VAR}") for
 // runtime substitution by cmd/extproc.
@@ -127,7 +132,7 @@ func AddMCPServers(data *ConfigData, input *MCPServers) error {
 		}
 
 		// Parse headers intelligently
-		var apiKey string
+		var apiKey, apiKeyHeader string
 		headers := make(map[string]string)
 
 		for headerKey, headerValue := range settings.Headers {
@@ -138,6 +143,17 @@ func AddMCPServers(data *ConfigData, input *MCPServers) error {
 				// Keep other headers for headerMutation
 				headers[headerKey] = headerValue
 			}
+		}
+
+		// A single non-Authorization header is unambiguously the intended credential
+		// (e.g. Composio's "x-consumer-api-key"), so extract it as the API key targeting
+		// that header name instead of leaving it in the unused headers map.
+		if apiKey == "" && len(headers) == 1 {
+			for headerKey, headerValue := range headers {
+				apiKey = headerValue
+				apiKeyHeader = headerKey
+			}
+			delete(headers, apiKeyHeader)
 		}
 
 		// Create Backend for this MCP server
@@ -156,6 +172,7 @@ func AddMCPServers(data *ConfigData, input *MCPServers) error {
 			Path:         path,
 			IncludeTools: settings.IncludeTools,
 			APIKey:       apiKey,
+			APIKeyHeader: apiKeyHeader,
 			Headers:      headers,
 		}
 
