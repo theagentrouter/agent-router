@@ -60,6 +60,9 @@ type BackendSecurityPolicyController struct {
 	logger                    logr.Logger
 	aiServiceBackendEventChan chan event.GenericEvent
 	inferencePoolEventChan    chan event.GenericEvent
+	// referenceGrantValidator authorizes cross-namespace Secret references (Azure/GCP/OIDC
+	// SecretRefs) via Gateway API ReferenceGrant.
+	referenceGrantValidator *referenceGrantValidator
 }
 
 func NewBackendSecurityPolicyController(client client.Client, kube kubernetes.Interface, logger logr.Logger, aiServiceBackendEventChan chan event.GenericEvent, inferencePoolEventChan chan event.GenericEvent) *BackendSecurityPolicyController {
@@ -69,6 +72,7 @@ func NewBackendSecurityPolicyController(client client.Client, kube kubernetes.In
 		logger:                    logger,
 		aiServiceBackendEventChan: aiServiceBackendEventChan,
 		inferencePoolEventChan:    inferencePoolEventChan,
+		referenceGrantValidator:   newReferenceGrantValidator(client),
 	}
 }
 
@@ -137,7 +141,7 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 		if oidc != nil {
 			region := bsp.Spec.AWSCredentials.Region
 			roleArn := bsp.Spec.AWSCredentials.OIDCExchangeToken.AwsRoleArn
-			rotator, err = rotators.NewAWSOIDCRotator(ctx, c.client, nil, c.kube, c.logger, bsp.Namespace, bsp.Name, preRotationWindow, oidc, roleArn, region)
+			rotator, err = rotators.NewAWSOIDCRotator(ctx, c.client, nil, c.kube, c.logger, bsp.Namespace, bsp.Name, preRotationWindow, oidc, roleArn, region, c.referenceGrantValidator.validateSecretReference)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -153,7 +157,7 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 		oidc := getBackendSecurityPolicyAuthOIDC(&bsp.Spec)
 		if oidc != nil {
 			var oidcProvider tokenprovider.TokenProvider
-			oidcProvider, err = tokenprovider.NewOidcTokenProvider(ctx, c.client, oidc)
+			oidcProvider, err = tokenprovider.NewOidcTokenProvider(ctx, c.client, oidc, bsp.Namespace, c.referenceGrantValidator.validateSecretReference)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -167,6 +171,9 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 				secretNamespace = string(*secretRef.Namespace)
 			}
 			secretName := string(secretRef.Name)
+			if err = c.referenceGrantValidator.validateSecretReference(ctx, bsp.Namespace, secretNamespace, secretName); err != nil {
+				return ctrl.Result{}, err
+			}
 			var secret *corev1.Secret
 			secret, err = rotators.LookupSecret(ctx, c.client, secretNamespace, secretName)
 			if err != nil {
@@ -198,7 +205,7 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 		if oidc != nil {
 			// Create the OIDC token provider that will be used to get tokens from the OIDC provider.
 			var oidcProvider tokenprovider.TokenProvider
-			oidcProvider, err = tokenprovider.NewOidcTokenProvider(ctx, c.client, oidc)
+			oidcProvider, err = tokenprovider.NewOidcTokenProvider(ctx, c.client, oidc, bsp.Namespace, c.referenceGrantValidator.validateSecretReference)
 			if err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to initialize OIDC provider: %w", err)
 			}
@@ -212,6 +219,9 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 				secretNamespace = string(*credentialFile.SecretRef.Namespace)
 			}
 			secretName := string(credentialFile.SecretRef.Name)
+			if err = c.referenceGrantValidator.validateSecretReference(ctx, bsp.Namespace, secretNamespace, secretName); err != nil {
+				return ctrl.Result{}, err
+			}
 			var secret *corev1.Secret
 			secret, err = rotators.LookupSecret(ctx, c.client, secretNamespace, secretName)
 			if err != nil {
