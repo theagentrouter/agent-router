@@ -2231,8 +2231,9 @@ spec:
                   Azure OpenAI specific logic will be applied.
                 properties:
                   clientID:
-                    description: ClientID is a unique identifier for an application
-                      in Azure.
+                    description: |-
+                      ClientID is a unique identifier for an application in Azure.
+                      This field is required unless ManagedIdentity is used, in which case it must not be set.
                     minLength: 1
                     type: string
                   clientSecretRef:
@@ -2278,6 +2279,15 @@ spec:
                         type: string
                     required:
                     - name
+                    type: object
+                  managedIdentity:
+                    description: ManagedIdentity configures Azure managed identity
+                      authentication.
+                    properties:
+                      clientID:
+                        description: ClientID selects a user-assigned managed identity.
+                        minLength: 1
+                        type: string
                     type: object
                   oidcExchangeToken:
                     description: |-
@@ -4214,19 +4224,21 @@ spec:
                     - oidc
                     type: object
                   tenantID:
-                    description: TenantId is a unique identifier for an Azure Active
-                      Directory instance.
+                    description: |-
+                      TenantId is a unique identifier for an Azure Active Directory instance.
+                      This field is required unless ManagedIdentity is used, in which case it must not be set.
                     minLength: 1
                     type: string
-                required:
-                - clientID
-                - tenantID
                 type: object
                 x-kubernetes-validations:
-                - message: Exactly one of clientSecretRef or oidcExchangeToken must
-                    be specified
-                  rule: (has(self.clientSecretRef) && !has(self.oidcExchangeToken))
-                    || (!has(self.clientSecretRef) && has(self.oidcExchangeToken))
+                - message: Exactly one of clientSecretRef, oidcExchangeToken, or managedIdentity
+                    must be specified
+                  rule: '(has(self.clientSecretRef) ? 1 : 0) + (has(self.oidcExchangeToken)
+                    ? 1 : 0) + (has(self.managedIdentity) ? 1 : 0) == 1'
+                - message: clientID and tenantID must be specified unless managedIdentity
+                    is used, in which case they must not be specified
+                  rule: 'has(self.managedIdentity) ? (!has(self.clientID) && !has(self.tenantID))
+                    : (has(self.clientID) && has(self.tenantID))'
               gcpCredentials:
                 description: GCPCredentials is a mechanism to access a backend(s).
                   GCP specific logic will be applied.
@@ -8667,8 +8679,9 @@ spec:
                   Azure OpenAI specific logic will be applied.
                 properties:
                   clientID:
-                    description: ClientID is a unique identifier for an application
-                      in Azure.
+                    description: |-
+                      ClientID is a unique identifier for an application in Azure.
+                      This field is required unless ManagedIdentity is used, in which case it must not be set.
                     minLength: 1
                     type: string
                   clientSecretRef:
@@ -8714,6 +8727,15 @@ spec:
                         type: string
                     required:
                     - name
+                    type: object
+                  managedIdentity:
+                    description: ManagedIdentity configures Azure managed identity
+                      authentication.
+                    properties:
+                      clientID:
+                        description: ClientID selects a user-assigned managed identity.
+                        minLength: 1
+                        type: string
                     type: object
                   oidcExchangeToken:
                     description: |-
@@ -10650,19 +10672,21 @@ spec:
                     - oidc
                     type: object
                   tenantID:
-                    description: TenantId is a unique identifier for an Azure Active
-                      Directory instance.
+                    description: |-
+                      TenantId is a unique identifier for an Azure Active Directory instance.
+                      This field is required unless ManagedIdentity is used, in which case it must not be set.
                     minLength: 1
                     type: string
-                required:
-                - clientID
-                - tenantID
                 type: object
                 x-kubernetes-validations:
-                - message: Exactly one of clientSecretRef or oidcExchangeToken must
-                    be specified
-                  rule: (has(self.clientSecretRef) && !has(self.oidcExchangeToken))
-                    || (!has(self.clientSecretRef) && has(self.oidcExchangeToken))
+                - message: Exactly one of clientSecretRef, oidcExchangeToken, or managedIdentity
+                    must be specified
+                  rule: '(has(self.clientSecretRef) ? 1 : 0) + (has(self.oidcExchangeToken)
+                    ? 1 : 0) + (has(self.managedIdentity) ? 1 : 0) == 1'
+                - message: clientID and tenantID must be specified unless managedIdentity
+                    is used, in which case they must not be specified
+                  rule: 'has(self.managedIdentity) ? (!has(self.clientID) && !has(self.tenantID))
+                    : (has(self.clientID) && has(self.tenantID))'
               credentialOverride:
                 description: |-
                   CredentialOverride, when set, sources the upstream credential per-request instead of using

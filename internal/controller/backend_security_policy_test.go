@@ -561,6 +561,64 @@ func TestNewBackendSecurityPolicyController_ReconcileAzureMissingSecretData(t *t
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
 }
 
+func TestNewBackendSecurityPolicyController_ReconcileAzureMissingAuthMethod(t *testing.T) {
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+	bspName := "my-azure-backend-security-policy"
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: "default"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
+			AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
+				ClientID: "some-client-id",
+				TenantID: "some-tenant-id",
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+	_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: bspName}})
+	require.Error(t, err)
+	require.Equal(t, "one of secret ref, oidc, or managed identity must be defined, namespace default name my-azure-backend-security-policy", err.Error())
+}
+
+func TestNewBackendSecurityPolicyController_ReconcileAzureManagedIdentity(t *testing.T) {
+	// Route the IMDS request of the user-assigned managed identity credential through a local
+	// proxy that always fails, so that the rotation deterministically reaches the managed identity
+	// token provider and fails there, without depending on the environment running the tests.
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable in unit tests", http.StatusBadRequest)
+	}))
+	defer proxy.Close()
+	t.Setenv("AI_GATEWAY_AZURE_PROXY_URL", proxy.URL)
+
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+	bspName := "my-azure-managed-identity-policy"
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: "default"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
+			AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
+				ManagedIdentity: &aigv1b1.AzureManagedIdentity{ClientID: "some-client-id"},
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: bspName}})
+	// The managed identity token request fails in the unit test environment; the important part is
+	// that the reconciliation took the managed identity path instead of requiring a client secret
+	// or an OIDC configuration.
+	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to execute rotation")
+	require.NotContains(t, err.Error(), "one of secret ref, oidc, or managed identity must be defined")
+	// A failed rotation is retried in one minute.
+	require.Equal(t, time.Minute, res.RequeueAfter)
+}
+
 func TestNewBackendSecurityPolicyController_RotateCredentialInvalidType(t *testing.T) {
 	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
 	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()
