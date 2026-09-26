@@ -16,13 +16,11 @@ import (
 
 	egextension "github.com/envoyproxy/gateway/proto/extension"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
-	mutation_rulesv3 "github.com/envoyproxy/go-control-plane/envoy/config/common/mutation_rules/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
-	header_mutationv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_mutation/v3"
 	htomv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_to_metadata/v3"
 	upstream_codecv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/upstream_codec/v3"
 	httpconnectionmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
@@ -249,7 +247,7 @@ func Test_maybeModifyCluster(t *testing.T) {
 										},
 										ProcessingMode: &extprocv3.ProcessingMode{
 											RequestHeaderMode:  extprocv3.ProcessingMode_SEND,
-											RequestBodyMode:    extprocv3.ProcessingMode_NONE,
+											RequestBodyMode:    extprocv3.ProcessingMode_BUFFERED,
 											ResponseHeaderMode: extprocv3.ProcessingMode_SKIP,
 											ResponseBodyMode:   extprocv3.ProcessingMode_NONE,
 										},
@@ -261,28 +259,6 @@ func Test_maybeModifyCluster(t *testing.T) {
 												},
 											},
 											Timeout: durationpb.New(30 * time.Second),
-										},
-									}),
-								},
-							},
-							{
-								Name: "envoy.filters.http.header_mutation",
-								ConfigType: &httpconnectionmanagerv3.HttpFilter_TypedConfig{
-									TypedConfig: mustToAny(t, &header_mutationv3.HeaderMutation{
-										Mutations: &header_mutationv3.Mutations{
-											RequestMutations: []*mutation_rulesv3.HeaderMutation{
-												{
-													Action: &mutation_rulesv3.HeaderMutation_Append{
-														Append: &corev3.HeaderValueOption{
-															AppendAction: corev3.HeaderValueOption_ADD_IF_ABSENT,
-															Header: &corev3.HeaderValue{
-																Key:   "content-length",
-																Value: `%DYNAMIC_METADATA(` + aigv1b1.AIGatewayFilterMetadataNamespace + `:content_length)%`,
-															},
-														},
-													},
-												},
-											},
 										},
 									}),
 								},
@@ -408,7 +384,7 @@ func Test_maybeModifyCluster(t *testing.T) {
 										},
 										ProcessingMode: &extprocv3.ProcessingMode{
 											RequestHeaderMode:  extprocv3.ProcessingMode_SEND,
-											RequestBodyMode:    extprocv3.ProcessingMode_NONE,
+											RequestBodyMode:    extprocv3.ProcessingMode_BUFFERED,
 											ResponseHeaderMode: extprocv3.ProcessingMode_SKIP,
 											ResponseBodyMode:   extprocv3.ProcessingMode_NONE,
 										},
@@ -420,28 +396,6 @@ func Test_maybeModifyCluster(t *testing.T) {
 												},
 											},
 											Timeout: durationpb.New(30 * time.Second),
-										},
-									}),
-								},
-							},
-							{
-								Name: "envoy.filters.http.header_mutation",
-								ConfigType: &httpconnectionmanagerv3.HttpFilter_TypedConfig{
-									TypedConfig: mustToAny(t, &header_mutationv3.HeaderMutation{
-										Mutations: &header_mutationv3.Mutations{
-											RequestMutations: []*mutation_rulesv3.HeaderMutation{
-												{
-													Action: &mutation_rulesv3.HeaderMutation_Append{
-														Append: &corev3.HeaderValueOption{
-															AppendAction: corev3.HeaderValueOption_ADD_IF_ABSENT,
-															Header: &corev3.HeaderValue{
-																Key:   "content-length",
-																Value: `%DYNAMIC_METADATA(` + aigv1b1.AIGatewayFilterMetadataNamespace + `:content_length)%`,
-															},
-														},
-													},
-												},
-											},
 										},
 									}),
 								},
@@ -547,7 +501,7 @@ func Test_maybeModifyCluster(t *testing.T) {
 										},
 										ProcessingMode: &extprocv3.ProcessingMode{
 											RequestHeaderMode:  extprocv3.ProcessingMode_SEND,
-											RequestBodyMode:    extprocv3.ProcessingMode_NONE,
+											RequestBodyMode:    extprocv3.ProcessingMode_BUFFERED,
 											ResponseHeaderMode: extprocv3.ProcessingMode_SKIP,
 											ResponseBodyMode:   extprocv3.ProcessingMode_NONE,
 										},
@@ -559,28 +513,6 @@ func Test_maybeModifyCluster(t *testing.T) {
 												},
 											},
 											Timeout: durationpb.New(30 * time.Second),
-										},
-									}),
-								},
-							},
-							{
-								Name: "envoy.filters.http.header_mutation",
-								ConfigType: &httpconnectionmanagerv3.HttpFilter_TypedConfig{
-									TypedConfig: mustToAny(t, &header_mutationv3.HeaderMutation{
-										Mutations: &header_mutationv3.Mutations{
-											RequestMutations: []*mutation_rulesv3.HeaderMutation{
-												{
-													Action: &mutation_rulesv3.HeaderMutation_Append{
-														Append: &corev3.HeaderValueOption{
-															AppendAction: corev3.HeaderValueOption_ADD_IF_ABSENT,
-															Header: &corev3.HeaderValue{
-																Key:   "content-length",
-																Value: `%DYNAMIC_METADATA(` + aigv1b1.AIGatewayFilterMetadataNamespace + `:content_length)%`,
-															},
-														},
-													},
-												},
-											},
 										},
 									}),
 								},
@@ -901,11 +833,10 @@ func TestMaybeModifyClusterExtended(t *testing.T) {
 		err = updatedPOAny.UnmarshalTo(updatedPO)
 		require.NoError(t, err)
 
-		// Should have ext_proc + header_mutation + existing_filter (which becomes the last filter).
-		require.Len(t, updatedPO.HttpFilters, 3)
+		// Should have ext_proc + existing_filter (which becomes the last filter).
+		require.Len(t, updatedPO.HttpFilters, 2)
 		require.Equal(t, "envoy.filters.http.ext_proc/aigateway", updatedPO.HttpFilters[0].Name)
-		require.Equal(t, "envoy.filters.http.header_mutation", updatedPO.HttpFilters[1].Name)
-		require.Equal(t, "existing-filter", updatedPO.HttpFilters[2].Name)
+		require.Equal(t, "existing-filter", updatedPO.HttpFilters[1].Name)
 	})
 
 	t.Run("cluster with existing ext_proc filter", func(t *testing.T) {
@@ -947,10 +878,9 @@ func TestMaybeModifyClusterExtended(t *testing.T) {
 		require.NoError(t, err)
 
 		// Our own filters are dropped and rebuilt, so the chain reflects the current config.
-		require.Len(t, updatedPO.HttpFilters, 3)
+		require.Len(t, updatedPO.HttpFilters, 2)
 		require.Equal(t, "envoy.filters.http.ext_proc/aigateway", updatedPO.HttpFilters[0].Name)
-		require.Equal(t, "envoy.filters.http.header_mutation", updatedPO.HttpFilters[1].Name)
-		require.Equal(t, "envoy.filters.http.upstream_codec", updatedPO.HttpFilters[2].Name)
+		require.Equal(t, "envoy.filters.http.upstream_codec", updatedPO.HttpFilters[1].Name)
 	})
 
 	t.Run("cluster with no existing HttpFilters", func(t *testing.T) {
@@ -979,11 +909,10 @@ func TestMaybeModifyClusterExtended(t *testing.T) {
 		err = updatedPOAny.UnmarshalTo(updatedPO)
 		require.NoError(t, err)
 
-		// Should have ext_proc + header_mutation + upstream_codec.
-		require.Len(t, updatedPO.HttpFilters, 3)
+		// Should have ext_proc + upstream_codec.
+		require.Len(t, updatedPO.HttpFilters, 2)
 		require.Equal(t, "envoy.filters.http.ext_proc/aigateway", updatedPO.HttpFilters[0].Name)
-		require.Equal(t, "envoy.filters.http.header_mutation", updatedPO.HttpFilters[1].Name)
-		require.Equal(t, "envoy.filters.http.upstream_codec", updatedPO.HttpFilters[2].Name)
+		require.Equal(t, "envoy.filters.http.upstream_codec", updatedPO.HttpFilters[1].Name)
 	})
 
 	t.Run("invalid HttpProtocolOptions unmarshal", func(t *testing.T) {
