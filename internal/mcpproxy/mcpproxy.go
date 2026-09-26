@@ -238,8 +238,7 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 			if initErr != nil {
 				m.l.Error("failed to create MCP session", slog.String("backend", backend.Name), slog.String("error", initErr.Error()))
 				// If one backend fails, don't fail the overall connection. Create a session to the rest of the backends, as they
-				// may provide the needed methods.
-				// TODO: should we record a metric for this?
+				// may provide the needed methods. initializeSession has recorded the failure against the backend.
 				return
 			}
 			m.metrics.WithBackend(backend.Name).RecordInitializationDuration(ctx, backendStartAt, p)
@@ -468,7 +467,20 @@ type initializeResult struct {
 	result    *mcp.InitializeResult
 }
 
-func (m *mcpRequestContext) initializeSession(ctx context.Context, routeName filterapi.MCPRouteName, backend filterapi.MCPBackend, p *mcp.InitializeParams, startAt time.Time) (*initializeResult, error) {
+func (m *mcpRequestContext) initializeSession(ctx context.Context, routeName filterapi.MCPRouteName, backend filterapi.MCPBackend, p *mcp.InitializeParams, startAt time.Time) (result *initializeResult, err error) {
+	// Record a failure against the backend and the phase it happened in, the same way a failed
+	// request is recorded, so a backend that answers initialize but rejects notifications/initialized
+	// is distinguishable from one that never initialized. The duration is measured from the
+	// request's startAt, not from the start of this backend's initialization.
+	backendMetrics := m.metrics.WithBackend(backend.Name)
+	phase := "initialize"
+	defer func() {
+		if err != nil {
+			backendMetrics.RecordMethodErrorCount(ctx, phase, p, metrics.MCPStatusError)
+			backendMetrics.RecordRequestErrorDuration(ctx, startAt, errorType(err), p)
+		}
+	}()
+
 	// Send the initialize request to the MCP backend listener.
 	reqID := mustJSONRPCRequestID()
 	var (
@@ -573,13 +585,13 @@ func (m *mcpRequestContext) initializeSession(ctx context.Context, routeName fil
 		if m.l.Enabled(ctx, slog.LevelDebug) {
 			m.l.Debug("MCP session initialized", slog.Any("capabilities", initResult.Capabilities))
 		}
-		backendMetrics := m.metrics.WithBackend(backend.Name)
 		backendMetrics.RecordServerCapabilities(ctx, initResult.Capabilities, p)
 		backendMetrics.RecordMethodCount(ctx, "initialize", p)
 		backendMetrics.RecordRequestDuration(ctx, startAt, p)
 	}
 
 	// Need to invoke "notifications/initialized" to complete the initialization.
+	phase = "notifications/initialized"
 	{
 		// Send the notifications/initialized request to the MCP backend listener.
 		mcpReq := &jsonrpc.Request{Method: "notifications/initialized", Params: emptyJSONRPCMessage}
@@ -596,7 +608,7 @@ func (m *mcpRequestContext) initializeSession(ctx context.Context, routeName fil
 			body, _ := io.ReadAll(resp.Body)
 			return nil, fmt.Errorf("MCP notifications/initialized request failed with status code %d, body=%s", resp.StatusCode, string(body))
 		}
-		m.metrics.WithBackend(backend.Name).RecordMethodCount(ctx, "notifications/initialized", p)
+		backendMetrics.RecordMethodCount(ctx, "notifications/initialized", p)
 	}
 	if m.l.Enabled(ctx, slog.LevelDebug) {
 		m.l.Debug("sent MCP notifications/initialized", slog.String("backend", backend.Name), slog.String("session_id", sessionID))

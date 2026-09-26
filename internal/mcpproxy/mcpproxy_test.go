@@ -19,9 +19,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/metrics"
+	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
@@ -312,6 +316,65 @@ func TestNewSession_Success(t *testing.T) {
 	require.NotEmpty(t, s.clientGatewaySessionID())
 }
 
+// TestNewSession_PartialBackendFailure_RecordsMetrics covers a composite session where one backend
+// fails to initialize and the other succeeds: the session must stay usable through the surviving
+// backend, and the failed backend must be visible in the backend-scoped metrics.
+func TestNewSession_PartialBackendFailure_RecordsMetrics(t *testing.T) {
+	var callCount perBackendCallCount
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backend := r.Header.Get(internalapi.MCPBackendHeader)
+		if backend == "backend2" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("initialization failed"))
+			return
+		}
+		if callCount.inc(backend)%2 == 1 {
+			w.Header().Set(sessionIDHeader, "test-session-123")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(validInitializeResponse))
+		} else {
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer backendServer.Close()
+
+	mr := sdkmetric.NewManualReader()
+	proxy := newTestMCPProxyWithOTEL(mr, noopTracer)
+	proxy.backendListenerAddr = backendServer.URL
+
+	s, err := proxy.newSession(t.Context(), &mcp.InitializeParams{}, "test-route", "", nil, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.Contains(t, s.perBackendSessions, filterapi.MCPBackendName("backend1"))
+	require.NotContains(t, s.perBackendSessions, filterapi.MCPBackendName("backend2"))
+
+	// The failed backend is counted as a failed initialize and its failure duration is recorded,
+	// the same way a failed request is.
+	failedInitialize := testotel.GetCounterValue(t, mr, "mcp.method.count", attribute.NewSet(
+		attribute.String("mcp.backend", "backend2"),
+		attribute.String("mcp.method.name", "initialize"),
+		attribute.String("status", string(metrics.MCPStatusError)),
+	))
+	require.Equal(t, float64(1), failedInitialize)
+	failedCount, _ := testotel.GetHistogramValues(t, mr, "mcp.request.duration", attribute.NewSet(
+		attribute.String("mcp.backend", "backend2"),
+		attribute.String("error.type", string(metrics.MCPErrorInternal)),
+	))
+	require.Equal(t, uint64(1), failedCount)
+
+	// The surviving backend keeps its success metrics only.
+	okCount, _ := testotel.GetHistogramValues(t, mr, "mcp.initialization.duration", attribute.NewSet(
+		attribute.String("mcp.backend", "backend1"),
+	))
+	require.Equal(t, uint64(1), okCount)
+	okInitialize := testotel.GetCounterValue(t, mr, "mcp.method.count", attribute.NewSet(
+		attribute.String("mcp.backend", "backend1"),
+		attribute.String("mcp.method.name", "initialize"),
+		attribute.String("status", string(metrics.MCPStatusSuccess)),
+	))
+	require.Equal(t, float64(1), okInitialize)
+}
+
 func TestNewSession_NoBackend(t *testing.T) {
 	proxy := newTestMCPProxy()
 
@@ -466,7 +529,8 @@ func TestInitializeSession_NotificationsInitializedFailure(t *testing.T) {
 	}))
 	defer backendServer.Close()
 
-	proxy := newTestMCPProxy()
+	mr := sdkmetric.NewManualReader()
+	proxy := newTestMCPProxyWithOTEL(mr, noopTracer)
 	proxy.backendListenerAddr = backendServer.URL
 
 	sessionID, err := proxy.initializeSession(t.Context(), "route1", filterapi.MCPBackend{Name: "test-backend"}, &mcp.InitializeParams{}, time.Now())
@@ -474,6 +538,20 @@ func TestInitializeSession_NotificationsInitializedFailure(t *testing.T) {
 	require.Error(t, err)
 	require.Empty(t, sessionID)
 	require.Contains(t, err.Error(), "notifications/initialized request failed")
+
+	// The failure is attributed to notifications/initialized, not to initialize, which succeeded.
+	failedNotification := testotel.GetCounterValue(t, mr, "mcp.method.count", attribute.NewSet(
+		attribute.String("mcp.backend", "test-backend"),
+		attribute.String("mcp.method.name", "notifications/initialized"),
+		attribute.String("status", string(metrics.MCPStatusError)),
+	))
+	require.Equal(t, float64(1), failedNotification)
+	okInitialize := testotel.GetCounterValue(t, mr, "mcp.method.count", attribute.NewSet(
+		attribute.String("mcp.backend", "test-backend"),
+		attribute.String("mcp.method.name", "initialize"),
+		attribute.String("status", string(metrics.MCPStatusSuccess)),
+	))
+	require.Equal(t, float64(1), okInitialize)
 }
 
 func TestInvokeJSONRPCRequest_Success(t *testing.T) {
