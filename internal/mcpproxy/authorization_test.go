@@ -42,8 +42,13 @@ func TestAuthorizeRequest(t *testing.T) {
 	proxy := &mcpRequestContext{ProxyConfig: &ProxyConfig{l: logger}}
 
 	tests := []struct {
-		name          string
-		auth          *filterapi.MCPRouteAuthorization
+		name string
+		auth *filterapi.MCPRouteAuthorization
+		// unverifiedJWT models a route with no securityPolicy.oauth configured (Envoy never
+		// verifies the bearer JWT). By default test cases model a route where OAuth *is*
+		// configured, i.e. auth.VerifiedJWT is forced true below, since that's what every
+		// other case here is exercising (claims/scopes trusted after Envoy verification).
+		unverifiedJWT bool
 		backend       string
 		tool          string
 		args          mcp.Params
@@ -960,6 +965,29 @@ func TestAuthorizeRequest(t *testing.T) {
 			tool:          "tool1",
 			expectAllowed: true,
 		},
+		// Aa CEL rule referencing request.auth.jwt.claims on a route with no securityPolicy.oauth
+		// (VerifiedJWT: false) must never trust an attacker-forged, unsigned (alg=none) JWT.
+		// Without the fix, this forged "admin" claim would satisfy the CEL rule and bypass the Deny default.
+		{
+			name: "CEL rule referencing jwt claims is ignored when JWT is not verified (unverifiedJWT)",
+			auth: &filterapi.MCPRouteAuthorization{
+				DefaultAction: "Deny",
+				Rules: []filterapi.MCPRouteAuthorizationRule{
+					{
+						Action: "Allow",
+						CEL:    ptr.To(`request.auth.jwt.claims["role"] == "admin"`),
+						Target: &filterapi.MCPAuthorizationTarget{
+							Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "tool1"}},
+						},
+					},
+				},
+			},
+			unverifiedJWT: true,
+			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"role": "admin"})}},
+			backend:       "backend1",
+			tool:          "tool1",
+			expectAllowed: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -968,6 +996,9 @@ func TestAuthorizeRequest(t *testing.T) {
 			if headers == nil {
 				headers = http.Header{}
 			}
+			// Every case here except those opting into unverifiedJWT models a route with
+			// securityPolicy.oauth configured, so Envoy has already verified the bearer JWT.
+			tt.auth.VerifiedJWT = !tt.unverifiedJWT
 			compiled, err := compileAuthorization(tt.auth)
 			if (err != nil) != tt.expectError {
 				t.Fatalf("expected error: %v, got: %v", tt.expectError, err)

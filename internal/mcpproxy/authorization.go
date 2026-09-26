@@ -28,6 +28,10 @@ type compiledAuthorization struct {
 	ResourceMetadataURL string
 	Rules               []compiledAuthorizationRule
 	DefaultAction       filterapi.AuthorizationAction
+	// VerifiedJWT mirrors filterapi.MCPRouteAuthorization.VerifiedJWT: true only when Envoy
+	// verifies the bearer JWT's signature before the request reaches the MCP proxy. JWT
+	// claims/scopes must never be trusted for authorization decisions unless this is true.
+	VerifiedJWT bool
 }
 
 type compiledAuthorizationRule struct {
@@ -45,7 +49,8 @@ func (a *compiledAuthorization) same(other *compiledAuthorization) bool {
 	if a == nil || other == nil {
 		return a == other
 	}
-	if a.ResourceMetadataURL != other.ResourceMetadataURL || a.DefaultAction != other.DefaultAction {
+	if a.ResourceMetadataURL != other.ResourceMetadataURL || a.DefaultAction != other.DefaultAction ||
+		a.VerifiedJWT != other.VerifiedJWT {
 		return false
 	}
 	return slices.EqualFunc(a.Rules, other.Rules, func(ra, rb compiledAuthorizationRule) bool {
@@ -85,6 +90,7 @@ func compileAuthorization(auth *filterapi.MCPRouteAuthorization) (*compiledAutho
 	compiled := &compiledAuthorization{
 		ResourceMetadataURL: auth.ResourceMetadataURL,
 		DefaultAction:       auth.DefaultAction,
+		VerifiedJWT:         auth.VerifiedJWT,
 	}
 
 	for _, rule := range auth.Rules {
@@ -129,9 +135,21 @@ type authzContext struct {
 // newAuthzContext parses the bearer token once. Callers that check many targets against
 // the same request should build this once and reuse it via authorizeRequestWith, instead
 // of re-parsing the token for every target.
-func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest) *authzContext {
+//
+// verifiedJWT must be true only when Envoy has cryptographically verified the bearer JWT
+// before this request reached the MCP proxy (i.e. the route has securityPolicy.oauth
+// configured; see filterapi.MCPRouteAuthorization.VerifiedJWT). When it is false, the token
+// is never parsed and no claims/scopes are exposed: without Envoy-side verification, a
+// caller-supplied JWT (including one with alg=none and forged claims) cannot be trusted, so
+// treating it as authoritative would let an attacker fabricate any claim or scope to satisfy
+// Source.JWT rules or CEL expressions referencing request.auth.jwt.*.
+func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest, verifiedJWT bool) *authzContext {
 	scopeSet := sets.New[string]()
 	claims := jwt.MapClaims{}
+
+	if !verifiedJWT {
+		return &authzContext{claims: claims, scopes: scopeSet}
+	}
 
 	token, err := bearerToken(req.Headers.Get("Authorization"))
 	// This is just a sanity check. The actual JWT verification is performed by Envoy before reaching here, and the token
@@ -139,7 +157,8 @@ func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest) *authzCon
 	if err != nil {
 		m.l.Info("missing or invalid bearer token", slog.String("error", err.Error()))
 	} else {
-		// JWT verification is performed by Envoy before reaching here. So we only need to parse the token without verification.
+		// JWT verification is performed by Envoy before reaching here (verifiedJWT is true). So we
+		// only need to parse the token without verification.
 		if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
 			m.l.Info("failed to parse JWT token", slog.String("error", err.Error()))
 		} else {
@@ -179,7 +198,7 @@ func (m *mcpRequestContext) authorizeRequest(authorization *compiledAuthorizatio
 	if len(authorization.Rules) == 0 {
 		return authorization.DefaultAction == filterapi.AuthorizationActionAllow, nil
 	}
-	return m.authorizeRequestWith(authorization, req, m.newAuthzContext(req))
+	return m.authorizeRequestWith(authorization, req, m.newAuthzContext(req, authorization.VerifiedJWT))
 }
 
 // authorizeRequestWith is authorizeRequest's matching logic, parameterized on an

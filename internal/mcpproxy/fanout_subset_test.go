@@ -73,6 +73,9 @@ func TestNewSession_BackendSelector(t *testing.T) {
 			name: "JWT claims rule selects a single backend (no shim required)",
 			backendSelector: &filterapi.MCPRouteAuthorization{
 				DefaultAction: filterapi.AuthorizationActionDeny,
+				// Models a route with securityPolicy.oauth configured, so Envoy has already
+				// verified the bearer JWT before this request reached the proxy.
+				VerifiedJWT: true,
 				Rules: []filterapi.MCPRouteAuthorizationRule{
 					{
 						Action: filterapi.AuthorizationActionAllow,
@@ -153,6 +156,9 @@ func TestNewSession_BackendSelector(t *testing.T) {
 func TestSelectBackends(t *testing.T) {
 	jwtSelector := mustCompileBackendSelector(t, &filterapi.MCPRouteAuthorization{
 		DefaultAction: filterapi.AuthorizationActionDeny,
+		// Models a route with securityPolicy.oauth configured, so Envoy has already verified
+		// the bearer JWT before this request reached the proxy.
+		VerifiedJWT: true,
 		Rules: []filterapi.MCPRouteAuthorizationRule{
 			{
 				Action: filterapi.AuthorizationActionAllow,

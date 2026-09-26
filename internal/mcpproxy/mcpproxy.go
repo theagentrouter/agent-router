@@ -172,7 +172,7 @@ func (m *mcpRequestContext) selectAuthorizedBackends(routeName filterapi.MCPRout
 		headers = http.Header{}
 	}
 	filtered := make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(route.backends))
-	authzCtx := m.newAuthzContext(&authorizationRequest{Headers: headers})
+	authzCtx := m.newAuthzContext(&authorizationRequest{Headers: headers}, route.backendSelector.VerifiedJWT)
 	for name, backend := range route.backends {
 		allowed, _ := m.authorizeRequestWith(route.backendSelector, &authorizationRequest{
 			Headers: headers,

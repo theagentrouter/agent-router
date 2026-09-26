@@ -650,10 +650,20 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			mcpRoute.Backends = append(
 				mcpRoute.Backends, mcpBackend)
 		}
+
+		// hasVerifiedJWT is true only when Envoy has been configured (via SecurityPolicy.OAuth)
+		// to cryptographically verify the bearer JWT before the request reaches the MCP proxy.
+		// Without it, the proxy must never trust JWT claims/scopes surfaced to authorization
+		// (Source.JWT or CEL's request.auth.jwt.*), since an attacker can forge an unsigned or
+		// otherwise unverified token. See MCPRouteAuthorization.VerifiedJWT.
+		hasVerifiedJWT := route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.OAuth != nil
+
 		// Add authorization configuration for the route.
 		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.Authorization != nil {
 			authorization := route.Spec.SecurityPolicy.Authorization
-			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{}
+			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{
+				VerifiedJWT: hasVerifiedJWT,
+			}
 
 			if route.Spec.SecurityPolicy.OAuth != nil {
 				mcpRoute.Authorization.ResourceMetadataURL = buildResourceMetadataURL(&route.Spec.SecurityPolicy.OAuth.ProtectedResourceMetadata)
@@ -718,6 +728,7 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			selector := route.Spec.BackendSelector
 			mcpRoute.BackendSelector = &filterapi.MCPRouteAuthorization{
 				DefaultAction: filterapi.AuthorizationAction(ptr.Deref(selector.DefaultAction, egv1a1.AuthorizationActionDeny)),
+				VerifiedJWT:   hasVerifiedJWT,
 			}
 
 			for _, rule := range selector.Rules {
