@@ -13,6 +13,7 @@ export const providers: Provider[] = [
   { name: 'Anthropic', logoUrl: '/img/providers/anthropic.svg', status: 'supported' },
   { name: 'AWS Bedrock', logoUrl: '/img/providers/aws-bedrock.svg', status: 'supported' },
   { name: 'Azure OpenAI', logoUrl: '/img/providers/azure-openai.svg', status: 'supported' },
+  { name: 'BitDeer', logoUrl: '/img/providers/bitdeer.svg', status: 'supported' },
   { name: 'Cohere', logoUrl: '/img/providers/cohere.svg', status: 'supported' },
   { name: 'DeepInfra', logoUrl: '/img/providers/deepinfra.svg', status: 'supported' },
   { name: 'DeepSeek', logoUrl: '/img/providers/deepseek.svg', status: 'supported' },
