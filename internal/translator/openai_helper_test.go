@@ -733,6 +733,57 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ToolCallStreaming(t *testing
 	require.JSONEq(t, `{"type":"message_stop"}`, events[5].data)
 }
 
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_ToolCallThenText(t *testing.T) {
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "claude-3",
+	}
+
+	input := "data: {\"id\":\"chatcmpl-tool-text\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-read\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"file_path\\\":\\\"README.md\\\"}\"},\"type\":\"function\"}]}}],\"model\":\"qwen-3.6-27b\"}\n\n" +
+		"data: {\"id\":\"chatcmpl-tool-text\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Reading the file.\"},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"chatcmpl-tool-text\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n"
+
+	state.buffer.WriteString(input)
+
+	var out []byte
+	err := state.processBuffer(&out, true)
+	require.NoError(t, err)
+
+	events := parseSSEEventsFromBytes(out)
+	require.Len(t, events, 9)
+	require.JSONEq(t, `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call-read","name":"Read","input":{}}}`, events[1].data)
+	require.JSONEq(t, `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"file_path\":\"README.md\"}"}}`, events[2].data)
+	require.JSONEq(t, `{"type":"content_block_stop","index":0}`, events[3].data)
+	require.JSONEq(t, `{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`, events[4].data)
+	require.JSONEq(t, `{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Reading the file."}}`, events[5].data)
+	require.JSONEq(t, `{"type":"content_block_stop","index":1}`, events[6].data)
+}
+
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_ToolCallThenReasoning(t *testing.T) {
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "claude-3",
+	}
+
+	input := `data: {"id":"chatcmpl-tool-reasoning","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-read","function":{"name":"Read","arguments":""},"type":"function"}]}}],"model":"qwen-3.6-27b"}` + "\n\n" +
+		`data: {"id":"chatcmpl-tool-reasoning","choices":[{"index":0,"delta":{"reasoning_content":{"text":"Checking the file."}}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-tool-reasoning","choices":[{"index":0,"delta":{"content":"Reading the file."},"finish_reason":"stop"}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-tool-reasoning","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n"
+
+	state.buffer.WriteString(input)
+
+	var out []byte
+	err := state.processBuffer(&out, true)
+	require.NoError(t, err)
+
+	events := parseSSEEventsFromBytes(out)
+	require.Len(t, events, 11)
+	require.JSONEq(t, `{"type":"content_block_stop","index":0}`, events[2].data)
+	require.JSONEq(t, `{"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":""}}`, events[3].data)
+	require.JSONEq(t, `{"type":"content_block_stop","index":1}`, events[5].data)
+	require.JSONEq(t, `{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}`, events[6].data)
+}
+
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_EndOfStreamClosing(t *testing.T) {
 	// Verify endOfStream triggers closing events when no usage chunk is present.
 	state := &openAIStreamToAnthropicState{
