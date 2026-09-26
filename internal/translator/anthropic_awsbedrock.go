@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
-	"k8s.io/utils/ptr"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
@@ -122,7 +121,7 @@ func (a *anthropicToAWSBedrockTranslator) RequestBody(_ []byte, body *anthropics
 	// top_k goes into additionalModelRequestFields.
 	if body.TopK != nil {
 		if bedrockReq.AdditionalModelRequestFields == nil {
-			bedrockReq.AdditionalModelRequestFields = make(map[string]interface{})
+			bedrockReq.AdditionalModelRequestFields = make(map[string]any)
 		}
 		bedrockReq.AdditionalModelRequestFields["top_k"] = *body.TopK
 	}
@@ -130,7 +129,7 @@ func (a *anthropicToAWSBedrockTranslator) RequestBody(_ []byte, body *anthropics
 	// Convert thinking config.
 	if body.Thinking != nil {
 		if bedrockReq.AdditionalModelRequestFields == nil {
-			bedrockReq.AdditionalModelRequestFields = make(map[string]interface{})
+			bedrockReq.AdditionalModelRequestFields = make(map[string]any)
 		}
 		if body.Thinking.Enabled != nil {
 			bedrockReq.AdditionalModelRequestFields["thinking"] = map[string]any{
@@ -256,7 +255,7 @@ func (a *anthropicToAWSBedrockTranslator) convertUserMessage(msg *anthropicschem
 	bedrockMsg := &awsbedrock.Message{Role: awsbedrock.ConversationRoleUser}
 	if msg.Content.Text != "" {
 		bedrockMsg.Content = []*awsbedrock.ContentBlock{
-			{Text: ptr.To(msg.Content.Text)},
+			{Text: new(msg.Content.Text)},
 		}
 		return bedrockMsg, nil
 	}
@@ -266,7 +265,7 @@ func (a *anthropicToAWSBedrockTranslator) convertUserMessage(msg *anthropicschem
 		switch {
 		case block.Text != nil:
 			bedrockMsg.Content = append(bedrockMsg.Content, &awsbedrock.ContentBlock{
-				Text: ptr.To(block.Text.Text),
+				Text: new(block.Text.Text),
 			})
 			bedrockMsg.Content = appendCachePoint(bedrockMsg.Content, block.Text.CacheControl)
 		case block.Image != nil:
@@ -288,7 +287,7 @@ func (a *anthropicToAWSBedrockTranslator) convertAssistantMessage(msg *anthropic
 	bedrockMsg := &awsbedrock.Message{Role: awsbedrock.ConversationRoleAssistant}
 	if msg.Content.Text != "" {
 		bedrockMsg.Content = []*awsbedrock.ContentBlock{
-			{Text: ptr.To(msg.Content.Text)},
+			{Text: new(msg.Content.Text)},
 		}
 		return bedrockMsg
 	}
@@ -298,7 +297,7 @@ func (a *anthropicToAWSBedrockTranslator) convertAssistantMessage(msg *anthropic
 		switch {
 		case block.Text != nil:
 			bedrockMsg.Content = append(bedrockMsg.Content, &awsbedrock.ContentBlock{
-				Text: ptr.To(block.Text.Text),
+				Text: new(block.Text.Text),
 			})
 			bedrockMsg.Content = appendCachePoint(bedrockMsg.Content, block.Text.CacheControl)
 		case block.Thinking != nil:
@@ -345,15 +344,15 @@ func (a *anthropicToAWSBedrockTranslator) convertToolResultMessage(msg *anthropi
 
 func (a *anthropicToAWSBedrockTranslator) convertToolResultBlock(tr *anthropicschema.ToolResultBlockParam) *awsbedrock.ContentBlock {
 	toolResult := &awsbedrock.ToolResultBlock{
-		ToolUseID: ptr.To(tr.ToolUseID),
+		ToolUseID: new(tr.ToolUseID),
 	}
 	if tr.IsError {
-		toolResult.Status = ptr.To("error")
+		toolResult.Status = new("error")
 	}
 	if tr.Content != nil {
 		if tr.Content.Text != "" {
 			toolResult.Content = []*awsbedrock.ToolResultContentBlock{
-				{Text: ptr.To(tr.Content.Text)},
+				{Text: new(tr.Content.Text)},
 			}
 		} else if len(tr.Content.Array) > 0 {
 			toolResult.Content = make([]*awsbedrock.ToolResultContentBlock, 0, len(tr.Content.Array))
@@ -361,7 +360,7 @@ func (a *anthropicToAWSBedrockTranslator) convertToolResultBlock(tr *anthropicsc
 				item := &tr.Content.Array[i]
 				if item.Text != nil {
 					toolResult.Content = append(toolResult.Content, &awsbedrock.ToolResultContentBlock{
-						Text: ptr.To(item.Text.Text),
+						Text: new(item.Text.Text),
 					})
 				}
 			}

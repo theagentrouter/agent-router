@@ -43,47 +43,47 @@ var completionRequests = map[Cassette]*openai.CompletionRequest{
 	CassetteCompletionToken: {
 		Model:       openai.ModelBabbage002,
 		Prompt:      openai.PromptUnion{Value: fibPromptTokens},
-		MaxTokens:   ptrTo(25),
-		Temperature: ptrTo(0.5),
-		TopP:        ptrTo(0.9),
+		MaxTokens:   new(25),
+		Temperature: new(0.5),
+		TopP:        new(0.9),
 	},
 	CassetteCompletionStreaming:      completionWithStream(cassetteCompletionBasic),
 	CassetteCompletionStreamingUsage: completionWithStreamUsage(cassetteCompletionBasic),
 	CassetteCompletionTextBatch: {
 		Model:       openai.ModelBabbage002,
 		Prompt:      openai.PromptUnion{Value: []string{fibPrompt, fibPromptPartial}},
-		MaxTokens:   ptrTo(25),
-		Temperature: ptrTo(0.5),
-		TopP:        ptrTo(0.9),
-		N:           ptrTo(2),         // Multiple completions for user choice in IDE
+		MaxTokens:   new(25),
+		Temperature: new(0.5),
+		TopP:        new(0.9),
+		N:           new(2),           // Multiple completions for user choice in IDE
 		Stop:        []string{"\n\n"}, // Stop at function boundaries for clean completion
 	},
 	CassetteCompletionTokenBatch: {
 		Model:       openai.ModelBabbage002,
 		Prompt:      openai.PromptUnion{Value: [][]int64{fibPromptTokens, fibPromptPartialTokens}},
-		MaxTokens:   ptrTo(25),
-		Temperature: ptrTo(0.5),
-		TopP:        ptrTo(0.9),
-		N:           ptrTo(2),
+		MaxTokens:   new(25),
+		Temperature: new(0.5),
+		TopP:        new(0.9),
+		N:           new(2),
 		Stop:        []string{"\n\n"},
 	},
 	CassetteCompletionSuffix: {
 		Model:       openai.ModelGPT35TurboInstruct, // supports suffix
 		Prompt:      openai.PromptUnion{Value: fibPromptPartial},
-		MaxTokens:   ptrTo(25),
-		Temperature: ptrTo(0.5),
-		TopP:        ptrTo(0.9),
-		N:           ptrTo(2),
+		MaxTokens:   new(25),
+		Temperature: new(0.5),
+		TopP:        new(0.9),
+		N:           new(2),
 		Suffix:      "\nprint(fib(10))",         // Infilling pattern used in code LoRA training
-		Logprobs:    ptrTo(3),                   // Confidence analysis for LoRA model comparison
+		Logprobs:    new(3),                     // Confidence analysis for LoRA model comparison
 		Stop:        []string{"def ", "class "}, // Prevent generating additional functions
 	},
 
 	CassetteCompletionBadRequest: {
 		Model:       openai.ModelBabbage002,
 		Prompt:      openai.PromptUnion{Value: ""},
-		MaxTokens:   ptrTo(-1),  // Invalid negative integer
-		Temperature: ptrTo(3.0), // Invalid float >2.0
+		MaxTokens:   new(-1),  // Invalid negative integer
+		Temperature: new(3.0), // Invalid float >2.0
 	},
 
 	CassetteCompletionUnknownModel: {
@@ -95,9 +95,9 @@ var completionRequests = map[Cassette]*openai.CompletionRequest{
 var cassetteCompletionBasic = &openai.CompletionRequest{
 	Model:       openai.ModelBabbage002,               // Base model for LoRA adapter testing
 	Prompt:      openai.PromptUnion{Value: fibPrompt}, // Standard code completion task
-	MaxTokens:   ptrTo(25),                            // Adequate for function body completion
-	Temperature: ptrTo(0.4),                           // Lower temperature for focused code generation
-	TopP:        ptrTo(0.9),                           // Nucleus sampling for quality code output
+	MaxTokens:   new(25),                              // Adequate for function body completion
+	Temperature: new(0.4),                             // Lower temperature for focused code generation
+	TopP:        new(0.9),                             // Nucleus sampling for quality code output
 }
 
 func completionWithStream(req *openai.CompletionRequest) *openai.CompletionRequest {
@@ -115,4 +115,4 @@ func completionWithStreamUsage(req *openai.CompletionRequest) *openai.Completion
 	return clone
 }
 
-func ptrTo[T any](v T) *T { return &v }
+//go:fix inline

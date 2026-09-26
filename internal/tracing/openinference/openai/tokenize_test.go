@@ -111,7 +111,7 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 		req            *tokenize.RequestUnion
 		body           string
 		config         *openinference.TraceConfig
-		expectedAttrs  map[string]interface{}
+		expectedAttrs  map[string]any
 		shouldHideBody bool
 	}{
 		{
@@ -119,10 +119,10 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 			req: &tokenize.RequestUnion{
 				ChatRequest: &tokenize.ChatRequest{
 					Model:                "gpt-4",
-					AddGenerationPrompt:  boolPtr(true),
+					AddGenerationPrompt:  new(true),
 					ContinueFinalMessage: false,
 					AddSpecialTokens:     true,
-					ReturnTokenStrs:      boolPtr(true),
+					ReturnTokenStrs:      new(true),
 					Messages: []openai.ChatCompletionMessageParamUnion{
 						{
 							OfUser: &openai.ChatCompletionUserMessageParam{
@@ -144,7 +144,7 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 				HideInputs:  false,
 				HideOutputs: false,
 			},
-			expectedAttrs: map[string]interface{}{
+			expectedAttrs: map[string]any{
 				openinference.SpanKind:            openinference.SpanKindTokenCounter,
 				openinference.LLMSystem:           openinference.LLMSystemOpenAI,
 				openinference.LLMModelName:        "gpt-4",
@@ -165,8 +165,8 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 				CompletionRequest: &tokenize.CompletionRequest{
 					Model:            "gpt-3.5-turbo",
 					Prompt:           "Complete this",
-					AddSpecialTokens: boolPtr(false),
-					ReturnTokenStrs:  boolPtr(false),
+					AddSpecialTokens: new(false),
+					ReturnTokenStrs:  new(false),
 				},
 			},
 			body: `{"model":"gpt-3.5-turbo","prompt":"Complete this"}`,
@@ -174,7 +174,7 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 				HideInputs:  false,
 				HideOutputs: false,
 			},
-			expectedAttrs: map[string]interface{}{
+			expectedAttrs: map[string]any{
 				openinference.SpanKind:        openinference.SpanKindTokenCounter,
 				openinference.LLMSystem:       openinference.LLMSystemOpenAI,
 				openinference.LLMModelName:    "gpt-3.5-turbo",
@@ -206,7 +206,7 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 				HideInputs:  true,
 				HideOutputs: false,
 			},
-			expectedAttrs: map[string]interface{}{
+			expectedAttrs: map[string]any{
 				openinference.SpanKind:     openinference.SpanKindTokenCounter,
 				openinference.LLMSystem:    openinference.LLMSystemOpenAI,
 				openinference.LLMModelName: "gpt-4",
@@ -228,7 +228,7 @@ func TestTokenizeRecorder_RecordRequest(t *testing.T) {
 			})
 
 			// Convert span attributes to map for easier testing
-			attrMap := make(map[string]interface{})
+			attrMap := make(map[string]any)
 			for _, attr := range actualSpan.Attributes {
 				attrMap[string(attr.Key)] = attr.Value.AsInterface()
 			}
@@ -293,7 +293,7 @@ func TestTokenizeRecorder_RecordResponse(t *testing.T) {
 			require.Equal(t, codes.Ok, actualSpan.Status.Code, "Status should be OK")
 
 			// Convert span attributes to map for easier testing
-			attrMap := make(map[string]interface{})
+			attrMap := make(map[string]any)
 			for _, attr := range actualSpan.Attributes {
 				attrMap[string(attr.Key)] = attr.Value.AsInterface()
 			}
@@ -338,7 +338,7 @@ func TestTokenizeRecorder_RecordResponseOnError(t *testing.T) {
 	assert.Equal(t, "exception", event.Name, "Event should be named 'exception'")
 
 	// Convert event attributes to map for easier testing
-	eventAttrs := make(map[string]interface{})
+	eventAttrs := make(map[string]any)
 	for _, attr := range event.Attributes {
 		eventAttrs[string(attr.Key)] = attr.Value.AsInterface()
 	}
@@ -349,6 +349,5 @@ func TestTokenizeRecorder_RecordResponseOnError(t *testing.T) {
 }
 
 // Helper function to create bool pointers
-func boolPtr(b bool) *bool {
-	return &b
-}
+//
+//go:fix inline

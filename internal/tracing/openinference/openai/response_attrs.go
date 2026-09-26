@@ -133,7 +133,7 @@ func decodeBase64Embeddings(encoded string) ([]float64, error) {
 	numFloats := len(decoded) / 4
 	result := make([]float64, numFloats)
 
-	for i := 0; i < numFloats; i++ {
+	for i := range numFloats {
 		bits := binary.LittleEndian.Uint32(decoded[i*4 : (i+1)*4])
 		result[i] = float64(math.Float32frombits(bits))
 	}

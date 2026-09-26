@@ -8,6 +8,7 @@ package extensionserver
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -547,11 +548,8 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 				for _, target := range policy.Spec.TargetRefs {
 					targetName := string(target.Name)
 					if overrides, ok := modelInfo.backendModels[targetName]; ok {
-						for _, override := range overrides {
-							if override == modelName {
-								matched = true
-								break
-							}
+						if slices.Contains(overrides, modelName) {
+							matched = true
 						}
 						if matched {
 							break
@@ -586,15 +584,15 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 				// regardless of target or model.
 				for rIdx, rule := range pmq.Quota.BucketRules {
 					headers := flattenAndSortClientSelectorHeaders(rule.ClientSelectors)
-					var dupKey string
+					var dupKey strings.Builder
 					for mIdx, hdr := range headers {
-						dupKey += "|" + translator.BucketRuleDescriptorKey(rIdx, mIdx, hdr.Name, headerMatchKeyValue(hdr))
+						dupKey.WriteString("|" + translator.BucketRuleDescriptorKey(rIdx, mIdx, hdr.Name, headerMatchKeyValue(hdr)))
 					}
 					if len(headers) == 0 {
-						dupKey += "|" + translator.BucketRuleDescriptorKey(rIdx, 0, "", "")
+						dupKey.WriteString("|" + translator.BucketRuleDescriptorKey(rIdx, 0, "", ""))
 					}
-					if !seenStreamDoneKeys[dupKey] {
-						seenStreamDoneKeys[dupKey] = true
+					if !seenStreamDoneKeys[dupKey.String()] {
+						seenStreamDoneKeys[dupKey.String()] = true
 						clientActions := buildClientSelectorStreamDoneActions(rIdx, rule.ClientSelectors)
 						streamDoneActions = append(streamDoneActions, &routev3.RateLimit{
 							Actions:           append(baseDescriptorActions(), clientActions...),

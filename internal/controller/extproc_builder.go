@@ -140,14 +140,14 @@ func (b *extProcBuilder) buildExtProcContainer(input extProcContainerInput) core
 
 	udsMountPath := filepath.Dir(b.udsPath)
 	securityContext := &corev1.SecurityContext{
-		AllowPrivilegeEscalation: ptr.To(false),
+		AllowPrivilegeEscalation: new(false),
 		Capabilities: &corev1.Capabilities{
 			Drop: []corev1.Capability{"ALL"},
 		},
-		Privileged:   ptr.To(false),
-		RunAsGroup:   ptr.To(int64(65532)),
-		RunAsNonRoot: ptr.To(true),
-		RunAsUser:    ptr.To(int64(65532)),
+		Privileged:   new(false),
+		RunAsGroup:   new(int64(65532)),
+		RunAsNonRoot: new(true),
+		RunAsUser:    new(int64(65532)),
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
@@ -174,12 +174,10 @@ func (b *extProcBuilder) buildExtProcContainer(input extProcContainerInput) core
 		},
 		SecurityContext: securityContext,
 		ReadinessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Port:   intstr.FromInt32(extProcAdminPort),
-					Path:   "/health",
-					Scheme: corev1.URISchemeHTTP,
-				},
+			HTTPGet: &corev1.HTTPGetAction{
+				Port:   intstr.FromInt32(extProcAdminPort),
+				Path:   "/health",
+				Scheme: corev1.URISchemeHTTP,
 			},
 			InitialDelaySeconds: 2,
 			TimeoutSeconds:      5,

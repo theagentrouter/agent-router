@@ -20,7 +20,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -346,7 +345,7 @@ func jwtBackendSelectorAllowing(t *testing.T) *compiledAuthorization {
 		Rules: []filterapi.MCPRouteAuthorizationRule{
 			{
 				Action: filterapi.AuthorizationActionAllow,
-				CEL:    ptr.To(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`),
+				CEL:    new(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`),
 			},
 		},
 	})
@@ -472,13 +471,13 @@ func TestHandleModernToolsList_MergesCachingHints(t *testing.T) {
 	respFn := func(backend, _ string) any {
 		if backend == "backend1" {
 			return mcp.ListToolsResult{
-				Tools:     []*mcp.Tool{{Name: "search"}},
-				Cacheable: mcp.Cacheable{TTLMs: 2000, CacheScope: "public"},
+				Tools: []*mcp.Tool{{Name: "search"}},
+				TTLMs: 2000, CacheScope: "public",
 			}
 		}
 		return mcp.ListToolsResult{
-			Tools:     []*mcp.Tool{{Name: "search"}},
-			Cacheable: mcp.Cacheable{TTLMs: 500, CacheScope: "private"},
+			Tools: []*mcp.Tool{{Name: "search"}},
+			TTLMs: 500, CacheScope: "private",
 		}
 	}
 	server := httptest.NewServer(modernBackendHandler(t, nil, nil, respFn))
@@ -1057,12 +1056,12 @@ func TestMergeDiscoverResults(t *testing.T) {
 		{
 			SupportedVersions: []string{protocolVersion20260728, protocolVersion20250618},
 			Capabilities:      &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
-			Cacheable:         mcp.Cacheable{TTLMs: 2000, CacheScope: "public"},
+			TTLMs:             2000, CacheScope: "public",
 		},
 		{
 			SupportedVersions: []string{protocolVersion20250618},
 			Capabilities:      &mcp.ServerCapabilities{Prompts: &mcp.PromptCapabilities{}},
-			Cacheable:         mcp.Cacheable{TTLMs: 500, CacheScope: "private"},
+			TTLMs:             500, CacheScope: "private",
 		},
 		nil,
 	})

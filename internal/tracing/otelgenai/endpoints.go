@@ -6,6 +6,8 @@
 package otelgenai
 
 import (
+	"slices"
+
 	"go.opentelemetry.io/otel/attribute"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
@@ -187,9 +189,9 @@ func NewCompletionRecorder(config *Config) tracingapi.CompletionRecorder {
 		outputMessages: completionOutputMessages,
 		// Completion streaming chunks are full responses, so the last one wins.
 		foldChunks: func(chunks []*openai.CompletionResponse) *openai.CompletionResponse {
-			for i := len(chunks) - 1; i >= 0; i-- {
-				if chunks[i] != nil {
-					return chunks[i]
+			for _, chunk := range slices.Backward(chunks) {
+				if chunk != nil {
+					return chunk
 				}
 			}
 			return &openai.CompletionResponse{}

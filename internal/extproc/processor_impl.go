@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -852,9 +853,7 @@ func mergeDynamicMetadata(base, extra *structpb.Struct) *structpb.Struct {
 	if extraFields == nil {
 		return base
 	}
-	for k, v := range extraFields.Fields {
-		baseFields.Fields[k] = v
-	}
+	maps.Copy(baseFields.Fields, extraFields.Fields)
 	return base
 }
 

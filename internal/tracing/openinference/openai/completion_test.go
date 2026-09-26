@@ -23,7 +23,8 @@ import (
 )
 
 // Helper to create int pointers.
-func intPtr(i int) *int { return &i }
+//
+//go:fix inline
 
 // Test data.
 var (
@@ -56,7 +57,7 @@ var (
 		Choices: []openai.CompletionChoice{
 			{
 				Text:         "This is a test",
-				Index:        intPtr(0),
+				Index:        new(0),
 				FinishReason: "stop",
 			},
 		},
@@ -75,12 +76,12 @@ var (
 		Choices: []openai.CompletionChoice{
 			{
 				Text:         "First choice",
-				Index:        intPtr(0),
+				Index:        new(0),
 				FinishReason: "stop",
 			},
 			{
 				Text:         "Second choice",
-				Index:        intPtr(1),
+				Index:        new(1),
 				FinishReason: "stop",
 			},
 		},
@@ -99,7 +100,7 @@ var (
 			Created: openai.JSONUNIXTime(time.Unix(1234567890, 0)),
 			Model:   "gpt-3.5-turbo-instruct",
 			Choices: []openai.CompletionChoice{
-				{Text: "This", Index: intPtr(0)},
+				{Text: "This", Index: new(0)},
 			},
 		},
 		{
@@ -108,7 +109,7 @@ var (
 			Created: openai.JSONUNIXTime(time.Unix(1234567890, 0)),
 			Model:   "gpt-3.5-turbo-instruct",
 			Choices: []openai.CompletionChoice{
-				{Text: " is", Index: intPtr(0)},
+				{Text: " is", Index: new(0)},
 			},
 		},
 		{
@@ -117,7 +118,7 @@ var (
 			Created: openai.JSONUNIXTime(time.Unix(1234567890, 0)),
 			Model:   "gpt-3.5-turbo-instruct",
 			Choices: []openai.CompletionChoice{
-				{Text: " a test", Index: intPtr(0), FinishReason: "stop"},
+				{Text: " a test", Index: new(0), FinishReason: "stop"},
 			},
 			Usage: &openai.Usage{
 				PromptTokens:     5,

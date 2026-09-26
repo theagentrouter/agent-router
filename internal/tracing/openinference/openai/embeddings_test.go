@@ -24,36 +24,36 @@ import (
 // Test data.
 var (
 	basicEmbeddingReq = &openai.EmbeddingRequest{
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-small"},
+		Model: "text-embedding-3-small",
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-small"},
-			Input:                openai.EmbeddingRequestInput{Value: "How do I reset my password?"},
+			Model: "text-embedding-3-small",
+			Input: openai.EmbeddingRequestInput{Value: "How do I reset my password?"},
 		},
 	}
 	basicEmbeddingReqBody = []byte(`{"model":"text-embedding-3-small","input":"How do I reset my password?"}`)
 
 	multiInputEmbeddingReq = &openai.EmbeddingRequest{
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-small"},
+		Model: "text-embedding-3-small",
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-small"},
-			Input:                openai.EmbeddingRequestInput{Value: []string{"How", "do", "I", "reset", "my", "password?"}},
+			Model: "text-embedding-3-small",
+			Input: openai.EmbeddingRequestInput{Value: []string{"How", "do", "I", "reset", "my", "password?"}},
 		},
 	}
 	multiInputEmbeddingReqBody = []byte(`{"model":"text-embedding-3-small","input":["How","do","I","reset","my","password?"]}`)
 
 	tokenInputEmbeddingReq = &openai.EmbeddingRequest{
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-small"},
+		Model: "text-embedding-3-small",
 		OfCompletion: &openai.EmbeddingCompletionRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-small"},
-			Input:                openai.EmbeddingRequestInput{Value: []int64{4438, 656, 358, 7738, 856, 3636, 30}},
+			Model: "text-embedding-3-small",
+			Input: openai.EmbeddingRequestInput{Value: []int64{4438, 656, 358, 7738, 856, 3636, 30}},
 		},
 	}
 	tokenInputEmbeddingReqBody = []byte(`{"model":"text-embedding-3-small","input":[4438,656,358,7738,856,3636,30]}`)
 
 	chatEmbeddingReq = &openai.EmbeddingRequest{
-		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2"},
+		Model: "gemini-embedding-2",
 		OfChat: &openai.EmbeddingChatRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2"},
+			Model: "gemini-embedding-2",
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				{OfUser: &openai.ChatCompletionUserMessageParam{
 					Role:    "user",

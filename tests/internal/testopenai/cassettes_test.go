@@ -117,7 +117,7 @@ func buildTestCases[R any](t *testing.T, requests map[Cassette]*R) ([]cassetteTe
 
 	// sort so they are in a consistent order.
 	result := make([]cassetteTestCase[R], 0, len(requests))
-	for c := Cassette(0); c < _cassetteNameEnd; c++ {
+	for c := range _cassetteNameEnd {
 		r, ok := requests[c]
 		if !ok {
 			continue // requests are a subset of all cassettes.

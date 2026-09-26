@@ -12,7 +12,6 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -103,12 +102,10 @@ func (r *azureTokenRotator) Rotate(ctx context.Context) (time.Time, error) {
 		if apierrors.IsNotFound(err) {
 			r.logger.Info("creating a new azure access token into secret", "namespace", bspNamespace, "name", bspName)
 			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      secretName,
-					Namespace: bspNamespace,
-				},
-				Type: corev1.SecretTypeOpaque,
-				Data: make(map[string][]byte),
+				Name:      secretName,
+				Namespace: bspNamespace,
+				Type:      corev1.SecretTypeOpaque,
+				Data:      make(map[string][]byte),
 			}
 			populateAzureAccessToken(secret, &azureToken)
 			err = r.client.Create(ctx, secret)

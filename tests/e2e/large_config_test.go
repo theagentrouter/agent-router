@@ -188,7 +188,7 @@ func buildLargeMCPRouteManifest(namespace, gatewayName, backendName, backendAPIK
 	)
 
 	var b strings.Builder
-	for r := 0; r < routeCount; r++ {
+	for r := range routeCount {
 		fmt.Fprintf(&b, `---
 apiVersion: aigateway.envoyproxy.io/v1alpha1
 kind: MCPRoute
@@ -212,13 +212,13 @@ spec:
       defaultAction: Allow
       rules:
 `, r, namespace, r, gatewayName, backendName, backendPort, backendAPIKey)
-		for i := 0; i < authRulesPerRoute; i++ {
+		for i := range authRulesPerRoute {
 			fmt.Fprintf(&b, `        - cel: request.mcp.params.name == "tool-r%03d-i%03d" && request.headers["x-debug-id"] == "large-config-r%03d-i%03d-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           action: Deny
           target:
             tools:
 `, r, i, r, i)
-			for j := 0; j < toolsPerRule; j++ {
+			for j := range toolsPerRule {
 				fmt.Fprintf(&b, `              - backend: %s
                 tool: "tool-r%03d-i%03d-t%02d"
 `, backendName, r, i, j)

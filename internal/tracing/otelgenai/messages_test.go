@@ -16,8 +16,6 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 )
 
-func ptr[T any](v T) *T { return &v }
-
 func userMessage(content string) openai.ChatCompletionMessageParamUnion {
 	return openai.ChatCompletionMessageParamUnion{
 		OfUser: &openai.ChatCompletionUserMessageParam{
@@ -118,7 +116,7 @@ func TestChatOutputMessages(t *testing.T) {
 				FinishReason: "stop",
 				Message: openai.ChatCompletionResponseChoiceMessage{
 					Role:    openai.ChatMessageRoleAssistant,
-					Content: ptr("hi there"),
+					Content: new("hi there"),
 				},
 			}}},
 			expected: `[{"role":"assistant","parts":[{"type":"text","content":"hi there"}],"finish_reason":"stop"}]`,
@@ -130,7 +128,7 @@ func TestChatOutputMessages(t *testing.T) {
 				Message: openai.ChatCompletionResponseChoiceMessage{
 					Role: openai.ChatMessageRoleAssistant,
 					ToolCalls: []openai.ChatCompletionMessageToolCallParam{{
-						ID: ptr("call_1"),
+						ID: new("call_1"),
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      "get_weather",
 							Arguments: `{"city":"Berlin"}`,
@@ -320,8 +318,8 @@ func TestChatInputMessages_assistantParts(t *testing.T) {
 				Role: openai.ChatMessageRoleAssistant,
 				Content: openai.StringOrAssistantRoleContentUnion{
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
-						{Type: openai.ChatCompletionAssistantMessageParamContentTypeText, Text: ptr("part one")},
-						{Type: openai.ChatCompletionAssistantMessageParamContentTypeText, Text: ptr("part two")},
+						{Type: openai.ChatCompletionAssistantMessageParamContentTypeText, Text: new("part one")},
+						{Type: openai.ChatCompletionAssistantMessageParamContentTypeText, Text: new("part two")},
 					},
 				},
 			},
@@ -334,8 +332,8 @@ func TestChatInputMessages_assistantParts(t *testing.T) {
 				Role: openai.ChatMessageRoleAssistant,
 				Content: openai.StringOrAssistantRoleContentUnion{
 					Value: []openai.ChatCompletionAssistantMessageParamContent{
-						{Type: openai.ChatCompletionAssistantMessageParamContentTypeRefusal, Refusal: ptr("no")},
-						{Type: openai.ChatCompletionAssistantMessageParamContentTypeText, Text: ptr("kept")},
+						{Type: openai.ChatCompletionAssistantMessageParamContentTypeRefusal, Refusal: new("no")},
+						{Type: openai.ChatCompletionAssistantMessageParamContentTypeText, Text: new("kept")},
 					},
 				},
 			},
@@ -347,7 +345,7 @@ func TestChatInputMessages_assistantParts(t *testing.T) {
 				Role:    openai.ChatMessageRoleAssistant,
 				Content: openai.StringOrAssistantRoleContentUnion{Value: "let me check"},
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{{
-					ID: ptr("call_1"),
+					ID: new("call_1"),
 					Function: openai.ChatCompletionMessageToolCallFunctionParam{
 						Name:      "get_weather",
 						Arguments: `{"city":"Berlin"}`,
@@ -394,7 +392,7 @@ func TestChatInputMessages_assistantParts(t *testing.T) {
 // TestChatCompletionRecorder_contentCapture is the redaction boundary: the same
 // request must produce content only when the opt-in is set.
 func TestChatCompletionRecorder_contentCapture(t *testing.T) {
-	const secret = "SENSITIVE-PROMPT-TEXT"
+	secret := "SENSITIVE-PROMPT-TEXT"
 	req := &openai.ChatCompletionRequest{
 		Model:    "gpt-5-nano",
 		Messages: []openai.ChatCompletionMessageParamUnion{userMessage(secret)},
@@ -403,7 +401,7 @@ func TestChatCompletionRecorder_contentCapture(t *testing.T) {
 		Choices: []openai.ChatCompletionResponseChoice{{
 			Message: openai.ChatCompletionResponseChoiceMessage{
 				Role:    openai.ChatMessageRoleAssistant,
-				Content: ptr(secret),
+				Content: &secret,
 			},
 		}},
 	}
@@ -448,7 +446,7 @@ func TestChatCompletionRecorder_messageCountBoundaries(t *testing.T) {
 	for _, count := range []int{0, 1, 127, 128, 129, 500} {
 		t.Run(t.Name(), func(t *testing.T) {
 			msgs := make([]openai.ChatCompletionMessageParamUnion, 0, count)
-			for i := 0; i < count; i++ {
+			for range count {
 				msgs = append(msgs, userMessage("m"))
 			}
 

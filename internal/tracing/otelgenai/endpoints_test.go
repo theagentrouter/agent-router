@@ -215,7 +215,7 @@ func TestRecorders_operations(t *testing.T) {
 		{name: "chat", spanName: mustStartName(t, NewChatCompletionRecorder(cfg), &openai.ChatCompletionRequest{Model: "m"}), expectedOperation: "chat m"},
 		{name: "text_completion", spanName: mustStartName(t, NewCompletionRecorder(cfg), &openai.CompletionRequest{Model: "m"}), expectedOperation: "text_completion m"},
 		{name: "embeddings", spanName: mustStartName(t, NewEmbeddingsRecorder(cfg), &openai.EmbeddingRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "m"},
+			Model: "m",
 		}), expectedOperation: "embeddings m"},
 		{name: "image_generation", spanName: mustStartName(t, NewImageGenerationRecorder(cfg), &openai.ImageGenerationRequest{Model: "m"}), expectedOperation: "image_generation m"},
 		{name: "speech", spanName: mustStartName(t, NewSpeechRecorder(cfg), &openai.SpeechRequest{Model: "m"}), expectedOperation: "speech m"},
@@ -358,7 +358,7 @@ func TestEmbeddingsRecorder_RecordRequest(t *testing.T) {
 	}{
 		{
 			name:           "encoding format",
-			encodingFormat: ptr("base64"),
+			encodingFormat: new("base64"),
 			expected: []attribute.KeyValue{
 				attribute.String(OperationName, "embeddings"),
 				attribute.String(RequestModel, "text-embedding-3-small"),
@@ -374,7 +374,7 @@ func TestEmbeddingsRecorder_RecordRequest(t *testing.T) {
 		},
 		{
 			name:           "empty encoding format is omitted",
-			encodingFormat: ptr(""),
+			encodingFormat: new(""),
 			expected: []attribute.KeyValue{
 				attribute.String(OperationName, "embeddings"),
 				attribute.String(RequestModel, "text-embedding-3-small"),
@@ -384,10 +384,10 @@ func TestEmbeddingsRecorder_RecordRequest(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := &openai.EmbeddingRequest{EmbeddingBaseRequest: openai.EmbeddingBaseRequest{
+			req := &openai.EmbeddingRequest{
 				Model:          "text-embedding-3-small",
 				EncodingFormat: tc.encodingFormat,
-			}}
+			}
 			span := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
 				r.RecordRequest(span, req, nil)
 				return false
@@ -512,7 +512,7 @@ func TestSystemOneRecorder_RecordResponse(t *testing.T) {
 func TestResponsesInputTokensRecorder_records(t *testing.T) {
 	r := NewResponsesInputTokensRecorder(&Config{CaptureMessageContent: true})
 
-	req := &openai.ResponseRequest{Model: "gpt-5-nano", Instructions: "be brief", Temperature: ptr(0.3)}
+	req := &openai.ResponseRequest{Model: "gpt-5-nano", Instructions: "be brief", Temperature: new(0.3)}
 	reqSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
 		r.RecordRequest(span, req, nil)
 		return false

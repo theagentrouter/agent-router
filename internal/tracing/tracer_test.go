@@ -8,6 +8,7 @@ package tracing
 import (
 	"context"
 	"fmt"
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -18,7 +19,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -136,7 +136,7 @@ func TestChatCompletionTracer_StartSpanAndInjectHeaders(t *testing.T) {
 				Index: 0,
 				Message: openai.ChatCompletionResponseChoiceMessage{
 					Role:    "assistant",
-					Content: ptr.To("hello world"),
+					Content: new("hello world"),
 				},
 				FinishReason: "stop",
 			},
@@ -204,9 +204,7 @@ func TestChatCompletionTracer_StartSpanAndInjectHeaders(t *testing.T) {
 			require.NoError(t, err)
 
 			headers := make(map[string]string, len(tt.existingHeaders))
-			for k, v := range tt.existingHeaders {
-				headers[k] = v
-			}
+			maps.Copy(headers, tt.existingHeaders)
 
 			runRequestTracerLifecycleTest(t, requestTracerLifecycleTest[openai.ChatCompletionRequest, openai.ChatCompletionResponse, openai.ChatCompletionResponseChunk]{
 				constructor:      chatCompletionTracerCtor,
@@ -348,7 +346,7 @@ func TestNewRerankTracer_BuildsGenericRequestTracer(t *testing.T) {
 	require.Equal(t, headerAttrs, impl.headerAttributes)
 	require.NotNil(t, impl.newSpan)
 	s := tracer.StartSpanAndInjectHeaders(context.Background(), nil, propagation.MapCarrier{}, &cohere.RerankV2Request{
-		TopN: ptr.To(1),
+		TopN: new(1),
 	}, []byte("{}"))
 	require.IsType(t, (*rerankSpan)(nil), s)
 }

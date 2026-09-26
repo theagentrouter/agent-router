@@ -48,9 +48,9 @@ func GetOllamaModel(model OllamaModel) (string, error) {
 		return "", err
 	}
 	prefix := model.String() + "="
-	for _, line := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(line, prefix) {
-			return strings.TrimPrefix(line, prefix), nil
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if after, ok := strings.CutPrefix(line, prefix); ok {
+			return after, nil
 		}
 	}
 	return "", fmt.Errorf("%s not found in .env.ollama", model.String())

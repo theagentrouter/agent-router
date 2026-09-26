@@ -31,7 +31,7 @@ func TestExtractModel(t *testing.T) {
 		},
 		{
 			name:     "embeddings request",
-			request:  &openai.EmbeddingRequest{EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-ada-002"}},
+			request:  &openai.EmbeddingRequest{Model: "text-embedding-ada-002"},
 			expected: "text-embedding-ada-002",
 		},
 	}

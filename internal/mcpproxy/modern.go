@@ -320,10 +320,8 @@ func mergeDiscoverResults(l *slog.Logger, results []*mcp.DiscoverResult) *mcp.Di
 	return &mcp.DiscoverResult{
 		SupportedVersions: versions,
 		Capabilities:      unionServerCapabilities(caps),
-		Cacheable: mcp.Cacheable{
-			TTLMs:      ttlMs,
-			CacheScope: cacheScope,
-		},
+		TTLMs:             ttlMs,
+		CacheScope:        cacheScope,
 	}
 }
 
@@ -613,10 +611,10 @@ func validateModernJSONRPCResponse(req *jsonrpc.Request, rpcResp map[string]json
 // message from "data:" lines. MCP backends return the final result as the last event.
 func extractJSONFromSSE(body []byte) []byte {
 	var lastData []byte
-	for _, line := range strings.Split(string(body), "\n") {
+	for line := range strings.SplitSeq(string(body), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if after, ok := strings.CutPrefix(line, "data:"); ok {
+			data := strings.TrimSpace(after)
 			if data != "" && data != "[DONE]" {
 				lastData = []byte(data)
 			}
@@ -763,10 +761,7 @@ func mergeCachingHintsFromBackends(results []mcp.Cacheable) (int, string) {
 	cacheScope := defaultCacheScope
 	hasTTL := false
 	for _, result := range results {
-		backendTTL := result.TTLMs
-		if backendTTL < 0 {
-			backendTTL = 0
-		}
+		backendTTL := max(result.TTLMs, 0)
 		if !hasTTL || backendTTL < ttlMs {
 			ttlMs = backendTTL
 			hasTTL = true

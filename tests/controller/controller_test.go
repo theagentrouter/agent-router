@@ -47,7 +47,7 @@ func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
 }
 
-var defaultSchema = aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaOpenAI, Prefix: ptr.To("v1")}
+var defaultSchema = aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaOpenAI, Prefix: new("v1")}
 
 // TestStartControllers tests the [controller.StartControllers] function.
 func TestStartControllers(t *testing.T) {
@@ -75,7 +75,7 @@ func TestStartControllers(t *testing.T) {
 	t.Run("setup backends", func(t *testing.T) {
 		for _, backend := range []string{"backend1", "backend2", "backend3", "backend4"} {
 			err := c.Create(ctx, &aigv1b1.AIServiceBackend{
-				ObjectMeta: metav1.ObjectMeta{Name: backend, Namespace: "default"},
+				Name: backend, Namespace: "default",
 				Spec: aigv1b1.AIServiceBackendSpec{
 					APISchema: defaultSchema,
 					BackendRef: gwapiv1.BackendObjectReference{
@@ -92,9 +92,7 @@ func TestStartControllers(t *testing.T) {
 		for _, route := range []string{"route1", "route2"} {
 			parentRefs := []gwapiv1a2.ParentReference{{Name: "gtw"}}
 			err := c.Create(ctx, &aigv1b1.AIGatewayRoute{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: route, Namespace: "default",
-				},
+				Name: route, Namespace: "default",
 				Spec: aigv1b1.AIGatewayRouteSpec{
 					ParentRefs: parentRefs,
 					Rules: []aigv1b1.AIGatewayRouteRule{
@@ -202,7 +200,7 @@ func TestNamespaceScopedCache(t *testing.T) {
 			DefaultNamespaces: map[string]cache.Config{"test": {}, "unexisting": {}},
 			DefaultTransform:  cache.TransformStripManagedFields(),
 		},
-		Controller:     config.Controller{SkipNameValidation: ptr.To(true)},
+		Controller:     config.Controller{SkipNameValidation: new(true)},
 		LeaderElection: false,
 	})
 	require.NoError(t, err)
@@ -218,10 +216,10 @@ func TestNamespaceScopedCache(t *testing.T) {
 	// other namespace is not watched.
 
 	require.NoError(t, mgr.GetClient().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Name: "test",
 	}))
 	require.NoError(t, mgr.GetClient().Create(ctx, &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend1", Namespace: "default"},
+		Name: "backend1", Namespace: "default",
 		Spec: aigv1b1.AIServiceBackendSpec{
 			APISchema: defaultSchema,
 			BackendRef: gwapiv1.BackendObjectReference{
@@ -232,7 +230,7 @@ func TestNamespaceScopedCache(t *testing.T) {
 		},
 	}))
 	require.NoError(t, mgr.GetClient().Create(ctx, &aigv1b1.AIServiceBackend{
-		ObjectMeta: metav1.ObjectMeta{Name: "backend2", Namespace: "test"},
+		Name: "backend2", Namespace: "test",
 		Spec: aigv1b1.AIServiceBackendSpec{
 			APISchema: defaultSchema,
 			BackendRef: gwapiv1.BackendObjectReference{
@@ -271,7 +269,7 @@ func TestAIGatewayRouteController(t *testing.T) {
 	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
 	rc := controller.NewAIGatewayRouteController(c, k, defaultLogger(), eventCh.Ch, "/foobar/")
 
-	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: ptr.To(true)}}
+	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: new(true)}}
 	mgr, err := ctrl.NewManager(cfg, opt)
 	require.NoError(t, err)
 
@@ -281,7 +279,7 @@ func TestAIGatewayRouteController(t *testing.T) {
 	const gatewayName = "gtw"
 	// Create the Gateway to be referenced by the AIGatewayRoute.
 	err = c.Create(t.Context(), &gwapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{Name: gatewayName, Namespace: "default"},
+		Name: gatewayName, Namespace: "default",
 		Spec: gwapiv1.GatewaySpec{
 			GatewayClassName: "gwclass",
 			Listeners: []gwapiv1.Listener{
@@ -292,7 +290,7 @@ func TestAIGatewayRouteController(t *testing.T) {
 	require.NoError(t, err)
 
 	origin := &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+		Name: "myroute", Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			ParentRefs: []gwapiv1a2.ParentReference{
 				{
@@ -315,7 +313,7 @@ func TestAIGatewayRouteController(t *testing.T) {
 
 	for _, b := range []string{"backend1", "backend2"} {
 		err := c.Create(t.Context(), &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: b, Namespace: "default"},
+			Name: b, Namespace: "default",
 			Spec: aigv1b1.AIServiceBackendSpec{
 				APISchema: defaultSchema,
 				BackendRef: gwapiv1.BackendObjectReference{
@@ -438,7 +436,7 @@ func TestBackendSecurityPolicyController(t *testing.T) {
 
 	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
 	eventChPool := internaltesting.NewControllerEventChan[*gwaiev1.InferencePool]()
-	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: ptr.To(true)}}
+	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: new(true)}}
 	mgr, err := ctrl.NewManager(cfg, opt)
 	require.NoError(t, err)
 	require.NoError(t, controller.ApplyIndexing(t.Context(), mgr.GetFieldIndexer().IndexField))
@@ -451,7 +449,7 @@ func TestBackendSecurityPolicyController(t *testing.T) {
 
 	originals := []*aigv1b1.AIServiceBackend{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "backend1", Namespace: backendSecurityPolicyNamespace},
+			Name: "backend1", Namespace: backendSecurityPolicyNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				APISchema: defaultSchema,
 				BackendRef: gwapiv1.BackendObjectReference{
@@ -462,7 +460,7 @@ func TestBackendSecurityPolicyController(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "backend2", Namespace: backendSecurityPolicyNamespace},
+			Name: "backend2", Namespace: backendSecurityPolicyNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				APISchema: defaultSchema,
 				BackendRef: gwapiv1.BackendObjectReference{
@@ -483,10 +481,8 @@ func TestBackendSecurityPolicyController(t *testing.T) {
 
 	t.Run("create security policy", func(t *testing.T) {
 		origin := &aigv1b1.BackendSecurityPolicy{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      backendSecurityPolicyName,
-				Namespace: backendSecurityPolicyNamespace,
-			},
+			Name:      backendSecurityPolicyName,
+			Namespace: backendSecurityPolicyNamespace,
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
 				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
@@ -568,10 +564,8 @@ func TestBackendSecurityPolicyController(t *testing.T) {
 
 	t.Run("delete bsp", func(t *testing.T) {
 		err = c.Delete(t.Context(), &aigv1b1.BackendSecurityPolicy{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      backendSecurityPolicyName,
-				Namespace: backendSecurityPolicyNamespace,
-			},
+			Name:      backendSecurityPolicyName,
+			Namespace: backendSecurityPolicyNamespace,
 		})
 		require.NoError(t, err)
 
@@ -600,7 +594,7 @@ func TestAIServiceBackendController(t *testing.T) {
 
 	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIGatewayRoute]()
 
-	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: ptr.To(true)}}
+	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: new(true)}}
 	mgr, err := ctrl.NewManager(cfg, opt)
 	require.NoError(t, err)
 	require.NoError(t, controller.ApplyIndexing(t.Context(), mgr.GetFieldIndexer().IndexField))
@@ -613,7 +607,7 @@ func TestAIServiceBackendController(t *testing.T) {
 	// Create an AIGatewayRoute to be referenced by the AIServiceBackend.
 	originals := []*aigv1b1.AIGatewayRoute{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: aiServiceBackendNamespace},
+			Name: "myroute", Namespace: aiServiceBackendNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				ParentRefs: []gwapiv1a2.ParentReference{
 					{
@@ -631,7 +625,7 @@ func TestAIServiceBackendController(t *testing.T) {
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "myroute2", Namespace: aiServiceBackendNamespace},
+			Name: "myroute2", Namespace: aiServiceBackendNamespace,
 			Spec: aigv1b1.AIGatewayRouteSpec{
 				ParentRefs: []gwapiv1a2.ParentReference{
 					{
@@ -659,7 +653,7 @@ func TestAIServiceBackendController(t *testing.T) {
 
 	t.Run("create backend", func(t *testing.T) {
 		origin := &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{Name: aiServiceBackendName, Namespace: aiServiceBackendNamespace},
+			Name: aiServiceBackendName, Namespace: aiServiceBackendNamespace,
 			Spec: aigv1b1.AIServiceBackendSpec{
 				APISchema: defaultSchema,
 				BackendRef: gwapiv1.BackendObjectReference{
@@ -721,10 +715,8 @@ func TestAIServiceBackendController(t *testing.T) {
 
 	t.Run("delete backend", func(t *testing.T) {
 		err = c.Delete(t.Context(), &aigv1b1.AIServiceBackend{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      aiServiceBackendName,
-				Namespace: aiServiceBackendNamespace,
-			},
+			Name:      aiServiceBackendName,
+			Namespace: aiServiceBackendNamespace,
 		})
 		require.NoError(t, err)
 
@@ -751,7 +743,7 @@ func TestAIServiceBackendController(t *testing.T) {
 func TestSecretController(t *testing.T) {
 	c, cfg, k := testsinternal.NewEnvTest(t)
 
-	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: ptr.To(true)}}
+	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: new(true)}}
 	mgr, err := ctrl.NewManager(cfg, opt)
 	require.NoError(t, err)
 
@@ -767,14 +759,14 @@ func TestSecretController(t *testing.T) {
 	// Create a bsp that references the secret.
 	originals := []*aigv1b1.BackendSecurityPolicy{
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "mybsp", Namespace: "default"},
+			Name: "mybsp", Namespace: "default",
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type:   aigv1b1.BackendSecurityPolicyTypeAPIKey,
 				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{SecretRef: &gwapiv1.SecretObjectReference{Name: secretName}},
 			},
 		},
 		{
-			ObjectMeta: metav1.ObjectMeta{Name: "mybsp2", Namespace: "default"},
+			Name: "mybsp2", Namespace: "default",
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 				AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
@@ -797,7 +789,7 @@ func TestSecretController(t *testing.T) {
 
 	t.Run("create secret", func(t *testing.T) {
 		err = c.Create(t.Context(), &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: secretNamespace},
+			Name: secretName, Namespace: secretNamespace,
 			StringData: map[string]string{"key": "value"},
 		})
 		require.NoError(t, err)
@@ -814,7 +806,7 @@ func TestSecretController(t *testing.T) {
 
 	t.Run("update secret", func(t *testing.T) {
 		err = c.Update(t.Context(), &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "mysecret", Namespace: "default"},
+			Name: "mysecret", Namespace: "default",
 			StringData: map[string]string{"key": "value2"},
 		})
 		require.NoError(t, err)

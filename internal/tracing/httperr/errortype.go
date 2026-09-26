@@ -7,7 +7,10 @@
 // tracing semantic convention reports.
 package httperr
 
-import "strconv"
+import (
+	"slices"
+	"strconv"
+)
 
 // FallbackOpenInference is reported for statuses with no specific mapping.
 const FallbackOpenInference = "Error"
@@ -38,10 +41,8 @@ var statusErrorTypes = []struct {
 // OpenInferenceErrorType returns the OpenInference error type for a status code.
 func OpenInferenceErrorType(statusCode int) string {
 	for _, e := range statusErrorTypes {
-		for _, s := range e.statuses {
-			if s == statusCode {
-				return e.openInference
-			}
+		if slices.Contains(e.statuses, statusCode) {
+			return e.openInference
 		}
 	}
 	return FallbackOpenInference
@@ -55,10 +56,8 @@ func OpenInferenceErrorType(statusCode int) string {
 // to FallbackGenAI to keep cardinality bounded.
 func GenAIErrorType(statusCode int) string {
 	for _, e := range statusErrorTypes {
-		for _, s := range e.statuses {
-			if s == statusCode {
-				return e.genAI
-			}
+		if slices.Contains(e.statuses, statusCode) {
+			return e.genAI
 		}
 	}
 	if statusCode >= 400 && statusCode <= 599 {

@@ -347,7 +347,7 @@ func extractScopes(claims jwt.MapClaims) []string {
 			scopes = append(scopes, strings.Fields(v)...)
 		case []string:
 			scopes = append(scopes, v...)
-		case []interface{}:
+		case []any:
 			for _, item := range v {
 				if s, ok := item.(string); ok && s != "" {
 					scopes = append(scopes, s)
@@ -436,7 +436,7 @@ func claimsSatisfied(claims jwt.MapClaims, required []filterapi.JWTClaim) bool {
 
 func lookupClaim(claims map[string]any, path string) (any, bool) {
 	current := any(claims)
-	for _, part := range strings.Split(path, ".") {
+	for part := range strings.SplitSeq(path, ".") {
 		m, ok := current.(map[string]any)
 		if !ok {
 			return nil, false

@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -48,10 +47,8 @@ func TestReferenceGrantValidator_ValidateAIServiceBackendReference(t *testing.T)
 			backendName:      "test-backend",
 			referenceGrants: []gwapiv1b1.ReferenceGrant{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "allow-from-route-ns",
-						Namespace: "backend-ns",
-					},
+					Name:      "allow-from-route-ns",
+					Namespace: "backend-ns",
 					Spec: gwapiv1b1.ReferenceGrantSpec{
 						From: []gwapiv1b1.ReferenceGrantFrom{
 							{
@@ -88,10 +85,8 @@ func TestReferenceGrantValidator_ValidateAIServiceBackendReference(t *testing.T)
 			backendName:      "test-backend",
 			referenceGrants: []gwapiv1b1.ReferenceGrant{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "allow-from-other-ns",
-						Namespace: "backend-ns",
-					},
+					Name:      "allow-from-other-ns",
+					Namespace: "backend-ns",
 					Spec: gwapiv1b1.ReferenceGrantSpec{
 						From: []gwapiv1b1.ReferenceGrantFrom{
 							{
@@ -119,10 +114,8 @@ func TestReferenceGrantValidator_ValidateAIServiceBackendReference(t *testing.T)
 			backendName:      "test-backend",
 			referenceGrants: []gwapiv1b1.ReferenceGrant{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "allow-wrong-kind",
-						Namespace: "backend-ns",
-					},
+					Name:      "allow-wrong-kind",
+					Namespace: "backend-ns",
 					Spec: gwapiv1b1.ReferenceGrantSpec{
 						From: []gwapiv1b1.ReferenceGrantFrom{
 							{
@@ -150,10 +143,8 @@ func TestReferenceGrantValidator_ValidateAIServiceBackendReference(t *testing.T)
 			backendName:      "test-backend",
 			referenceGrants: []gwapiv1b1.ReferenceGrant{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "allow-wrong-target",
-						Namespace: "backend-ns",
-					},
+					Name:      "allow-wrong-target",
+					Namespace: "backend-ns",
 					Spec: gwapiv1b1.ReferenceGrantSpec{
 						From: []gwapiv1b1.ReferenceGrantFrom{
 							{
@@ -181,10 +172,8 @@ func TestReferenceGrantValidator_ValidateAIServiceBackendReference(t *testing.T)
 			backendName:      "test-backend",
 			referenceGrants: []gwapiv1b1.ReferenceGrant{
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "invalid-grant",
-						Namespace: "backend-ns",
-					},
+					Name:      "invalid-grant",
+					Namespace: "backend-ns",
 					Spec: gwapiv1b1.ReferenceGrantSpec{
 						From: []gwapiv1b1.ReferenceGrantFrom{
 							{
@@ -202,10 +191,8 @@ func TestReferenceGrantValidator_ValidateAIServiceBackendReference(t *testing.T)
 					},
 				},
 				{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "valid-grant",
-						Namespace: "backend-ns",
-					},
+					Name:      "valid-grant",
+					Namespace: "backend-ns",
 					Spec: gwapiv1b1.ReferenceGrantSpec{
 						From: []gwapiv1b1.ReferenceGrantFrom{
 							{
@@ -289,7 +276,7 @@ func TestReferenceGrantValidator_ValidateInferencePoolReference(t *testing.T) {
 
 	inferencePoolGrant := func(fromNS string, toGroup gwapiv1b1.Group, toKind gwapiv1b1.Kind) gwapiv1b1.ReferenceGrant {
 		return gwapiv1b1.ReferenceGrant{
-			ObjectMeta: metav1.ObjectMeta{Name: "grant", Namespace: "pool-ns"},
+			Name: "grant", Namespace: "pool-ns",
 			Spec: gwapiv1b1.ReferenceGrantSpec{
 				From: []gwapiv1b1.ReferenceGrantFrom{{
 					Group:     aiServiceBackendGroup,
@@ -492,10 +479,8 @@ func TestReferenceGrantValidator_WithIndex(t *testing.T) {
 
 	// Create multiple ReferenceGrants with different target kinds
 	grant1 := &gwapiv1b1.ReferenceGrant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "grant-aiservicebackend",
-			Namespace: "backend-ns",
-		},
+		Name:      "grant-aiservicebackend",
+		Namespace: "backend-ns",
 		Spec: gwapiv1b1.ReferenceGrantSpec{
 			From: []gwapiv1b1.ReferenceGrantFrom{
 				{
@@ -514,10 +499,8 @@ func TestReferenceGrantValidator_WithIndex(t *testing.T) {
 	}
 
 	grant2 := &gwapiv1b1.ReferenceGrant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "grant-secret",
-			Namespace: "backend-ns",
-		},
+		Name:      "grant-secret",
+		Namespace: "backend-ns",
 		Spec: gwapiv1b1.ReferenceGrantSpec{
 			From: []gwapiv1b1.ReferenceGrantFrom{
 				{
@@ -570,10 +553,8 @@ func TestReferenceGrantValidator_WithIndex(t *testing.T) {
 
 		// Add another grant that allows AIGatewayRoute from other-ns but to Secret (not AIServiceBackend)
 		grant3 := &gwapiv1b1.ReferenceGrant{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "grant-other-ns-secret",
-				Namespace: "backend-ns",
-			},
+			Name:      "grant-other-ns-secret",
+			Namespace: "backend-ns",
 			Spec: gwapiv1b1.ReferenceGrantSpec{
 				From: []gwapiv1b1.ReferenceGrantFrom{
 					{

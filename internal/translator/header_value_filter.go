@@ -22,7 +22,7 @@ func parseCommaSeparatedHeader(headers map[string]string, name string) []string 
 		return nil
 	}
 	var values []string
-	for _, v := range strings.Split(raw, ",") {
+	for v := range strings.SplitSeq(raw, ",") {
 		if v = strings.TrimSpace(v); v != "" {
 			values = append(values, v)
 		}

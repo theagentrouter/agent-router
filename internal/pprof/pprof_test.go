@@ -22,8 +22,7 @@ import (
 
 func TestRun_disabled(t *testing.T) {
 	t.Setenv(DisableEnvVarKey, "anything")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	Run(ctx)
 	// Try accessing the pprof server here if needed.
 	response, err := http.Get("http://localhost:6060/debug/pprof/") //nolint:bodyclose

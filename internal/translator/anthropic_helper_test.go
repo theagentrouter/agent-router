@@ -136,7 +136,7 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 						Type: "function",
 						Function: &openai.FunctionDefinition{
 							Name:                "get_weather",
-							EagerInputStreaming: ptr.To(true),
+							EagerInputStreaming: new(true),
 						},
 					},
 				},
@@ -161,7 +161,7 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 						Type: "function",
 						Function: &openai.FunctionDefinition{
 							Name:                "get_weather",
-							EagerInputStreaming: ptr.To(false),
+							EagerInputStreaming: new(false),
 						},
 					},
 				},
@@ -248,7 +248,7 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 			openAIReq: &openai.ChatCompletionRequest{
 				ToolChoice:        &openai.ChatCompletionToolChoiceUnion{Value: "auto"},
 				Tools:             openaiTestTool,
-				ParallelToolCalls: ptr.To(false),
+				ParallelToolCalls: new(false),
 			},
 			expectedTools: anthropicTestTool,
 			expectedToolChoice: anthropic.ToolChoiceUnionParam{
@@ -262,7 +262,7 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 			openAIReq: &openai.ChatCompletionRequest{
 				Tools:             openaiTestTool,
 				ToolChoice:        &openai.ChatCompletionToolChoiceUnion{Value: "auto"},
-				ParallelToolCalls: ptr.To(true),
+				ParallelToolCalls: new(true),
 			},
 			expectedTools: anthropicTestTool,
 			expectedToolChoice: anthropic.ToolChoiceUnionParam{
@@ -1319,7 +1319,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-sonnet-4-5-20250514",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
 						Role:    "user",
@@ -1351,7 +1351,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-3-sonnet",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
 						Role:    "user",
@@ -1375,7 +1375,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-sonnet-4-5-20250514",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
 						Role:    "user",
@@ -1390,7 +1390,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-sonnet-4-5-20250514",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
 						Role:    "user",
@@ -1414,7 +1414,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			apiSchema: filterapi.APISchemaGCPAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-sonnet-4-6",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
 						Role:    "user",
@@ -1448,7 +1448,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			apiSchema: filterapi.APISchemaGCPAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-8",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
 						Role:    "user",
@@ -1477,7 +1477,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-8",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
 						Role:    "user",
@@ -1523,7 +1523,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 	t.Run("structured output enabled via modelNameOverride when request model is custom", func(t *testing.T) {
 		request := &openai.ChatCompletionRequest{
 			Model:               "my-custom-model", // User-defined name that doesn't match any supported model identifier.
-			MaxCompletionTokens: ptr.To(int64(1024)),
+			MaxCompletionTokens: new(int64(1024)),
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				{OfUser: &openai.ChatCompletionUserMessageParam{
 					Role:    "user",
@@ -1589,7 +1589,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			name: "reasoning_effort low on supported model",
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-5-20250514",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				ReasoningEffort:     openai.ReasoningEffortLow,
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1604,7 +1604,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			name: "reasoning_effort medium on supported model",
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-5-20250514",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				ReasoningEffort:     openai.ReasoningEffortMedium,
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1619,7 +1619,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			name: "reasoning_effort high on supported model",
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-5-20250514",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				ReasoningEffort:     openai.ReasoningEffortHigh,
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1634,7 +1634,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			name: "reasoning_effort xhigh on supported model",
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-7",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				ReasoningEffort:     openai.ReasoningEffortXhigh,
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1649,7 +1649,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			name: "reasoning_effort max on supported model",
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-6",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				ReasoningEffort:     openai.ReasoningEffortMax,
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1664,7 +1664,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			name: "reasoning_effort skipped on unsupported model claude-3-sonnet",
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-3-sonnet",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				ReasoningEffort:     openai.ReasoningEffortHigh,
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1679,7 +1679,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			name: "reasoning_effort skipped on unsupported model claude-sonnet-4-5",
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-sonnet-4-5-20250514",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				ReasoningEffort:     openai.ReasoningEffortHigh,
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1694,7 +1694,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			name: "no reasoning_effort set",
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-5-20250514",
-				MaxCompletionTokens: ptr.To(int64(1024)),
+				MaxCompletionTokens: new(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
 						Role:    "user",
@@ -1718,7 +1718,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 	t.Run("unsupported reasoning_effort returns error", func(t *testing.T) {
 		request := &openai.ChatCompletionRequest{
 			Model:               "claude-opus-4-5-20250514",
-			MaxCompletionTokens: ptr.To(int64(1024)),
+			MaxCompletionTokens: new(int64(1024)),
 			ReasoningEffort:     "invalid",
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1736,7 +1736,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 	t.Run("reasoning_effort enabled via modelNameOverride when request model is custom", func(t *testing.T) {
 		request := &openai.ChatCompletionRequest{
 			Model:               "my-custom-model", // User-defined name that doesn't match effort models.
-			MaxCompletionTokens: ptr.To(int64(1024)),
+			MaxCompletionTokens: new(int64(1024)),
 			ReasoningEffort:     openai.ReasoningEffortHigh,
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1755,7 +1755,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 	t.Run("reasoning_effort skipped when modelNameOverride is unsupported model", func(t *testing.T) {
 		request := &openai.ChatCompletionRequest{
 			Model:               "claude-opus-4-5-20250514", // Request model matches, but override doesn't.
-			MaxCompletionTokens: ptr.To(int64(1024)),
+			MaxCompletionTokens: new(int64(1024)),
 			ReasoningEffort:     openai.ReasoningEffortHigh,
 			Messages: []openai.ChatCompletionMessageParamUnion{
 				{OfUser: &openai.ChatCompletionUserMessageParam{

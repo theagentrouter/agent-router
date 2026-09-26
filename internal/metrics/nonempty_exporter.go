@@ -46,8 +46,8 @@ func newNonEmptyConsoleExporter(writer io.Writer) (metric.Exporter, error) {
 	}
 
 	return &temporalityExporter{
-		nonEmptyExporter: nonEmptyExporter{delegate: delegate},
-		temporality:      temporality,
+		delegate:    delegate,
+		temporality: temporality,
 	}, nil
 }
 

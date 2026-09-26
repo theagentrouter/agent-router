@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/tidwall/sjson"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
@@ -436,7 +435,7 @@ func (MessagesEndpointSpec) RedactSensitiveInfoFromRequest(req *anthropic.Messag
 		redacted.Messages[i] = redactedMsg
 	}
 	if req.System != nil {
-		redacted.System = ptr.To(redactUnionField(*req.System))
+		redacted.System = new(redactUnionField(*req.System))
 	}
 	return &redacted, nil
 }

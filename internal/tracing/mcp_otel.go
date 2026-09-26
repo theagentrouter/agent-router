@@ -67,8 +67,7 @@ func mcpVocabularyOTel(captureContent bool) *mcpVocabulary {
 			// error.type is the OTel span attribute for the failure class; the
 			// JSON-RPC numeric code, when present, is rpc.response.status_code.
 			span.SetAttributes(attribute.String("error.type", errType))
-			var jsonrpcErr *jsonrpc.Error
-			if errors.As(err, &jsonrpcErr) {
+			if jsonrpcErr, ok := errors.AsType[*jsonrpc.Error](err); ok {
 				span.SetAttributes(attribute.Int64("rpc.response.status_code", jsonrpcErr.Code))
 			}
 		},

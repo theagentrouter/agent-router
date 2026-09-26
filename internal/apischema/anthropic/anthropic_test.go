@@ -1187,7 +1187,7 @@ func TestCacheControl_UnmarshalJSON(t *testing.T) {
 			jsonStr: `{"type":"ephemeral","ttl":"5m"}`,
 			want: CacheControl{Ephemeral: &CacheControlEphemeral{
 				Type: "ephemeral",
-				TTL:  strPtr("5m"),
+				TTL:  new("5m"),
 			}},
 		},
 		{
@@ -1195,7 +1195,7 @@ func TestCacheControl_UnmarshalJSON(t *testing.T) {
 			jsonStr: `{"type":"ephemeral","ttl":"1h"}`,
 			want: CacheControl{Ephemeral: &CacheControlEphemeral{
 				Type: "ephemeral",
-				TTL:  strPtr("1h"),
+				TTL:  new("1h"),
 			}},
 		},
 		{
@@ -1243,7 +1243,7 @@ func TestCacheControl_MarshalJSON(t *testing.T) {
 		},
 		{
 			name: "ephemeral with TTL",
-			cc:   CacheControl{Ephemeral: &CacheControlEphemeral{Type: "ephemeral", TTL: strPtr("1h")}},
+			cc:   CacheControl{Ephemeral: &CacheControlEphemeral{Type: "ephemeral", TTL: new("1h")}},
 			want: `{"type":"ephemeral","ttl":"1h"}`,
 		},
 		{
@@ -2425,6 +2425,5 @@ func TestToolResultContent_InToolResultBlockParam(t *testing.T) {
 }
 
 // strPtr is a helper to create a pointer to a string literal.
-func strPtr(s string) *string {
-	return &s
-}
+//
+//go:fix inline

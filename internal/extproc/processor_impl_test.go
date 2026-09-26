@@ -1590,7 +1590,7 @@ func TestChatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_WithBodyMut
 		mutatedBody, err := p.bodyMutator.Mutate(testBodyMutation)
 		require.NoError(t, err)
 
-		var result map[string]interface{}
+		var result map[string]any
 		err = json.Unmarshal(mutatedBody, &result)
 		require.NoError(t, err)
 
@@ -1649,7 +1649,7 @@ func TestChatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_WithBodyMut
 		mutatedBody, err := p.bodyMutator.Mutate(modifiedBody)
 		require.NoError(t, err)
 
-		var result map[string]interface{}
+		var result map[string]any
 		err = json.Unmarshal(mutatedBody, &result)
 		require.NoError(t, err)
 
@@ -1659,10 +1659,10 @@ func TestChatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_WithBodyMut
 		require.Equal(t, "gpt-4", result["model"], "Model should be preserved from modified body")
 		require.Equal(t, "field", result["extra"], "Extra field from modified body should be preserved")
 
-		messages, ok := result["messages"].([]interface{})
+		messages, ok := result["messages"].([]any)
 		require.True(t, ok)
 		require.Len(t, messages, 1)
-		firstMessage, ok := messages[0].(map[string]interface{})
+		firstMessage, ok := messages[0].(map[string]any)
 		require.True(t, ok)
 		require.Equal(t, "Modified", firstMessage["content"], "Message content from modified body should be preserved")
 	})
@@ -1757,12 +1757,12 @@ func TestChatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_WithBodyMut
 		require.NotNil(t, mutatedBody)
 
 		// Parse the mutated body
-		var result map[string]interface{}
+		var result map[string]any
 		err = json.Unmarshal(mutatedBody, &result)
 		require.NoError(t, err)
 
 		// Verify route mutations were applied
-		serviceTier, ok := result["serviceTier"].(map[string]interface{})
+		serviceTier, ok := result["serviceTier"].(map[string]any)
 		require.True(t, ok, "serviceTier should be an object")
 		require.Equal(t, "default", serviceTier["type"], "Route body mutation should set serviceTier.type")
 
@@ -1770,7 +1770,7 @@ func TestChatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_WithBodyMut
 		require.Contains(t, result, "messages", "Bedrock translation should be preserved")
 		require.Contains(t, result, "inferenceConfig", "Bedrock translation should be preserved")
 
-		inferenceConfig, ok := result["inferenceConfig"].(map[string]interface{})
+		inferenceConfig, ok := result["inferenceConfig"].(map[string]any)
 		require.True(t, ok, "inferenceConfig should be an object")
 		require.Equal(t, float64(1000), inferenceConfig["maxTokens"], "Original maxTokens from Bedrock translation should be preserved")
 
@@ -1852,17 +1852,17 @@ func TestChatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_WithBodyMut
 		mutatedBody := commonRes.BodyMutation.GetBody()
 		require.NotNil(t, mutatedBody)
 
-		var result map[string]interface{}
+		var result map[string]any
 		err = json.Unmarshal(mutatedBody, &result)
 		require.NoError(t, err)
 
 		// Verify mutations were applied to the translated Bedrock body
-		serviceTier, ok := result["serviceTier"].(map[string]interface{})
+		serviceTier, ok := result["serviceTier"].(map[string]any)
 		require.True(t, ok, "serviceTier should be present after mutation")
 		require.Equal(t, "default", serviceTier["type"], "Body mutation should set serviceTier.type to default")
 
 		// Verify other Bedrock fields from translation are preserved
-		inferenceConfig, ok := result["inferenceConfig"].(map[string]interface{})
+		inferenceConfig, ok := result["inferenceConfig"].(map[string]any)
 		require.True(t, ok, "inferenceConfig should be present in Bedrock format")
 		require.Equal(t, 0.7, inferenceConfig["temperature"], "Temperature from Bedrock translation should be preserved")
 		require.Equal(t, float64(1024), inferenceConfig["maxTokens"], "maxTokens from Bedrock translation should be preserved")
@@ -1911,16 +1911,16 @@ func TestChatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_WithBodyMut
 		retryMutatedBody := retryCommonRes.BodyMutation.GetBody()
 		require.NotNil(t, retryMutatedBody)
 
-		var retryResult map[string]interface{}
+		var retryResult map[string]any
 		err = json.Unmarshal(retryMutatedBody, &retryResult)
 		require.NoError(t, err)
 
 		// Verify retry mutations were applied to the modified Bedrock body (NOT restored to original)
-		retryServiceTier, ok := retryResult["serviceTier"].(map[string]interface{})
+		retryServiceTier, ok := retryResult["serviceTier"].(map[string]any)
 		require.True(t, ok, "serviceTier should be present after retry mutation")
 		require.Equal(t, "default", retryServiceTier["type"], "Retry mutation should set serviceTier.type to default")
 
-		retryInferenceConfig, ok := retryResult["inferenceConfig"].(map[string]interface{})
+		retryInferenceConfig, ok := retryResult["inferenceConfig"].(map[string]any)
 		require.True(t, ok, "inferenceConfig should be present in Bedrock format")
 		require.Equal(t, 0.7, retryInferenceConfig["temperature"], "Temperature should be preserved from modified body")
 		require.Equal(t, float64(1024), retryInferenceConfig["maxTokens"], "maxTokens should be preserved from modified body")

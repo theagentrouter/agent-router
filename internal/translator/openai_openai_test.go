@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -231,7 +230,7 @@ func TestOpenAIToOpenAITranslator_ResponseError(t *testing.T) {
 				Type: "error",
 				Error: openai.ErrorType{
 					Type:    openAIBackendError,
-					Code:    ptr.To("503"),
+					Code:    new("503"),
 					Message: "service not available",
 				},
 			},
@@ -247,7 +246,7 @@ func TestOpenAIToOpenAITranslator_ResponseError(t *testing.T) {
 			output: openai.Error{
 				Error: openai.ErrorType{
 					Type:    "BadRequestError",
-					Code:    ptr.To("400"),
+					Code:    new("400"),
 					Message: "missing required field",
 				},
 			},
@@ -414,7 +413,7 @@ data: [DONE]
 			resp.Choices = []openai.ChatCompletionResponseChoice{
 				{
 					Message: openai.ChatCompletionResponseChoiceMessage{
-						Content: ptr.To("plain content"),
+						Content: new("plain content"),
 						ReasoningContent: &openai.ReasoningContentUnion{
 							Value: "reasoning content",
 						},
@@ -587,7 +586,7 @@ func TestRedactBody(t *testing.T) {
 						Role: "assistant",
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
-								ID:   ptr.To("call_123"),
+								ID:   new("call_123"),
 								Type: "function",
 								Function: openai.ChatCompletionMessageToolCallFunctionParam{
 									Name:      "get_weather",

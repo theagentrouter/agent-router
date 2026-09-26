@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -79,7 +78,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	input := extProcContainerInput{}
 	baseHash := base.extProcContainerHash(input)
 	require.NotEmpty(t, baseHash)
-	require.Equal(t, 20, reflect.TypeOf(extProcBuilder{}).NumField(),
+	require.Equal(t, 20, reflect.TypeFor[extProcBuilder]().NumField(),
 		"update drift coverage when extProcBuilder fields change")
 
 	// Helper: mutate a copy of the builder, recompute, expect a different hash.
@@ -223,7 +222,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	})
 	t.Run("gatewayConfig image override changes", func(t *testing.T) {
 		gc := testGatewayConfig.DeepCopy()
-		gc.Spec.ExtProc.Kubernetes.Image = ptr.To("gcr.io/custom/extproc:v9")
+		gc.Spec.ExtProc.Kubernetes.Image = new("gcr.io/custom/extproc:v9")
 		require.NotEqual(t, gcBaseHash, base.extProcContainerHash(extProcContainerInput{gatewayConfig: gc}))
 	})
 
@@ -312,7 +311,7 @@ func TestBuildExtProcContainer_GatewayConfigOverrides(t *testing.T) {
 						Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
 					},
 					SecurityContext: &corev1.SecurityContext{
-						RunAsUser: ptr.To(int64(1000)),
+						RunAsUser: new(int64(1000)),
 					},
 					VolumeMounts: []corev1.VolumeMount{{Name: "extra-mount", MountPath: "/extra"}},
 				},

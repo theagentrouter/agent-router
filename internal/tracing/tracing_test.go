@@ -17,7 +17,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/propagation"
-	"k8s.io/utils/ptr"
 
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -459,7 +458,7 @@ func TestNewTracingFromEnv_ChatCompletion_Redaction(t *testing.T) {
 				Choices: []openai.ChatCompletionResponseChoice{{
 					Message: openai.ChatCompletionResponseChoiceMessage{
 						Role:    "assistant",
-						Content: ptr.To("Response with sensitive data"),
+						Content: new("Response with sensitive data"),
 					},
 				}},
 			}
@@ -646,7 +645,7 @@ func TestNewTracingFromEnv_HeaderAttributeMapping_LargeContext(t *testing.T) {
 		Choices: []openai.ChatCompletionResponseChoice{{
 			Message: openai.ChatCompletionResponseChoiceMessage{
 				Role:    "assistant",
-				Content: ptr.To("response"),
+				Content: new("response"),
 			},
 		}},
 	})
@@ -715,7 +714,7 @@ func TestNewTracingFromEnv_CaptureDisabled(t *testing.T) {
 		Model: openai.ModelGPT5Nano,
 		Choices: []openai.ChatCompletionResponseChoice{{
 			Message: openai.ChatCompletionResponseChoiceMessage{
-				Role: "assistant", Content: ptr.To("response"),
+				Role: "assistant", Content: new("response"),
 			},
 		}},
 	})
@@ -776,9 +775,9 @@ func TestNewTracingFromEnv_Embeddings_Redaction(t *testing.T) {
 
 			// Create a test request with sensitive data.
 			req := &openai.EmbeddingRequest{
-				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-small"},
+				Model: "text-embedding-3-small",
 				OfCompletion: &openai.EmbeddingCompletionRequest{
-					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-small"},
+					Model: "text-embedding-3-small",
 					Input: openai.EmbeddingRequestInput{
 						Value: "Sensitive embedding text",
 					},

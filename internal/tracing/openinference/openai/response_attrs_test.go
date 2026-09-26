@@ -26,7 +26,7 @@ var (
 			Index: 0,
 			Message: openai.ChatCompletionResponseChoiceMessage{
 				Role:    "assistant",
-				Content: ptr("Hello! How can I help you today?"),
+				Content: new("Hello! How can I help you today?"),
 			},
 			FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 		}},
@@ -45,9 +45,9 @@ var (
 			Index: 0,
 			Message: openai.ChatCompletionResponseChoiceMessage{
 				Role:    "assistant",
-				Content: ptr("I can help you with that."),
+				Content: new("I can help you with that."),
 				ToolCalls: []openai.ChatCompletionMessageToolCallParam{{
-					ID:   ptr("call_123"),
+					ID:   new("call_123"),
 					Type: openai.ChatCompletionMessageToolCallType("function"),
 					Function: openai.ChatCompletionMessageToolCallFunctionParam{
 						Name:      "get_weather",
@@ -75,7 +75,7 @@ var (
 			Index: 0,
 			Message: openai.ChatCompletionResponseChoiceMessage{
 				Role:    "assistant",
-				Content: ptr("Hello! How can I assist you today?"),
+				Content: new("Hello! How can I assist you today?"),
 			},
 			FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 		}},
@@ -339,7 +339,7 @@ func TestBuildCompletionResponseAttributes(t *testing.T) {
 		Choices: []openai.CompletionChoice{
 			{
 				Text:  "This is a test",
-				Index: ptr(0),
+				Index: new(0),
 			},
 		},
 		Usage: &openai.Usage{
@@ -354,11 +354,11 @@ func TestBuildCompletionResponseAttributes(t *testing.T) {
 		Choices: []openai.CompletionChoice{
 			{
 				Text:  "First choice",
-				Index: ptr(0),
+				Index: new(0),
 			},
 			{
 				Text:  "Second choice",
-				Index: ptr(1),
+				Index: new(1),
 			},
 		},
 		Usage: &openai.Usage{
@@ -489,7 +489,7 @@ func TestSetResponseOutputMsgAttrs(t *testing.T) {
 				Role: "assistant",
 				Type: "message",
 				Content: openai.ResponseOutputMessageContentUnion{
-					OfString: ptr("Hello! This is a test response."),
+					OfString: new("Hello! This is a test response."),
 				},
 			},
 			config:       openinference.NewTraceConfig(),
@@ -507,7 +507,7 @@ func TestSetResponseOutputMsgAttrs(t *testing.T) {
 				Role: "assistant",
 				Type: "message",
 				Content: openai.ResponseOutputMessageContentUnion{
-					OfString: ptr("Hello! This is a test response."),
+					OfString: new("Hello! This is a test response."),
 				},
 			},
 			config:       &openinference.TraceConfig{HideOutputText: true},
@@ -731,7 +731,7 @@ func TestSetResponseFileSearchCallAttrs(t *testing.T) {
 					{
 						FileID:   "file-123",
 						Filename: "README.md",
-						Score:    ptr(0.95),
+						Score:    new(0.95),
 						Text:     "This is the project documentation...",
 					},
 				},

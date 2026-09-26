@@ -27,7 +27,7 @@ var (
 	// MarshalForDeterministicTesting marshals a value to JSON in a deterministic way for testing.
 	// The normal sonic configuration does not guarantee deterministic output in terms of field order.
 	// It panics if called outside of tests.
-	MarshalForDeterministicTesting = func(v interface{}) ([]byte, error) {
+	MarshalForDeterministicTesting = func(v any) ([]byte, error) {
 		if !testing.Testing() {
 			panic("MarshalForDeterministicTesting can only be called from tests")
 		}
@@ -39,5 +39,5 @@ type (
 	// RawMessage is equivalent to encoding/json.RawMessage.
 	RawMessage = sonicjson.NoCopyRawMessage
 	// Marshaler is the function signature of encoding/json.Marshal.
-	Marshaler = func(interface{}) ([]byte, error)
+	Marshaler = func(any) ([]byte, error)
 )

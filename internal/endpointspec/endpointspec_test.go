@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -161,10 +160,10 @@ func TestEmbeddingsEndpointSpec_ParseBody(t *testing.T) {
 
 	t.Run("success with input", func(t *testing.T) {
 		req := openai.EmbeddingRequest{
-			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-large"},
+			Model: "text-embedding-3-large",
 			OfCompletion: &openai.EmbeddingCompletionRequest{
-				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "text-embedding-3-large"},
-				Input:                openai.EmbeddingRequestInput{Value: "input"},
+				Model: "text-embedding-3-large",
+				Input: openai.EmbeddingRequestInput{Value: "input"},
 			},
 		}
 		body, err := json.Marshal(req)
@@ -368,7 +367,7 @@ func TestResponsesEndpointSpec_ParseBody(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		req := openai.ResponseRequest{Model: "gpt-4o", Input: openai.ResponseNewParamsInputUnion{
-			OfString: ptr.To("Hi"),
+			OfString: new("Hi"),
 		}, Stream: true}
 		body, err := json.Marshal(req)
 		require.NoError(t, err)
@@ -508,7 +507,7 @@ func TestTokenizeEndpointSpec_ParseBody(t *testing.T) {
 					Content: openai.StringOrUserRoleContentUnion{Value: "Hello"},
 				}},
 			},
-			AddGenerationPrompt:  ptr.To(true),
+			AddGenerationPrompt:  new(true),
 			ContinueFinalMessage: true,
 		}
 		body, err := json.Marshal(chatReq)
@@ -695,7 +694,7 @@ func TestChatCompletionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T
 					Function: &openai.FunctionDefinition{
 						Name:        "get_weather",
 						Description: "Get the current weather in a given location",
-						Parameters:  map[string]interface{}{"type": "object", "properties": map[string]interface{}{"location": map[string]interface{}{"type": "string"}}},
+						Parameters:  map[string]any{"type": "object", "properties": map[string]any{"location": map[string]any{"type": "string"}}},
 					},
 				},
 			},

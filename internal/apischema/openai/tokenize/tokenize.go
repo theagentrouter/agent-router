@@ -69,9 +69,9 @@ type ChatRequest struct {
 	ChatTemplate *string `json:"chat_template,omitempty"`
 	// ChatTemplateKwargs are additional keyword args to pass to the template renderer.
 	// Will be accessible by the chat template.
-	ChatTemplateKwargs map[string]interface{} `json:"chat_template_kwargs,omitempty"`
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 	// MmProcessorKwargs are additional kwargs to pass to the HF processor.
-	MmProcessorKwargs map[string]interface{} `json:"mm_processor_kwargs,omitempty"`
+	MmProcessorKwargs map[string]any `json:"mm_processor_kwargs,omitempty"`
 	// Tools is a list of tools the model may call.
 	Tools []openai.Tool `json:"tools,omitempty"`
 

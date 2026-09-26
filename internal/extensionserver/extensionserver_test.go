@@ -38,7 +38,6 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -155,10 +154,8 @@ func Test_maybeModifyCluster(t *testing.T) {
 
 	// Create some fake AIGatewayRoute objects.
 	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "myroute",
-			Namespace: "ns",
-		},
+		Name:      "myroute",
+		Namespace: "ns",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			Rules: []aigv1b1.AIGatewayRouteRule{
 				{
@@ -667,7 +664,7 @@ func TestMaybeModifyClusterPerBackendClusterName(t *testing.T) {
 		t.Helper()
 		c := newFakeClient()
 		require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
-			ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "ns"},
+			Name: "myroute", Namespace: "ns",
 			Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{
 				BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
 					{Name: "primary", Priority: ptr.To[uint32](0)},
@@ -802,10 +799,8 @@ func TestMaybeModifyClusterExtended(t *testing.T) {
 
 	// Create AIGatewayRoute with InferencePool backend.
 	err := c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "inference-route",
-			Namespace: "test-ns",
-		},
+		Name:      "inference-route",
+		Namespace: "test-ns",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			Rules: []aigv1b1.AIGatewayRouteRule{
 				{
@@ -1227,10 +1222,8 @@ func TestPatchListenerWithInferencePoolFilters(t *testing.T) {
 	// Helper function to create an InferencePool.
 	createInferencePool := func(name, namespace string) *gwaiev1.InferencePool {
 		return &gwaiev1.InferencePool{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: namespace,
-			},
+			Name:      name,
+			Namespace: namespace,
 			Spec: gwaiev1.InferencePoolSpec{
 				TargetPorts: []gwaiev1.Port{{Number: 8080}},
 				EndpointPickerRef: &gwaiev1.EndpointPickerRef{
@@ -1424,10 +1417,8 @@ func TestPatchVirtualHostWithInferencePool(t *testing.T) {
 	// Helper function to create an InferencePool.
 	createInferencePool := func(name, namespace string) *gwaiev1.InferencePool {
 		return &gwaiev1.InferencePool{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: namespace,
-			},
+			Name:      name,
+			Namespace: namespace,
 			Spec: gwaiev1.InferencePoolSpec{
 				TargetPorts: []gwaiev1.Port{{Number: 8080}},
 				EndpointPickerRef: &gwaiev1.EndpointPickerRef{
@@ -1915,7 +1906,7 @@ func TestPostRouteModify(t *testing.T) {
 func TestMaybeSetStreamIdleTimeout(t *testing.T) {
 	c := newFakeClient()
 	err := c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "ttft-route", Namespace: "default"},
+		Name: "ttft-route", Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			Rules: []aigv1b1.AIGatewayRouteRule{
 				{StreamIdleTimeout: ptr.To(gwapiv1.Duration("10s"))},
@@ -2012,7 +2003,7 @@ func TestMaybeSetStreamIdleTimeout(t *testing.T) {
 func TestApplyStreamIdleTimeouts(t *testing.T) {
 	c := newFakeClient()
 	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "ttft-route", Namespace: "default"},
+		Name: "ttft-route", Namespace: "default",
 		Spec: aigv1b1.AIGatewayRouteSpec{
 			Rules: []aigv1b1.AIGatewayRouteRule{{StreamIdleTimeout: ptr.To(gwapiv1.Duration("7s"))}},
 		},
@@ -2101,10 +2092,8 @@ func TestConstructInferencePoolsFrom(t *testing.T) {
 func TestInferencePoolHelperFunctions(t *testing.T) {
 	// Create a test InferencePool.
 	pool := &gwaiev1.InferencePool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pool",
-			Namespace: "test-ns",
-		},
+		Name:      "test-pool",
+		Namespace: "test-ns",
 		Spec: gwaiev1.InferencePoolSpec{
 			TargetPorts: []gwaiev1.Port{{Number: 8080}},
 			EndpointPickerRef: &gwaiev1.EndpointPickerRef{
@@ -2152,10 +2141,8 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 	t.Run("getProcessingBodyModeFromAnnotations", func(t *testing.T) {
 		t.Run("no annotations", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-				},
+				Name:      "test-pool",
+				Namespace: "test-ns",
 			}
 			mode := getProcessingBodyModeFromAnnotations(pool)
 			require.Equal(t, extprocv3.ProcessingMode_FULL_DUPLEX_STREAMED, mode)
@@ -2163,12 +2150,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to duplex", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/processing-body-mode": "duplex",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/processing-body-mode": "duplex",
 				},
 			}
 			mode := getProcessingBodyModeFromAnnotations(pool)
@@ -2177,12 +2162,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to buffered", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/processing-body-mode": "buffered",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/processing-body-mode": "buffered",
 				},
 			}
 			mode := getProcessingBodyModeFromAnnotations(pool)
@@ -2191,12 +2174,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to invalid value", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/processing-body-mode": "invalid",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/processing-body-mode": "invalid",
 				},
 			}
 			mode := getProcessingBodyModeFromAnnotations(pool)
@@ -2207,10 +2188,8 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 	t.Run("getAllowModeOverrideFromAnnotations", func(t *testing.T) {
 		t.Run("no annotations", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-				},
+				Name:      "test-pool",
+				Namespace: "test-ns",
 			}
 			override := getAllowModeOverrideFromAnnotations(pool)
 			require.False(t, override)
@@ -2218,12 +2197,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to true", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/allow-mode-override": "true",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/allow-mode-override": "true",
 				},
 			}
 			override := getAllowModeOverrideFromAnnotations(pool)
@@ -2232,12 +2209,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to false", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/allow-mode-override": "false",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/allow-mode-override": "false",
 				},
 			}
 			override := getAllowModeOverrideFromAnnotations(pool)
@@ -2246,12 +2221,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to invalid value", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/allow-mode-override": "invalid",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/allow-mode-override": "invalid",
 				},
 			}
 			override := getAllowModeOverrideFromAnnotations(pool)
@@ -2262,10 +2235,8 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 	t.Run("getProcessingBodyModeStringFromAnnotations", func(t *testing.T) {
 		t.Run("no annotations", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-				},
+				Name:      "test-pool",
+				Namespace: "test-ns",
 			}
 			mode := getProcessingBodyModeStringFromAnnotations(pool)
 			require.Equal(t, "duplex", mode)
@@ -2273,12 +2244,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to duplex", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/processing-body-mode": "duplex",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/processing-body-mode": "duplex",
 				},
 			}
 			mode := getProcessingBodyModeStringFromAnnotations(pool)
@@ -2287,12 +2256,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to buffered", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/processing-body-mode": "buffered",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/processing-body-mode": "buffered",
 				},
 			}
 			mode := getProcessingBodyModeStringFromAnnotations(pool)
@@ -2301,12 +2268,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to invalid value", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/processing-body-mode": "invalid",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/processing-body-mode": "invalid",
 				},
 			}
 			mode := getProcessingBodyModeStringFromAnnotations(pool)
@@ -2317,10 +2282,8 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 	t.Run("getAllowModeOverrideStringFromAnnotations", func(t *testing.T) {
 		t.Run("no annotations", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-				},
+				Name:      "test-pool",
+				Namespace: "test-ns",
 			}
 			override := getAllowModeOverrideStringFromAnnotations(pool)
 			require.Equal(t, "false", override)
@@ -2328,12 +2291,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to true", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/allow-mode-override": "true",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/allow-mode-override": "true",
 				},
 			}
 			override := getAllowModeOverrideStringFromAnnotations(pool)
@@ -2342,12 +2303,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to false", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/allow-mode-override": "false",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/allow-mode-override": "false",
 				},
 			}
 			override := getAllowModeOverrideStringFromAnnotations(pool)
@@ -2356,12 +2315,10 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 
 		t.Run("annotation set to invalid value", func(t *testing.T) {
 			pool := &gwaiev1.InferencePool{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pool",
-					Namespace: "test-ns",
-					Annotations: map[string]string{
-						"aigateway.envoyproxy.io/allow-mode-override": "invalid",
-					},
+				Name:      "test-pool",
+				Namespace: "test-ns",
+				Annotations: map[string]string{
+					"aigateway.envoyproxy.io/allow-mode-override": "invalid",
 				},
 			}
 			override := getAllowModeOverrideStringFromAnnotations(pool)
@@ -2374,10 +2331,8 @@ func TestInferencePoolAnnotationHelpers(t *testing.T) {
 func TestBuildHTTPFilterForInferencePool(t *testing.T) {
 	t.Run("default configuration", func(t *testing.T) {
 		pool := &gwaiev1.InferencePool{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-pool",
-				Namespace: "test-ns",
-			},
+			Name:      "test-pool",
+			Namespace: "test-ns",
 			Spec: gwaiev1.InferencePoolSpec{
 				EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "test-epp"},
 			},
@@ -2394,12 +2349,10 @@ func TestBuildHTTPFilterForInferencePool(t *testing.T) {
 
 	t.Run("with buffered mode annotation", func(t *testing.T) {
 		pool := &gwaiev1.InferencePool{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-pool",
-				Namespace: "test-ns",
-				Annotations: map[string]string{
-					"aigateway.envoyproxy.io/processing-body-mode": "buffered",
-				},
+			Name:      "test-pool",
+			Namespace: "test-ns",
+			Annotations: map[string]string{
+				"aigateway.envoyproxy.io/processing-body-mode": "buffered",
 			},
 			Spec: gwaiev1.InferencePoolSpec{
 				EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "test-epp"},
@@ -2417,12 +2370,10 @@ func TestBuildHTTPFilterForInferencePool(t *testing.T) {
 
 	t.Run("with allow mode override annotation", func(t *testing.T) {
 		pool := &gwaiev1.InferencePool{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-pool",
-				Namespace: "test-ns",
-				Annotations: map[string]string{
-					"aigateway.envoyproxy.io/allow-mode-override": "true",
-				},
+			Name:      "test-pool",
+			Namespace: "test-ns",
+			Annotations: map[string]string{
+				"aigateway.envoyproxy.io/allow-mode-override": "true",
 			},
 			Spec: gwaiev1.InferencePoolSpec{
 				EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "test-epp"},
@@ -2440,13 +2391,11 @@ func TestBuildHTTPFilterForInferencePool(t *testing.T) {
 
 	t.Run("with both annotations", func(t *testing.T) {
 		pool := &gwaiev1.InferencePool{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-pool",
-				Namespace: "test-ns",
-				Annotations: map[string]string{
-					"aigateway.envoyproxy.io/processing-body-mode": "buffered",
-					"aigateway.envoyproxy.io/allow-mode-override":  "true",
-				},
+			Name:      "test-pool",
+			Namespace: "test-ns",
+			Annotations: map[string]string{
+				"aigateway.envoyproxy.io/processing-body-mode": "buffered",
+				"aigateway.envoyproxy.io/allow-mode-override":  "true",
 			},
 			Spec: gwaiev1.InferencePoolSpec{
 				EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "test-epp"},
@@ -2466,10 +2415,8 @@ func TestBuildHTTPFilterForInferencePool(t *testing.T) {
 // TestBuildExtProcClusterForInferencePoolEndpointPicker tests cluster building.
 func TestBuildExtProcClusterForInferencePoolEndpointPicker(t *testing.T) {
 	pool := &gwaiev1.InferencePool{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pool",
-			Namespace: "test-ns",
-		},
+		Name:      "test-pool",
+		Namespace: "test-ns",
 		Spec: gwaiev1.InferencePoolSpec{
 			TargetPorts:       []gwaiev1.Port{{Number: 8080}},
 			EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "test-epp"},
@@ -2555,7 +2502,7 @@ func TestPostTranslateModify(t *testing.T) {
 	})
 
 	t.Run("with log header mapping inserts header_to_metadata filter", func(t *testing.T) {
-		s, err := New(newFakeClient(), logger, udsPath, false, nil, ptr.To("agent-session-id:session.id"), "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
+		s, err := New(newFakeClient(), logger, udsPath, false, nil, new("agent-session-id:session.id"), "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
 		require.NoError(t, err)
 		hcm := &httpconnectionmanagerv3.HttpConnectionManager{
 			HttpFilters: []*httpconnectionmanagerv3.HttpFilter{{Name: wellknown.Router}},
@@ -2592,7 +2539,7 @@ func TestPostTranslateModify(t *testing.T) {
 	})
 
 	t.Run("with existing header_to_metadata merges log mapping", func(t *testing.T) {
-		s, err := New(newFakeClient(), logger, udsPath, false, nil, ptr.To("agent-session-id:session.id"), "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
+		s, err := New(newFakeClient(), logger, udsPath, false, nil, new("agent-session-id:session.id"), "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
 		require.NoError(t, err)
 		existingCfg := &htomv3.Config{
 			RequestRules: []*htomv3.Config_Rule{
@@ -2645,7 +2592,7 @@ func TestPostTranslateModify(t *testing.T) {
 	})
 
 	t.Run("without log header mapping leaves filters untouched", func(t *testing.T) {
-		s, err := New(newFakeClient(), logger, udsPath, false, nil, ptr.To(""), "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
+		s, err := New(newFakeClient(), logger, udsPath, false, nil, new(""), "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
 		require.NoError(t, err)
 		hcm := &httpconnectionmanagerv3.HttpConnectionManager{
 			HttpFilters: []*httpconnectionmanagerv3.HttpFilter{{Name: wellknown.Router}},
