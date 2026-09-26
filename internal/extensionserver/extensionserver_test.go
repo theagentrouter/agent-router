@@ -148,6 +148,14 @@ func TestServerPostTranslateModify(t *testing.T) {
 		require.Equal(t, "foo", res.Clusters[0].Name)
 		require.Equal(t, extProcUDSClusterName, res.Clusters[1].Name)
 	})
+	t.Run("records the invocation", func(t *testing.T) {
+		s, err := New(newFakeClient(), logr.Discard(), udsPath, false, nil, nil, "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
+		require.NoError(t, err)
+		require.False(t, s.PostTranslateModifyInvoked())
+		_, err = s.PostTranslateModify(t.Context(), &egextension.PostTranslateModifyRequest{})
+		require.NoError(t, err)
+		require.True(t, s.PostTranslateModifyInvoked())
+	})
 }
 
 func Test_maybeModifyCluster(t *testing.T) {
