@@ -52,7 +52,94 @@ type Config struct {
 	UnscopedModels []Model `json:"unscopedModels,omitempty"`
 	// MCPConfig is the configuration for the MCPRoute implementations.
 	MCPConfig *MCPConfig `json:"mcpConfig,omitempty"`
+	// Guardrails are content-safety checks evaluated before the request is forwarded upstream or before the response is returned to the client.
+	Guardrails []Guardrail `json:"guardrails,omitempty"`
 }
+
+// Guardrail specifies a content-safety rule to evaluate.
+type Guardrail struct {
+	Name     string            `json:"name"`
+	Phase    GuardrailPhase    `json:"phase"`
+	Provider GuardrailProvider `json:"provider"`
+	// Backends scopes this guardrail to generated backend names. Empty means global.
+	Backends []string `json:"backends,omitempty"`
+	// MaxPayloadBytes bounds evaluation and response buffering for this rule.
+	MaxPayloadBytes int64 `json:"maxPayloadBytes,omitempty"`
+}
+
+// GuardrailPhase determines when the rule is evaluated.
+type GuardrailPhase string
+
+const (
+	GuardrailPhaseRequest  GuardrailPhase = "Request"
+	GuardrailPhaseResponse GuardrailPhase = "Response"
+)
+
+// GuardrailProvider describes the implementation used to evaluate a guardrail.
+type GuardrailProvider struct {
+	Type               GuardrailProviderType                `json:"type"`
+	Pattern            string                               `json:"pattern,omitempty"`
+	Action             GuardrailAction                      `json:"action,omitempty"`
+	MaskReplacement    string                               `json:"maskReplacement,omitempty"`
+	Message            string                               `json:"message,omitempty"`
+	Presidio           *PresidioGuardrailProvider           `json:"presidio,omitempty"`
+	Bedrock            *BedrockGuardrailProvider            `json:"bedrock,omitempty"`
+	AzureContentSafety *AzureContentSafetyGuardrailProvider `json:"azureContentSafety,omitempty"`
+	TimeoutSeconds     int32                                `json:"timeoutSeconds,omitempty"`
+	FailureMode        GuardrailFailureMode                 `json:"failureMode,omitempty"`
+}
+
+// GuardrailFailureMode determines how external provider failures are handled.
+type GuardrailFailureMode string
+
+const (
+	GuardrailFailureModeFailClosed GuardrailFailureMode = "FailClosed"
+	GuardrailFailureModeFailOpen   GuardrailFailureMode = "FailOpen"
+)
+
+// PresidioGuardrailProvider configures a Presidio analyzer request.
+type PresidioGuardrailProvider struct {
+	Endpoint              string `json:"endpoint"`
+	Language              string `json:"language,omitempty"`
+	ScoreThresholdPercent int32  `json:"scoreThresholdPercent,omitempty"`
+	APIKey                string `json:"apiKey,omitempty"`
+}
+
+// BedrockGuardrailProvider configures an AWS Bedrock ApplyGuardrail request.
+type BedrockGuardrailProvider struct {
+	Endpoint              string `json:"endpoint,omitempty"`
+	Region                string `json:"region"`
+	GuardrailIdentifier   string `json:"guardrailIdentifier"`
+	GuardrailVersion      string `json:"guardrailVersion"`
+	CredentialFileLiteral string `json:"credentialFileLiteral,omitempty"`
+}
+
+// AzureContentSafetyGuardrailProvider configures an Azure AI Content Safety request.
+type AzureContentSafetyGuardrailProvider struct {
+	Endpoint          string `json:"endpoint"`
+	APIVersion        string `json:"apiVersion,omitempty"`
+	SeverityThreshold *int32 `json:"severityThreshold,omitempty"`
+	APIKey            string `json:"apiKey"`
+}
+
+// GuardrailProviderType identifies a guardrail implementation.
+type GuardrailProviderType string
+
+const (
+	GuardrailProviderTypeRegex              GuardrailProviderType = "Regex"
+	GuardrailProviderTypePresidio           GuardrailProviderType = "Presidio"
+	GuardrailProviderTypeBedrockGuardrails  GuardrailProviderType = "Bedrock"
+	GuardrailProviderTypeAzureContentSafety GuardrailProviderType = "AzureContentSafety"
+)
+
+// GuardrailAction is the action taken when the rule matches.
+type GuardrailAction string
+
+const (
+	GuardrailActionBlock   GuardrailAction = "Block"
+	GuardrailActionMonitor GuardrailAction = "Monitor"
+	GuardrailActionMask    GuardrailAction = "Mask"
+)
 
 // Model corresponds to the OpenAI model object in the OpenAI-compatible APIs
 // and is used to populate the "/models" endpoint in OpenAI-compatible APIs.

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -58,13 +59,14 @@ var LogRequestHeaderAttributes map[string]string
 // * ProcessorFactory: A factory function to create processors based on the configuration.
 func NewFactory[ReqT any, RespT any, RespChunkT any, EndpointSpecT endpointspec.Spec[ReqT, RespT, RespChunkT]](
 	f metrics.Factory,
+	guardrailMetrics metrics.GuardrailMetrics,
 	tracer tracingapi.RequestTracer[ReqT, RespT, RespChunkT],
 	_ EndpointSpecT, // This is a type marker to bind EndpointSpecT without specifying ReqT, RespT, RespChunkT explicitly.
 ) ProcessorFactory {
 	return func(config *filterapi.RuntimeConfig, requestHeaders map[string]string, logger *slog.Logger, isUpstreamFilter bool, enableRedaction bool) (Processor, error) {
 		logger = logger.With("isUpstreamFilter", fmt.Sprintf("%v", isUpstreamFilter))
 		if !isUpstreamFilter {
-			return newRouterProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](config, requestHeaders, logger, tracer, enableRedaction), nil
+			return newRouterProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](config, requestHeaders, logger, guardrailMetrics, tracer, enableRedaction), nil
 		}
 		return newUpstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](requestHeaders, f.NewMetrics(), logger), nil
 	}
@@ -96,6 +98,8 @@ type (
 		forceBodyMutation      bool
 		// tracer is the tracer used for requests.
 		tracer tracingapi.RequestTracer[ReqT, RespT, RespChunkT]
+		// guardrailMetrics records guardrail evaluation outcomes.
+		guardrailMetrics metrics.GuardrailMetrics
 		// span is the tracing span for this request, created in ProcessRequestBody.
 		span tracingapi.Span[RespT, RespChunkT]
 		// upstreamFilterCount is the number of upstream filters that have been processed.
@@ -139,6 +143,7 @@ func newRouterProcessor[ReqT, RespT, RespChunkT any, EndpointSpecT endpointspec.
 	config *filterapi.RuntimeConfig,
 	requestHeaders map[string]string,
 	logger *slog.Logger,
+	guardrailMetrics metrics.GuardrailMetrics,
 	tracer tracingapi.RequestTracer[ReqT, RespT, RespChunkT],
 	enableRedaction bool,
 ) *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT] {
@@ -147,10 +152,30 @@ func newRouterProcessor[ReqT, RespT, RespChunkT any, EndpointSpecT endpointspec.
 		config:            config,
 		requestHeaders:    requestHeaders,
 		logger:            logger,
+		guardrailMetrics:  guardrailMetrics,
 		tracer:            tracer,
 		forceBodyMutation: false,
 		debugLogEnabled:   debugLogEnabled,
 		enableRedaction:   enableRedaction,
+	}
+}
+
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) recordGuardrailEvaluation(
+	ctx context.Context,
+	phase filterapi.GuardrailPhase,
+	result metrics.GuardrailResult,
+	backendName string,
+	includeGlobal bool,
+) {
+	if r.guardrailMetrics == nil || r.config == nil || !guardrailsConfiguredForPhase(r.config.Guardrails, phase, backendName, includeGlobal) {
+		return
+	}
+	r.guardrailMetrics.RecordEvaluation(ctx, string(phase), result)
+}
+
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) recordGuardrailTrace(name string, phase filterapi.GuardrailPhase, result metrics.GuardrailResult) {
+	if span, ok := r.span.(tracingapi.GuardrailSpan); ok {
+		span.RecordGuardrail(name, string(phase), string(result))
 	}
 }
 
@@ -212,6 +237,10 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) respondLocal
 // createUserFacingErrorResponse creates an ImmediateResponse for user-facing errors with JSON body.
 func createUserFacingErrorResponse(statusCode int, errorType string, message string) *extprocv3.ProcessingResponse {
 	body := formatUserFacingErrorJSON(errorType, statusCode, message)
+	grpcStatus := codes.InvalidArgument
+	if statusCode == http.StatusForbidden {
+		grpcStatus = codes.PermissionDenied
+	}
 	headerMutation := &extprocv3.HeaderMutation{}
 	setHeader(headerMutation, "content-type", "application/json")
 	setHeader(headerMutation, "content-length", strconv.Itoa(len(body)))
@@ -222,7 +251,7 @@ func createUserFacingErrorResponse(statusCode int, errorType string, message str
 				Status:     &typev3.HttpStatus{Code: typev3.StatusCode(statusCode)}, // #nosec G115 - HTTP status codes are always in valid int32 range
 				Headers:    headerMutation,
 				Body:       body,
-				GrpcStatus: &extprocv3.GrpcStatus{Status: uint32(codes.InvalidArgument)},
+				GrpcStatus: &extprocv3.GrpcStatus{Status: uint32(grpcStatus)},
 			},
 		},
 	}
@@ -252,7 +281,6 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		}
 		return nil, fmt.Errorf("failed to parse request body: %w", err)
 	}
-
 	// Use the request-scoped logger from context if available, otherwise fall back to processor logger
 	logger := loggerFromContext(ctx)
 	if logger == nil {
@@ -261,11 +289,11 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 
 	// Only log parsed request body when redaction is enabled
 	if r.debugLogEnabled && r.enableRedaction {
-		if redactedBody, err := r.eh.RedactSensitiveInfoFromRequest(body); err != nil {
-			logger.Warn("failed to redact sensitive info from request, ignoring and continuing", slog.Any("error", err))
+		if redactedBody, redactionErr := r.eh.RedactSensitiveInfoFromRequest(body); redactionErr != nil {
+			logger.Warn("failed to redact sensitive info from request, ignoring and continuing", slog.Any("error", redactionErr))
 		} else {
-			if jsonBody, err := json.Marshal(redactedBody); err != nil {
-				logger.Error("failed to marshal redacted request for logging, ignoring and continuing", slog.Any("error", err))
+			if jsonBody, marshalErr := json.Marshal(redactedBody); marshalErr != nil {
+				logger.Error("failed to marshal redacted request for logging, ignoring and continuing", slog.Any("error", marshalErr))
 			} else {
 				logger.Debug("request body processing", slog.Any("request", string(jsonBody)))
 			}
@@ -318,6 +346,42 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		body,
 		rawBody.Body,
 	)
+	outcome, guardrailErr := evaluateRequestGuardrails(ctx, r.config.Guardrails, rawBody.Body)
+	if guardrailErr != nil {
+		r.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultError, "", true)
+		r.recordGuardrailTrace("", filterapi.GuardrailPhaseRequest, metrics.GuardrailResultError)
+		if !isGuardrailFailOpenError(guardrailErr) {
+			return nil, fmt.Errorf("failed to evaluate request guardrails: %w", guardrailErr)
+		}
+		r.logger.Warn("request guardrail provider failed open", slog.String("error", guardrailErr.Error()))
+	} else if outcome.Violation != nil {
+		r.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultBlocked, "", true)
+		r.recordGuardrailTrace(outcome.Violation.Name, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultBlocked)
+		r.logger.Warn("request blocked by guardrail",
+			slog.String("guardrail.name", outcome.Violation.Name),
+			slog.String("guardrail.phase", string(filterapi.GuardrailPhaseRequest)))
+		response := createUserFacingErrorResponse(http.StatusForbidden, "GuardrailViolation", outcome.Violation.Message)
+		if r.span != nil {
+			r.span.EndSpanOnError(http.StatusForbidden, response.GetImmediateResponse().GetBody())
+		}
+		return response, nil
+	}
+	switch {
+	case outcome.Masked:
+		if err = r.updateParsedRequestAfterGuardrailMask(outcome.Body, costConfigured); err != nil {
+			return nil, err
+		}
+		r.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultMasked, "", true)
+		r.recordGuardrailTrace(outcome.RuleName, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultMasked)
+		r.logger.Info("request masked by guardrail", slog.String("guardrail.name", outcome.RuleName))
+	case outcome.Monitored:
+		r.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultMonitored, "", true)
+		r.recordGuardrailTrace(outcome.RuleName, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultMonitored)
+		r.logger.Info("request detected by monitor guardrail", slog.String("guardrail.name", outcome.RuleName))
+	case guardrailErr == nil:
+		r.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultAllowed, "", true)
+		r.recordGuardrailTrace("", filterapi.GuardrailPhaseRequest, metrics.GuardrailResultAllowed)
+	}
 
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_RequestBody{
@@ -329,6 +393,22 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 			},
 		},
 	}, nil
+}
+
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) updateParsedRequestAfterGuardrailMask(maskedBody []byte, costConfigured bool) error {
+	originalModel, parsedBody, stream, mutatedBody, err := r.eh.ParseBody(maskedBody, costConfigured)
+	if err != nil {
+		return fmt.Errorf("failed to parse guardrail-masked request body: %w", err)
+	}
+	r.originalModel = originalModel
+	r.originalRequestBody = parsedBody
+	r.stream = stream
+	r.originalRequestBodyRaw = maskedBody
+	if mutatedBody != nil {
+		r.originalRequestBodyRaw = mutatedBody
+	}
+	r.forceBodyMutation = true
+	return nil
 }
 
 func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) onRetry() bool {
@@ -355,6 +435,41 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	// Set the request model for metrics from the original model or override if applied.
 	reqModel := cmp.Or(u.requestHeaders[internalapi.ModelNameHeaderKeyDefault], u.parent.originalModel)
 	u.metrics.SetRequestModel(reqModel)
+	var configuredGuardrails []filterapi.RuntimeGuardrail
+	if u.parent.config != nil {
+		configuredGuardrails = u.parent.config.Guardrails
+	}
+	outcome, guardrailErr := evaluateBackendRequestGuardrails(ctx, configuredGuardrails, u.parent.originalRequestBodyRaw, u.backendName)
+	if guardrailErr != nil {
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultError, u.backendName, false)
+		u.parent.recordGuardrailTrace("", filterapi.GuardrailPhaseRequest, metrics.GuardrailResultError)
+		if !isGuardrailFailOpenError(guardrailErr) {
+			return nil, fmt.Errorf("failed to evaluate backend request guardrails: %w", guardrailErr)
+		}
+		u.logger.Warn("request guardrail provider failed open", slog.String("error", guardrailErr.Error()))
+	} else if outcome.Violation != nil {
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultBlocked, u.backendName, false)
+		u.parent.recordGuardrailTrace(outcome.Violation.Name, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultBlocked)
+		u.logger.Warn("request blocked by guardrail", slog.String("guardrail.name", outcome.Violation.Name), slog.String("guardrail.phase", string(filterapi.GuardrailPhaseRequest)))
+		return u.respondLocally(ctx, http.StatusForbidden, "GuardrailViolation", outcome.Violation.Message), nil
+	}
+	switch {
+	case outcome.Masked:
+		costConfigured := len(u.parent.config.RequestCosts) > 0 || len(u.parent.config.GlobalRequestCosts) > 0
+		if err = u.parent.updateParsedRequestAfterGuardrailMask(outcome.Body, costConfigured); err != nil {
+			return nil, err
+		}
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultMasked, u.backendName, false)
+		u.parent.recordGuardrailTrace(outcome.RuleName, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultMasked)
+		u.logger.Info("request masked by guardrail", slog.String("guardrail.name", outcome.RuleName))
+	case outcome.Monitored:
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultMonitored, u.backendName, false)
+		u.parent.recordGuardrailTrace(outcome.RuleName, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultMonitored)
+		u.logger.Info("request detected by monitor guardrail", slog.String("guardrail.name", outcome.RuleName))
+	case guardrailErr == nil:
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseRequest, metrics.GuardrailResultAllowed, u.backendName, false)
+		u.parent.recordGuardrailTrace("", filterapi.GuardrailPhaseRequest, metrics.GuardrailResultAllowed)
+	}
 
 	// We force the body mutation in the following cases:
 	// * The request is a retry request because the body mutation might have happened the previous iteration.
@@ -506,7 +621,8 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		return nil, fmt.Errorf("failed to transform response headers: %w", err)
 	}
 	var mode *extprocv3http.ProcessingMode
-	if u.parent.stream && u.responseHeaders[":status"] == "200" {
+	hasResponseGuardrails := u.parent.config != nil && guardrailsRequireBufferedResponse(u.parent.config.Guardrails, u.backendName)
+	if u.parent.stream && u.responseHeaders[":status"] == "200" && !hasResponseGuardrails {
 		// We only stream the response if the status code is 200 and the response is a stream.
 		mode = &extprocv3http.ProcessingMode{ResponseBodyMode: extprocv3http.ProcessingMode_STREAMED}
 	}
@@ -595,14 +711,15 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		}, nil
 	}
 
-	newHeaders, newBody, tokenUsage, responseModel, err := u.translator.ResponseBody(u.responseHeaders, decodingResult.reader, body.EndOfStream, u.parent.span)
+	decodedBody, err := io.ReadAll(decodingResult.reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read decoded response body: %w", err)
+	}
+	newHeaders, newBody, tokenUsage, responseModel, err := u.translator.ResponseBody(u.responseHeaders, bytes.NewReader(decodedBody), body.EndOfStream, u.parent.span)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transform response: %w", err)
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
-
-	// Remove content-encoding header if original body encoded but was mutated in the processor.
-	headerMutation = removeContentEncodingIfNeeded(headerMutation, bodyMutation, decodingResult.isEncoded)
 
 	resp := &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_ResponseBody{
@@ -617,6 +734,47 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 
 	// Translator reports the latest cumulative token usage which we use to override existing costs.
 	u.costs.Override(tokenUsage)
+
+	guardrailBody := decodedBody
+	if len(newBody) > 0 {
+		guardrailBody = newBody
+	}
+	outcome, guardrailErr := evaluateResponseGuardrails(ctx, u.parent.config.Guardrails, guardrailBody, u.backendName)
+	if guardrailErr != nil {
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseResponse, metrics.GuardrailResultError, u.backendName, true)
+		u.parent.recordGuardrailTrace("", filterapi.GuardrailPhaseResponse, metrics.GuardrailResultError)
+		if !isGuardrailFailOpenError(guardrailErr) {
+			return nil, fmt.Errorf("failed to evaluate response guardrails: %w", guardrailErr)
+		}
+		u.logger.Warn("response guardrail provider failed open", slog.String("error", guardrailErr.Error()))
+	} else if outcome.Violation != nil {
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseResponse, metrics.GuardrailResultBlocked, u.backendName, true)
+		u.parent.recordGuardrailTrace(outcome.Violation.Name, filterapi.GuardrailPhaseResponse, metrics.GuardrailResultBlocked)
+		u.logger.Warn("response blocked by guardrail",
+			slog.String("guardrail.name", outcome.Violation.Name),
+			slog.String("guardrail.phase", string(filterapi.GuardrailPhaseResponse)))
+		return u.respondLocally(ctx, http.StatusForbidden, "GuardrailViolation", outcome.Violation.Message), nil
+	}
+	switch {
+	case outcome.Masked:
+		bodyMutation = &extprocv3.BodyMutation{Mutation: &extprocv3.BodyMutation_Body{Body: outcome.Body}}
+		resp.GetResponseBody().Response.BodyMutation = bodyMutation
+		setHeader(headerMutation, "content-length", strconv.Itoa(len(outcome.Body)))
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseResponse, metrics.GuardrailResultMasked, u.backendName, true)
+		u.parent.recordGuardrailTrace(outcome.RuleName, filterapi.GuardrailPhaseResponse, metrics.GuardrailResultMasked)
+		u.logger.Info("response masked by guardrail", slog.String("guardrail.name", outcome.RuleName))
+	case outcome.Monitored:
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseResponse, metrics.GuardrailResultMonitored, u.backendName, true)
+		u.parent.recordGuardrailTrace(outcome.RuleName, filterapi.GuardrailPhaseResponse, metrics.GuardrailResultMonitored)
+		u.logger.Info("response detected by monitor guardrail", slog.String("guardrail.name", outcome.RuleName))
+	case guardrailErr == nil:
+		u.parent.recordGuardrailEvaluation(ctx, filterapi.GuardrailPhaseResponse, metrics.GuardrailResultAllowed, u.backendName, true)
+		u.parent.recordGuardrailTrace("", filterapi.GuardrailPhaseResponse, metrics.GuardrailResultAllowed)
+	}
+
+	// Remove content-encoding when translation or guardrail masking produces an uncompressed body.
+	headerMutation = removeContentEncodingIfNeeded(headerMutation, bodyMutation, decodingResult.isEncoded)
+	resp.GetResponseBody().Response.HeaderMutation = headerMutation
 
 	// Set the response model for metrics
 	u.metrics.SetResponseModel(responseModel)

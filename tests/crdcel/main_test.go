@@ -160,6 +160,38 @@ func TestGatewayConfigs(t *testing.T) {
 	}
 }
 
+func TestGuardrailPolicies(t *testing.T) {
+	c, _, _ := testsinternal.NewEnvTest(t)
+	ctx := t.Context()
+
+	for _, tc := range []struct {
+		name   string
+		expErr string
+	}{
+		{name: "basic.yaml"},
+		{name: "regex_missing_pattern.yaml", expErr: "Regex requires pattern and no external provider configuration"},
+		{name: "provider_mismatch.yaml", expErr: "Presidio requires only presidio provider configuration"},
+		{name: "invalid_action.yaml", expErr: "Unsupported value"},
+		{name: "invalid_endpoint.yaml", expErr: "Invalid value"},
+		{name: "duplicate_rule_names.yaml", expErr: "rule name must be unique within the policy"},
+		{name: "azure_mask.yaml", expErr: "AzureContentSafety does not support Mask"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := testdata.ReadFile(path.Join("testdata/guardrailpolicies", tc.name))
+			require.NoError(t, err)
+
+			policy := &aigv1b1.GuardrailPolicy{}
+			require.NoError(t, yaml.UnmarshalStrict(data, policy))
+			if tc.expErr != "" {
+				require.ErrorContains(t, c.Create(ctx, policy), tc.expErr)
+			} else {
+				require.NoError(t, c.Create(ctx, policy))
+				require.NoError(t, c.Delete(ctx, policy))
+			}
+		})
+	}
+}
+
 func TestBackendSecurityPolicies(t *testing.T) {
 	c, _, _ := testsinternal.NewEnvTest(t)
 	ctx := t.Context()

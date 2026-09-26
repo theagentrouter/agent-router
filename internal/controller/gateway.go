@@ -433,6 +433,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 		routeBackendNamesSet := map[string]struct{}{}
 		routeBackendNames := []string{}
 		injectedQuotaCosts := make(map[string]struct{})
+		injectedGuardrailKeys := make(map[string]struct{})
 		for ruleIndex := range spec.Rules {
 			rule := &spec.Rules[ruleIndex]
 			if rule.ExcludeFromModelsEndpoint {
@@ -569,6 +570,9 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 			// Inject QuotaPolicy cost expressions as LLMRequestCost entries so ext_proc
 			// computes and stores them in metadata for the HitsAddend to read.
 			c.injectQuotaPolicyCostExpressions(ctx, aiGatewayRoute, ec, injectedQuotaCosts, routeName)
+			if guardrailErr := c.injectGuardrails(ctx, aiGatewayRoute, ec, injectedGuardrailKeys); guardrailErr != nil {
+				return false, fmt.Errorf("failed to inject guardrails for route %s: %w", aiGatewayRoute.Name, guardrailErr)
+			}
 
 			for _, fc := range dedup {
 				ec.LLMRequestCosts = append(ec.LLMRequestCosts, fc)
@@ -603,6 +607,196 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 		return false, err
 	}
 	return hasEffectiveRoute, nil
+}
+
+func (c *GatewayController) injectGuardrails(
+	ctx context.Context,
+	route *aigv1b1.AIGatewayRoute,
+	ec *filterapi.Config,
+	injected map[string]struct{},
+) error {
+	var policies aigv1b1.GuardrailPolicyList
+	if err := c.client.List(ctx, &policies, client.InNamespace(route.Namespace)); err != nil {
+		return fmt.Errorf("failed to list GuardrailPolicies: %w", err)
+	}
+	sort.Slice(policies.Items, func(i, j int) bool {
+		if policies.Items[i].Namespace != policies.Items[j].Namespace {
+			return policies.Items[i].Namespace < policies.Items[j].Namespace
+		}
+		return policies.Items[i].Name < policies.Items[j].Name
+	})
+
+	routeBackends := make(map[string]struct{})
+	for _, routeRule := range route.Spec.Rules {
+		for _, backendRef := range routeRule.BackendRefs {
+			backendNamespace := backendRef.GetNamespace(route.Namespace)
+			routeBackends[backendNamespace+"/"+backendRef.Name] = struct{}{}
+		}
+	}
+
+	for i := range policies.Items {
+		policy := &policies.Items[i]
+		targetsRoute := false
+		for _, targetRef := range policy.Spec.TargetRefs {
+			if _, ok := routeBackends[policy.Namespace+"/"+string(targetRef.Name)]; ok {
+				targetsRoute = true
+				break
+			}
+		}
+		if !targetsRoute {
+			continue
+		}
+
+		for ruleIndex := range policy.Spec.Rules {
+			rule := &policy.Spec.Rules[ruleIndex]
+			key := policy.Namespace + "/" + policy.Name + "/" + rule.Name
+			if _, ok := injected[key]; ok {
+				continue
+			}
+			backends := guardrailBackendNames(route, policy)
+			provider, err := c.guardrailProviderToFilterAPI(ctx, policy.Namespace, &rule.Provider)
+			if err != nil {
+				if rule.Provider.FailureMode == aigv1b1.GuardrailFailureModeFailOpen || rule.Provider.Action == aigv1b1.GuardrailActionMonitor {
+					c.logger.Error(err, "guardrail configuration failed open", "policy", policy.Name, "rule", rule.Name)
+					injected[key] = struct{}{}
+					continue
+				}
+				c.logger.Error(err, "guardrail configuration failed closed", "policy", policy.Name, "rule", rule.Name)
+				provider = filterapi.GuardrailProvider{
+					Type:    filterapi.GuardrailProviderTypeRegex,
+					Pattern: `(?s).*`,
+					Action:  filterapi.GuardrailActionBlock,
+					Message: "request blocked because guardrail configuration is unavailable",
+				}
+			}
+			ec.Guardrails = append(ec.Guardrails, filterapi.Guardrail{
+				Name:            key,
+				Phase:           filterapi.GuardrailPhase(rule.Phase),
+				Provider:        provider,
+				Backends:        backends,
+				MaxPayloadBytes: guardrailMaxPayloadBytes(policy, rule.Phase),
+			})
+			injected[key] = struct{}{}
+		}
+	}
+	return nil
+}
+
+const defaultGuardrailMaxPayloadBytes int64 = 10 * 1024 * 1024
+
+func guardrailMaxPayloadBytes(policy *aigv1b1.GuardrailPolicy, phase aigv1b1.GuardrailPhase) int64 {
+	configured := policy.Spec.MaxRequestBodyBytes
+	if phase == aigv1b1.GuardrailPhaseResponse {
+		configured = policy.Spec.MaxResponseBodyBytes
+	}
+	if configured == nil {
+		return defaultGuardrailMaxPayloadBytes
+	}
+	return *configured
+}
+
+func guardrailBackendNames(route *aigv1b1.AIGatewayRoute, policy *aigv1b1.GuardrailPolicy) []string {
+	targets := make(map[string]struct{}, len(policy.Spec.TargetRefs))
+	for _, targetRef := range policy.Spec.TargetRefs {
+		targets[string(targetRef.Name)] = struct{}{}
+	}
+	var names []string
+	for ruleIndex := range route.Spec.Rules {
+		for backendRefIndex := range route.Spec.Rules[ruleIndex].BackendRefs {
+			backendRef := &route.Spec.Rules[ruleIndex].BackendRefs[backendRefIndex]
+			if backendRef.GetNamespace(route.Namespace) != policy.Namespace {
+				continue
+			}
+			if _, ok := targets[backendRef.Name]; !ok {
+				continue
+			}
+			names = append(names, internalapi.PerRouteRuleRefBackendName(
+				route.Namespace, backendRef.Name, route.Name, ruleIndex, backendRefIndex))
+		}
+	}
+	return names
+}
+
+func (c *GatewayController) guardrailProviderToFilterAPI(ctx context.Context, namespace string, provider *aigv1b1.GuardrailProvider) (filterapi.GuardrailProvider, error) {
+	converted := filterapi.GuardrailProvider{
+		Type:            filterapi.GuardrailProviderType(provider.Type),
+		Pattern:         provider.Pattern,
+		Action:          filterapi.GuardrailAction(provider.Action),
+		MaskReplacement: provider.MaskReplacement,
+		Message:         provider.Message,
+		FailureMode:     filterapi.GuardrailFailureMode(provider.FailureMode),
+	}
+	if provider.TimeoutSeconds != nil {
+		converted.TimeoutSeconds = *provider.TimeoutSeconds
+	}
+	switch provider.Type {
+	case aigv1b1.GuardrailProviderTypeRegex:
+	case aigv1b1.GuardrailProviderTypePresidio:
+		if provider.Presidio == nil {
+			return converted, fmt.Errorf("presidio configuration is required")
+		}
+		config := provider.Presidio
+		converted.Presidio = &filterapi.PresidioGuardrailProvider{
+			Endpoint: config.Endpoint,
+			Language: config.Language,
+		}
+		if config.ScoreThresholdPercent != nil {
+			converted.Presidio.ScoreThresholdPercent = *config.ScoreThresholdPercent
+		}
+		if config.APIKeySecretRef != nil {
+			apiKey, err := c.getGuardrailSecretData(ctx, namespace, config.APIKeySecretRef, "apiKey")
+			if err != nil {
+				return converted, err
+			}
+			converted.Presidio.APIKey = apiKey
+		}
+	case aigv1b1.GuardrailProviderTypeBedrockGuardrails:
+		if provider.Bedrock == nil {
+			return converted, fmt.Errorf("bedrock configuration is required")
+		}
+		config := provider.Bedrock
+		converted.Bedrock = &filterapi.BedrockGuardrailProvider{
+			Endpoint:            config.Endpoint,
+			Region:              config.Region,
+			GuardrailIdentifier: config.GuardrailIdentifier,
+			GuardrailVersion:    config.GuardrailVersion,
+		}
+		if config.CredentialsSecretRef != nil {
+			credentials, err := c.getGuardrailSecretData(ctx, namespace, config.CredentialsSecretRef, "credentials")
+			if err != nil {
+				return converted, err
+			}
+			converted.Bedrock.CredentialFileLiteral = credentials
+		}
+	case aigv1b1.GuardrailProviderTypeAzureContentSafety:
+		if provider.AzureContentSafety == nil {
+			return converted, fmt.Errorf("azure Content Safety configuration is required")
+		}
+		config := provider.AzureContentSafety
+		apiKey, err := c.getGuardrailSecretData(ctx, namespace, config.APIKeySecretRef, "apiKey")
+		if err != nil {
+			return converted, err
+		}
+		converted.AzureContentSafety = &filterapi.AzureContentSafetyGuardrailProvider{
+			Endpoint:          config.Endpoint,
+			APIVersion:        config.APIVersion,
+			SeverityThreshold: config.SeverityThreshold,
+			APIKey:            apiKey,
+		}
+	default:
+		return converted, fmt.Errorf("unsupported provider type %q", provider.Type)
+	}
+	return converted, nil
+}
+
+func (c *GatewayController) getGuardrailSecretData(ctx context.Context, namespace string, ref *gwapiv1.SecretObjectReference, key string) (string, error) {
+	if ref == nil {
+		return "", fmt.Errorf("secret reference is required")
+	}
+	if ref.Namespace != nil && string(*ref.Namespace) != namespace {
+		return "", fmt.Errorf("cross-namespace guardrail secret references are not supported")
+	}
+	return c.getSecretData(ctx, namespace, string(ref.Name), key)
 }
 
 // reconcileFilterConfigSecretForMCPGateway updates the filter config secret for the external processor.

@@ -1,0 +1,54 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GuardrailPolicy
+metadata:
+  name: valid-guardrails
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: backend
+  rules:
+    - name: regex
+      phase: Request
+      provider:
+        type: Regex
+        pattern: secret
+        action: Monitor
+    - name: regex-mask
+      phase: Response
+      provider:
+        type: Regex
+        pattern: secret
+        action: Mask
+        maskReplacement: "[FILTERED]"
+    - name: presidio
+      phase: Request
+      provider:
+        type: Presidio
+        timeoutSeconds: 5
+        failureMode: FailOpen
+        presidio:
+          endpoint: https://presidio.example.com
+          scoreThresholdPercent: 70
+    - name: bedrock
+      phase: Response
+      provider:
+        type: Bedrock
+        bedrock:
+          region: us-east-1
+          guardrailIdentifier: guardrail-id
+          guardrailVersion: "1"
+    - name: azure
+      phase: Response
+      provider:
+        type: AzureContentSafety
+        azureContentSafety:
+          endpoint: https://content-safety.example.com
+          apiKeySecretRef:
+            name: azure-key

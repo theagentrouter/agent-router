@@ -1,0 +1,25 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GuardrailPolicy
+metadata:
+  name: azure-mask
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: backend
+  rules:
+    - name: invalid-mask
+      phase: Response
+      provider:
+        type: AzureContentSafety
+        action: Mask
+        azureContentSafety:
+          endpoint: https://content-safety.example.com
+          apiKeySecretRef:
+            name: azure-key
