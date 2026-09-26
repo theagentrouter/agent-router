@@ -439,11 +439,23 @@ func (m *mcpRequestContext) mergeToolsList(s *session, responses []broadCastResp
 	// (admission-validated for cross-backend uniqueness), so no runtime collision bookkeeping
 	// is needed for them here. Always-mode backends prefix inline; both can coexist on the
 	// same route. Tools are filtered by toolSelector and authorization before inclusion.
+	canaryHealth := m.canaryProber.routeState(s.route)
 	for _, r := range responses {
 		backendMode := route.effectivePrefixMode(r.backendName)
 		selector := route.toolSelectors[r.backendName]
 		for _, tool := range r.res.Tools {
 			if selector != nil && !selector.allows(tool.Name) {
+				continue
+			}
+			if canaryHealth != nil && !canaryHealth.isToolHealthy(r.backendName, tool.Name) {
+				// Covers both OnFailure=Drop (the tool itself is unhealthy) and, as
+				// defense-in-depth, OnFailure=Deny for sessions that were already
+				// established before this backend went unhealthy: selectAuthorizedBackends
+				// only re-evaluates Deny exclusion for new sessions, so an existing
+				// session's tools/list would otherwise keep showing a failing backend's
+				// tools until it reconnects.
+				m.l.Warn("dropping tool: failing canary check",
+					slog.String("backend", r.backendName), slog.String("tool", tool.Name))
 				continue
 			}
 			if route.authorization != nil {

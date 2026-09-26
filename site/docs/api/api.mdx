@@ -3182,6 +3182,9 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy)
 - [MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)
 - [MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselectorrule)
+- [MCPCanaryAction](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanaryaction)
+- [MCPCanaryCheck](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanarycheck)
+- [MCPCanaryExpectation](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanaryexpectation)
 - [MCPHeaderForward](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpheaderforward)
 - [MCPPromptFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter)
 - [MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorization)
@@ -4730,6 +4733,111 @@ MCPBackendSelectorRule defines a single backend selection rule.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanaryaction">MCPCanaryAction</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPCanaryCheck](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanarycheck)
+
+MCPCanaryAction controls what happens when a canary check's result stops matching its
+expectation.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="Drop"
+  type="enum"
+  required="false"
+  description="MCPCanaryActionDrop omits just the checked tool from tools/list while it is failing,<br />without affecting the rest of the backend's tools. This is the default.<br />"
+/><ApiField
+  name="Deny"
+  type="enum"
+  required="false"
+  description="MCPCanaryActionDeny excludes the entire backend from being selected for any new<br />client session while any of its Deny-configured checks are failing -- this gates<br />tools/call as well as tools/list, unlike Drop and unlike ToolIntegrity's Deny (which<br />only affects tools/list). Existing sessions already fanned out to this backend are<br />unaffected until they reconnect, matching how BackendSelector already behaves.<br />"
+/>
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanarycheck">MCPCanaryCheck</a>
+
+
+
+**Appears in:**
+- [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
+
+MCPCanaryCheck defines a single synthetic health check: periodically call one of this
+backend's tools with known arguments and verify the result still looks the way it did
+when this check was configured and trusted.
+
+This is deliberately a real tools/call to the real backend, dispatched directly by the
+gateway (bypassing per-caller authorization and tool selectors, since it is testing the
+backend itself, not a caller's access to it) -- not a synthetic simulation. Only
+configure this for tools that are safe to invoke repeatedly with the given arguments
+(idempotent, no meaningful side effects) and whose output is stable enough to assert on.
+
+##### Fields
+
+
+
+<ApiField
+  name="tool"
+  type="string"
+  required="true"
+  description="Tool is the bare name of the tool on this backend to invoke (before any backend-name<br />prefixing the gateway applies)."
+/><ApiField
+  name="arguments"
+  type="[JSON](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#json-v1-apiextensions-k8s-io)"
+  required="false"
+  description="Arguments are the JSON arguments passed to the tool call, exactly as a real caller<br />would supply them. If omitted, the tool is called with no arguments."
+/><ApiField
+  name="expect"
+  type="[MCPCanaryExpectation](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanaryexpectation)"
+  required="true"
+  description="Expect defines what a healthy result looks like."
+/><ApiField
+  name="interval"
+  type="[Duration](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.Duration)"
+  required="false"
+  defaultValue="1m"
+  description="Interval is how often to run this check. If not specified, defaults to 1 minute."
+/><ApiField
+  name="onFailure"
+  type="[MCPCanaryAction](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanaryaction)"
+  required="false"
+  defaultValue="Drop"
+  description="OnFailure controls what happens when this check's result stops matching Expect.<br />If not specified, defaults to Drop."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanaryexpectation">MCPCanaryExpectation</a>
+
+
+
+**Appears in:**
+- [MCPCanaryCheck](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanarycheck)
+
+MCPCanaryExpectation defines what a healthy canary result looks like. It is checked
+against the text content of a successful (non-error) tools/call result; a result with
+IsError set, or with no text content, always counts as a failure regardless of Contains
+or Equals.
+
+##### Fields
+
+
+
+<ApiField
+  name="contains"
+  type="string"
+  required="false"
+  description="Contains, when set, requires the tool result's text content to contain this substring."
+/><ApiField
+  name="equals"
+  type="string"
+  required="false"
+  description="Equals, when set, requires the tool result's text content to equal this string exactly."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpheaderforward">MCPHeaderForward</a>
 
 
@@ -4914,6 +5022,11 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   type="[MCPPromptFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter)"
   required="false"
   description="PromptSelector filters the prompts exposed by this MCP server, analogous to ToolSelector.<br />If not specified, all prompts from the MCP server are exposed.<br />This is also used to determine which prompt names can be safely exposed unprefixed when<br />this backend's effective PrefixMode is Never: only prompts named in Include are validated<br />for cross-backend uniqueness and exposed bare. If unset while PrefixMode is Never, this<br />backend's prompts are not exposed bare (they keep the `<backendName>__` prefix) because<br />their names cannot be proven unique at admission time."
+/><ApiField
+  name="canaryChecks"
+  type="[MCPCanaryCheck](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpcanarycheck) array"
+  required="false"
+  description="CanaryChecks define synthetic health checks that periodically invoke this backend's<br />tools with known inputs and verify the result still matches what was reviewed and<br />trusted. MCP's tools/list only describes a tool's declared interface (name,<br />description, schemas, annotations); nothing in the protocol lets a caller see the<br />handler logic behind that interface. A backend that starts behaving differently while<br />keeping its declared interface identical is therefore invisible to any check based on<br />tools/list alone. Canary checks close that gap by actually calling the tool and<br />verifying its real, live behavior.<br />A failing check whose OnFailure is Deny excludes this backend from being selected for<br />any new client session (gating tools/call, not just discovery); Drop only omits the<br />checked tool from tools/list. See MCPCanaryCheck for details."
 /><ApiField
   name="securityPolicy"
   type="[MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy)"

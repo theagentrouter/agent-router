@@ -1,0 +1,124 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: mcp-gateway-class-canary-check
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: mcp-gateway-canary-check
+  namespace: default
+spec:
+  gatewayClassName: mcp-gateway-class-canary-check
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-mcp-gateway-canary-check
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-route-canary-check-drop
+  namespace: default
+spec:
+  path: "/mcp-canary-drop"
+  parentRefs:
+    - name: mcp-gateway-canary-check
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-backend-canary-check
+      port: 1063
+      canaryChecks:
+        - tool: echo
+          arguments:
+            text: "probe"
+          expect:
+            equals: "this text will never appear"
+          interval: "1s"
+          onFailure: Drop
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-route-canary-check-deny
+  namespace: default
+spec:
+  path: "/mcp-canary-deny"
+  parentRefs:
+    - name: mcp-gateway-canary-check
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-backend-canary-check
+      port: 1063
+      canaryChecks:
+        - tool: echo
+          arguments:
+            text: "probe"
+          expect:
+            equals: "this text will never appear"
+          interval: "1s"
+          onFailure: Deny
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-backend-canary-check
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-backend-canary-check
+  template:
+    metadata:
+      labels:
+        app: mcp-backend-canary-check
+    spec:
+      containers:
+        - name: mcp-backend-canary-check
+          image: docker.io/envoyproxy/ai-gateway-testmcpserver:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 1063
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-backend-canary-check
+  namespace: default
+spec:
+  selector:
+    app: mcp-backend-canary-check
+  ports:
+    - protocol: TCP
+      port: 1063
+      targetPort: 1063
+  type: ClusterIP
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-mcp-gateway-canary-check
+  namespace: default
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        container:
+          # Clear the default memory/cpu requirements for local tests.
+          resources: {}

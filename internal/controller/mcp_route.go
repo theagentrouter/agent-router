@@ -957,7 +957,8 @@ func validatePerBackendPrefixMode(mcpRoute *aigv1b1.MCPRoute) error {
 
 	seenTools := make(map[string]string)   // tool name → first backend name that claimed it
 	seenPrompts := make(map[string]string) // prompt name → first backend name that claimed it
-	for _, ref := range mcpRoute.Spec.BackendRefs {
+	for i := range mcpRoute.Spec.BackendRefs {
+		ref := &mcpRoute.Spec.BackendRefs[i]
 		effectiveMode := routeMode
 		if ref.PrefixMode != nil {
 			effectiveMode = *ref.PrefixMode

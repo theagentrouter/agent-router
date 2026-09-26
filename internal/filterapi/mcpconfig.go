@@ -5,6 +5,8 @@
 
 package filterapi
 
+import "time"
+
 // MCPConfig is the configuration for the MCP listener and routing.
 type MCPConfig struct {
 	// BackendListenerAddr is the address that speaks plain HTTP and can be used to
@@ -80,6 +82,53 @@ type MCPBackend struct {
 	// When set, overrides the route-level PrefixMode for this specific backend.
 	// Defaults to Always if unset.
 	PrefixMode PrefixMode `json:"prefixMode,omitempty"`
+
+	// CanaryChecks define synthetic health checks that periodically invoke this backend's
+	// tools with known inputs and verify the result still matches what was configured.
+	CanaryChecks []MCPCanaryCheck `json:"canaryChecks,omitempty"`
+}
+
+// CanaryAction controls what happens when a canary check's result stops matching its
+// expectation.
+type CanaryAction string
+
+const (
+	// CanaryActionDrop omits just the checked tool from tools/list while it is failing.
+	CanaryActionDrop CanaryAction = "Drop"
+
+	// CanaryActionDeny excludes the entire backend from being selected for any new client
+	// session while any of its Deny-configured checks are failing.
+	CanaryActionDeny CanaryAction = "Deny"
+)
+
+// MCPCanaryExpectation defines what a healthy canary result looks like.
+type MCPCanaryExpectation struct {
+	// Contains, when non-empty, requires the tool result's text content to contain this
+	// substring.
+	Contains string `json:"contains,omitempty"`
+
+	// Equals, when non-empty, requires the tool result's text content to equal this string
+	// exactly.
+	Equals string `json:"equals,omitempty"`
+}
+
+// MCPCanaryCheck defines a single synthetic health check for a backend's tool.
+type MCPCanaryCheck struct {
+	// Tool is the bare name of the tool on this backend to invoke.
+	Tool string `json:"tool"`
+
+	// Arguments are the JSON arguments passed to the tool call.
+	Arguments map[string]any `json:"arguments,omitempty"`
+
+	// Expect defines what a healthy result looks like.
+	Expect MCPCanaryExpectation `json:"expect"`
+
+	// Interval is how often to run this check. Defaults to 1 minute if zero.
+	Interval time.Duration `json:"interval,omitempty"`
+
+	// OnFailure controls what happens when this check's result stops matching Expect.
+	// Defaults to CanaryActionDrop if empty.
+	OnFailure CanaryAction `json:"onFailure,omitempty"`
 }
 
 // MCPHeaderForward specifies a header to extract from the incoming request and forward to a backend.

@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap/zapcore"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -3200,6 +3201,81 @@ func TestGatewayController_writeFilterConfigBundleShards_Overflow(t *testing.T) 
 	payload := []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*(maxFilterConfigBundleSlots+1)))
 	err := c.writeFilterConfigBundle(t.Context(), "cfg-gw", "cfg-ns", "ns", payload, "uuid-1")
 	require.ErrorContains(t, err, "exceeds max supported slots")
+}
+
+func Test_mcpConfig_CanaryChecks(t *testing.T) {
+	t.Run("explicit fields are propagated", func(t *testing.T) {
+		deny := aigv1b1.MCPCanaryActionDeny
+		interval := gwapiv1.Duration("30s")
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{
+							Name: gwapiv1.ObjectName("backend"),
+						},
+						CanaryChecks: []aigv1b1.MCPCanaryCheck{{
+							Tool:      "echo",
+							Arguments: &apiextensionsv1.JSON{Raw: []byte(`{"text":"probe"}`)},
+							Expect:    aigv1b1.MCPCanaryExpectation{Contains: ptr.To("probe")},
+							Interval:  &interval,
+							OnFailure: &deny,
+						}},
+					}},
+				},
+			},
+		}
+
+		mc, effective := mcpConfig(mcpRoutes)
+		require.True(t, effective)
+		require.Len(t, mc.Routes[0].Backends[0].CanaryChecks, 1)
+		check := mc.Routes[0].Backends[0].CanaryChecks[0]
+		require.Equal(t, "echo", check.Tool)
+		require.Equal(t, map[string]any{"text": "probe"}, check.Arguments)
+		require.Equal(t, "probe", check.Expect.Contains)
+		require.Equal(t, 30*time.Second, check.Interval)
+		require.Equal(t, filterapi.CanaryActionDeny, check.OnFailure)
+	})
+
+	t.Run("unset Interval and OnFailure default", func(t *testing.T) {
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+						CanaryChecks: []aigv1b1.MCPCanaryCheck{{
+							Tool:   "echo",
+							Expect: aigv1b1.MCPCanaryExpectation{Equals: ptr.To("ok")},
+						}},
+					}},
+				},
+			},
+		}
+
+		mc, _ := mcpConfig(mcpRoutes)
+		check := mc.Routes[0].Backends[0].CanaryChecks[0]
+		require.Equal(t, defaultCanaryCheckInterval, check.Interval)
+		require.Equal(t, filterapi.CanaryActionDrop, check.OnFailure)
+		require.Nil(t, check.Arguments)
+	})
+
+	t.Run("no CanaryChecks leaves the slice empty", func(t *testing.T) {
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+					}},
+				},
+			},
+		}
+
+		mc, _ := mcpConfig(mcpRoutes)
+		require.Empty(t, mc.Routes[0].Backends[0].CanaryChecks)
+	})
 }
 
 func Test_mcpConfig_ToolSelectorExclude(t *testing.T) {

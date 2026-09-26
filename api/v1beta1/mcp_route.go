@@ -7,6 +7,7 @@ package v1beta1
 
 import (
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -207,6 +208,24 @@ type MCPRouteBackendRef struct {
 	PromptSelector *MCPPromptFilter `json:"promptSelector,omitempty"`
 
 	// TODO: we can add resource selectors in the future.
+
+	// CanaryChecks define synthetic health checks that periodically invoke this backend's
+	// tools with known inputs and verify the result still matches what was reviewed and
+	// trusted. MCP's tools/list only describes a tool's declared interface (name,
+	// description, schemas, annotations); nothing in the protocol lets a caller see the
+	// handler logic behind that interface. A backend that starts behaving differently while
+	// keeping its declared interface identical is therefore invisible to any check based on
+	// tools/list alone. Canary checks close that gap by actually calling the tool and
+	// verifying its real, live behavior.
+	//
+	// A failing check whose OnFailure is Deny excludes this backend from being selected for
+	// any new client session (gating tools/call, not just discovery); Drop only omits the
+	// checked tool from tools/list. See MCPCanaryCheck for details.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	CanaryChecks []MCPCanaryCheck `json:"canaryChecks,omitempty"`
 
 	// SecurityPolicy is the security policy to apply to this MCP server.
 	//
@@ -773,4 +792,93 @@ type ProtectedResourceMetadata struct {
 	// +kubebuilder:validation:Format=uri
 	// +optional
 	ResourcePolicyURI *string `json:"resourcePolicyUri,omitempty"`
+}
+
+// MCPCanaryAction controls what happens when a canary check's result stops matching its
+// expectation.
+//
+// +kubebuilder:validation:Enum=Drop;Deny
+type MCPCanaryAction string
+
+const (
+	// MCPCanaryActionDrop omits just the checked tool from tools/list while it is failing,
+	// without affecting the rest of the backend's tools. This is the default.
+	MCPCanaryActionDrop MCPCanaryAction = "Drop"
+
+	// MCPCanaryActionDeny excludes the entire backend from being selected for any new
+	// client session while any of its Deny-configured checks are failing -- this gates
+	// tools/call as well as tools/list, unlike Drop and unlike ToolIntegrity's Deny (which
+	// only affects tools/list). Existing sessions already fanned out to this backend are
+	// unaffected until they reconnect, matching how BackendSelector already behaves.
+	MCPCanaryActionDeny MCPCanaryAction = "Deny"
+)
+
+// MCPCanaryExpectation defines what a healthy canary result looks like. It is checked
+// against the text content of a successful (non-error) tools/call result; a result with
+// IsError set, or with no text content, always counts as a failure regardless of Contains
+// or Equals.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.contains) || has(self.equals)", message="one of contains or equals must be specified"
+type MCPCanaryExpectation struct {
+	// Contains, when set, requires the tool result's text content to contain this substring.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=4096
+	// +optional
+	Contains *string `json:"contains,omitempty"`
+
+	// Equals, when set, requires the tool result's text content to equal this string exactly.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=4096
+	// +optional
+	Equals *string `json:"equals,omitempty"`
+}
+
+// MCPCanaryCheck defines a single synthetic health check: periodically call one of this
+// backend's tools with known arguments and verify the result still looks the way it did
+// when this check was configured and trusted.
+//
+// This is deliberately a real tools/call to the real backend, dispatched directly by the
+// gateway (bypassing per-caller authorization and tool selectors, since it is testing the
+// backend itself, not a caller's access to it) -- not a synthetic simulation. Only
+// configure this for tools that are safe to invoke repeatedly with the given arguments
+// (idempotent, no meaningful side effects) and whose output is stable enough to assert on.
+type MCPCanaryCheck struct {
+	// Tool is the bare name of the tool on this backend to invoke (before any backend-name
+	// prefixing the gateway applies).
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	Tool string `json:"tool"`
+
+	// Arguments are the JSON arguments passed to the tool call, exactly as a real caller
+	// would supply them. If omitted, the tool is called with no arguments.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +kubebuilder:validation:Schemaless
+	// +optional
+	Arguments *apiextensionsv1.JSON `json:"arguments,omitempty"`
+
+	// Expect defines what a healthy result looks like.
+	//
+	// +kubebuilder:validation:Required
+	Expect MCPCanaryExpectation `json:"expect"`
+
+	// Interval is how often to run this check. If not specified, defaults to 1 minute.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default:="1m"
+	// +optional
+	Interval *gwapiv1.Duration `json:"interval,omitempty"`
+
+	// OnFailure controls what happens when this check's result stops matching Expect.
+	// If not specified, defaults to Drop.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default:=Drop
+	// +optional
+	OnFailure *MCPCanaryAction `json:"onFailure,omitempty"`
 }

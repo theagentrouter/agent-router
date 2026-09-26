@@ -345,7 +345,7 @@ func (s *session) sendToBackendsFiltered(ctx context.Context, httpMethod string,
 }
 
 // sendRequestPerBackend sends an HTTP request to the given backend and streams the response events to eventChan.
-func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *backendEvent, routeName filterapi.MCPRouteName, backend filterapi.MCPBackend, cse *compositeSessionEntry,
+func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *backendEvent, routeName filterapi.MCPRouteName, backend filterapi.MCPBackend, cse *compositeSessionEntry, //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional CanaryChecks field; not worth pointer-ifying every existing by-value backend param for that.
 	httpMethod string, request *jsonrpc.Request, params mcpsdk.Params,
 ) error {
 	var body io.Reader

@@ -408,7 +408,8 @@ func mcpRouteToAttachedGatewayIndexFunc(o client.Object) []string {
 func mcpRouteToReferencedSecret(o client.Object) []string {
 	mcpRoute := o.(*aigv1b1.MCPRoute)
 	var ret []string
-	for _, ref := range mcpRoute.Spec.BackendRefs {
+	for i := range mcpRoute.Spec.BackendRefs {
+		ref := &mcpRoute.Spec.BackendRefs[i]
 		if ref.SecurityPolicy == nil || ref.SecurityPolicy.APIKey == nil || ref.SecurityPolicy.APIKey.SecretRef == nil {
 			continue
 		}
