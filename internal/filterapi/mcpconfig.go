@@ -80,6 +80,38 @@ type MCPBackend struct {
 	// When set, overrides the route-level PrefixMode for this specific backend.
 	// Defaults to Always if unset.
 	PrefixMode PrefixMode `json:"prefixMode,omitempty"`
+
+	// ToolIntegrity, when set, enables opt-in content-digest verification of this
+	// backend's tool definitions before they are exposed to callers.
+	ToolIntegrity *MCPToolIntegrity `json:"toolIntegrity,omitempty"`
+}
+
+// ToolIntegrityAction controls what happens to a tool whose observed content digest does
+// not match its configured expected digest.
+type ToolIntegrityAction string
+
+const (
+	// ToolIntegrityActionDrop silently omits the mismatched tool from tools/list and
+	// refuses tools/call for it, without affecting the rest of the backend's tools.
+	ToolIntegrityActionDrop ToolIntegrityAction = "Drop"
+
+	// ToolIntegrityActionDeny drops every tool from the backend the moment any one of its
+	// digest-covered tools mismatches.
+	ToolIntegrityActionDeny ToolIntegrityAction = "Deny"
+)
+
+// MCPToolIntegrity configures opt-in content-digest verification of a backend's tool
+// definitions. Only tool names present in Digests are verified; any other tool the
+// backend exposes is passed through unverified.
+type MCPToolIntegrity struct {
+	// Digests maps a tool name (as the backend itself names it, before any backend-name
+	// prefixing) to the expected lowercase-hex-encoded SHA-256 digest of that tool's
+	// canonical definition.
+	Digests map[string]string `json:"digests,omitempty"`
+
+	// OnMismatch controls what happens when a tool's observed digest does not match its
+	// expected digest. Defaults to ToolIntegrityActionDrop if empty.
+	OnMismatch ToolIntegrityAction `json:"onMismatch,omitempty"`
 }
 
 // MCPHeaderForward specifies a header to extract from the incoming request and forward to a backend.

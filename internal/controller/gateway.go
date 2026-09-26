@@ -656,6 +656,17 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			if b.PrefixMode != nil {
 				mcpBackend.PrefixMode = filterapi.PrefixMode(*b.PrefixMode)
 			}
+			if b.ToolIntegrity != nil {
+				onMismatch := ptr.Deref(b.ToolIntegrity.OnMismatch, aigv1b1.MCPToolIntegrityActionDrop)
+				digests := make(map[string]string, len(b.ToolIntegrity.Digests))
+				for tool, digest := range b.ToolIntegrity.Digests {
+					digests[tool] = string(digest)
+				}
+				mcpBackend.ToolIntegrity = &filterapi.MCPToolIntegrity{
+					Digests:    digests,
+					OnMismatch: filterapi.ToolIntegrityAction(onMismatch),
+				}
+			}
 			mcpRoute.Backends = append(
 				mcpRoute.Backends, mcpBackend)
 		}

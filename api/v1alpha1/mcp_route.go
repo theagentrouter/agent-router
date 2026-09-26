@@ -181,6 +181,81 @@ type MCPRouteBackendRef struct {
 	// +kubebuilder:validation:MaxItems=32
 	// +optional
 	ForwardHeaders []MCPHeaderForward `json:"forwardHeaders,omitempty"`
+
+	// ToolIntegrity enables opt-in content-digest verification of this backend's tool
+	// definitions. The MCP tools/list response carries no built-in integrity guarantee
+	// (per the MCP spec, callers must "consider tool data untrusted unless it comes from
+	// a trusted server"); this closes that gap for callers who need it by letting the
+	// gateway verify a tool's definition against an operator-supplied digest before ever
+	// exposing it downstream.
+	//
+	// If not specified, no integrity verification is performed for this backend's tools.
+	//
+	// +kubebuilder:validation:Optional
+	// +optional
+	ToolIntegrity *MCPToolIntegrity `json:"toolIntegrity,omitempty"`
+}
+
+// MCPToolIntegrityAction controls what happens to a tool whose observed content digest
+// does not match its configured expected digest.
+//
+// +kubebuilder:validation:Enum=Drop;Deny
+type MCPToolIntegrityAction string
+
+const (
+	// MCPToolIntegrityActionDrop silently omits the mismatched tool from tools/list and
+	// refuses tools/call for it, without affecting the rest of the backend's tools. This
+	// is the default.
+	MCPToolIntegrityActionDrop MCPToolIntegrityAction = "Drop"
+
+	// MCPToolIntegrityActionDeny drops every tool from the backend the moment any one of
+	// its digest-covered tools mismatches, treating an unexpected change as a signal that
+	// the whole backend may be compromised or misconfigured rather than an isolated issue.
+	MCPToolIntegrityActionDeny MCPToolIntegrityAction = "Deny"
+)
+
+// MCPToolIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.
+//
+// This is its own named type, rather than a plain string with an x-kubernetes-validations
+// CEL rule on the containing map, because the Kubernetes API server statically estimates
+// the worst-case cost of every CEL rule at admission time. A rule that loops over a map
+// with a regex match per element (`self.all(k, self[k].matches(...))`) is charged as if
+// every value could be unbounded in length, which blows the per-schema CEL cost budget long
+// before MaxProperties=512 is even reached. A native `pattern` on a fixed-length named type
+// costs nothing extra at admission time and is exactly as strict.
+//
+// +kubebuilder:validation:Pattern="^[0-9a-f]{64}$"
+type MCPToolIntegrityDigest string
+
+// MCPToolIntegrity configures opt-in content-digest verification of a backend's tool
+// definitions before they are forwarded to callers.
+//
+// Verification is opt-in per tool: only tool names present in Digests are checked; any
+// other tool the backend exposes is passed through unverified. This lets an operator pin
+// digests for a sensitive subset of tools (or all of them) without having to track every
+// tool a backend happens to expose.
+//
+// The digest covers the tool's name, description, input schema, output schema, and
+// annotations -- the full set of fields a caller (or the LLM behind it) uses to decide
+// whether and how to invoke the tool. It intentionally excludes envelope/metadata fields
+// (e.g. "_meta") that can vary across otherwise-identical responses.
+type MCPToolIntegrity struct {
+	// Digests maps a tool name, as the backend itself names it (before any
+	// backend-name prefixing the gateway applies), to the expected digest of that tool's
+	// canonical definition, as a 64-character lowercase hex-encoded SHA-256 digest.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinProperties=1
+	// +kubebuilder:validation:MaxProperties=512
+	Digests map[string]MCPToolIntegrityDigest `json:"digests"`
+
+	// OnMismatch controls what happens when a tool's observed digest does not match its
+	// expected digest. If not specified, defaults to Drop.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default:=Drop
+	// +optional
+	OnMismatch *MCPToolIntegrityAction `json:"onMismatch,omitempty"`
 }
 
 // MCPHeaderForward specifies a header to extract from the incoming request and forward to a backend.

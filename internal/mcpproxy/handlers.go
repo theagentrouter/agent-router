@@ -438,13 +438,45 @@ func (m *mcpRequestContext) mergeToolsList(s *session, responses []broadCastResp
 	// computed at config load from each Never-mode backend's declared toolSelector.include
 	// (admission-validated for cross-backend uniqueness), so no runtime collision bookkeeping
 	// is needed for them here. Always-mode backends prefix inline; both can coexist on the
-	// same route. Tools are filtered by toolSelector and authorization before inclusion.
+	// same route. Tools are filtered by toolSelector, tool integrity, and authorization
+	// before inclusion.
 	for _, r := range responses {
+		integrity := route.toolIntegrity[r.backendName]
+		// ToolIntegrityActionDeny is checked once per backend up front: any digest-covered
+		// mismatch is treated as a signal the whole backend's tool set is suspect, not just
+		// the one tool, so the entire response is dropped rather than filtered tool-by-tool.
+		if integrity != nil && integrity.onMismatch == filterapi.ToolIntegrityActionDeny {
+			if badTool, mismatched := toolIntegrityMismatch(integrity, r.res.Tools); mismatched {
+				m.l.Warn("dropping all tools from backend: tool integrity mismatch",
+					slog.String("backend", r.backendName),
+					slog.String("tool", badTool),
+					slog.String("on_mismatch", string(integrity.onMismatch)),
+				)
+				continue
+			}
+		}
 		backendMode := route.effectivePrefixMode(r.backendName)
 		selector := route.toolSelectors[r.backendName]
 		for _, tool := range r.res.Tools {
 			if selector != nil && !selector.allows(tool.Name) {
 				continue
+			}
+			// ToolIntegrityActionDrop (the default) is checked per tool here, since only
+			// the mismatched tool itself needs to be dropped from the response.
+			if integrity != nil && integrity.onMismatch == filterapi.ToolIntegrityActionDrop {
+				ok, mismatched, err := verifyToolIntegrity(integrity, tool)
+				if err != nil {
+					m.l.Error("failed to compute tool integrity digest, dropping tool",
+						slog.String("backend", r.backendName), slog.String("tool", tool.Name), slog.String("error", err.Error()))
+					continue
+				}
+				if !ok {
+					if mismatched {
+						m.l.Warn("dropping tool: content digest mismatch",
+							slog.String("backend", r.backendName), slog.String("tool", tool.Name))
+					}
+					continue
+				}
 			}
 			if route.authorization != nil {
 				allowed, _ := m.authorizeRequest(route.authorization, &authorizationRequest{

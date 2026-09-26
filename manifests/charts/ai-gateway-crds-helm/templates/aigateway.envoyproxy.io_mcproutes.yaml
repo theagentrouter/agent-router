@@ -246,6 +246,50 @@ spec:
                           - message: only one of header or queryParam can be set
                             rule: '!(has(self.header) && has(self.queryParam))'
                       type: object
+                    toolIntegrity:
+                      description: |-
+                        ToolIntegrity enables opt-in content-digest verification of this backend's tool
+                        definitions. The MCP tools/list response carries no built-in integrity guarantee
+                        (per the MCP spec, callers must "consider tool data untrusted unless it comes from
+                        a trusted server"); this closes that gap for callers who need it by letting the
+                        gateway verify a tool's definition against an operator-supplied digest before ever
+                        exposing it downstream.
+
+                        If not specified, no integrity verification is performed for this backend's tools.
+                      properties:
+                        digests:
+                          additionalProperties:
+                            description: |-
+                              MCPToolIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.
+
+                              This is its own named type, rather than a plain string with an x-kubernetes-validations
+                              CEL rule on the containing map, because the Kubernetes API server statically estimates
+                              the worst-case cost of every CEL rule at admission time. A rule that loops over a map
+                              with a regex match per element (`self.all(k, self[k].matches(...))`) is charged as if
+                              every value could be unbounded in length, which blows the per-schema CEL cost budget long
+                              before MaxProperties=512 is even reached. A native `pattern` on a fixed-length named type
+                              costs nothing extra at admission time and is exactly as strict.
+                            pattern: ^[0-9a-f]{64}$
+                            type: string
+                          description: |-
+                            Digests maps a tool name, as the backend itself names it (before any
+                            backend-name prefixing the gateway applies), to the expected digest of that tool's
+                            canonical definition, as a 64-character lowercase hex-encoded SHA-256 digest.
+                          maxProperties: 512
+                          minProperties: 1
+                          type: object
+                        onMismatch:
+                          default: Drop
+                          description: |-
+                            OnMismatch controls what happens when a tool's observed digest does not match its
+                            expected digest. If not specified, defaults to Drop.
+                          enum:
+                          - Drop
+                          - Deny
+                          type: string
+                      required:
+                      - digests
+                      type: object
                     toolSelector:
                       description: |-
                         ToolSelector filters the tools exposed by this MCP server.
@@ -6512,6 +6556,50 @@ spec:
                               is set
                             rule: '!(has(self.queryParam) && has(self.injectionPolicy)
                               && self.injectionPolicy == ''IfNotPresent'')'
+                      type: object
+                    toolIntegrity:
+                      description: |-
+                        ToolIntegrity enables opt-in content-digest verification of this backend's tool
+                        definitions. The MCP tools/list response carries no built-in integrity guarantee
+                        (per the MCP spec, callers must "consider tool data untrusted unless it comes from
+                        a trusted server"); this closes that gap for callers who need it by letting the
+                        gateway verify a tool's definition against an operator-supplied digest before ever
+                        exposing it downstream.
+
+                        If not specified, no integrity verification is performed for this backend's tools.
+                      properties:
+                        digests:
+                          additionalProperties:
+                            description: |-
+                              MCPToolIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.
+
+                              This is its own named type, rather than a plain string with an x-kubernetes-validations
+                              CEL rule on the containing map, because the Kubernetes API server statically estimates
+                              the worst-case cost of every CEL rule at admission time. A rule that loops over a map
+                              with a regex match per element (`self.all(k, self[k].matches(...))`) is charged as if
+                              every value could be unbounded in length, which blows the per-schema CEL cost budget long
+                              before MaxProperties=512 is even reached. A native `pattern` on a fixed-length named type
+                              costs nothing extra at admission time and is exactly as strict.
+                            pattern: ^[0-9a-f]{64}$
+                            type: string
+                          description: |-
+                            Digests maps a tool name, as the backend itself names it (before any
+                            backend-name prefixing the gateway applies), to the expected digest of that tool's
+                            canonical definition, as a 64-character lowercase hex-encoded SHA-256 digest.
+                          maxProperties: 512
+                          minProperties: 1
+                          type: object
+                        onMismatch:
+                          default: Drop
+                          description: |-
+                            OnMismatch controls what happens when a tool's observed digest does not match its
+                            expected digest. If not specified, defaults to Drop.
+                          enum:
+                          - Drop
+                          - Deny
+                          type: string
+                      required:
+                      - digests
                       type: object
                     toolSelector:
                       description: |-
