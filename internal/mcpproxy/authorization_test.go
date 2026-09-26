@@ -550,6 +550,52 @@ func TestAuthorizeRequest(t *testing.T) {
 			expectScopes:  nil,
 		},
 		{
+			// A CEL runtime evaluation error (as opposed to a false result) must not be treated
+			// as "rule does not match" and fall through to a later Allow rule or the route's DefaultAction.
+			// Here the request omits "arguments" entirely, so indexing it with ["folder"] errors at
+			// evaluation time rather than compiling to false. Despite a later Allow rule
+			// whose Source/Target would otherwise match, the request must be denied because
+			// the Deny rule's condition could not be evaluated.
+			name: "CEL runtime error on deny rule fails closed instead of falling through to allow",
+			auth: &filterapi.MCPRouteAuthorization{
+				DefaultAction: "Deny",
+				Rules: []filterapi.MCPRouteAuthorizationRule{
+					{
+						Action: "Deny",
+						Target: &filterapi.MCPAuthorizationTarget{
+							Tools: []filterapi.ToolCall{{
+								Backend: "backend1",
+								Tool:    "listFiles",
+							}},
+						},
+						CEL: ptr.To(`request.mcp.params.arguments["folder"] == "restricted"`),
+					},
+					{
+						Action: "Allow",
+						Source: &filterapi.MCPAuthorizationSource{
+							JWT: filterapi.JWTSource{Scopes: []string{"read"}},
+						},
+						Target: &filterapi.MCPAuthorizationTarget{
+							Tools: []filterapi.ToolCall{{
+								Backend: "backend1",
+								Tool:    "listFiles",
+							}},
+						},
+					},
+				},
+			},
+			headers: http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			backend: "backend1",
+			tool:    "listFiles",
+			args: &mcp.CallToolParams{
+				Name: "p1",
+				// No Arguments set at all, so request.mcp.params.arguments is absent and
+				// indexing it with ["folder"] raises a CEL evaluation error, not a match failure.
+			},
+			expectAllowed: false,
+			expectScopes:  nil,
+		},
+		{
 			name: "no rules default deny",
 			auth: &filterapi.MCPRouteAuthorization{
 				DefaultAction: "Deny",
