@@ -115,3 +115,24 @@ func TestCutSSEDataPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestNextSSEEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		buffer    string
+		event     string
+		remaining string
+		ok        bool
+	}{
+		{name: "LF", buffer: "data: one\n\ndata: two", event: "data: one", remaining: "data: two", ok: true},
+		{name: "CRLF", buffer: "data: one\r\n\r\ndata: two", event: "data: one", remaining: "data: two", ok: true},
+		{name: "partial", buffer: "data: one\r\n", remaining: "data: one\r\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event, remaining, ok := nextSSEEvent([]byte(tc.buffer))
+			require.Equal(t, tc.ok, ok)
+			require.Equal(t, tc.event, string(event))
+			require.Equal(t, tc.remaining, string(remaining))
+		})
+	}
+}
