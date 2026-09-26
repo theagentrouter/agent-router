@@ -1286,6 +1286,42 @@ func Test_maybeResponseModify(t *testing.T) {
 		require.NoError(t, json.Unmarshal(msg.Result, &got))
 		require.Equal(t, "ui://backend1/prefab/renderer.html", got.Contents[0].URI)
 	})
+
+	t.Run("tools/call preserves unknown fields", func(t *testing.T) {
+		raw := []byte(`{
+			"content":[{"type":"resource_link","uri":"file:///data","name":"data"}],
+			"ttlMs":1000,
+			"_meta":{"ui":{"resourceUri":"ui://app/view"},"customKey":"keep-me"}
+		}`)
+		msg := &jsonrpc.Response{Result: raw}
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
+
+		var envelope map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(msg.Result, &envelope))
+		require.Equal(t, json.RawMessage(`1000`), envelope["ttlMs"])
+
+		var meta map[string]any
+		require.NoError(t, json.Unmarshal(envelope["_meta"], &meta))
+		require.Equal(t, "keep-me", meta["customKey"])
+		require.Equal(t, "ui://backend1/app/view", meta["ui"].(map[string]any)["resourceUri"])
+
+		var contents []map[string]any
+		require.NoError(t, json.Unmarshal(envelope["content"], &contents))
+		require.Equal(t, downstreamResourceURI("file:///data", "backend1"), contents[0]["uri"])
+	})
+
+	t.Run("resources/read preserves unknown fields", func(t *testing.T) {
+		raw := []byte(`{"contents":[{"uri":"file:///a","text":"x"}],"extra":"keep"}`)
+		msg := &jsonrpc.Response{Result: raw}
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
+
+		var envelope map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(msg.Result, &envelope))
+		require.Equal(t, json.RawMessage(`"keep"`), envelope["extra"])
+		var contents []map[string]any
+		require.NoError(t, json.Unmarshal(envelope["contents"], &contents))
+		require.Equal(t, downstreamResourceURI("file:///a", "backend1"), contents[0]["uri"])
+	})
 }
 
 func TestExtractSubject(t *testing.T) {

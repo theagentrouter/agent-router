@@ -271,8 +271,10 @@ func TestOnError(t *testing.T) {
 	onErrorResponse(rr, http.StatusBadRequest, "test error")
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
-	require.Equal(t, "text/plain; charset=utf-8", rr.Header().Get("Content-Type"))
-	require.Equal(t, "test error", rr.Body.String())
+	require.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+	require.Contains(t, rr.Body.String(), "test error")
+	require.Contains(t, rr.Body.String(), `"jsonrpc":"2.0"`)
+	require.Contains(t, rr.Body.String(), `"code":-32600`)
 }
 
 func Test_downstreamName(t *testing.T) {
@@ -497,49 +499,62 @@ func Test_rewriteMetaResourceURIs(t *testing.T) {
 	}
 }
 
-func Test_rewriteToolResultURIs(t *testing.T) {
+func Test_rewriteToolsCallResult(t *testing.T) {
 	backend := filterapi.MCPBackendName("backend1")
 
+	mustRewrite := func(t *testing.T, in *mcp.CallToolResult) mcp.CallToolResult {
+		t.Helper()
+		raw, err := json.Marshal(in)
+		require.NoError(t, err)
+		out, ok := rewriteToolsCallResult(raw, backend)
+		require.True(t, ok)
+		var got mcp.CallToolResult
+		require.NoError(t, json.Unmarshal(out, &got))
+		return got
+	}
+
 	t.Run("rewrites ResourceLink URI", func(t *testing.T) {
-		result := &mcp.CallToolResult{
+		got := mustRewrite(t, &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.ResourceLink{URI: "ui://prefab/link.html"}},
-		}
-		require.True(t, rewriteToolResultURIs(result, backend))
-		require.Equal(t, "ui://backend1/prefab/link.html", result.Content[0].(*mcp.ResourceLink).URI)
+		})
+		require.Equal(t, "ui://backend1/prefab/link.html", got.Content[0].(*mcp.ResourceLink).URI)
 	})
 
 	t.Run("rewrites EmbeddedResource URI", func(t *testing.T) {
-		result := &mcp.CallToolResult{
+		got := mustRewrite(t, &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.EmbeddedResource{Resource: &mcp.ResourceContents{URI: "ui://prefab/embed.html"}}},
-		}
-		require.True(t, rewriteToolResultURIs(result, backend))
-		require.Equal(t, "ui://backend1/prefab/embed.html", result.Content[0].(*mcp.EmbeddedResource).Resource.URI)
+		})
+		require.Equal(t, "ui://backend1/prefab/embed.html", got.Content[0].(*mcp.EmbeddedResource).Resource.URI)
 	})
 
 	t.Run("nil EmbeddedResource.Resource", func(t *testing.T) {
-		result := &mcp.CallToolResult{Content: []mcp.Content{&mcp.EmbeddedResource{Resource: nil}}}
-		require.False(t, rewriteToolResultURIs(result, backend))
+		raw, err := json.Marshal(&mcp.CallToolResult{Content: []mcp.Content{&mcp.EmbeddedResource{Resource: nil}}})
+		require.NoError(t, err)
+		out, ok := rewriteToolsCallResult(raw, backend)
+		require.False(t, ok)
+		require.Nil(t, out)
 	})
 
 	t.Run("rewrites _meta.ui.resourceUri", func(t *testing.T) {
-		result := &mcp.CallToolResult{
+		got := mustRewrite(t, &mcp.CallToolResult{
 			Meta: mcp.Meta{"ui": map[string]any{"resourceUri": "ui://meta/renderer.html"}},
-		}
-		require.True(t, rewriteToolResultURIs(result, backend))
-		require.Equal(t, "ui://backend1/meta/renderer.html", result.Meta["ui"].(map[string]any)["resourceUri"])
+		})
+		require.Equal(t, "ui://backend1/meta/renderer.html", got.Meta["ui"].(map[string]any)["resourceUri"])
 	})
 
 	t.Run("non-ui URIs are namespaced with the scheme prefix form", func(t *testing.T) {
-		result := &mcp.CallToolResult{
+		got := mustRewrite(t, &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.ResourceLink{URI: "file:///tmp/file.txt"}},
-		}
-		require.True(t, rewriteToolResultURIs(result, backend))
-		require.Equal(t, "backend1+file:///tmp/file.txt", result.Content[0].(*mcp.ResourceLink).URI)
+		})
+		require.Equal(t, "backend1+file:///tmp/file.txt", got.Content[0].(*mcp.ResourceLink).URI)
 	})
 
 	t.Run("no resource URIs", func(t *testing.T) {
-		result := &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "hi"}}}
-		require.False(t, rewriteToolResultURIs(result, backend))
+		raw, err := json.Marshal(&mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "hi"}}})
+		require.NoError(t, err)
+		out, ok := rewriteToolsCallResult(raw, backend)
+		require.False(t, ok)
+		require.Nil(t, out)
 	})
 }
 
@@ -811,6 +826,60 @@ func TestServePOST_InvalidJSONRPC(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	require.Contains(t, rr.Body.String(), "invalid JSON-RPC message")
+}
+
+// TestServePOST_EraDispatch covers the era detection branch in servePOST:
+// detection errors are returned as-is, and a modern-era request is handed to
+// serveModernPOST (rather than the legacy session path).
+func TestServePOST_EraDispatch(t *testing.T) {
+	caps, err := json.Marshal(mcp.ClientCapabilities{})
+	require.NoError(t, err)
+	modernParams := modernMeta(protocolVersion20260728, caps)
+
+	t.Run("detection error is returned", func(t *testing.T) {
+		// A JSON-RPC *response* on a modern POST is rejected by detectClientEra
+		// before either era handler runs. This also covers the servePOST guard
+		// that expects a *jsonrpc.Request before calling serveModernPOST —
+		// detectClientEra rejects responses first, so the type assertion is
+		// never reached for this input.
+		id, err := jsonrpc.MakeID("1")
+		require.NoError(t, err)
+		body, err := jsonrpc.EncodeMessage(&jsonrpc.Response{ID: id, Result: []byte(`{}`)})
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(string(body)))
+		req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+		req.Header.Set(mcpProtocolVersionHeader, protocolVersion20260728)
+		req.Header.Set(mcpMethodHeader, "tools/list")
+		rr := httptest.NewRecorder()
+
+		newTestMCPProxy().servePOST(rr, req)
+
+		require.Equal(t, http.StatusBadRequest, rr.Code)
+		require.Contains(t, rr.Body.String(), "JSON-RPC responses are not valid on the modern POST path")
+		// Must not have reached serveModernPOST (which would complain about routing).
+		require.NotContains(t, rr.Body.String(), "missing route header")
+		require.NotContains(t, rr.Body.String(), "unknown method")
+	})
+
+	t.Run("modern request routes to serveModernPOST", func(t *testing.T) {
+		// Use a method that passes modern era validation but is unknown to
+		// serveModernPOST. The modern "unknown method" 404 proves servePOST
+		// dispatched to the modern path (legacy would have required a session).
+		body, err := jsonrpc.EncodeMessage(modernReq(t, "tools/frobnicate", modernParams))
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(string(body)))
+		req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+		req.Header.Set(mcpProtocolVersionHeader, protocolVersion20260728)
+		req.Header.Set(mcpMethodHeader, "tools/frobnicate")
+		rr := httptest.NewRecorder()
+
+		newTestMCPProxy().servePOST(rr, req)
+
+		require.Equal(t, http.StatusNotFound, rr.Code)
+		require.Contains(t, rr.Body.String(), "unknown method")
+	})
 }
 
 func TestServePOST_OversizedBody(t *testing.T) {

@@ -40,6 +40,18 @@ func doMain() *http.Server {
 	if err != nil {
 		logger.Fatalf("invalid port: %v", err)
 	}
+
+	// When MODERN_MODE is set, start a modern (2026-07-28) stateless MCP server
+	// instead of the legacy streamable HTTP server.
+	if os.Getenv("MODERN_MODE") == "true" {
+		dumb := os.Getenv("DUMB_ECHO_SERVER") == "true"
+		return testmcp.NewModernServer(&testmcp.ModernOptions{
+			Port:           port,
+			WriteTimeout:   1200 * time.Second,
+			DumbEchoServer: dumb,
+		})
+	}
+
 	server, _ := testmcp.NewServer(&testmcp.Options{
 		Port:         port,
 		WriteTimeout: 1200 * time.Second,

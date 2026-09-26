@@ -40,12 +40,13 @@ const (
 
 // MCP JSON-RPC error codes from the SDK (re-exported for local use).
 const (
-	errCodeParseError                = -32700
-	errCodeInvalidRequest            = -32600
-	errCodeMethodNotFound            = -32601
-	errCodeInvalidParams             = -32602
-	errCodeHeaderMismatch            = mcp.CodeHeaderMismatch                    // -32020
-	errCodeMissingRequiredCapability = mcp.CodeMissingRequiredClientCapabilities // -32021
+	errCodeParseError                 = -32700
+	errCodeInvalidRequest             = -32600
+	errCodeMethodNotFound             = -32601
+	errCodeInvalidParams              = -32602
+	errCodeHeaderMismatch             = mcp.CodeHeaderMismatch                    // -32020
+	errCodeMissingRequiredCapability  = mcp.CodeMissingRequiredClientCapabilities // -32021
+	errCodeUnsupportedProtocolVersion = mcp.CodeUnsupportedProtocolVersion        // -32022
 )
 
 // legacyOnlyMethods were removed by the 2026-07-28 spec (SEP-2575). Seeing one
@@ -206,6 +207,15 @@ func detectClientEra(r *http.Request, msg jsonrpc.Message) eraDetection {
 	if reqDetails.headerVersion == protocolVersion20260728 {
 		return validateModernRequest(&reqDetails)
 	}
+
+	// Reject ambiguous or unsupported version declarations before falling
+	// through to legacy:
+	//   - Mcp-Method without a version → client looks modern but didn't declare an era.
+	//   - Future/malformed version     → not a known legacy date, not modern.
+	unsupportedVersionErr := validateHeaderVersion(&reqDetails)
+	if unsupportedVersionErr.err != nil {
+		return unsupportedVersionErr
+	}
 	return validateLegacyRequest(&reqDetails)
 }
 
@@ -328,4 +338,51 @@ func validateModernRequest(requestDetails *requestDetails) eraDetection {
 		era:     eraModern,
 		version: requestDetails.headerVersion,
 	}
+}
+
+// validateHeaderVersion validates the Mcp-Protocol-Version header.
+//
+// If the header is missing, the client looks like it's trying to speak modern but
+// didn't declare the right version. On the legacy path the mirrored
+// Mcp-Method header is never validated, so a mismatch between body method
+// and header method would be silently trusted. Reject explicitly so the
+// client gets a clear signal instead of a confusing "missing session ID".
+//
+// If the header is present but not a known legacy version, return an error.
+func validateHeaderVersion(reqDetails *requestDetails) eraDetection {
+	// Mcp-Method without a version → client looks modern but didn't declare an era.
+	if reqDetails.headerVersion == "" && reqDetails.headerMethod != "" {
+		return eraDetection{err: &protocolError{
+			Code:       errCodeHeaderMismatch,
+			Message:    fmt.Sprintf("%s header is present but %s is missing; set %s to declare a protocol version", mcpMethodHeader, mcpProtocolVersionHeader, mcpProtocolVersionHeader),
+			Data:       &mcp.UnsupportedProtocolVersionData{Supported: []string{protocolVersion20260728}},
+			HTTPStatus: http.StatusBadRequest,
+		}}
+	}
+	// Future/malformed version → not a known legacy date, not modern.
+	if reqDetails.headerVersion != "" && !isLegacyVersion(reqDetails.headerVersion) {
+		return eraDetection{err: &protocolError{
+			Code:    errCodeUnsupportedProtocolVersion,
+			Message: fmt.Sprintf("Unsupported protocol version: %q", reqDetails.headerVersion),
+			Data: &mcp.UnsupportedProtocolVersionData{
+				Supported: []string{protocolVersion20260728},
+				Requested: reqDetails.headerVersion,
+			},
+			HTTPStatus: http.StatusBadRequest,
+		}}
+	}
+	return eraDetection{}
+}
+
+// isLegacyVersion reports whether v is a well-formed date-based protocol
+// version that predates the modern version (2026-07-28). The comparison is a
+// simple lexicographic string compare, which works correctly for ISO-8601
+// date strings (YYYY-MM-DD). Malformed strings that don't look like dates
+// return false so they fall through to the "unsupported version" error.
+func isLegacyVersion(v string) bool {
+	// Sanity check: must be a 10-char date string (YYYY-MM-DD).
+	if len(v) != 10 || v[4] != '-' || v[7] != '-' {
+		return false
+	}
+	return v < protocolVersion20260728
 }
