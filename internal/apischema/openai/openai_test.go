@@ -14270,3 +14270,60 @@ func TestResponseContentPartDoneEventPartUnionUnmarshalJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestErrorTypeUnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  []byte
+		expect ErrorType
+	}{
+		{
+			name:  "all string fields",
+			input: []byte(`{"type":"invalid_request_error","code":"bad_input","message":"boom","param":"model","event_id":"evt_1"}`),
+			expect: ErrorType{
+				Type:    "invalid_request_error",
+				Code:    ptr.To("bad_input"),
+				Message: "boom",
+				Param:   ptr.To("model"),
+				EventID: ptr.To("evt_1"),
+			},
+		},
+		{
+			name:  "numeric type, message, code, param and event_id are coerced to strings",
+			input: []byte(`{"type":500,"code":400,"message":429,"param":1,"event_id":2}`),
+			expect: ErrorType{
+				Type:    "500",
+				Code:    ptr.To("400"),
+				Message: "429",
+				Param:   ptr.To("1"),
+				EventID: ptr.To("2"),
+			},
+		},
+		{
+			name:  "boolean code",
+			input: []byte(`{"type":"error","message":"boom","code":true}`),
+			expect: ErrorType{
+				Type:    "error",
+				Code:    ptr.To("true"),
+				Message: "boom",
+			},
+		},
+		{
+			name:  "null and missing optional fields stay nil",
+			input: []byte(`{"type":"error","message":"boom","code":null}`),
+			expect: ErrorType{
+				Type:    "error",
+				Message: "boom",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var result ErrorType
+			err := json.Unmarshal(tc.input, &result)
+			require.NoError(t, err)
+			require.Equal(t, tc.expect, result)
+		})
+	}
+}
