@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -120,8 +122,43 @@ func (t *countTokensToAWSAnthropicTranslator) ResponseBody(_ map[string]string, 
 }
 
 // ResponseError implements [AnthropicCountTokensTranslator.ResponseError].
-func (t *countTokensToAWSAnthropicTranslator) ResponseError(_ map[string]string, _ io.Reader) (
+//
+// Bedrock returns errors in its own shape (e.g. `{"message": "..."}` with the
+// exception type in a header), so translate them into an Anthropic error
+// envelope the same way the Bedrock messages translator does.
+func (t *countTokensToAWSAnthropicTranslator) ResponseError(respHeaders map[string]string, body io.Reader) (
 	newHeaders []internalapi.Header, mutatedBody []byte, err error,
 ) {
-	return nil, nil, nil
+	statusCode := respHeaders[statusHeaderName]
+	var errorMessage string
+	if v, ok := respHeaders[contentTypeHeaderName]; ok && strings.Contains(v, jsonContentType) {
+		var bedrockError awsbedrock.BedrockException
+		if err = json.NewDecoder(body).Decode(&bedrockError); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal error body: %w", err)
+		}
+		errorMessage = bedrockError.Message
+	} else {
+		var buf []byte
+		buf, err = io.ReadAll(body)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to read error body: %w", err)
+		}
+		errorMessage = string(buf)
+	}
+	anthropicError := anthropicschema.ErrorResponse{
+		Type: "error",
+		Error: anthropicschema.ErrorResponseMessage{
+			Type:    httpStatusToAnthropicErrorType(statusCode),
+			Message: errorMessage,
+		},
+	}
+	mutatedBody, err = json.Marshal(anthropicError)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal error body: %w", err)
+	}
+	newHeaders = []internalapi.Header{
+		{contentTypeHeaderName, jsonContentType},
+		{contentLengthHeaderName, strconv.Itoa(len(mutatedBody))},
+	}
+	return
 }
