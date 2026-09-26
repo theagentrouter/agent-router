@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"k8s.io/utils/ptr"
 
@@ -145,17 +146,35 @@ func (ChatCompletionsEndpointSpec) ParseBody(
 		// Rewrite the original bytes to include the stream_options.include_usage=true so that forcing the request body
 		// mutation, which uses this raw body, will also result in the stream_options.include_usage=true.
 		var err error
-		mutatedBody, err = sjson.SetBytesOptions(body, "stream_options.include_usage", true, &sjson.Options{
-			Optimistic: true,
-			// Note: it is safe to do in-place replacement since this route level processor is executed once per request,
-			// and the result can be safely shared among possible multiple retries.
-			ReplaceInPlace: true,
-		})
+		mutatedBody, err = forceStreamOptionsIncludeUsage(body)
 		if err != nil {
 			return "", nil, false, nil, fmt.Errorf("%w: failed to set stream_options.include_usage", internalapi.ErrMalformedRequest)
 		}
 	}
 	return req.Model, &req, req.Stream, mutatedBody, nil
+}
+
+// forceStreamOptionsIncludeUsage rewrites body so that it has exactly one top-level
+// "stream_options" key set to {"include_usage": true}.
+func forceStreamOptionsIncludeUsage(body []byte) ([]byte, error) {
+	mutatedBody := body
+	for gjson.GetBytes(mutatedBody, "stream_options").Exists() {
+		var err error
+		mutatedBody, err = sjson.DeleteBytes(mutatedBody, "stream_options")
+		if err != nil {
+			return nil, fmt.Errorf("failed to remove existing stream_options: %w", err)
+		}
+	}
+	mutatedBody, err := sjson.SetBytesOptions(mutatedBody, "stream_options.include_usage", true, &sjson.Options{
+		Optimistic: true,
+		// Note: it is safe to do in-place replacement since this route level processor is executed once per request,
+		// and the result can be safely shared among possible multiple retries.
+		ReplaceInPlace: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to set stream_options.include_usage: %w", err)
+	}
+	return mutatedBody, nil
 }
 
 // ParseMultipartBody implements [Spec.ParseMultipartBody].
