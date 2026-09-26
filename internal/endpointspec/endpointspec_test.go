@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"mime/multipart"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -65,6 +66,28 @@ func TestChatCompletionsEndpointSpec_ParseBody(t *testing.T) {
 		require.NotNil(t, parsed)
 		require.True(t, parsed.StreamOptions.IncludeUsage)
 		require.Nil(t, mutated)
+	})
+
+	t.Run("streaming_with_duplicate_stream_options", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true},"stream_options":{"include_usage":false}}`)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.Equal(t, "gpt-4o", model)
+		require.True(t, stream)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.StreamOptions)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+
+		// The mutated body -- which is what actually gets forwarded to the upstream provider --
+		// must contain a single, unambiguous stream_options.include_usage=true and must not retain
+		// any attacker-controlled duplicate "stream_options" key.
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		var mutatedReq openai.ChatCompletionRequest
+		require.NoError(t, json.Unmarshal(mutated, &mutatedReq))
+		require.NotNil(t, mutatedReq.StreamOptions)
+		require.True(t, mutatedReq.StreamOptions.IncludeUsage)
 	})
 
 	t.Run("non_streaming", func(t *testing.T) {
