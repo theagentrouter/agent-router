@@ -7,7 +7,11 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	stdjson "encoding/json" //nolint: depguard // HTTPRoute quota-policy annotation needs byte-stable hashing; sonic does not guarantee stable field order.
 	"fmt"
+	"sort"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -24,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
@@ -39,7 +44,11 @@ const (
 	// We use this annotation to ensure that Envoy Gateway reconciles the HTTPRoute when the backend refs change.
 	// This will result in metadata being added to the underling Envoy route
 	// @see https://gateway.envoyproxy.io/contributions/design/metadata/
-	httpRouteBackendRefPriorityAnnotationKey           = egAnnotationPrefix + "backend-ref-priority"
+	httpRouteBackendRefPriorityAnnotationKey = egAnnotationPrefix + "backend-ref-priority"
+	// httpRouteQuotaPolicyAnnotationKey is stamped on the derived HTTPRoute so Envoy Gateway
+	// observes an annotation change when QuotaPolicies targeting the route's backends change.
+	// Envoy Gateway's HTTPRoute watch predicate is GenerationChanged OR LabelChanged OR AnnotationChanged.
+	httpRouteQuotaPolicyAnnotationKey                  = "aigateway.envoyproxy.io/quota-policy"
 	httpRouteAnnotationForAIGatewayGeneratedIndication = egAnnotationPrefix + internalapi.AIGatewayGeneratedHTTPRouteAnnotation
 	egOwningGatewayNameLabel                           = egAnnotationPrefix + "owning-gateway-name"
 	egOwningGatewayNamespaceLabel                      = egAnnotationPrefix + "owning-gateway-namespace"
@@ -365,6 +374,14 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 	dst.Annotations[httpRouteBackendRefPriorityAnnotationKey] = buildPriorityAnnotation(aiGatewayRoute.Spec.Rules)
 	dst.Annotations[httpRouteAnnotationForAIGatewayGeneratedIndication] = "true"
 
+	// Stamp a hash of QuotaPolicies that target this route's backends so Envoy Gateway
+	// re-translates the HTTPRoute when quota configuration changes.
+	policies, err := c.quotaPoliciesForRoute(ctx, aiGatewayRoute)
+	if err != nil {
+		return fmt.Errorf("failed to list QuotaPolicies: %w", err)
+	}
+	dst.Annotations[httpRouteQuotaPolicyAnnotationKey] = buildQuotaPolicyAnnotation(policies)
+
 	dst.Spec.ParentRefs = aiGatewayRoute.Spec.ParentRefs
 
 	dst.Spec.Hostnames = aiGatewayRoute.Spec.Hostnames
@@ -474,4 +491,57 @@ func buildPriorityAnnotation(rules []aigv1b1.AIGatewayRouteRule) string {
 		}
 	}
 	return strings.Join(priorities, ",")
+}
+
+// quotaPoliciesForRoute lists QuotaPolicies that target AIServiceBackends referenced by the route.
+func (c *AIGatewayRouteController) quotaPoliciesForRoute(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) ([]aigv1a1.QuotaPolicy, error) {
+	seen := make(map[string]struct{})
+	var policies []aigv1a1.QuotaPolicy
+	for i := range aiGatewayRoute.Spec.Rules {
+		for j := range aiGatewayRoute.Spec.Rules[i].BackendRefs {
+			br := &aiGatewayRoute.Spec.Rules[i].BackendRefs[j]
+			if br.IsInferencePool() {
+				continue
+			}
+			key := fmt.Sprintf("%s.%s", br.Name, br.GetNamespace(aiGatewayRoute.Namespace))
+			var list aigv1a1.QuotaPolicyList
+			if err := c.client.List(ctx, &list, client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: key}); err != nil {
+				return nil, err
+			}
+			for k := range list.Items {
+				p := &list.Items[k]
+				id := p.Namespace + "/" + p.Name
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				policies = append(policies, *p)
+			}
+		}
+	}
+	return policies, nil
+}
+
+// buildQuotaPolicyAnnotation returns a deterministic fingerprint of QuotaPolicies that
+// affect an AIGatewayRoute. Envoy Gateway only re-translates HTTPRoutes on generation,
+// label, or annotation changes, so this value must change when those policies change.
+func buildQuotaPolicyAnnotation(policies []aigv1a1.QuotaPolicy) string {
+	sort.Slice(policies, func(i, j int) bool {
+		if policies[i].Namespace != policies[j].Namespace {
+			return policies[i].Namespace < policies[j].Namespace
+		}
+		return policies[i].Name < policies[j].Name
+	})
+	parts := make([]string, 0, len(policies))
+	for i := range policies {
+		p := &policies[i]
+		raw, err := stdjson.Marshal(p.Spec)
+		if err != nil {
+			parts = append(parts, fmt.Sprintf("%s/%s:%d", p.Namespace, p.Name, p.Generation))
+			continue
+		}
+		sum := sha256.Sum256(raw)
+		parts = append(parts, fmt.Sprintf("%s/%s:%s", p.Namespace, p.Name, hex.EncodeToString(sum[:8])))
+	}
+	return strings.Join(parts, ",")
 }

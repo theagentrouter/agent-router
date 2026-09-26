@@ -8,6 +8,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -27,6 +28,7 @@ import (
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 )
@@ -393,6 +395,37 @@ func Test_buildPriorityAnnotation(t *testing.T) {
 	require.Equal(t, "0:orange:0,0:apple:1,0:pineapple:2", annotation)
 }
 
+func Test_buildQuotaPolicyAnnotation(t *testing.T) {
+	require.Empty(t, buildQuotaPolicyAnnotation(nil))
+
+	p1 := aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "qp-b", Namespace: "default"},
+		Spec: aigv1a1.QuotaPolicySpec{
+			ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
+			},
+		},
+	}
+	p2 := aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "qp-a", Namespace: "default"},
+		Spec: aigv1a1.QuotaPolicySpec{
+			ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				Quota: aigv1a1.QuotaValue{Limit: 200, Duration: "1h"},
+			},
+		},
+	}
+
+	sorted := buildQuotaPolicyAnnotation([]aigv1a1.QuotaPolicy{p1, p2})
+	reversed := buildQuotaPolicyAnnotation([]aigv1a1.QuotaPolicy{p2, p1})
+	require.Equal(t, sorted, reversed)
+	require.True(t, strings.HasPrefix(sorted, "default/qp-a:"))
+	require.Contains(t, sorted, ",default/qp-b:")
+
+	updated := p1
+	updated.Spec.ServiceQuota.Quota.Limit = 999
+	require.NotEqual(t, buildQuotaPolicyAnnotation([]aigv1a1.QuotaPolicy{p1}), buildQuotaPolicyAnnotation([]aigv1a1.QuotaPolicy{updated}))
+}
+
 func TestAIGatewayRouteController_backend(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexes(t)
 	kube := fake2.NewClientset()
@@ -722,6 +755,7 @@ func Test_newHTTPRoute_LabelAndAnnotationPropagation(t *testing.T) {
 
 	// Verify that controller-specific annotations are also present.
 	require.Equal(t, "true", httpRoute.Annotations[httpRouteAnnotationForAIGatewayGeneratedIndication])
+	require.Contains(t, httpRoute.Annotations, httpRouteQuotaPolicyAnnotationKey)
 
 	// Test updating existing HTTPRoute with new labels and annotations.
 	aiGatewayRoute.Labels["new-label"] = "new-value"

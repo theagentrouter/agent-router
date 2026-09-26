@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 
@@ -33,7 +34,8 @@ func requireNewFakeClientWithIndexesForQuotaPolicy(t *testing.T) client.Client {
 	t.Helper()
 	builder := fake.NewClientBuilder().WithScheme(Scheme).
 		WithStatusSubresource(&aigv1a1.QuotaPolicy{}).
-		WithStatusSubresource(&aigv1b1.AIServiceBackend{})
+		WithStatusSubresource(&aigv1b1.AIServiceBackend{}).
+		WithStatusSubresource(&aigv1b1.AIGatewayRoute{})
 	err := ApplyIndexing(t.Context(), func(_ context.Context, obj client.Object, field string, extractValue client.IndexerFunc) error {
 		builder = builder.WithIndex(obj, field, extractValue)
 		return nil
@@ -573,6 +575,112 @@ func Test_quotaPolicyTargetRefsIndexFunc(t *testing.T) {
 		client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: "nonexistent.default"})
 	require.NoError(t, err)
 	require.Empty(t, policies.Items)
+}
+
+// httpRouteHasEnvoyGatewayObservableChange reports whether Envoy Gateway's HTTPRoute
+// watch predicate (generation, labels, or annotations) would fire.
+func httpRouteHasEnvoyGatewayObservableChange(before, after *gwapiv1.HTTPRoute) bool {
+	return before.Generation != after.Generation ||
+		!maps.Equal(before.Labels, after.Labels) ||
+		!maps.Equal(before.Annotations, after.Annotations)
+}
+
+func TestQuotaPolicyUpdate_RequeuesAIGatewayRouteAndUpdatesDerivedHTTPRoute(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	rateLimitRunner := newTestRunner(t)
+	routeCh := make(chan event.GenericEvent, 100)
+	gwCh := make(chan event.GenericEvent, 100)
+	qpController := NewQuotaPolicyController(fakeClient, fake2.NewClientset(), ctrl.Log, rateLimitRunner, routeCh)
+	routeController := NewAIGatewayRouteController(fakeClient, fake2.NewClientset(), ctrl.Log, gwCh, "/")
+	namespace := "default"
+
+	backend := &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "quota-backend", Namespace: namespace},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			BackendRef: gwapiv1.BackendObjectReference{
+				Name: "quota-backend-svc",
+				Port: ptrTo[gwapiv1.PortNumber](8080),
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), backend))
+
+	route := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "quota-route", Namespace: namespace},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			Rules: []aigv1b1.AIGatewayRouteRule{
+				{
+					BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+						{Name: backend.Name, Weight: ptrTo[int32](1)},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), route))
+
+	qp := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "quota-policy", Namespace: namespace},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
+				{
+					Kind:  "AIServiceBackend",
+					Group: "aigateway.envoyproxy.io",
+					Name:  gwapiv1.ObjectName(backend.Name),
+				},
+			},
+			ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), qp))
+
+	_, err := qpController.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: namespace, Name: qp.Name},
+	})
+	require.NoError(t, err)
+	require.Equal(t, route.Name, (<-routeCh).Object.GetName(), "initial QuotaPolicy reconcile must requeue the AIGatewayRoute")
+
+	_, err = routeController.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: namespace, Name: route.Name},
+	})
+	require.NoError(t, err)
+
+	var httpRouteBefore gwapiv1.HTTPRoute
+	require.NoError(t, fakeClient.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: route.Name}, &httpRouteBefore))
+
+	var updatedQP aigv1a1.QuotaPolicy
+	require.NoError(t, fakeClient.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: qp.Name}, &updatedQP))
+	updatedQP.Spec.ServiceQuota.Quota.Limit = 250
+	updatedQP.Spec.ServiceQuota.Quota.Duration = "1h"
+	require.NoError(t, fakeClient.Update(t.Context(), &updatedQP))
+
+	_, err = qpController.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: namespace, Name: qp.Name},
+	})
+	require.NoError(t, err)
+
+	select {
+	case ev := <-routeCh:
+		require.Equal(t, route.Name, ev.Object.GetName())
+		require.Equal(t, namespace, ev.Object.GetNamespace())
+	default:
+		t.Fatal("QuotaPolicy update must requeue the AIGatewayRoute")
+	}
+
+	_, err = routeController.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: namespace, Name: route.Name},
+	})
+	require.NoError(t, err)
+
+	var httpRouteAfter gwapiv1.HTTPRoute
+	require.NoError(t, fakeClient.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: route.Name}, &httpRouteAfter))
+
+	require.True(t, httpRouteHasEnvoyGatewayObservableChange(&httpRouteBefore, &httpRouteAfter),
+		"QuotaPolicy update requeued the route but the derived HTTPRoute has no generation/label/annotation change Envoy Gateway would observe; before annotations=%v labels=%v gen=%d after annotations=%v labels=%v gen=%d",
+		httpRouteBefore.Annotations, httpRouteBefore.Labels, httpRouteBefore.Generation,
+		httpRouteAfter.Annotations, httpRouteAfter.Labels, httpRouteAfter.Generation)
 }
 
 func ptrTo[T any](v T) *T {
