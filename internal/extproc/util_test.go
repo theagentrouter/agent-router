@@ -173,6 +173,65 @@ func TestStreamingGzipDecompression(t *testing.T) {
 	require.Equal(t, expected, totalDecompressed)
 }
 
+// TestDecodeStreamingContent_TruncatedGzipAtEndOfStream verifies that when the gzip
+// stream is cut short before its footer arrives (e.g. the upstream connection resets
+// during streaming), decodeStreamingContent returns the partial data that decompressed
+// cleanly rather than failing the whole response. Without this tolerance the client
+// receives an empty 200 instead of the bytes that did arrive.
+func TestDecodeStreamingContent_TruncatedGzipAtEndOfStream(t *testing.T) {
+	messages := []string{
+		"event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hello\"}}\n\n",
+	}
+
+	// Produce a gzip stream flushed after each message but never closed, so the footer
+	// (CRC32 + ISIZE) is never written: this mimics an upstream reset mid-stream.
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	var chunkBoundaries []int
+	for _, msg := range messages {
+		_, err := gz.Write([]byte(msg))
+		require.NoError(t, err)
+		require.NoError(t, gz.Flush())
+		chunkBoundaries = append(chunkBoundaries, buf.Len())
+	}
+	// Note: gz.Close() is intentionally NOT called, so the footer is absent.
+	truncated := buf.Bytes()
+
+	var chunks [][]byte
+	prev := 0
+	for _, boundary := range chunkBoundaries {
+		chunks = append(chunks, truncated[prev:boundary])
+		prev = boundary
+	}
+
+	u := &chatCompletionProcessorUpstreamFilter{responseEncoding: "gzip"}
+
+	var totalDecompressed string
+	for _, chunk := range chunks {
+		result, err := u.decodeStreamingContent(chunk)
+		// Even on the final chunk, a missing footer (ErrUnexpectedEOF) must not be fatal.
+		require.NoError(t, err)
+		require.True(t, result.isEncoded)
+
+		data, readErr := io.ReadAll(result.reader)
+		require.NoError(t, readErr)
+		totalDecompressed += string(data)
+	}
+
+	// All bytes written before the connection reset are delivered to the client.
+	require.Equal(t, messages[0]+messages[1], totalDecompressed)
+}
+
+// TestDecodeStreamingContent_CorruptGzipStillFails verifies that genuine corruption
+// (as opposed to truncation) remains fatal: a malformed gzip header reports an error
+// other than io.ErrUnexpectedEOF and is not silently tolerated.
+func TestDecodeStreamingContent_CorruptGzipStillFails(t *testing.T) {
+	u := &chatCompletionProcessorUpstreamFilter{responseEncoding: "gzip"}
+	_, err := u.decodeStreamingContent([]byte("this is not a gzip stream"))
+	require.Error(t, err)
+}
+
 func TestRemoveContentEncodingIfNeeded(t *testing.T) {
 	tests := []struct {
 		name        string
