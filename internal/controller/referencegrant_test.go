@@ -385,6 +385,106 @@ func TestReferenceGrantValidator_ValidateInferencePoolReference(t *testing.T) {
 	}
 }
 
+// TestReferenceGrantValidator_ValidateSecretReference tests cross-namespace Secret references from
+// a BackendSecurityPolicy (Azure ClientSecretRef, GCP CredentialsFile.SecretRef, OIDC ClientSecret),
+// which must be governed by ReferenceGrant just like AIGatewayRoute -> AIServiceBackend/InferencePool.
+func TestReferenceGrantValidator_ValidateSecretReference(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = gwapiv1b1.Install(scheme)
+	_ = aigv1a1.AddToScheme(scheme)
+
+	secretGrant := func(fromNS string, toGroup gwapiv1b1.Group, toKind gwapiv1b1.Kind) gwapiv1b1.ReferenceGrant {
+		return gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "grant", Namespace: "secret-ns"},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{
+					Group:     aiServiceBackendGroup,
+					Kind:      backendSecurityPolicyKind,
+					Namespace: gwapiv1b1.Namespace(fromNS),
+				}},
+				To: []gwapiv1b1.ReferenceGrantTo{{Group: toGroup, Kind: toKind}},
+			},
+		}
+	}
+
+	tests := []struct {
+		name                string
+		bspNamespace        string
+		secretNamespace     string
+		secretName          string
+		referenceGrants     []gwapiv1b1.ReferenceGrant
+		expectedError       bool
+		expectedErrorString string
+	}{
+		{
+			name:            "Same namespace reference - should succeed",
+			bspNamespace:    "default",
+			secretNamespace: "default",
+			secretName:      "my-secret",
+		},
+		{
+			name:            "Cross-namespace with valid ReferenceGrant - should succeed",
+			bspNamespace:    "tenant-a",
+			secretNamespace: "secret-ns",
+			secretName:      "victim-secret",
+			referenceGrants: []gwapiv1b1.ReferenceGrant{secretGrant("tenant-a", secretGroup, secretKind)},
+		},
+		{
+			name:            "Cross-namespace without ReferenceGrant - should fail",
+			bspNamespace:    "tenant-a",
+			secretNamespace: "secret-ns",
+			secretName:      "victim-secret",
+			expectedError:   true,
+			expectedErrorString: "cross-namespace reference from BackendSecurityPolicy in namespace tenant-a " +
+				"to Secret victim-secret in namespace secret-ns is not permitted",
+		},
+		{
+			name:                "Cross-namespace with ReferenceGrant for wrong from namespace - should fail",
+			bspNamespace:        "tenant-a",
+			secretNamespace:     "secret-ns",
+			secretName:          "victim-secret",
+			referenceGrants:     []gwapiv1b1.ReferenceGrant{secretGrant("tenant-b", secretGroup, secretKind)},
+			expectedError:       true,
+			expectedErrorString: "is not permitted",
+		},
+		{
+			name:                "Cross-namespace with ReferenceGrant allowing wrong target kind - should fail",
+			bspNamespace:        "tenant-a",
+			secretNamespace:     "secret-ns",
+			secretName:          "victim-secret",
+			referenceGrants:     []gwapiv1b1.ReferenceGrant{secretGrant("tenant-a", aiServiceBackendGroup, aiServiceBackendKind)},
+			expectedError:       true,
+			expectedErrorString: "is not permitted",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs := make([]client.Object, len(tt.referenceGrants))
+			for i := range tt.referenceGrants {
+				objs[i] = &tt.referenceGrants[i]
+			}
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(objs...).
+				WithIndex(&gwapiv1b1.ReferenceGrant{}, k8sClientIndexReferenceGrantToTargetKind, referenceGrantToTargetKindIndexFunc).
+				Build()
+
+			validator := newReferenceGrantValidator(fakeClient)
+			err := validator.validateSecretReference(context.Background(), tt.bspNamespace, tt.secretNamespace, tt.secretName)
+
+			if tt.expectedError {
+				require.Error(t, err)
+				if tt.expectedErrorString != "" {
+					require.Contains(t, err.Error(), tt.expectedErrorString)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestReferenceGrantValidator_MatchesFrom_WrongGroup tests matchesFrom with wrong group
 func TestReferenceGrantValidator_MatchesFrom_WrongGroup(t *testing.T) {
 	scheme := runtime.NewScheme()
@@ -400,7 +500,7 @@ func TestReferenceGrantValidator_MatchesFrom_WrongGroup(t *testing.T) {
 		Namespace: "route-ns",
 	}
 
-	result := validator.matchesFrom(from, "route-ns")
+	result := validator.matchesFrom(from, aiServiceBackendGroup, aiGatewayRouteKind, "route-ns")
 	require.False(t, result, "should return false for wrong group")
 }
 
@@ -419,7 +519,7 @@ func TestReferenceGrantValidator_MatchesFrom_WrongKind(t *testing.T) {
 		Namespace: "route-ns",
 	}
 
-	result := validator.matchesFrom(from, "route-ns")
+	result := validator.matchesFrom(from, aiServiceBackendGroup, aiGatewayRouteKind, "route-ns")
 	require.False(t, result, "should return false for wrong kind")
 }
 
@@ -438,7 +538,7 @@ func TestReferenceGrantValidator_MatchesFrom_WrongNamespace(t *testing.T) {
 		Namespace: "wrong-ns",
 	}
 
-	result := validator.matchesFrom(from, "route-ns")
+	result := validator.matchesFrom(from, aiServiceBackendGroup, aiGatewayRouteKind, "route-ns")
 	require.False(t, result, "should return false for wrong namespace")
 }
 

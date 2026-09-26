@@ -285,6 +285,111 @@ func TestAWS_OIDCRotator(t *testing.T) {
 		require.WithinRange(t, expiration, startTime, startTime.Add(1*time.Hour))
 		verifyAwsCredentialsSecret(t, fakeClient, policyNameSpace, policyName, newAwsAccessKey, newAwsSecretKey, newAwsSessionToken, awsProfileName, awsRegion)
 	})
+
+	// Rotating AWS credentials via OIDC must not read the OIDC ClientSecret from a foreign namespace
+	// unless a validator (backed by a ReferenceGrant) authorizes it.
+	t.Run("cross-namespace OIDC client secret blocked without a validator", func(t *testing.T) {
+		victimNamespace := "victim-ns"
+		scheme := runtime.NewScheme()
+		scheme.AddKnownTypes(corev1.SchemeGroupVersion,
+			&corev1.Secret{},
+		)
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		createTestAwsSecret(t, fakeClient, policyName, oldAwsAccessKey, oldAwsSecretKey, oldAwsSessionToken, awsProfileName, awsRegion)
+		require.NoError(t, fakeClient.Create(t.Context(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: testClientSecret, Namespace: victimNamespace},
+			Data:       map[string][]byte{clientSecretKey: []byte(testClientSecret)},
+		}))
+
+		crossNsOIDC := oidc
+		crossNsOIDC.ClientSecret = gwapiv1.SecretObjectReference{
+			Name:      gwapiv1.ObjectName(testClientSecret),
+			Namespace: (*gwapiv1.Namespace)(ptr.To(victimNamespace)),
+		}
+
+		var mockSTS STSClient = &mockStsOperations{
+			assumeRoleWithWebIdentityFunc: func(_ context.Context, _ *sts.AssumeRoleWithWebIdentityInput, _ ...func(*sts.Options)) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+				return nil, fmt.Errorf("must not reach STS: the ReferenceGrant check should have blocked this request")
+			},
+		}
+		rotator := AWSOIDCRotator{
+			client:                         fakeClient,
+			stsClient:                      mockSTS,
+			backendSecurityPolicyNamespace: policyNameSpace,
+			backendSecurityPolicyName:      policyName,
+			oidc:                           &crossNsOIDC,
+			region:                         awsRegion,
+			roleArn:                        awsRoleArn,
+		}
+
+		ctx := oidcv3.InsecureIssuerURLContext(t.Context(), discoveryServer.URL)
+		expiration, err := rotator.Rotate(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "is not permitted")
+		require.True(t, expiration.IsZero())
+	})
+
+	// TestAWS_OIDCRotator/cross-namespace_OIDC_client_secret_allowed_with_a_validator verifies that
+	// a validator approving the cross-namespace reference (e.g. because a ReferenceGrant exists)
+	// still allows rotation to proceed.
+	t.Run("cross-namespace OIDC client secret allowed with a validator", func(t *testing.T) {
+		startTime := time.Now()
+		victimNamespace := "victim-ns"
+		scheme := runtime.NewScheme()
+		scheme.AddKnownTypes(corev1.SchemeGroupVersion,
+			&corev1.Secret{},
+		)
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		require.NoError(t, fakeClient.Create(t.Context(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: testClientSecret, Namespace: victimNamespace},
+			Data:       map[string][]byte{clientSecretKey: []byte(testClientSecret)},
+		}))
+
+		crossNsOIDC := oidc
+		crossNsOIDC.ClientSecret = gwapiv1.SecretObjectReference{
+			Name:      gwapiv1.ObjectName(testClientSecret),
+			Namespace: (*gwapiv1.Namespace)(ptr.To(victimNamespace)),
+		}
+
+		var validatorCalled bool
+		validateSecretRef := func(_ context.Context, fromNamespace, toNamespace, secretName string) error {
+			validatorCalled = true
+			assert.Equal(t, policyNameSpace, fromNamespace)
+			assert.Equal(t, victimNamespace, toNamespace)
+			assert.Equal(t, testClientSecret, secretName)
+			return nil
+		}
+
+		var mockSTS STSClient = &mockStsOperations{
+			assumeRoleWithWebIdentityFunc: func(_ context.Context, _ *sts.AssumeRoleWithWebIdentityInput, _ ...func(*sts.Options)) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+				return &sts.AssumeRoleWithWebIdentityOutput{
+					Credentials: &types.Credentials{
+						AccessKeyId:     aws.String(newAwsAccessKey),
+						SecretAccessKey: aws.String(newAwsSecretKey),
+						SessionToken:    aws.String(newAwsSessionToken),
+						Expiration:      aws.Time(startTime.Add(1 * time.Hour)),
+					},
+				}, nil
+			},
+		}
+		rotator := AWSOIDCRotator{
+			client:                         fakeClient,
+			stsClient:                      mockSTS,
+			backendSecurityPolicyNamespace: policyNameSpace,
+			backendSecurityPolicyName:      policyName,
+			oidc:                           &crossNsOIDC,
+			region:                         awsRegion,
+			roleArn:                        awsRoleArn,
+			validateSecretRef:              validateSecretRef,
+		}
+
+		ctx := oidcv3.InsecureIssuerURLContext(t.Context(), discoveryServer.URL)
+		expiration, err := rotator.Rotate(ctx)
+		require.NoError(t, err)
+		require.True(t, validatorCalled, "the validator must be consulted for the cross-namespace reference")
+		require.WithinRange(t, expiration, startTime, startTime.Add(1*time.Hour))
+		verifyAwsCredentialsSecret(t, fakeClient, policyNameSpace, policyName, newAwsAccessKey, newAwsSecretKey, newAwsSessionToken, awsProfileName, awsRegion)
+	})
 }
 
 func TestAWS_GetPreRotationTime(t *testing.T) {
