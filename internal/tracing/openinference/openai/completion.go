@@ -59,7 +59,7 @@ func (r *CompletionRecorder) RecordRequest(span trace.Span, req *openai.Completi
 
 // RecordResponseOnError implements the same method as defined in tracingapi.CompletionRecorder.
 func (r *CompletionRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
 
 // RecordResponseChunks implements the same method as defined in tracingapi.CompletionRecorder.
