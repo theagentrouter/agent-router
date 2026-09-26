@@ -6408,6 +6408,40 @@ spec:
                           excludeRegex must be specified
                         rule: has(self.include) || has(self.includeRegex) || has(self.exclude)
                           || has(self.excludeRegex)
+                    resourceIntegrity:
+                      description: |-
+                        ResourceIntegrity enables opt-in content-digest verification of this backend's MCP
+                        resources (e.g. skill files or other plain-text/blob content served via
+                        resources/read). Unlike tool integrity, a resource's content digest is a complete
+                        integrity check, not just an interface-level one: an MCP resource's entire "behavior"
+                        is the content itself, with no separate handler logic hidden behind it the way a
+                        tool's implementation is hidden behind its declared schema.
+
+                        If not specified, no integrity verification is performed for this backend's resources.
+                      properties:
+                        digests:
+                          additionalProperties:
+                            description: |-
+                              MCPResourceIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.
+
+                              This is its own named type, rather than a plain string with an x-kubernetes-validations
+                              CEL rule on the containing map, for the same reason as the digest type used elsewhere in
+                              this API for content-addressed fields: a CEL rule that loops over a map applying a regex
+                              per element is charged by the API server's cost estimator as if every value were
+                              unbounded in length, which blows the per-schema CEL cost budget. A native `pattern` on a
+                              fixed-length named type costs nothing extra at admission time and is exactly as strict.
+                            pattern: ^[0-9a-f]{64}$
+                            type: string
+                          description: |-
+                            Digests maps a resource URI, as the backend itself advertises it (before any
+                            backend-name URI rewriting the gateway applies), to the expected digest of that
+                            resource's canonical content, as a 64-character lowercase hex-encoded SHA-256 digest.
+                          maxProperties: 512
+                          minProperties: 1
+                          type: object
+                      required:
+                      - digests
+                      type: object
                     securityPolicy:
                       description: SecurityPolicy is the security policy to apply
                         to this MCP server.

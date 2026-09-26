@@ -208,6 +208,19 @@ type MCPRouteBackendRef struct {
 
 	// TODO: we can add resource selectors in the future.
 
+	// ResourceIntegrity enables opt-in content-digest verification of this backend's MCP
+	// resources (e.g. skill files or other plain-text/blob content served via
+	// resources/read). Unlike tool integrity, a resource's content digest is a complete
+	// integrity check, not just an interface-level one: an MCP resource's entire "behavior"
+	// is the content itself, with no separate handler logic hidden behind it the way a
+	// tool's implementation is hidden behind its declared schema.
+	//
+	// If not specified, no integrity verification is performed for this backend's resources.
+	//
+	// +kubebuilder:validation:Optional
+	// +optional
+	ResourceIntegrity *MCPResourceIntegrity `json:"resourceIntegrity,omitempty"`
+
 	// SecurityPolicy is the security policy to apply to this MCP server.
 	//
 	// +kubebuilder:validation:Optional
@@ -773,4 +786,38 @@ type ProtectedResourceMetadata struct {
 	// +kubebuilder:validation:Format=uri
 	// +optional
 	ResourcePolicyURI *string `json:"resourcePolicyUri,omitempty"`
+}
+
+// MCPResourceIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.
+//
+// This is its own named type, rather than a plain string with an x-kubernetes-validations
+// CEL rule on the containing map, for the same reason as the digest type used elsewhere in
+// this API for content-addressed fields: a CEL rule that loops over a map applying a regex
+// per element is charged by the API server's cost estimator as if every value were
+// unbounded in length, which blows the per-schema CEL cost budget. A native `pattern` on a
+// fixed-length named type costs nothing extra at admission time and is exactly as strict.
+//
+// +kubebuilder:validation:Pattern="^[0-9a-f]{64}$"
+type MCPResourceIntegrityDigest string
+
+// MCPResourceIntegrity configures opt-in content-digest verification of a backend's MCP
+// resources. Only resource URIs present in Digests are verified; any other resource the
+// backend exposes is passed through unverified.
+//
+// Verification happens when a resource is actually read (resources/read), not at
+// resources/list time: resources/list only returns metadata (URI, name, description), never
+// the content itself, so there is nothing to hash until a caller reads it. A read whose
+// content doesn't match its configured digest is rejected with an error instead of being
+// returned -- there is no separate Drop/Deny distinction the way there is for tool
+// integrity or canary checks, because a single resources/read has nothing analogous to
+// "drop this one entry from a list" to fall back to.
+type MCPResourceIntegrity struct {
+	// Digests maps a resource URI, as the backend itself advertises it (before any
+	// backend-name URI rewriting the gateway applies), to the expected digest of that
+	// resource's canonical content, as a 64-character lowercase hex-encoded SHA-256 digest.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinProperties=1
+	// +kubebuilder:validation:MaxProperties=512
+	Digests map[string]MCPResourceIntegrityDigest `json:"digests"`
 }

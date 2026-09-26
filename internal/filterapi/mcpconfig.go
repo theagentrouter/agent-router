@@ -80,6 +80,10 @@ type MCPBackend struct {
 	// When set, overrides the route-level PrefixMode for this specific backend.
 	// Defaults to Always if unset.
 	PrefixMode PrefixMode `json:"prefixMode,omitempty"`
+
+	// ResourceIntegrity, when set, enables opt-in content-digest verification of this
+	// backend's MCP resources at resources/read time.
+	ResourceIntegrity *MCPResourceIntegrity `json:"resourceIntegrity,omitempty"`
 }
 
 // MCPHeaderForward specifies a header to extract from the incoming request and forward to a backend.
@@ -242,4 +246,14 @@ type ToolCall struct {
 
 	// Tool is the name of the tool.
 	Tool string `json:"tool"`
+}
+
+// MCPResourceIntegrity configures opt-in content-digest verification of a backend's MCP
+// resources, checked at resources/read time. Only resource URIs present in Digests are
+// verified; any other resource the backend exposes is passed through unverified.
+type MCPResourceIntegrity struct {
+	// Digests maps a resource URI (as the backend itself advertises it, before any
+	// backend-name URI rewriting) to the expected lowercase-hex-encoded SHA-256 digest of
+	// that resource's canonical content.
+	Digests map[string]string `json:"digests,omitempty"`
 }
