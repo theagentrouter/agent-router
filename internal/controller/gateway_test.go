@@ -3357,6 +3357,7 @@ func Test_mcpConfig_Authorization_VerifiedJWT(t *testing.T) {
 		require.True(t, auth.VerifiedJWT, "VerifiedJWT must be true when securityPolicy.oauth is configured")
 	})
 }
+
 func Test_mcpConfig_BackendSelector(t *testing.T) {
 	t.Run("unset means no selector", func(t *testing.T) {
 		mcpRoutes := []aigv1b1.MCPRoute{
