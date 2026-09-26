@@ -134,6 +134,10 @@ Agent Router supports a wide range of AI providers, making it easy to integrate 
         <img src="site/static/img/providers/anthropic.svg" width="60" height="60" alt="Anthropic"/>
         <br><sub><b>Anthropic</b></sub>
       </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/vercel.svg" width="60" height="60" alt="Vercel AI Gateway"/>
+        <br><sub><b>Vercel AI Gateway</b></sub>
+      </td>
     </tr>
   </table>
 </div>

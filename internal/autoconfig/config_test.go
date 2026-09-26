@@ -37,6 +37,9 @@ var (
 	//go:embed testdata/tars.yaml
 	tarsYAML string
 
+	//go:embed testdata/vercel.yaml
+	vercelYAML string
+
 	//go:embed testdata/openrouter.yaml
 	openrouterYAML string
 
@@ -233,6 +236,26 @@ func TestWriteConfig(t *testing.T) {
 				OTELLog: &otelLogConfig{Exporter: "console"},
 			},
 			expected: tarsYAML,
+		},
+		{
+			name: "Vercel AI Gateway (https host)",
+			input: ConfigData{
+				Backends: []Backend{
+					{
+						Name:     "openai",
+						Hostname: "ai-gateway.vercel.sh",
+						Port:     443,
+						NeedsTLS: true,
+					},
+				},
+				OpenAI: &OpenAIConfig{
+					BackendName: "openai",
+					SchemaName:  "OpenAI",
+					Version:     "",
+				},
+				OTELLog: &otelLogConfig{Exporter: "console"},
+			},
+			expected: vercelYAML,
 		},
 		{
 			name: "OpenRouter (https path prefix)",
