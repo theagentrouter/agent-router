@@ -2277,7 +2277,7 @@ MCPRouteSpec details the MCPRoute configuration.
   name="backendSelector"
   type="[MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselector)"
   required="false"
-  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered."
+  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered.<br />Security note: a backendSelector rule whose CEL expression reads request.auth.jwt<br />(claims or scopes) only reflects verified JWT data when SecurityPolicy.OAuth is<br />configured for this route; the XValidation below enforces that pairing so that<br />unauthenticated or forged bearer tokens can't influence backend selection."
 />
 
 
@@ -5140,7 +5140,7 @@ MCPRouteSpec details the MCPRoute configuration.
   name="backendSelector"
   type="[MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)"
   required="false"
-  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered."
+  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered.<br />Security note: a backendSelector rule whose CEL expression reads request.auth.jwt<br />(claims or scopes) only reflects verified JWT data when SecurityPolicy.OAuth is<br />configured for this route; the XValidation below enforces that pairing so that<br />unauthenticated or forged bearer tokens can't influence backend selection."
 /><ApiField
   name="prefixMode"
   type="[MCPRoutePrefixMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode)"
