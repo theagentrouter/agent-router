@@ -294,16 +294,31 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 	}, nil
 }
 
+// errSessionSubjectMismatch is returned by sessionFromID when the subject embedded in the
+// decrypted session ID (set at session creation from the authenticated caller's JWT "sub" claim)
+// does not match the current request's authenticated subject. This is the anti-hijacking check
+// documented at https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices#session-hijacking:
+// without it, any client in possession of a Mcp-Session-Id value (its own or another user's) could
+// resume another user's session and act with its already-initialized backend session(s).
+var errSessionSubjectMismatch = errors.New("session ID was issued for a different authenticated subject")
+
 // sessionFromID returns the session with the given ID, or error if not found or invalid.
-func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, lastEvent secureClientToGatewayEventID) (*session, error) {
+//
+// currentSubject is the authenticated subject of the current request (see extractSubject) and
+// MUST be compared against the subject embedded in the session ID to prevent session hijacking:
+// resuming a session must only be allowed for the same authenticated caller that created it.
+func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, lastEvent secureClientToGatewayEventID, currentSubject string) (*session, error) {
 	decrypted, err := m.sessionCrypto.Decrypt(string(id))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt session ID: %w", err)
 	}
 
-	perBackendSessionIDs, route, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
+	perBackendSessionIDs, route, subject, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
 	if err != nil {
 		return nil, err
+	}
+	if subject != currentSubject {
+		return nil, errSessionSubjectMismatch
 	}
 	if len(lastEvent) != 0 {
 		decryptedEventID, err := m.sessionCrypto.Decrypt(string(lastEvent))
