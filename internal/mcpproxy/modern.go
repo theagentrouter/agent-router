@@ -262,7 +262,7 @@ func (m *mcpRequestContext) handleServerDiscover(ctx context.Context, w http.Res
 // cache was removed until we have a multiplexing-aware caching strategy (see the
 // TODO on defaultTTLMs/defaultCacheScope in era.go), so every discover currently
 // hits the backend live.
-func (m *mcpRequestContext) discoverBackend(ctx context.Context, route filterapi.MCPRouteName, backend filterapi.MCPBackend) (*mcp.DiscoverResult, error) {
+func (m *mcpRequestContext) discoverBackend(ctx context.Context, route filterapi.MCPRouteName, backend filterapi.MCPBackend) (*mcp.DiscoverResult, error) { //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional CanaryChecks field; not worth pointer-ifying every existing by-value backend param for that.
 	id, _ := jsonrpc.MakeID(fmt.Sprintf("gw-discover-%s-%d", backend.Name, time.Now().UnixNano()))
 	req := &jsonrpc.Request{
 		ID:     id,
@@ -501,7 +501,7 @@ func sendToAllModernBackendsAndAggregateResponses[T any](ctx context.Context, m 
 
 // sendModernRequest sends a JSON-RPC request to a modern backend with proper headers (P1.6).
 // Returns the raw result JSON. Handles both plain JSON and SSE response formats.
-func (m *mcpRequestContext) sendModernRequest(ctx context.Context, req *jsonrpc.Request, route filterapi.MCPRouteName, backend filterapi.MCPBackend) (json.RawMessage, error) {
+func (m *mcpRequestContext) sendModernRequest(ctx context.Context, req *jsonrpc.Request, route filterapi.MCPRouteName, backend filterapi.MCPBackend) (json.RawMessage, error) { //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional CanaryChecks field; not worth pointer-ifying every existing by-value backend param for that.
 	body, err := jsonrpc.EncodeMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf("encode request: %w", err)
@@ -788,7 +788,7 @@ func mergeCachingHintsFromBackends(results []mcp.Cacheable) (int, string) {
 // outbound backend call. resolveModernRouteBackends extracts them first; this
 // falls back to extracting from the current request when sendModernRequest is
 // invoked directly (tests).
-func (m *mcpRequestContext) applyForwardHeaders(httpReq *http.Request, route filterapi.MCPRouteName, backend filterapi.MCPBackend) {
+func (m *mcpRequestContext) applyForwardHeaders(httpReq *http.Request, route filterapi.MCPRouteName, backend filterapi.MCPBackend) { //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional CanaryChecks field; not worth pointer-ifying every existing by-value backend param for that.
 	if !m.forwardHeadersResolved {
 		if routeConfig := m.routes[route]; routeConfig != nil {
 			m.extraHeaders = extractForwardHeaders(m.requestHeaders, routeConfig.forwardHeaders)

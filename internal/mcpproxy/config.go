@@ -32,6 +32,11 @@ type (
 		client                     http.Client
 		logRequestHeaderAttributes map[string]string
 		maxRequestBodySize         int64 // maximum allowed POST body size in bytes
+		// canaryProber runs configured canary checks in the background and tracks their
+		// health. It is created once and outlives individual LoadConfig reloads, unlike
+		// mcpProxyConfig, since a check's failure state must survive unrelated config
+		// changes. LoadConfig calls its reconcile method on every reload.
+		canaryProber *canaryProber
 	}
 
 	mcpProxyConfig struct {
@@ -349,6 +354,9 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 	p.mcpProxyConfig = newConfig // This is racy, but we don't care.
 	if toolsChanged {
 		p.toolChangeSignaler.Signal()
+	}
+	if p.canaryProber != nil {
+		p.canaryProber.reconcile(newConfig)
 	}
 
 	return nil

@@ -606,6 +606,23 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 }
 
 // reconcileFilterConfigSecretForMCPGateway updates the filter config secret for the external processor.
+// defaultCanaryCheckInterval is used when a MCPCanaryCheck doesn't specify Interval, or
+// specifies one that fails to parse (which validation should already prevent).
+const defaultCanaryCheckInterval = time.Minute
+
+// canaryCheckIntervalOrDefault parses d, falling back to defaultCanaryCheckInterval when d
+// is unset, non-positive, or fails to parse.
+func canaryCheckIntervalOrDefault(d *gwapiv1.Duration) time.Duration {
+	if d == nil {
+		return defaultCanaryCheckInterval
+	}
+	parsed, err := time.ParseDuration(string(*d))
+	if err != nil || parsed <= 0 {
+		return defaultCanaryCheckInterval
+	}
+	return parsed
+}
+
 func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffectiveRoute bool) {
 	if len(mcpRoutes) == 0 {
 		return nil, false
@@ -624,7 +641,8 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			Name:     fmt.Sprintf("%s/%s", route.Namespace, route.Name),
 			Backends: []filterapi.MCPBackend{},
 		}
-		for _, b := range route.Spec.BackendRefs {
+		for j := range route.Spec.BackendRefs {
+			b := &route.Spec.BackendRefs[j]
 			mcpBackend := filterapi.MCPBackend{
 				// MCPRoute doesn't support cross-namespace backend reference so just use the name.
 				Name: filterapi.MCPBackendName(b.Name),
@@ -655,6 +673,30 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			// Propagate per-backend PrefixMode for all valid enum values.
 			if b.PrefixMode != nil {
 				mcpBackend.PrefixMode = filterapi.PrefixMode(*b.PrefixMode)
+			}
+			for _, cc := range b.CanaryChecks {
+				check := filterapi.MCPCanaryCheck{
+					Tool: cc.Tool,
+					Expect: filterapi.MCPCanaryExpectation{
+						Contains: ptr.Deref(cc.Expect.Contains, ""),
+						Equals:   ptr.Deref(cc.Expect.Equals, ""),
+					},
+					Interval:  canaryCheckIntervalOrDefault(cc.Interval),
+					OnFailure: filterapi.CanaryAction(ptr.Deref(cc.OnFailure, aigv1b1.MCPCanaryActionDrop)),
+				}
+				if cc.Arguments != nil && len(cc.Arguments.Raw) > 0 {
+					// Raw is always well-formed JSON: the API server enforces that for
+					// any Schemaless/PreserveUnknownFields field at admission time, so a
+					// stored MCPRoute can never carry malformed bytes here. If this ever
+					// somehow failed, calling the tool with no arguments is a reasonable
+					// degradation -- not worth threading an error return through
+					// mcpConfig's signature for a case that cannot occur in practice.
+					var args map[string]any
+					if err := stdjson.Unmarshal(cc.Arguments.Raw, &args); err == nil {
+						check.Arguments = args
+					}
+				}
+				mcpBackend.CanaryChecks = append(mcpBackend.CanaryChecks, check)
 			}
 			mcpRoute.Backends = append(
 				mcpRoute.Backends, mcpBackend)

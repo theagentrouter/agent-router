@@ -76,6 +76,7 @@ func NewMCPProxy(l *slog.Logger, mcpMetrics metrics.MCPMetrics, tracer tracingap
 		logRequestHeaderAttributes: maps.Clone(logRequestHeaderAttributes),
 		maxRequestBodySize:         getMaxRequestBodySize(),
 	}
+	cfg.canaryProber = newCanaryProber(l, nil, func() string { return cfg.backendListenerAddr })
 	mux := http.NewServeMux()
 	mux.HandleFunc(
 		// Must match all paths since the route selection happens at Envoy level and the "route" header is already
@@ -161,26 +162,45 @@ func extractMetaFromJSONRPCMessage(msg jsonrpc.Message) map[string]any {
 
 // selectAuthorizedBackends returns the subset of route backends this request may fan out to.
 // spec.backendSelector is evaluated once per candidate backend using the caller's
-// headers. JWT/CEL inputs are parsed once and reused across candidates. With no
-// selector configured, all route backends are returned.
+// headers. JWT/CEL inputs are parsed once and reused across candidates. Backends with a
+// failing OnFailure=Deny canary check are excluded regardless of backendSelector. With
+// neither configured, all route backends are returned.
+//
+// This is evaluated once, when a new client session is created (see newSession and
+// resolveModernRouteBackends); an existing session's already-selected backends are
+// unaffected by a canary or backendSelector change until it reconnects, matching how
+// backendSelector has always behaved.
 func (m *mcpRequestContext) selectAuthorizedBackends(routeName filterapi.MCPRouteName, route *mcpProxyConfigRoute) (map[filterapi.MCPBackendName]filterapi.MCPBackend, error) {
-	if route.backendSelector == nil {
+	canaryHealth := m.canaryProber.routeState(routeName)
+
+	if route.backendSelector == nil && canaryHealth == nil {
 		return route.backends, nil
 	}
+
+	var authzCtx *authzContext
 	headers := m.requestHeaders
 	if headers == nil {
 		headers = http.Header{}
 	}
+	if route.backendSelector != nil {
+		authzCtx = m.newAuthzContext(&authorizationRequest{Headers: headers})
+	}
+
 	filtered := make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(route.backends))
-	authzCtx := m.newAuthzContext(&authorizationRequest{Headers: headers})
 	for name, backend := range route.backends {
-		allowed, _ := m.authorizeRequestWith(route.backendSelector, &authorizationRequest{
-			Headers: headers,
-			Backend: name,
-		}, authzCtx)
-		if allowed {
-			filtered[name] = backend
+		if canaryHealth != nil && !canaryHealth.isBackendDenyHealthy(name) {
+			continue
 		}
+		if route.backendSelector != nil {
+			allowed, _ := m.authorizeRequestWith(route.backendSelector, &authorizationRequest{
+				Headers: headers,
+				Backend: name,
+			}, authzCtx)
+			if !allowed {
+				continue
+			}
+		}
+		filtered[name] = backend
 	}
 	if len(filtered) == 0 {
 		return nil, fmt.Errorf("%w for route %s", errNoMatchingBackendSelector, routeName)
@@ -468,7 +488,7 @@ type initializeResult struct {
 	result    *mcp.InitializeResult
 }
 
-func (m *mcpRequestContext) initializeSession(ctx context.Context, routeName filterapi.MCPRouteName, backend filterapi.MCPBackend, p *mcp.InitializeParams, startAt time.Time) (*initializeResult, error) {
+func (m *mcpRequestContext) initializeSession(ctx context.Context, routeName filterapi.MCPRouteName, backend filterapi.MCPBackend, p *mcp.InitializeParams, startAt time.Time) (*initializeResult, error) { //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional CanaryChecks field; not worth pointer-ifying every existing by-value backend param for that.
 	// Send the initialize request to the MCP backend listener.
 	reqID := mustJSONRPCRequestID()
 	var (
@@ -607,7 +627,7 @@ func (m *mcpRequestContext) initializeSession(ctx context.Context, routeName fil
 	}, nil
 }
 
-func (m *mcpRequestContext) invokeJSONRPCRequest(ctx context.Context, routeName filterapi.MCPRouteName, backend filterapi.MCPBackend, cse *compositeSessionEntry, msg jsonrpc.Message, params mcp.Params) (*http.Response, error) {
+func (m *mcpRequestContext) invokeJSONRPCRequest(ctx context.Context, routeName filterapi.MCPRouteName, backend filterapi.MCPBackend, cse *compositeSessionEntry, msg jsonrpc.Message, params mcp.Params) (*http.Response, error) { //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional CanaryChecks field; not worth pointer-ifying every existing by-value backend param for that.
 	encoded, err := jsonrpc.EncodeMessage(msg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode MCP message: %w", err)

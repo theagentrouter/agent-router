@@ -6254,6 +6254,83 @@ spec:
                   description: MCPRouteBackendRef wraps a EG's BackendObjectReference
                     to reference an MCP server.
                   properties:
+                    canaryChecks:
+                      description: |-
+                        CanaryChecks define synthetic health checks that periodically invoke this backend's
+                        tools with known inputs and verify the result still matches what was reviewed and
+                        trusted. MCP's tools/list only describes a tool's declared interface (name,
+                        description, schemas, annotations); nothing in the protocol lets a caller see the
+                        handler logic behind that interface. A backend that starts behaving differently while
+                        keeping its declared interface identical is therefore invisible to any check based on
+                        tools/list alone. Canary checks close that gap by actually calling the tool and
+                        verifying its real, live behavior.
+
+                        A failing check whose OnFailure is Deny excludes this backend from being selected for
+                        any new client session (gating tools/call, not just discovery); Drop only omits the
+                        checked tool from tools/list. See MCPCanaryCheck for details.
+                      items:
+                        description: |-
+                          MCPCanaryCheck defines a single synthetic health check: periodically call one of this
+                          backend's tools with known arguments and verify the result still looks the way it did
+                          when this check was configured and trusted.
+
+                          This is deliberately a real tools/call to the real backend, dispatched directly by the
+                          gateway (bypassing per-caller authorization and tool selectors, since it is testing the
+                          backend itself, not a caller's access to it) -- not a synthetic simulation. Only
+                          configure this for tools that are safe to invoke repeatedly with the given arguments
+                          (idempotent, no meaningful side effects) and whose output is stable enough to assert on.
+                        properties:
+                          arguments:
+                            description: |-
+                              Arguments are the JSON arguments passed to the tool call, exactly as a real caller
+                              would supply them. If omitted, the tool is called with no arguments.
+                            x-kubernetes-preserve-unknown-fields: true
+                          expect:
+                            description: Expect defines what a healthy result looks
+                              like.
+                            properties:
+                              contains:
+                                description: Contains, when set, requires the tool
+                                  result's text content to contain this substring.
+                                maxLength: 4096
+                                type: string
+                              equals:
+                                description: Equals, when set, requires the tool result's
+                                  text content to equal this string exactly.
+                                maxLength: 4096
+                                type: string
+                            type: object
+                            x-kubernetes-validations:
+                            - message: one of contains or equals must be specified
+                              rule: has(self.contains) || has(self.equals)
+                          interval:
+                            default: 1m
+                            description: Interval is how often to run this check.
+                              If not specified, defaults to 1 minute.
+                            pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
+                            type: string
+                          onFailure:
+                            default: Drop
+                            description: |-
+                              OnFailure controls what happens when this check's result stops matching Expect.
+                              If not specified, defaults to Drop.
+                            enum:
+                            - Drop
+                            - Deny
+                            type: string
+                          tool:
+                            description: |-
+                              Tool is the bare name of the tool on this backend to invoke (before any backend-name
+                              prefixing the gateway applies).
+                            maxLength: 256
+                            minLength: 1
+                            type: string
+                        required:
+                        - expect
+                        - tool
+                        type: object
+                      maxItems: 16
+                      type: array
                     forwardHeaders:
                       description: |-
                         ForwardHeaders specifies HTTP headers to extract from the incoming client request
