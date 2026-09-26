@@ -615,7 +615,8 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			Name:     fmt.Sprintf("%s/%s", route.Namespace, route.Name),
 			Backends: []filterapi.MCPBackend{},
 		}
-		for _, b := range route.Spec.BackendRefs {
+		for j := range route.Spec.BackendRefs {
+			b := &route.Spec.BackendRefs[j]
 			mcpBackend := filterapi.MCPBackend{
 				// MCPRoute doesn't support cross-namespace backend reference so just use the name.
 				Name: filterapi.MCPBackendName(b.Name),
@@ -646,6 +647,13 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			// Propagate per-backend PrefixMode for all valid enum values.
 			if b.PrefixMode != nil {
 				mcpBackend.PrefixMode = filterapi.PrefixMode(*b.PrefixMode)
+			}
+			if b.ResourceIntegrity != nil {
+				digests := make(map[string]string, len(b.ResourceIntegrity.Digests))
+				for uri, digest := range b.ResourceIntegrity.Digests {
+					digests[uri] = string(digest)
+				}
+				mcpBackend.ResourceIntegrity = &filterapi.MCPResourceIntegrity{Digests: digests}
 			}
 			mcpRoute.Backends = append(
 				mcpRoute.Backends, mcpBackend)

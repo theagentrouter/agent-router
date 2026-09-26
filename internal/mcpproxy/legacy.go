@@ -735,8 +735,15 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 }
 
 func (m *mcpRequestContext) proxyResponseBody(ctx context.Context, s *session, w http.ResponseWriter, resp *http.Response,
-	req *jsonrpc.Request, backend filterapi.MCPBackend, span tracingapi.MCPSpan,
+	req *jsonrpc.Request, backend filterapi.MCPBackend, span tracingapi.MCPSpan, //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional ResourceIntegrity field; not worth pointer-ifying every existing by-value backend param for that.
 ) error {
+	// s is nil for session-less proxying (e.g. TestProxyResponseBody_JSONResponse); resource
+	// integrity lookups below simply find no route and skip verification in that case.
+	var routeName filterapi.MCPRouteName
+	if s != nil {
+		routeName = s.route
+	}
+
 	// Some backends (e.g. Slack MCP) send SSE data despite Content-Type: application/json.
 	// Try to decode as a single JSON-RPC message first; if that fails, fall through to the
 	// SSE parser using the already-read bytes.
@@ -759,7 +766,7 @@ func (m *mcpRequestContext) proxyResponseBody(ctx context.Context, s *session, w
 				body, _ = jsonrpc.EncodeMessage(msg)
 			case *jsonrpc.Response:
 				if req != nil {
-					if err = m.maybeResponseModify(ctx, req, msg, backend.Name); err != nil {
+					if err = m.maybeResponseModify(ctx, req, msg, routeName, backend.Name); err != nil {
 						m.l.Error("failed to modify response", slog.String("error", err.Error()))
 						return err
 					}
@@ -831,7 +838,7 @@ func (m *mcpRequestContext) proxyResponseBody(ctx context.Context, s *session, w
 				case *jsonrpc.Response:
 					// Correct the ID to match the original request if possible.
 					if req != nil {
-						if err = m.maybeResponseModify(ctx, req, msg, backend.Name); err != nil {
+						if err = m.maybeResponseModify(ctx, req, msg, routeName, backend.Name); err != nil {
 							m.l.Error("failed to modify response", slog.String("error", err.Error()))
 							continue
 						}
@@ -900,7 +907,7 @@ func (m *mcpRequestContext) maybeUpdateProgressTokenMetadata(ctx context.Context
 }
 
 // maybeResponseModify modifies the client->server response to include the backend name where needed.
-func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.Request, msg *jsonrpc.Response, backend filterapi.MCPBackendName) error {
+func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.Request, msg *jsonrpc.Response, routeName filterapi.MCPRouteName, backend filterapi.MCPBackendName) error {
 	if msg.Result == nil {
 		return nil
 	}
@@ -909,6 +916,31 @@ func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.
 		result := &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{}}
 		if err := json.Unmarshal(msg.Result, result); err != nil {
 			return fmt.Errorf("failed to unmarshal resources/read result: %w", err)
+		}
+		// Digests are keyed by the backend's own advertised URI, so integrity is checked
+		// before downstreamResourceURI rewrites it below.
+		var digests map[string]string
+		if route := m.routes[routeName]; route != nil {
+			digests = route.resourceIntegrity[backend]
+		}
+		if digests != nil {
+			for _, res := range result.Contents {
+				ok, mismatched, err := verifyResourceIntegrity(digests, res)
+				if err != nil {
+					m.l.Error("failed to compute resource integrity digest", slog.String("backend", backend), slog.String("uri", res.URI), slog.String("error", err.Error()))
+					msg.Result = nil
+					msg.Error = &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "failed to verify resource integrity"}
+					return nil
+				}
+				if !ok {
+					if mismatched {
+						m.l.Warn("rejecting resources/read: content digest mismatch", slog.String("backend", backend), slog.String("uri", res.URI))
+					}
+					msg.Result = nil
+					msg.Error = &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: fmt.Sprintf("resource %q failed integrity verification", res.URI)}
+					return nil
+				}
+			}
 		}
 		for _, res := range result.Contents {
 			res.URI = downstreamResourceURI(res.URI, backend)
@@ -1364,7 +1396,7 @@ func copyProxyHeaders(resp *http.Response, w http.ResponseWriter) {
 
 // invokeAndProxyResponse invokes the given JSON-RPC request to the given backend and proxies the response back to the client
 // via w ResponseWriter.
-func (m *mcpRequestContext) invokeAndProxyResponse(ctx context.Context, s *session, w http.ResponseWriter, backend filterapi.MCPBackend, sess *compositeSessionEntry, req *jsonrpc.Request, params mcp.Params, span tracingapi.MCPSpan) error {
+func (m *mcpRequestContext) invokeAndProxyResponse(ctx context.Context, s *session, w http.ResponseWriter, backend filterapi.MCPBackend, sess *compositeSessionEntry, req *jsonrpc.Request, params mcp.Params, span tracingapi.MCPSpan) error { //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional ResourceIntegrity field; not worth pointer-ifying every existing by-value backend param for that.
 	resp, err := m.invokeJSONRPCRequest(ctx, s.route, backend, sess, req, params)
 	if err != nil {
 		onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("call to %s failed: %v", backend.Name, err))

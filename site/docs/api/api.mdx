@@ -3184,6 +3184,8 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselectorrule)
 - [MCPHeaderForward](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpheaderforward)
 - [MCPPromptFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter)
+- [MCPResourceIntegrity](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpresourceintegrity)
+- [MCPResourceIntegrityDigest](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpresourceintegritydigest)
 - [MCPRouteAuthorization](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorization)
 - [MCPRouteAuthorizationRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorizationrule)
 - [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
@@ -4794,6 +4796,56 @@ a prompt must match an include rule AND not match any exclude rule to be allowed
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpresourceintegrity">MCPResourceIntegrity</a>
+
+
+
+**Appears in:**
+- [MCPRouteBackendRef](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutebackendref)
+
+MCPResourceIntegrity configures opt-in content-digest verification of a backend's MCP
+resources. Only resource URIs present in Digests are verified; any other resource the
+backend exposes is passed through unverified.
+
+Verification happens when a resource is actually read (resources/read), not at
+resources/list time: resources/list only returns metadata (URI, name, description), never
+the content itself, so there is nothing to hash until a caller reads it. A read whose
+content doesn't match its configured digest is rejected with an error instead of being
+returned -- there is no separate Drop/Deny distinction the way there is for tool
+integrity or canary checks, because a single resources/read has nothing analogous to
+"drop this one entry from a list" to fall back to.
+
+##### Fields
+
+
+
+<ApiField
+  name="digests"
+  type="object (keys:string, values:[MCPResourceIntegrityDigest](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpresourceintegritydigest))"
+  required="true"
+  description="Digests maps a resource URI, as the backend itself advertises it (before any<br />backend-name URI rewriting the gateway applies), to the expected digest of that<br />resource's canonical content, as a 64-character lowercase hex-encoded SHA-256 digest."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpresourceintegritydigest">MCPResourceIntegrityDigest</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPResourceIntegrity](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpresourceintegrity)
+
+MCPResourceIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.
+
+This is its own named type, rather than a plain string with an x-kubernetes-validations
+CEL rule on the containing map, for the same reason as the digest type used elsewhere in
+this API for content-addressed fields: a CEL rule that loops over a map applying a regex
+per element is charged by the API server's cost estimator as if every value were
+unbounded in length, which blows the per-schema CEL cost budget. A native `pattern` on a
+fixed-length named type costs nothing extra at admission time and is exactly as strict.
+
+
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteauthorization">MCPRouteAuthorization</a>
 
 
@@ -4914,6 +4966,11 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   type="[MCPPromptFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcppromptfilter)"
   required="false"
   description="PromptSelector filters the prompts exposed by this MCP server, analogous to ToolSelector.<br />If not specified, all prompts from the MCP server are exposed.<br />This is also used to determine which prompt names can be safely exposed unprefixed when<br />this backend's effective PrefixMode is Never: only prompts named in Include are validated<br />for cross-backend uniqueness and exposed bare. If unset while PrefixMode is Never, this<br />backend's prompts are not exposed bare (they keep the `<backendName>__` prefix) because<br />their names cannot be proven unique at admission time."
+/><ApiField
+  name="resourceIntegrity"
+  type="[MCPResourceIntegrity](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpresourceintegrity)"
+  required="false"
+  description="ResourceIntegrity enables opt-in content-digest verification of this backend's MCP<br />resources (e.g. skill files or other plain-text/blob content served via<br />resources/read). Unlike tool integrity, a resource's content digest is a complete<br />integrity check, not just an interface-level one: an MCP resource's entire `behavior`<br />is the content itself, with no separate handler logic hidden behind it the way a<br />tool's implementation is hidden behind its declared schema.<br />If not specified, no integrity verification is performed for this backend's resources."
 /><ApiField
   name="securityPolicy"
   type="[MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy)"

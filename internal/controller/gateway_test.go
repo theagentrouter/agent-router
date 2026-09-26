@@ -3202,6 +3202,48 @@ func TestGatewayController_writeFilterConfigBundleShards_Overflow(t *testing.T) 
 	require.ErrorContains(t, err, "exceeds max supported slots")
 }
 
+func Test_mcpConfig_ResourceIntegrity(t *testing.T) {
+	t.Run("digests are propagated", func(t *testing.T) {
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+						ResourceIntegrity: &aigv1b1.MCPResourceIntegrity{
+							Digests: map[string]aigv1b1.MCPResourceIntegrityDigest{
+								"skill://readme": aigv1b1.MCPResourceIntegrityDigest(strings.Repeat("a", 64)),
+							},
+						},
+					}},
+				},
+			},
+		}
+
+		mc, effective := mcpConfig(mcpRoutes)
+		require.True(t, effective)
+		ri := mc.Routes[0].Backends[0].ResourceIntegrity
+		require.NotNil(t, ri)
+		require.Equal(t, map[string]string{"skill://readme": strings.Repeat("a", 64)}, ri.Digests)
+	})
+
+	t.Run("unset ResourceIntegrity leaves it nil", func(t *testing.T) {
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+					}},
+				},
+			},
+		}
+
+		mc, _ := mcpConfig(mcpRoutes)
+		require.Nil(t, mc.Routes[0].Backends[0].ResourceIntegrity)
+	})
+}
+
 func Test_mcpConfig_ToolSelectorExclude(t *testing.T) {
 	mcpRoutes := []aigv1b1.MCPRoute{
 		{
