@@ -247,9 +247,11 @@ func NewResponsesRecorder(config *Config) tracingapi.ResponsesRecorder {
 		requestModel:       func(r *openai.ResponseRequest) string { return r.Model },
 		requestAttrs:       responsesRequestAttrs,
 		responseAttrs:      responsesResponseAttrs,
+		inputMessages:      responsesInputMessages,
 		outputMessages:     responsesOutputMessages,
 		systemInstructions: responsesSystemInstructions,
 		conversationID:     responsesConversationID,
+		foldChunks:         responsesFoldChunks,
 	}
 }
 
