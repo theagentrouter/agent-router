@@ -11,6 +11,7 @@ traffic for various AI providers.
 - `azure_openai.yaml` - Azure OpenAI integration
 - `gcp_vertex.yaml` - GCP Vertex AI integration
 - `tars.yaml` - TARS integration
+- `thegrid.yaml` - The Grid integration
 - `cohere.yaml` - Cohere integration
 - `typesafe.yaml` - TypeSafe AI (Jev) integration
 
