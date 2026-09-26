@@ -547,6 +547,23 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 				},
 			},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "hidden-alias-route", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"api.example.com"},
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs:               []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}},
+						ExcludeFromModelsEndpoint: true,
+						Matches: []aigv1b1.AIGatewayRouteRuleMatch{
+							{Headers: []gwapiv1.HTTPHeaderMatch{
+								{Name: internalapi.ModelNameHeaderKeyDefault, Value: "hidden-alias"},
+							}},
+						},
+					},
+				},
+			},
+		},
 	}
 	for _, b := range []*aigv1b1.AIServiceBackend{
 		{
@@ -590,6 +607,14 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 		gotHostModels = append(gotHostModels, m.Name)
 	}
 	require.ElementsMatch(t, []string{"scoped-model", "unscoped-model"}, gotHostModels)
+
+	// The hidden alias must keep its backend config so requests can still be routed.
+	hiddenAliasBackendName := internalapi.PerRouteRuleRefBackendName(gwNamespace, "apple", "hidden-alias-route", 0, 0)
+	backendNames := make([]string, 0, len(fc.Backends))
+	for _, backend := range fc.Backends {
+		backendNames = append(backendNames, backend.Name)
+	}
+	require.Contains(t, backendNames, hiddenAliasBackendName)
 }
 
 // TestGatewayController_reconcileFilterConfigSecret_AllUnscopedRoutesLeaveUnscopedModelsEmpty
