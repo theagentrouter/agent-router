@@ -789,6 +789,50 @@ func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostA
 	requireLLMRequestCostsEqual(t, wantLLMRequestCosts, fc.LLMRequestCosts)
 }
 
+// TestGatewayController_reconcileFilterConfigSecret_LLMRequestCostsWithUnresolvedBackend
+// verifies that a route's LLMRequestCosts still reach the filter config when none of its
+// backendRefs resolve. The costs are route-scoped, so gating them on backend resolution
+// would silently strip the metadata keys a BackendTrafficPolicy rateLimit charges against.
+func TestGatewayController_reconcileFilterConfigSecret_LLMRequestCostsWithUnresolvedBackend(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	kube := fake2.NewClientset()
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zap.Options{Development: true, Level: zapcore.DebugLevel})))
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	const gwNamespace = "ns"
+	routes := []aigv1b1.AIGatewayRoute{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "route-with-missing-backend", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					// No AIServiceBackend named "not-yet-created" exists, so this backendRef
+					// is skipped for this reconcile.
+					{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "not-yet-created"}}},
+				},
+				LLMRequestCosts: []aigv1b1.LLMRequestCost{
+					{MetadataKey: "llm_total_token", Type: aigv1b1.LLMRequestCostTypeTotalToken},
+				},
+			},
+		},
+	}
+
+	const someNamespace = "some-namespace"
+	effective, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "foouuid", nil, nil)
+	require.NoError(t, err)
+	require.True(t, effective, "expected filter config to be effective")
+
+	fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", gwNamespace)
+	require.Empty(t, fc.Backends, "the unresolved backendRef must not produce a backend")
+	requireLLMRequestCostsEqual(t, []filterapi.LLMRequestCost{
+		{
+			MetadataKey: "llm_total_token",
+			RouteName:   "ns/route-with-missing-backend",
+			Type:        filterapi.LLMRequestCostTypeTotalToken,
+		},
+	}, fc.LLMRequestCosts)
+}
+
 // TestGatewayController_reconcileFilterConfigSecret_InvalidCELExpression tests that invalid CEL
 // expressions in LLMRequestCosts cause an error during reconciliation.
 func TestGatewayController_reconcileFilterConfigSecret_InvalidCELExpression(t *testing.T) {

@@ -331,3 +331,26 @@ curl -H "Content-Type: application/json" \
     }' \
   $GATEWAY_URL/v1/chat/completions
 ```
+
+## Troubleshooting
+
+### Requests are never limited
+
+Token limits are charged from dynamic metadata, so a rule whose cost key is never written charges nothing and the limit never fires. Check, in order:
+
+1. **The `BackendTrafficPolicy` has `targetRefs`.** A policy with only a `rateLimit` block and no `targetRefs` is attached to nothing, so no rate limit filter is configured. Target the `HTTPRoute` generated for your `AIGatewayRoute` — it carries the same name as the `AIGatewayRoute`.
+
+2. **The cost key is declared in `llmRequestCosts`.** `cost.response.metadata.key` only reads what AI Gateway wrote. Nothing is written for a key that no `llmRequestCosts` entry (or `GatewayConfig.spec.globalLLMRequestCosts` entry) declares, so a rule pointing at, say, `llm_total_token` needs the matching declaration:
+
+   ```yaml
+   spec:
+     llmRequestCosts:
+       - metadataKey: llm_total_token
+         type: TotalToken
+   ```
+
+   The namespace is always `io.envoy.ai_gateway`; only the key is yours to choose.
+
+3. **The `clientSelectors` match the request.** Descriptors are all-or-nothing: a rule whose selectors don't all match is not applied at all, and the request passes unlimited. An `x-ai-eg-model` selector must carry the model name the request actually resolves to — the value of the `model` field in the request body, or the `x-ai-eg-model` header when the client sets it explicitly.
+
+4. **Redis is reachable and rate limiting is enabled in Envoy Gateway.** Both are prerequisites; see the tip under [Configuration](#configuration).
