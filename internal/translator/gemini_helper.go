@@ -608,7 +608,7 @@ func isGeminiFlashModel(model internalapi.RequestModel) bool {
 // - "none" → ThinkingLevelMinimal (Gemini Flash only)
 // - "low" → ThinkingLevelLow
 // - "medium" → ThinkingLevelMedium for Flash, ThinkingLevelHigh for Pro
-// - "high" → ThinkingLevelHigh
+// - "high" → ThinkingLevelHigh (every Gemini 3 model; it is the Pro default)
 // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/start/get-started-with-gemini-3#openai-example
 func mapReasoningEffortToThinkingLevel(reasonEffort openai.ReasoningEffort, model internalapi.RequestModel) (genai.ThinkingLevel, error) {
 	isFlash := isGeminiFlashModel(model)
@@ -627,9 +627,6 @@ func mapReasoningEffortToThinkingLevel(reasonEffort openai.ReasoningEffort, mode
 		}
 		return genai.ThinkingLevelHigh, nil
 	case openai.ReasoningEffortHigh:
-		if !isFlash {
-			return "", fmt.Errorf("%w: reasoning effort 'high' is only supported for Gemini Flash models", internalapi.ErrInvalidRequestBody)
-		}
 		return genai.ThinkingLevelHigh, nil
 	default:
 		return "", fmt.Errorf("%w: unsupported reasoning effort level: %q (supported: none, low, medium, high)", internalapi.ErrInvalidRequestBody, reasonEffort)
