@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/controller/rotators"
@@ -498,6 +499,149 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 		require.Equal(t, "foo", fc.Backends[0].HeaderMutation.Set[0].Value)
 		require.Equal(t, "x-bar", fc.Backends[0].HeaderMutation.Remove[0])
 	}
+}
+
+// GatewayController must not include a cross-namespace AIServiceBackend/InferencePool
+// (and its BackendSecurityPolicy credentials) in the extproc filter config unless a ReferenceGrant permits it.
+func TestGatewayController_reconcileFilterConfigSecret_CrossNamespaceReferenceGrant(t *testing.T) {
+	const (
+		routeNamespace   = "tenant-a"
+		backendNamespace = "tenant-b"
+	)
+
+	newRoute := func(kind, name string) []aigv1b1.AIGatewayRoute {
+		group := aiServiceBackendGroup
+		if kind == "InferencePool" {
+			group = inferencePoolGroup
+		}
+		return []aigv1b1.AIGatewayRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: routeNamespace},
+				Spec: aigv1b1.AIGatewayRouteSpec{
+					Rules: []aigv1b1.AIGatewayRouteRule{
+						{
+							BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+								{
+									Name:      name,
+									Namespace: ptr.To(gwapiv1.Namespace(backendNamespace)),
+									Group:     ptr.To(group),
+									Kind:      ptr.To(kind),
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	referenceGrant := func(fromGroup, fromKind, toGroup, toKind string) *gwapiv1b1.ReferenceGrant {
+		return &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow", Namespace: backendNamespace},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{Group: gwapiv1b1.Group(fromGroup), Kind: gwapiv1b1.Kind(fromKind), Namespace: routeNamespace}},
+				To:   []gwapiv1b1.ReferenceGrantTo{{Group: gwapiv1b1.Group(toGroup), Kind: gwapiv1b1.Kind(toKind)}},
+			},
+		}
+	}
+
+	setup := func(t *testing.T, grant *gwapiv1b1.ReferenceGrant) (*GatewayController, kubernetes.Interface) {
+		t.Helper()
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		kube := fake2.NewClientset()
+		c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+			"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "backend1", Namespace: backendNamespace},
+			Spec: aigv1b1.AIServiceBackendSpec{
+				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend", Namespace: ptr.To[gwapiv1.Namespace](backendNamespace)},
+			},
+		}))
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: backendNamespace},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+					SecretRef: &gwapiv1.SecretObjectReference{Name: "api-key-secret"},
+				},
+				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
+					{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: "backend1"},
+				},
+			},
+		}))
+		_, err := kube.CoreV1().Secrets(backendNamespace).Create(t.Context(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "api-key-secret", Namespace: backendNamespace},
+			Data:       map[string][]byte{apiKeyInSecret: []byte("supersecret")},
+		}, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		if grant != nil {
+			require.NoError(t, fakeClient.Create(t.Context(), grant))
+		}
+		return c, kube
+	}
+
+	t.Run("AIServiceBackend cross-namespace without ReferenceGrant is rejected", func(t *testing.T) {
+		c, kube := setup(t, nil)
+		const someNamespace = "some-namespace"
+		_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("AIServiceBackend", "backend1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Empty(t, fc.Backends, "cross-namespace backend without a ReferenceGrant must not be wired into the filter config")
+	})
+
+	t.Run("AIServiceBackend cross-namespace with ReferenceGrant is allowed", func(t *testing.T) {
+		grant := referenceGrant(aiServiceBackendGroup, aiGatewayRouteKind, aiServiceBackendGroup, aiServiceBackendKind)
+		c, kube := setup(t, grant)
+		const someNamespace = "some-namespace"
+		_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("AIServiceBackend", "backend1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Len(t, fc.Backends, 1)
+		require.NotNil(t, fc.Backends[0].Auth)
+		require.NotNil(t, fc.Backends[0].Auth.APIKey)
+		require.Equal(t, "supersecret", fc.Backends[0].Auth.APIKey.Key)
+	})
+
+	t.Run("InferencePool cross-namespace without ReferenceGrant is rejected", func(t *testing.T) {
+		c, kube := setup(t, nil)
+		const someNamespace = "some-namespace"
+		_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("InferencePool", "pool1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Empty(t, fc.Backends, "cross-namespace inference pool without a ReferenceGrant must not be wired into the filter config")
+	})
+
+	t.Run("InferencePool cross-namespace with ReferenceGrant is allowed", func(t *testing.T) {
+		grant := referenceGrant(aiServiceBackendGroup, aiGatewayRouteKind, inferencePoolGroup, inferencePoolKind)
+		c, kube := setup(t, grant)
+
+		// Re-target the existing BSP at the InferencePool instead of the AIServiceBackend.
+		var bsp aigv1b1.BackendSecurityPolicy
+		require.NoError(t, c.client.Get(t.Context(), client.ObjectKey{Namespace: backendNamespace, Name: "bsp"}, &bsp))
+		bsp.Spec.TargetRefs = []gwapiv1a2.LocalPolicyTargetReference{
+			{Kind: "InferencePool", Group: "inference.networking.k8s.io", Name: "pool1"},
+		}
+		require.NoError(t, c.client.Update(t.Context(), &bsp))
+
+		const someNamespace = "some-namespace"
+		_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("InferencePool", "pool1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Len(t, fc.Backends, 1)
+		require.NotNil(t, fc.Backends[0].Auth)
+		require.NotNil(t, fc.Backends[0].Auth.APIKey)
+		require.Equal(t, "supersecret", fc.Backends[0].Auth.APIKey.Key)
+	})
 }
 
 // TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels verifies that mixing routes
@@ -3332,10 +3476,8 @@ func Test_mcpConfig_ForwardHeaders(t *testing.T) {
 	require.Empty(t, backendB.ForwardHeaders)
 }
 
-// Test_mcpConfig_Authorization_VerifiedJWT is a regression test for GHSA-9mp9-4hr2-835f
-// (MCPRoute CEL Authorization Bypass via Unverified JWT Claims). The CRD's XValidation rule
-// only requires oauth when a rule's source.jwt is set; a CEL expression referencing
-// request.auth.jwt.claims/scopes is accepted without oauth configured. mcpConfig must still
+// The CRD's XValidation rule only requires oauth when a rule's source.jwt is set; a CEL expression
+// referencing request.auth.jwt.claims/scopes is accepted without oauth configured. mcpConfig must still
 // mark the resulting filterapi.MCPRouteAuthorization as VerifiedJWT: false in that case, so
 // the mcpproxy never trusts an attacker-forged bearer JWT for such a rule.
 func Test_mcpConfig_Authorization_VerifiedJWT(t *testing.T) {

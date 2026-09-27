@@ -22,13 +22,14 @@ import (
 // ReferenceGrantController implements [reconcile.TypedReconciler] for ReferenceGrant.
 //
 // This controller watches ReferenceGrant resources and triggers reconciliation of
-// affected AIGatewayRoutes when grants are created, updated, or deleted.
+// affected AIGatewayRoutes and BackendSecurityPolicies when grants are created, updated, or deleted.
 //
 // Exported for testing purposes.
 type ReferenceGrantController struct {
-	client             client.Client
-	logger             logr.Logger
-	aiGatewayRouteChan chan event.GenericEvent
+	client                    client.Client
+	logger                    logr.Logger
+	aiGatewayRouteChan        chan event.GenericEvent
+	backendSecurityPolicyChan chan event.GenericEvent
 }
 
 // NewReferenceGrantController creates a new [reconcile.TypedReconciler] for ReferenceGrant.
@@ -36,11 +37,13 @@ func NewReferenceGrantController(
 	c client.Client,
 	logger logr.Logger,
 	aiGatewayRouteChan chan event.GenericEvent,
+	backendSecurityPolicyChan chan event.GenericEvent,
 ) *ReferenceGrantController {
 	return &ReferenceGrantController{
-		client:             c,
-		logger:             logger,
-		aiGatewayRouteChan: aiGatewayRouteChan,
+		client:                    c,
+		logger:                    logger,
+		aiGatewayRouteChan:        aiGatewayRouteChan,
+		backendSecurityPolicyChan: backendSecurityPolicyChan,
 	}
 }
 
@@ -75,6 +78,22 @@ func (c *ReferenceGrantController) Reconcile(ctx context.Context, req reconcile.
 			"route_namespace", route.Namespace, "route_name", route.Name,
 			"grant_namespace", referenceGrant.Namespace, "grant_name", referenceGrant.Name)
 		c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+	}
+
+	// Get all BackendSecurityPolicies that might be affected by this ReferenceGrant
+	affectedBackendSecurityPolicies, err := c.getAffectedBackendSecurityPolicies(ctx, &referenceGrant)
+	if err != nil {
+		c.logger.Error(err, "failed to get affected BackendSecurityPolicies",
+			"namespace", referenceGrant.Namespace, "name", referenceGrant.Name)
+		return ctrl.Result{}, err
+	}
+
+	// Trigger reconciliation for each affected BackendSecurityPolicy
+	for _, bsp := range affectedBackendSecurityPolicies {
+		c.logger.Info("Triggering reconciliation for affected BackendSecurityPolicy",
+			"backendsecuritypolicy_namespace", bsp.Namespace, "backendsecuritypolicy_name", bsp.Name,
+			"grant_namespace", referenceGrant.Namespace, "grant_name", referenceGrant.Name)
+		c.backendSecurityPolicyChan <- event.GenericEvent{Object: bsp}
 	}
 
 	return reconcile.Result{}, nil
@@ -126,4 +145,43 @@ func (c *ReferenceGrantController) routeReferencesNamespace(route *aigv1b1.AIGat
 		}
 	}
 	return false
+}
+
+// getAffectedBackendSecurityPolicies returns all BackendSecurityPolicies that might be affected by a
+// ReferenceGrant change. This is used to trigger reconciliation when a ReferenceGrant is created, updated, or deleted.
+func (c *ReferenceGrantController) getAffectedBackendSecurityPolicies(
+	ctx context.Context,
+	grant *gwapiv1b1.ReferenceGrant,
+) ([]*aigv1b1.BackendSecurityPolicy, error) {
+	var affectedBackendSecurityPolicies []*aigv1b1.BackendSecurityPolicy
+
+	// For each "from" reference in the grant, find BackendSecurityPolicies in that namespace
+	// that might reference Secrets in the grant's namespace
+	for _, from := range grant.Spec.From {
+		if from.Group != aiServiceBackendGroup || from.Kind != backendSecurityPolicyKind {
+			continue
+		}
+
+		var policies aigv1b1.BackendSecurityPolicyList
+		if err := c.client.List(ctx, &policies, client.InNamespace(string(from.Namespace))); err != nil {
+			return nil, fmt.Errorf("failed to list BackendSecurityPolicies in namespace %s: %w", from.Namespace, err)
+		}
+
+		// Check if any of these policies reference secrets in the grant's namespace
+		for i := range policies.Items {
+			bsp := &policies.Items[i]
+			if c.backendSecurityPolicyReferencesNamespace(bsp, grant.Namespace) {
+				affectedBackendSecurityPolicies = append(affectedBackendSecurityPolicies, bsp)
+			}
+		}
+	}
+
+	return affectedBackendSecurityPolicies, nil
+}
+
+// backendSecurityPolicyReferencesNamespace checks if a BackendSecurityPolicy has a Secret reference to a
+// specific namespace.
+func (c *ReferenceGrantController) backendSecurityPolicyReferencesNamespace(bsp *aigv1b1.BackendSecurityPolicy, namespace string) bool {
+	_, secretNamespace, ok := backendSecurityPolicySecretRef(bsp)
+	return ok && secretNamespace == namespace
 }

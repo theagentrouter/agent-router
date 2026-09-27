@@ -61,13 +61,14 @@ func NewGatewayController(
 		uf = uuid.NewString
 	}
 	return &GatewayController{
-		client:                client,
-		kube:                  kube,
-		logger:                logger,
-		envoyGatewayNamespace: envoyGatewayNamespace,
-		standAlone:            standAlone,
-		uuidFn:                uf,
-		extProcBuilder:        newExtProcBuilder(options, extProcAsSideCar, logger),
+		client:                  client,
+		kube:                    kube,
+		logger:                  logger,
+		envoyGatewayNamespace:   envoyGatewayNamespace,
+		standAlone:              standAlone,
+		uuidFn:                  uf,
+		extProcBuilder:          newExtProcBuilder(options, extProcAsSideCar, logger),
+		referenceGrantValidator: newReferenceGrantValidator(client),
 	}
 }
 
@@ -83,6 +84,9 @@ type GatewayController struct {
 	// extProcBuilder is shared with the mutating webhook so the template hash
 	// computed here matches the extproc container injected by the webhook.
 	*extProcBuilder
+	// referenceGrantValidator authorizes cross-namespace AIServiceBackend/InferencePool
+	// references (and their BackendSecurityPolicy credentials) via Gateway API ReferenceGrant.
+	referenceGrantValidator *referenceGrantValidator
 }
 
 // Reconcile implements the reconcile.Reconciler for gwapiv1.Gateway.
@@ -482,6 +486,23 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 				var bsp *aigv1b1.BackendSecurityPolicy
 				backendNamespace := backendRef.GetNamespace(aiGatewayRoute.Namespace)
+
+				if backendRef.IsCrossNamespace(aiGatewayRoute.Namespace) {
+					var rgErr error
+					if backendRef.IsInferencePool() {
+						rgErr = c.referenceGrantValidator.validateInferencePoolReference(
+							ctx, aiGatewayRoute.Namespace, backendNamespace, backendRef.Name)
+					} else {
+						rgErr = c.referenceGrantValidator.validateAIServiceBackendReference(
+							ctx, aiGatewayRoute.Namespace, backendNamespace, backendRef.Name)
+					}
+					if rgErr != nil {
+						c.logger.Error(rgErr, "cross-namespace backendRef rejected: no valid ReferenceGrant. Skipping this backend.",
+							"backend_name", backendRef.Name, "aigatewayroute", aiGatewayRoute.Name,
+							"namespace", backendNamespace)
+						continue
+					}
+				}
 
 				if backendRef.IsInferencePool() {
 					// We assume that InferencePools are all OpenAI schema.
