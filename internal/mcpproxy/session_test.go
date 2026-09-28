@@ -713,6 +713,40 @@ func TestSendRequestPerBackend_BOMPrefixedJSON(t *testing.T) {
 	require.Equal(t, id1, resp.ID)
 }
 
+func TestSendRequestPerBackend_JSONContentTypeWithCharset(t *testing.T) {
+	id1, _ := jsonrpc.MakeID("1")
+	msg1, _ := jsonrpc.EncodeMessage(&jsonrpc.Response{ID: id1, Result: []byte(`{"ok":true}`)})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(msg1)
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+	s := &session{reqCtx: proxy}
+	ch := make(chan *backendEvent, 10)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	err := s.sendRequestPerBackend(ctx, ch, "route1", filterapi.MCPBackend{Name: "backend1"}, &compositeSessionEntry{
+		sessionID: "sess1",
+	}, http.MethodGet, nil, nil)
+	require.NoError(t, err)
+	close(ch)
+	var events []*backendEvent
+	for e := range ch {
+		events = append(events, e)
+	}
+	require.Len(t, events, 1, "expected 1 event from application/json;charset=UTF-8 response")
+	require.Equal(t, "message", events[0].event)
+	require.Len(t, events[0].messages, 1)
+	resp, ok := events[0].messages[0].(*jsonrpc.Response)
+	require.True(t, ok)
+	require.Equal(t, id1, resp.ID)
+}
+
 func TestHandleNotificationsPerBackend_SSE(t *testing.T) {
 	// Provide two SSE events with valid JSON-RPC requests then close.
 	id1, _ := jsonrpc.MakeID("1")

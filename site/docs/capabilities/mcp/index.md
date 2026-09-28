@@ -324,6 +324,25 @@ spec:
           - "email"
 ```
 
+#### Authorization servers with non-standard metadata locations
+
+By default the gateway discovers the authorization server's endpoints by probing the well-known
+URIs derived from `issuer`, as described in [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414#section-3).
+Some authorization servers publish their metadata somewhere the issuer does not lead to, for example
+at a versioned path. Point `authorizationServerMetadataUrl` at the document in that case:
+
+```yaml
+securityPolicy:
+  oauth:
+    issuer: "https://example.com/api/idp/authn"
+    authorizationServerMetadataUrl: "https://example.com/api/idp/v4/authn/.well-known/openid-configuration"
+```
+
+`issuer` is unaffected by this field: it still identifies the authorization server in the protected
+resource metadata the gateway publishes. When `jwks` is not set, the JWKS URI is also discovered from
+the document fetched here. If that document cannot be fetched, the MCPRoute is not accepted and the
+reason appears in its status conditions.
+
 The OAuth flow follows the MCP specification's authorization code flow with PKCE:
 
 ```mermaid

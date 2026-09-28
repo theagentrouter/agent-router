@@ -696,7 +696,26 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 		}
 	}
 
-	if openAIReq.GuidedChoice != nil {
+	// structured_outputs (vLLM v0.12.0+) supersedes the deprecated top-level guided_* fields.
+	// Resolve the effective values, preferring structured_outputs when present. Reject the
+	// sub-fields that have no Gemini equivalent.
+	guidedChoice, guidedRegex, guidedJSON := openAIReq.GuidedChoice, openAIReq.GuidedRegex, openAIReq.GuidedJSON
+	if so := openAIReq.StructuredOutputs; so != nil {
+		if so.Grammar != "" || len(so.StructuralTag) > 0 || so.WhitespacePattern != "" {
+			return nil, responseMode, fmt.Errorf("%w: structured_outputs grammar/structural_tag/whitespace_pattern are not supported on GCP/Gemini", internalapi.ErrInvalidRequestBody)
+		}
+		if so.Choice != nil {
+			guidedChoice = so.Choice
+		}
+		if so.Regex != "" {
+			guidedRegex = so.Regex
+		}
+		if len(so.JSON) > 0 {
+			guidedJSON = so.JSON
+		}
+	}
+
+	if guidedChoice != nil {
 		formatSpecifiedCount++
 		if existSchema := gc.ResponseSchema != nil || gc.ResponseJsonSchema != nil; existSchema {
 			return nil, responseMode, fmt.Errorf("%w: duplicate json schema specifications", internalapi.ErrInvalidRequestBody)
@@ -704,18 +723,18 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 
 		responseMode = responseModeEnum
 		gc.ResponseMIMEType = mimeTypeApplicationEnum
-		gc.ResponseSchema = &genai.Schema{Type: "STRING", Enum: openAIReq.GuidedChoice}
+		gc.ResponseSchema = &genai.Schema{Type: "STRING", Enum: guidedChoice}
 	}
-	if openAIReq.GuidedRegex != "" {
+	if guidedRegex != "" {
 		formatSpecifiedCount++
 		if existSchema := gc.ResponseSchema != nil || gc.ResponseJsonSchema != nil; existSchema {
 			return nil, responseMode, fmt.Errorf("%w: duplicate json schema specifications", internalapi.ErrInvalidRequestBody)
 		}
 		responseMode = responseModeRegex
 		gc.ResponseMIMEType = mimeTypeApplicationJSON
-		gc.ResponseSchema = &genai.Schema{Type: "STRING", Pattern: openAIReq.GuidedRegex}
+		gc.ResponseSchema = &genai.Schema{Type: "STRING", Pattern: guidedRegex}
 	}
-	if openAIReq.GuidedJSON != nil {
+	if guidedJSON != nil {
 		formatSpecifiedCount++
 		if existSchema := gc.ResponseSchema != nil || gc.ResponseJsonSchema != nil; existSchema {
 			return nil, responseMode, fmt.Errorf("%w: duplicate json schema specifications", internalapi.ErrInvalidRequestBody)
@@ -723,7 +742,7 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 		responseMode = responseModeJSON
 
 		gc.ResponseMIMEType = mimeTypeApplicationJSON
-		gc.ResponseJsonSchema = openAIReq.GuidedJSON
+		gc.ResponseJsonSchema = guidedJSON
 	}
 	if openAIReq.ReasoningEffort != "" && reasoningEffortAvailable(requestModel) {
 		thinkLevel, err := mapReasoningEffortToThinkingLevel(openAIReq.ReasoningEffort, requestModel)

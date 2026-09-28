@@ -166,6 +166,7 @@ jobs:
           TEST_GROK_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_GROK_API_KEY }}
           TEST_SAMBANOVA_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_SAMBANOVA_API_KEY }}
           TEST_DEEPINFRA_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_DEEPINFRA_API_KEY }}
+          TEST_OPENROUTER_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_OPENROUTER_API_KEY }}
         run: make test-data-plane
 
   test_data_plane_mcp:
