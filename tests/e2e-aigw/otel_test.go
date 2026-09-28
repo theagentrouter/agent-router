@@ -106,6 +106,7 @@ func verifyTokenUsageMetrics(t *testing.T, op string, span *tracev1.Span, metric
 					expected := map[string]string{
 						"gen_ai.operation.name": op,
 						"gen_ai.provider.name":  "openai",
+						"gen_ai.backend":        "default/openai",
 						"gen_ai.original.model": originalModel,
 						"gen_ai.request.model":  originalModel,
 						"gen_ai.response.model": responseModel,
@@ -130,6 +131,7 @@ func verifyRequestDurationMetrics(t *testing.T, op string, span *tracev1.Span, m
 	expectedAttrs := map[string]string{
 		"gen_ai.operation.name": op,
 		"gen_ai.provider.name":  "openai",
+		"gen_ai.backend":        "default/openai",
 		"gen_ai.original.model": originalModel,
 		"gen_ai.request.model":  originalModel,
 		"gen_ai.response.model": responseModel,

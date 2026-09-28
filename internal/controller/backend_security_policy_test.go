@@ -33,6 +33,7 @@ import (
 	gwaiev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/controller/rotators"
@@ -377,7 +378,7 @@ func TestBackendSecurityPolicyController_RotateExpiredCredential(t *testing.T) {
 
 	ctx := oidcv3.InsecureIssuerURLContext(t.Context(), discoveryServer.URL)
 	rotator, err := rotators.NewAWSOIDCRotator(ctx, cl, &mockSTSClient{time.Now().Add(time.Hour)}, fake2.NewClientset(), ctrl.Log, bspNamespace, bsp.Name, preRotationWindow,
-		&oidc, "placeholder", "us-east-1")
+		&oidc, "placeholder", "us-east-1", nil)
 	require.NoError(t, err)
 
 	// Ensure aws credentials secret do not exist.
@@ -559,6 +560,194 @@ func TestNewBackendSecurityPolicyController_ReconcileAzureMissingSecretData(t *t
 	require.Error(t, err)
 	require.Equal(t, "missing azure client secret key client-secret", err.Error())
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
+}
+
+// The BackendSecurityPolicy controller must not read a Secret from a foreign namespace referenced
+// via AzureCredentials.ClientSecretRef.Namespace unless a ReferenceGrant authorizes it.
+func TestNewBackendSecurityPolicyController_RotateCredentialAzureCrossNamespaceBlocked(t *testing.T) {
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := requireNewFakeClientWithIndexes(t)
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+
+	// Victim secret lives in a different namespace than the BackendSecurityPolicy.
+	require.NoError(t, cl.Create(t.Context(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "victim-azure-secret", Namespace: "tenant-b"},
+		Data:       map[string][]byte{clientSecretKey: []byte("VICTIM-AZURE-CLIENT-SECRET")},
+	}))
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "attacker-bsp", Namespace: "tenant-a"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
+			AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
+				ClientID: "attacker-client-id",
+				TenantID: "attacker-tenant-id",
+				ClientSecretRef: &gwapiv1.SecretObjectReference{
+					Name:      "victim-azure-secret",
+					Namespace: ptr.To[gwapiv1.Namespace]("tenant-b"),
+				},
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+
+	_, err := c.rotateCredential(t.Context(), bsp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "is not permitted")
+	require.NotContains(t, err.Error(), "not found",
+		"the Secret must be rejected by the ReferenceGrant check before a lookup is even attempted")
+
+	// Directly confirm the Secret is unreachable via the controller path: the reconciler must
+	// surface the ReferenceGrant error, not the secret contents.
+	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "tenant-a", Name: "attacker-bsp"}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "is not permitted")
+	require.Equal(t, time.Duration(0), res.RequeueAfter)
+	var updated aigv1b1.BackendSecurityPolicy
+	require.NoError(t, cl.Get(t.Context(), types.NamespacedName{Namespace: "tenant-a", Name: "attacker-bsp"}, &updated))
+	require.Len(t, updated.Status.Conditions, 1)
+	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updated.Status.Conditions[0].Type)
+	require.Contains(t, updated.Status.Conditions[0].Message, "is not permitted")
+}
+
+// TestNewBackendSecurityPolicyController_RotateCredentialAzureCrossNamespaceAllowedWithReferenceGrant
+// verifies that a valid ReferenceGrant still allows an intentional cross-namespace Secret reference.
+func TestNewBackendSecurityPolicyController_RotateCredentialAzureCrossNamespaceAllowedWithReferenceGrant(t *testing.T) {
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := requireNewFakeClientWithIndexes(t)
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+
+	require.NoError(t, cl.Create(t.Context(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-azure-secret", Namespace: "tenant-b"},
+		Data:       map[string][]byte{clientSecretKey: []byte("shared-secret")},
+	}))
+	require.NoError(t, cl.Create(t.Context(), &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-tenant-a", Namespace: "tenant-b"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{
+				Group:     aiServiceBackendGroup,
+				Kind:      backendSecurityPolicyKind,
+				Namespace: "tenant-a",
+			}},
+			To: []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+		},
+	}))
+
+	bspNamespace, secretNamespace, secretName := "tenant-a", "tenant-b", "shared-azure-secret"
+
+	// This mirrors exactly the check rotateCredential performs before calling
+	// rotators.LookupSecret for AzureCredentials.ClientSecretRef: it must succeed given the
+	// ReferenceGrant above, proving the fix doesn't break legitimate, explicitly-granted
+	// cross-namespace references.
+	require.NoError(t, c.referenceGrantValidator.validateSecretReference(t.Context(), bspNamespace, secretNamespace, secretName))
+
+	secret, err := rotators.LookupSecret(t.Context(), cl, secretNamespace, secretName)
+	require.NoError(t, err)
+	require.Equal(t, "shared-secret", string(secret.Data[clientSecretKey]))
+}
+
+func TestNewBackendSecurityPolicyController_RotateCredentialGCPCrossNamespaceBlocked(t *testing.T) {
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := requireNewFakeClientWithIndexes(t)
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+
+	require.NoError(t, cl.Create(t.Context(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "victim-gcp-sa", Namespace: "tenant-b"},
+		Data:       map[string][]byte{rotators.GCPServiceAccountJSON: []byte(`{"type":"service_account"}`)},
+	}))
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "attacker-gcp-bsp", Namespace: "tenant-a"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
+			GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
+				ProjectName: "attacker-project",
+				Region:      "us-central1",
+				CredentialsFile: &aigv1b1.GCPCredentialsFile{
+					SecretRef: &gwapiv1.SecretObjectReference{
+						Name:      "victim-gcp-sa",
+						Namespace: ptr.To[gwapiv1.Namespace]("tenant-b"),
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+
+	_, err := c.rotateCredential(t.Context(), bsp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "is not permitted")
+	require.NotContains(t, err.Error(), "not found",
+		"the Secret must be rejected by the ReferenceGrant check before a lookup is even attempted")
+}
+
+// TestNewBackendSecurityPolicyController_RotateCredentialGCPCrossNamespaceAllowedWithReferenceGrant
+// verifies that, unlike the blocked case above, a valid ReferenceGrant lets rotateCredential's full
+// GCPCredentials.CredentialsFile path proceed past the ReferenceGrant check.
+func TestNewBackendSecurityPolicyController_RotateCredentialGCPCrossNamespaceAllowedWithReferenceGrant(t *testing.T) {
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := requireNewFakeClientWithIndexes(t)
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+
+	// Create a secret containing an invalid service account JSON structure to ensure controlled test
+	// failure past the ReferenceGrant check, mirroring
+	// TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_CredentialsFile.
+	serviceAccountJSON := `{
+		"type": "service_account",
+		"project_id": "test-project",
+		"private_key_id": "key-id",
+		"private_key": "invalid-private-key-data",
+		"client_email": "test@test-project.iam.gserviceaccount.com",
+		"client_id": "123456789",
+		"auth_uri": "https://accounts.google.com/o/oauth2/auth",
+		"token_uri": "https://oauth2.googleapis.com/token"
+	}` // #nosec G101
+	require.NoError(t, cl.Create(t.Context(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-gcp-sa", Namespace: "tenant-b"},
+		Data:       map[string][]byte{rotators.GCPServiceAccountJSON: []byte(serviceAccountJSON)},
+	}))
+	require.NoError(t, cl.Create(t.Context(), &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-tenant-a", Namespace: "tenant-b"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{
+				Group:     aiServiceBackendGroup,
+				Kind:      backendSecurityPolicyKind,
+				Namespace: "tenant-a",
+			}},
+			To: []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+		},
+	}))
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-gcp-bsp", Namespace: "tenant-a"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
+			GCPCredentials: &aigv1b1.BackendSecurityPolicyGCPCredentials{
+				ProjectName: "test-project",
+				Region:      "us-central1",
+				CredentialsFile: &aigv1b1.GCPCredentialsFile{
+					SecretRef: &gwapiv1.SecretObjectReference{
+						Name:      "shared-gcp-sa",
+						Namespace: ptr.To[gwapiv1.Namespace]("tenant-b"),
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+
+	res, err := c.rotateCredential(t.Context(), bsp)
+	// As in TestBackendSecurityPolicyController_RotateCredential_GCPCredentials_CredentialsFile, the
+	// test behavior past the ReferenceGrant check varies depending on environment mocking, but both
+	// outcomes prove the ReferenceGrant was honored:
+	// 1. Error at token provider creation (invalid private key) confirms the Secret was read.
+	// 2. Success indicates the test environment provides full mocking.
+	if err != nil {
+		require.Contains(t, err.Error(), "private key")
+		require.NotContains(t, err.Error(), "is not permitted")
+	} else {
+		require.NotZero(t, res.RequeueAfter)
+	}
 }
 
 func TestNewBackendSecurityPolicyController_RotateCredentialInvalidType(t *testing.T) {
@@ -764,6 +953,7 @@ func TestBackendSecurityPolicyController_ExecutionRotation(t *testing.T) {
 		&oidc,
 		"placeholder",
 		"us-east-1",
+		nil,
 	)
 	require.NoError(t, err)
 	res, err := c.executeRotation(ctx, rotator, bsp)
