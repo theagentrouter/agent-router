@@ -31,6 +31,17 @@ If release name contains chart name it will be used as a full name.
 {{- end }}
 
 {{/*
+Name of the Secret that holds the MCP session encryption seed.
+*/}}
+{{- define "ai-gateway-helm.controller.mcpSessionEncryptionSecretName" -}}
+{{- if .Values.controller.mcp.sessionEncryption.existingSecret }}
+{{- .Values.controller.mcp.sessionEncryption.existingSecret }}
+{{- else }}
+{{- printf "%s-mcp-session-encryption" (include "ai-gateway-helm.controller.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Create chart name and version as used by the chart label.
 */}}
 {{- define "ai-gateway-helm.chart" -}}
