@@ -54,22 +54,35 @@ func (c *ReferenceGrantController) Reconcile(ctx context.Context, req reconcile.
 	var referenceGrant gwapiv1b1.ReferenceGrant
 	if err := c.client.Get(ctx, req.NamespacedName, &referenceGrant); err != nil {
 		if client.IgnoreNotFound(err) == nil {
-			// ReferenceGrant was deleted, need to reconcile affected routes
-			c.logger.Info("ReferenceGrant deleted, reconciling affected AIGatewayRoutes",
-				"namespace", req.Namespace, "name", req.Name)
-			// We can't determine affected routes without the grant object,
-			// so we rely on the AIGatewayRoute controller to handle the validation failure
+			// The ReferenceGrant is already gone, e.g. it was removed before the finalizer below
+			// could be attached. There's no spec left to determine what it used to authorize.
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
+	// A finalizer keeps the ReferenceGrant retrievable (with DeletionTimestamp set) until
+	// triggerAffectedReconciles has run, so a deleted grant still wakes up everything it used to
+	// authorize instead of leaving them with stale, now-invalid access.
+	if handleFinalizer(ctx, c.client, c.logger, &referenceGrant, c.triggerAffectedReconciles) {
+		return ctrl.Result{}, nil
+	}
+
+	if err := c.triggerAffectedReconciles(ctx, &referenceGrant); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// triggerAffectedReconciles triggers reconciliation of every AIGatewayRoute and BackendSecurityPolicy
+// that referenceGrant affects, whether it was just created, updated, or is about to be deleted.
+func (c *ReferenceGrantController) triggerAffectedReconciles(ctx context.Context, referenceGrant *gwapiv1b1.ReferenceGrant) error {
 	// Get all AIGatewayRoutes that might be affected by this ReferenceGrant
-	affectedRoutes, err := c.getAffectedAIGatewayRoutes(ctx, &referenceGrant)
+	affectedRoutes, err := c.getAffectedAIGatewayRoutes(ctx, referenceGrant)
 	if err != nil {
 		c.logger.Error(err, "failed to get affected AIGatewayRoutes",
 			"namespace", referenceGrant.Namespace, "name", referenceGrant.Name)
-		return ctrl.Result{}, err
+		return err
 	}
 
 	// Trigger reconciliation for each affected AIGatewayRoute
@@ -81,11 +94,11 @@ func (c *ReferenceGrantController) Reconcile(ctx context.Context, req reconcile.
 	}
 
 	// Get all BackendSecurityPolicies that might be affected by this ReferenceGrant
-	affectedBackendSecurityPolicies, err := c.getAffectedBackendSecurityPolicies(ctx, &referenceGrant)
+	affectedBackendSecurityPolicies, err := c.getAffectedBackendSecurityPolicies(ctx, referenceGrant)
 	if err != nil {
 		c.logger.Error(err, "failed to get affected BackendSecurityPolicies",
 			"namespace", referenceGrant.Namespace, "name", referenceGrant.Name)
-		return ctrl.Result{}, err
+		return err
 	}
 
 	// Trigger reconciliation for each affected BackendSecurityPolicy
@@ -96,7 +109,7 @@ func (c *ReferenceGrantController) Reconcile(ctx context.Context, req reconcile.
 		c.backendSecurityPolicyChan <- event.GenericEvent{Object: bsp}
 	}
 
-	return reconcile.Result{}, nil
+	return nil
 }
 
 // getAffectedAIGatewayRoutes returns all AIGatewayRoutes that might be affected by a ReferenceGrant change.
