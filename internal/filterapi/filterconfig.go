@@ -183,6 +183,8 @@ const (
 	APISchemaAWSAnthropic APISchemaName = "AWSAnthropic"
 	// APISchemaAWSOpenAI represents the AWS OpenAI-compatible API schema.
 	APISchemaAWSOpenAI APISchemaName = "AWSOpenAI"
+	// APISchemaTypeSafe represents the native TypeSafe AI System One API schema (Jev).
+	APISchemaTypeSafe APISchemaName = "TypeSafe"
 )
 
 // RouteRuleName is the name of the route rule.

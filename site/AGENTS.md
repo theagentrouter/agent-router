@@ -58,7 +58,7 @@ site/
 ├── src/
 │   ├── components/          # Custom React components
 │   ├── css/                 # Custom styles
-│   ├── data/                # JSON data files (releases, adopters, talks)
+│   ├── data/                # JSON data files (releases, adopters, solutions, talks)
 │   ├── pages/               # Custom pages (homepage, release notes)
 │   └── theme/               # Theme customizations
 ├── static/                  # Static assets (images, favicons)

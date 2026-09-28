@@ -137,12 +137,12 @@ func (o *openAIToOpenAITranslatorV1Responses) handleNonStreamingResponse(body io
 	responseModel = cmp.Or(resp.Model, o.requestModel)
 
 	if resp.Usage != nil {
-		tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                                         // #nosec G115
-		tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                                       // #nosec G115
-		tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                                         // #nosec G115
-		tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens))               // #nosec G115
-		tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.InputTokensDetails.CacheCreationTokens)) // #nosec G115
-		tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens))             // #nosec G115
+		tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                                             // #nosec G115
+		tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                                           // #nosec G115
+		tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                                             // #nosec G115
+		tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens))                   // #nosec G115
+		tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.InputTokensDetails.CacheWriteTokensValue())) // #nosec G115
+		tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens))                 // #nosec G115
 	}
 
 	// Record non-streaming response to span if tracing is enabled.
@@ -158,13 +158,12 @@ func setTokenUsageFromResponse(tokenUsage *metrics.TokenUsage, resp *openai.Resp
 	if resp == nil || resp.Usage == nil {
 		return
 	}
-	tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                           // #nosec G115
-	tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                         // #nosec G115
-	tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                           // #nosec G115
-	tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens)) // #nosec G115
-	// Openai does not support cache creation response.
-	tokenUsage.SetCacheCreationInputTokens(uint32(0))                                     // #nosec G115
-	tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens)) // #nosec G115
+	tokenUsage.SetInputTokens(uint32(resp.Usage.InputTokens))                                             // #nosec G115
+	tokenUsage.SetOutputTokens(uint32(resp.Usage.OutputTokens))                                           // #nosec G115
+	tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))                                             // #nosec G115
+	tokenUsage.SetCachedInputTokens(uint32(resp.Usage.InputTokensDetails.CachedTokens))                   // #nosec G115
+	tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.InputTokensDetails.CacheWriteTokensValue())) // #nosec G115
+	tokenUsage.SetReasoningTokens(uint32(resp.Usage.OutputTokensDetails.ReasoningTokens))                 // #nosec G115
 }
 
 // extractUsageFromBufferEvent extracts the token usage and model from the buffered SSE events.
@@ -172,20 +171,16 @@ func setTokenUsageFromResponse(tokenUsage *metrics.TokenUsage, resp *openai.Resp
 // response.incomplete or response.failed events.
 func (o *openAIToOpenAITranslatorV1Responses) extractUsageFromBufferEvent(span tracingapi.ResponsesSpan) (tokenUsage metrics.TokenUsage) {
 	for {
-		// SSE event boundary is a blank line: "data: {json}\n\n".
-		i := bytes.Index(o.buffered, []byte("\n\n"))
-		if i == -1 {
+		event, remaining, ok := nextSSEEvent(o.buffered)
+		if !ok {
 			return tokenUsage
 		}
-		event := o.buffered[:i]
-		o.buffered = o.buffered[i+2:]
+		o.buffered = remaining
 		for line := range bytes.SplitSeq(event, []byte("\n")) {
-			// Look for lines carrying the "data" field.
 			data, ok := cutSSEDataPrefix(line)
 			if !ok {
 				continue
 			}
-
 			if len(data) == 0 || bytes.Equal(data, sseDoneMessage) {
 				continue
 			}

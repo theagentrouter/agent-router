@@ -91,8 +91,30 @@
   flex-wrap: wrap;
 }
 
+/* third path, deliberately quieter than the buttons: plain text, muted */
+.hosted {
+  margin: 22px 0 0;
+  font-size: var(--ar-text-sm);
+  line-height: 1.7;
+  color: var(--ar-fg-muted);
+}
+/* first sentence stays on one line; the solutions link drops below it */
+.hostedLine {
+  display: block;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .hostedLine { white-space: normal; }
+}
+.hosted a {
+  color: var(--ar-brand-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+.hosted a:hover { text-decoration: underline; }
+
 .sub {
-  margin: 36px 0 0;
+  margin: 28px 0 0;
   font: 500 var(--ar-text-sm) / 1 var(--ar-font-ui);
   color: var(--ar-fg-subtle);
 }

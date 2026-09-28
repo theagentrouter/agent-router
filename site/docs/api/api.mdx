@@ -673,6 +673,11 @@ AIGatewayRouteRule is a rule that defines the routing behavior of the AIGatewayR
   type="[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#time-v1-meta)"
   required="false"
   description="ModelsCreatedAt represents the creation timestamp of the running models serving by the backends,<br />which will be exported as the field of `Created` in openai-compatible API `/models`.<br />It follows the format of RFC 3339, for example `2024-05-21T10:00:00Z`.<br />This is used only when this rule contains `x-ai-eg-model` in its header matching<br />where the header value will be recognized as a `model` in `/models` endpoint.<br />All the matched models will share the same creation time.<br />Default to the creation timestamp of the AIGatewayRoute if not set."
+/><ApiField
+  name="excludeFromModelsEndpoint"
+  type="boolean"
+  required="false"
+  description="ExcludeFromModelsEndpoint prevents models matched by this rule from being returned by the<br />OpenAI-compatible `/models` endpoint. Requests still match this rule and apply its<br />configured transformations, including model name overrides.<br />This is useful for internal or backwards-compatible aliases, as well as duplicate model<br />definitions with different schemas."
 />
 
 
@@ -933,6 +938,11 @@ APISchema defines the API schema.
   type="enum"
   required="false"
   description="APISchemaAWSOpenAI is the OpenAI-compatible API schema provided by AWS.<br />"
+/><ApiField
+  name="TypeSafe"
+  type="enum"
+  required="false"
+  description="APISchemaTypeSafe is the native TypeSafe AI schema used by the Jev System One model.<br />Requests to /v1/systemone are passed through unchanged, and the version defaults to v1.<br />https://docs.typesafe.ai/api.md<br />"
 />
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-awscredentialsfile">AWSCredentialsFile</a>
 
@@ -2156,6 +2166,11 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
   required="false"
   description="JWKS defines how a JSON Web Key Sets (JWKS) can be obtained to verify the access tokens presented by the clients.<br />If not specified, the JWKS URI will be discovered from the OAuth 2.0 Authorization Server Metadata<br />as per RFC 8414 by querying the `/.well-known/oauth-authorization-server` endpoint on the Issuer."
 /><ApiField
+  name="authorizationServerMetadataUrl"
+  type="string"
+  required="false"
+  description="AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization<br />Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known<br />URIs derived from Issuer.<br />Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer<br />of `https://example.com/api/idp/authn` whose document is served only at<br />`https://example.com/api/idp/v4/authn/.well-known/openid-configuration`.<br />Issuer is unaffected by this field. It continues to identify the authorization server in the<br />protected resource metadata the gateway publishes, and to derive the well-known URIs when this<br />field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here."
+/><ApiField
   name="protectedResourceMetadata"
   type="[ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1alpha1-protectedresourcemetadata)"
   required="true"
@@ -2262,7 +2277,7 @@ MCPRouteSpec details the MCPRoute configuration.
   name="backendSelector"
   type="[MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselector)"
   required="false"
-  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered."
+  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered.<br />Security note: a backendSelector rule whose CEL expression reads request.auth.jwt<br />(claims or scopes) only reflects verified JWT data when SecurityPolicy.OAuth is<br />configured for this route; the XValidation below enforces that pairing so that<br />unauthenticated or forged bearer tokens can't influence backend selection."
 />
 
 
@@ -3168,6 +3183,7 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPAuthorizationSource](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpauthorizationsource)
 - [MCPAuthorizationTarget](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpauthorizationtarget)
 - [MCPBackendAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikey)
+- [MCPBackendAPIKeyInjectionPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikeyinjectionpolicy)
 - [MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy)
 - [MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)
 - [MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselectorrule)
@@ -3237,6 +3253,11 @@ AIGatewayRouteRule is a rule that defines the routing behavior of the AIGatewayR
   type="[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#time-v1-meta)"
   required="false"
   description="ModelsCreatedAt represents the creation timestamp of the running models serving by the backends,<br />which will be exported as the field of `Created` in openai-compatible API `/models`.<br />It follows the format of RFC 3339, for example `2024-05-21T10:00:00Z`.<br />This is used only when this rule contains `x-ai-eg-model` in its header matching<br />where the header value will be recognized as a `model` in `/models` endpoint.<br />All the matched models will share the same creation time.<br />Default to the creation timestamp of the AIGatewayRoute if not set."
+/><ApiField
+  name="excludeFromModelsEndpoint"
+  type="boolean"
+  required="false"
+  description="ExcludeFromModelsEndpoint prevents models matched by this rule from being returned by the<br />OpenAI-compatible `/models` endpoint. Requests still match this rule and apply its<br />configured transformations, including model name overrides.<br />This is useful for internal or backwards-compatible aliases, as well as duplicate model<br />definitions with different schemas."
 />
 
 
@@ -3502,6 +3523,11 @@ APISchema defines the API schema.
   type="enum"
   required="false"
   description="APISchemaAWSOpenAI is the OpenAI-compatible API schema provided by AWS.<br />"
+/><ApiField
+  name="TypeSafe"
+  type="enum"
+  required="false"
+  description="APISchemaTypeSafe is the native TypeSafe AI schema used by the Jev System One model.<br />Requests to /v1/systemone are passed through unchanged, and the version defaults to v1.<br />https://docs.typesafe.ai/api.md<br />"
 />
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-awscredentialsfile">AWSCredentialsFile</a>
 
@@ -4606,9 +4632,39 @@ When both `header` and `queryParam` are unspecified, the API key will be injecte
   type="string"
   required="false"
   description="QueryParam is the HTTP query parameter to inject the API key into.<br />For example, if QueryParam is set to `api_key`, and the API key is `mysecretkey`, the request URL will be modified to include<br />`?api_key=mysecretkey`.<br />Either one of Header or QueryParam can be specified to inject the API key.<br />Note: Embedding credentials in URLs (including query parameters) is generally not recommended because URLs can be exposed in logs<br />and intermediary systems; prefer header-based injection when possible."
+/><ApiField
+  name="injectionPolicy"
+  type="[MCPBackendAPIKeyInjectionPolicy](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikeyinjectionpolicy)"
+  required="false"
+  defaultValue="Always"
+  description="InjectionPolicy controls when the configured API key is written onto the target header.<br />Always (the default) writes the credential, replacing any existing value, including<br />values populated by forwardHeaders.<br />IfNotPresent writes the API key only if the target header is absent, so a<br />caller-supplied token forwarded onto the same header is preserved.<br />InjectionPolicy applies only to header injection. It must not be set to IfNotPresent<br />when queryParam is used, because query-parameter injection always rewrites the backend URL."
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikeyinjectionpolicy">MCPBackendAPIKeyInjectionPolicy</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [MCPBackendAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendapikey)
+
+MCPBackendAPIKeyInjectionPolicy controls when the configured API key is written onto the request.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="Always"
+  type="enum"
+  required="false"
+  description="MCPBackendAPIKeyInjectionAlways writes the configured key onto the target header,<br />replacing any existing value. This is the default and preserves existing behavior.<br />"
+/><ApiField
+  name="IfNotPresent"
+  type="enum"
+  required="false"
+  description="MCPBackendAPIKeyInjectionIfNotPresent writes the configured key only when the target<br />header is absent, so a value already set (for example by forwardHeaders) is preserved.<br />"
+/>
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendsecuritypolicy">MCPBackendSecurityPolicy</a>
 
 
@@ -4939,6 +4995,11 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
   required="false"
   description="JWKS defines how a JSON Web Key Sets (JWKS) can be obtained to verify the access tokens presented by the clients.<br />If not specified, the JWKS URI will be discovered from the OAuth 2.0 Authorization Server Metadata<br />as per RFC 8414 by querying the `/.well-known/oauth-authorization-server` endpoint on the Issuer."
 /><ApiField
+  name="authorizationServerMetadataUrl"
+  type="string"
+  required="false"
+  description="AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization<br />Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known<br />URIs derived from Issuer.<br />Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer<br />of `https://example.com/api/idp/authn` whose document is served only at<br />`https://example.com/api/idp/v4/authn/.well-known/openid-configuration`.<br />Issuer is unaffected by this field. It continues to identify the authorization server in the<br />protected resource metadata the gateway publishes, and to derive the well-known URIs when this<br />field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here."
+/><ApiField
   name="protectedResourceMetadata"
   type="[ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1beta1-protectedresourcemetadata)"
   required="true"
@@ -5079,7 +5140,7 @@ MCPRouteSpec details the MCPRoute configuration.
   name="backendSelector"
   type="[MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcpbackendselector)"
   required="false"
-  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered."
+  description="BackendSelector restricts which of this route's backends a given request may fan<br />out to, evaluated once per candidate backend when a client session is initialized.<br />If unspecified, all backends on the route are considered.<br />Security note: a backendSelector rule whose CEL expression reads request.auth.jwt<br />(claims or scopes) only reflects verified JWT data when SecurityPolicy.OAuth is<br />configured for this route; the XValidation below enforces that pairing so that<br />unauthenticated or forged bearer tokens can't influence backend selection."
 /><ApiField
   name="prefixMode"
   type="[MCPRoutePrefixMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcprouteprefixmode)"

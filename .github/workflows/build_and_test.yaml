@@ -161,10 +161,12 @@ jobs:
           TEST_OPENAI_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_OPENAI_API_KEY }}
           TEST_GEMINI_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_GEMINI_API_KEY }}
           TEST_COHERE_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_COHERE_API_KEY }}
+          TEST_TYPESAFE_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_TYPESAFE_API_KEY }}
           TEST_GROQ_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_GROQ_API_KEY }}
           TEST_GROK_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_GROK_API_KEY }}
           TEST_SAMBANOVA_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_SAMBANOVA_API_KEY }}
           TEST_DEEPINFRA_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_DEEPINFRA_API_KEY }}
+          TEST_OPENROUTER_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_OPENROUTER_API_KEY }}
         run: make test-data-plane
 
   test_data_plane_mcp:
@@ -238,6 +240,7 @@ jobs:
           TEST_ANTHROPIC_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_ANTHROPIC_API_KEY }}
           TEST_GEMINI_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_GEMINI_API_KEY }}
           TEST_COHERE_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_COHERE_API_KEY }}
+          TEST_TYPESAFE_API_KEY: ${{ secrets.ENVOY_AI_GATEWAY_TYPESAFE_API_KEY }}
         run: make test-e2e
 
   test_e2e_upgrade:

@@ -249,8 +249,6 @@ WORKAROUND_GAIE_EPP_IMAGE ?= us-central1-docker.pkg.dev/k8s-staging-images/gatew
 .PHONY: test-e2e-inference-extension
 test-e2e-inference-extension: build-e2e ## Run the end-to-end tests with a local kind cluster for Gateway API Inference Extension.
 	@echo "Run E2E tests for inference extension"
-	docker pull $(WORKAROUND_GAIE_EPP_IMAGE)
-	docker tag $(WORKAROUND_GAIE_EPP_IMAGE) registry.k8s.io/gateway-api-inference-extension/lwepp:v1.6.0
 	@go test -v ./tests/e2e-inference-extension/... $(GO_TEST_ARGS) $(GO_TEST_E2E_ARGS)
 
 # This runs the end-to-end upgrade tests for the controller and extproc with a local kind cluster.
@@ -398,6 +396,14 @@ helm-test: helm-package  ## Test the helm chart with a dummy version.
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "extProcLogFormat=text"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.logFormat=json --set extProc.logFormat=json | grep -q -- "-logFormat=json"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.logFormat=json --set extProc.logFormat=json | grep -q -- "extProcLogFormat=json"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "startupProbe:"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "failureThreshold: 75"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "name: ai-gateway-controller-mcp-session-encryption"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -qF -- "--mcpSessionEncryptionSeed=\$$(MCP_SESSION_ENCRYPTION_SEED)"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "default-insecure-seed"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.seed=my-test-seed | grep -q -- "seed: bXktdGVzdC1zZWVk"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.existingSecret=my-seed-secret | grep -q -- "name: my-seed-secret"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.existingSecret=my-seed-secret | grep -q -- "mcp-session-encryption"
 
 # This pushes the helm chart to the OCI registry, requiring the access to the registry endpoint.
 .PHONY: helm-push

@@ -26,6 +26,9 @@
   z-index: -1;
   background: var(--ar-texture-sequin);
 }
+/* grid items default to min-width:auto, which lets the wide <pre> force the
+   column (and the whole panel) past the viewport on small screens */
+.panel > div { min-width: 0; }
 
 .label {
   font: 600 var(--ar-text-xs) / 1 var(--ar-font-ui);
@@ -46,8 +49,15 @@
   margin-bottom: 26px;
 }
 
+.note {
+  color: #b8afa6;
+  font-size: var(--ar-text-xs);
+  margin: 14px 0 0;
+}
+
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 14px;
 }
@@ -99,8 +109,8 @@
   overflow-x: auto;
   background: transparent;
   border-radius: 0;
-  /* tallest tab (Kubernetes, 9 lines) sets the floor so switching doesn't jump */
-  min-height: 210px;
+  /* tallest tab (Hosted, 10 lines) sets the floor so switching doesn't jump */
+  min-height: 234px;
 }
 
 .comment { color: #8a7f76; }
@@ -109,4 +119,10 @@
 
 @media (max-width: 996px) {
   .panel { grid-template-columns: 1fr; padding: 36px; gap: 36px; }
+}
+
+@media (max-width: 640px) {
+  .panel { padding: 28px 20px; gap: 28px; border-radius: 20px; }
+  .title { font-size: var(--ar-text-xl); }
+  .termPre { padding: 18px 16px; font-size: 0.78rem; min-height: 0; }
 }

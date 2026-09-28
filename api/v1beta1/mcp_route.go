@@ -66,6 +66,8 @@ type MCPRouteList struct {
 }
 
 // MCPRouteSpec details the MCPRoute configuration.
+//
+// +kubebuilder:validation:XValidation:rule="!(has(self.backendSelector) && self.backendSelector.rules.exists(r, has(r.cel) && r.cel.contains('auth.jwt')) && !(has(self.securityPolicy) && has(self.securityPolicy.oauth)))",message="securityPolicy.oauth must be configured when a backendSelector rule's cel expression references request.auth.jwt"
 type MCPRouteSpec struct {
 	// ParentRefs are the names of the Gateway resources this MCPRoute is being attached to.
 	// Cross namespace references are not supported. In other words, the Gateway resources must be in the
@@ -138,6 +140,11 @@ type MCPRouteSpec struct {
 	// BackendSelector restricts which of this route's backends a given request may fan
 	// out to, evaluated once per candidate backend when a client session is initialized.
 	// If unspecified, all backends on the route are considered.
+	//
+	// Security note: a backendSelector rule whose CEL expression reads request.auth.jwt
+	// (claims or scopes) only reflects verified JWT data when SecurityPolicy.OAuth is
+	// configured for this route; the XValidation below enforces that pairing so that
+	// unauthenticated or forged bearer tokens can't influence backend selection.
 	//
 	// +kubebuilder:validation:Optional
 	// +optional
@@ -337,11 +344,27 @@ type MCPBackendSecurityPolicy struct {
 	APIKey *MCPBackendAPIKey `json:"apiKey,omitempty"`
 }
 
+// MCPBackendAPIKeyInjectionPolicy controls when the configured API key is written onto the request.
+//
+// +kubebuilder:validation:Enum=Always;IfNotPresent
+type MCPBackendAPIKeyInjectionPolicy string
+
+const (
+	// MCPBackendAPIKeyInjectionAlways writes the configured key onto the target header,
+	// replacing any existing value. This is the default and preserves existing behavior.
+	MCPBackendAPIKeyInjectionAlways MCPBackendAPIKeyInjectionPolicy = "Always"
+
+	// MCPBackendAPIKeyInjectionIfNotPresent writes the configured key only when the target
+	// header is absent, so a value already set (for example by forwardHeaders) is preserved.
+	MCPBackendAPIKeyInjectionIfNotPresent MCPBackendAPIKeyInjectionPolicy = "IfNotPresent"
+)
+
 // MCPBackendAPIKey defines the configuration for the API Key Authentication to a backend.
 // When both `header` and `queryParam` are unspecified, the API key will be injected into the "Authorization" header by default.
 //
 // +kubebuilder:validation:XValidation:rule="(has(self.secretRef) && !has(self.inline)) || (!has(self.secretRef) && has(self.inline))", message="exactly one of secretRef or inline must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.header) && has(self.queryParam))", message="only one of header or queryParam can be set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.queryParam) && has(self.injectionPolicy) && self.injectionPolicy == 'IfNotPresent')", message="injectionPolicy cannot be IfNotPresent when queryParam is set"
 type MCPBackendAPIKey struct {
 	// secretRef is the Kubernetes secret which contains the API keys.
 	// The key of the secret should be "apiKey".
@@ -378,11 +401,24 @@ type MCPBackendAPIKey struct {
 	// +kubebuilder:validation:MinLength=1
 	// +optional
 	QueryParam *string `json:"queryParam,omitempty"`
+
+	// InjectionPolicy controls when the configured API key is written onto the target header.
+	// Always (the default) writes the credential, replacing any existing value, including
+	// values populated by forwardHeaders.
+	// IfNotPresent writes the API key only if the target header is absent, so a
+	// caller-supplied token forwarded onto the same header is preserved.
+	//
+	// InjectionPolicy applies only to header injection. It must not be set to IfNotPresent
+	// when queryParam is used, because query-parameter injection always rewrites the backend URL.
+	//
+	// +kubebuilder:default=Always
+	// +optional
+	InjectionPolicy *MCPBackendAPIKeyInjectionPolicy `json:"injectionPolicy,omitempty"`
 }
 
 // MCPRouteSecurityPolicy defines the security policy for a MCPRoute.
 //
-// +kubebuilder:validation:XValidation:rule="!(has(self.authorization) && self.authorization.rules.exists(r, has(r.source) && has(r.source.jwt)) && !has(self.oauth))",message="oauth must be configured when any authorization rule uses a jwt source"
+// +kubebuilder:validation:XValidation:rule="!(has(self.authorization) && self.authorization.rules.exists(r, (has(r.source) && has(r.source.jwt)) || (has(r.cel) && r.cel.contains('auth.jwt'))) && !has(self.oauth))",message="oauth must be configured when any authorization rule uses a jwt source or references request.auth.jwt in a cel expression"
 type MCPRouteSecurityPolicy struct {
 	// OAuth defines the configuration for the MCP spec compatible OAuth authentication.
 	//
@@ -448,6 +484,24 @@ type MCPRouteOAuth struct {
 	//
 	// +optional
 	JWKS *JWKS `json:"jwks,omitempty"`
+
+	// AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization
+	// Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known
+	// URIs derived from Issuer.
+	//
+	// Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer
+	// of "https://example.com/api/idp/authn" whose document is served only at
+	// "https://example.com/api/idp/v4/authn/.well-known/openid-configuration".
+	//
+	// Issuer is unaffected by this field. It continues to identify the authorization server in the
+	// protected resource metadata the gateway publishes, and to derive the well-known URIs when this
+	// field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Format=uri
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	AuthorizationServerMetadataURL *string `json:"authorizationServerMetadataUrl,omitempty"`
 
 	// ProtectedResourceMetadata defines the OAuth 2.0 Resource Server Metadata as per RFC 8414.
 	// This is used to expose the metadata endpoint for mcp clients to discover the authorization servers,

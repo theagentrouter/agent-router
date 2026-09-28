@@ -1227,6 +1227,24 @@ func TestChatCompletionRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "Anthropic web search tool",
+			jsonStr: `{
+				"model": "claude-sonnet-4-6",
+				"messages": [{"role": "user", "content": "Search for the weather"}],
+				"tools": [{"type": "web_search_20260209", "name": "web_search"}]
+			}`,
+			expected: &ChatCompletionRequest{
+				Model: "claude-sonnet-4-6",
+				Messages: []ChatCompletionMessageParamUnion{{
+					OfUser: &ChatCompletionUserMessageParam{
+						Role:    ChatMessageRoleUser,
+						Content: StringOrUserRoleContentUnion{Value: "Search for the weather"},
+					},
+				}},
+				Tools: []Tool{{Type: ToolTypeAnthropicWebSearch, Name: "web_search"}},
+			},
+		},
+		{
 			name: "enterprise search tool",
 			jsonStr: `{
 				"model": "gemini-1.5-pro",
@@ -1882,12 +1900,14 @@ func TestPromptTokensDetails(t *testing.T) {
 				TextTokens:          15,
 				AudioTokens:         8,
 				CachedTokens:        384,
+				CacheWriteTokens:    10,
 				CacheCreationTokens: 10,
 			},
 			expected: `{
 				"text_tokens": 15,
 				"audio_tokens": 8,
 				"cached_tokens": 384,
+				"cache_write_tokens": 10,
 				"cache_creation_input_tokens": 10
 			}`,
 		},
@@ -1897,11 +1917,13 @@ func TestPromptTokensDetails(t *testing.T) {
 				TextTokens:          0,
 				AudioTokens:         8,
 				CachedTokens:        384,
+				CacheWriteTokens:    10,
 				CacheCreationTokens: 10,
 			},
 			expected: `{
 				"audio_tokens": 8,
 				"cached_tokens": 384,
+				"cache_write_tokens": 10,
 				"cache_creation_input_tokens": 10
 			}`,
 		},
@@ -1919,6 +1941,55 @@ func TestPromptTokensDetails(t *testing.T) {
 			require.Equal(t, tc.details, decoded)
 		})
 	}
+}
+
+func TestCacheWriteTokensBackwardCompatibility(t *testing.T) {
+	t.Run("prompt token details accept legacy field", func(t *testing.T) {
+		var details PromptTokensDetails
+		err := json.Unmarshal([]byte(`{"cache_creation_input_tokens":10}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, 10, details.CacheCreationTokens)
+		require.Equal(t, 10, details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cache_write_tokens":10,"cache_creation_input_tokens":10}`, string(encoded))
+	})
+
+	t.Run("official field takes precedence", func(t *testing.T) {
+		var details PromptTokensDetails
+		err := json.Unmarshal([]byte(`{"cache_creation_input_tokens":10,"cache_write_tokens":12}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, 12, details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cache_write_tokens":12,"cache_creation_input_tokens":12}`, string(encoded))
+	})
+
+	t.Run("responses usage accepts legacy field", func(t *testing.T) {
+		var details ResponseUsageInputTokensDetails
+		err := json.Unmarshal([]byte(`{"cached_tokens":3,"cache_creation_input_tokens":10}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, int64(10), details.CacheCreationTokens)
+		require.Equal(t, int64(10), details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cached_tokens":3,"cache_write_tokens":10,"cache_creation_input_tokens":10}`, string(encoded))
+	})
+
+	t.Run("response token details accept legacy field", func(t *testing.T) {
+		var details ResponseTokensDetails
+		err := json.Unmarshal([]byte(`{"cache_creation_input_tokens":10}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, int64(10), details.CacheCreationTokens)
+		require.Equal(t, int64(10), details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cache_write_tokens":10,"cache_creation_input_tokens":10}`, string(encoded))
+	})
 }
 
 func TestChatCompletionResponseUsage(t *testing.T) {
@@ -1961,6 +2032,7 @@ func TestChatCompletionResponseUsage(t *testing.T) {
 				PromptTokensDetails: &PromptTokensDetails{
 					AudioTokens:         8,
 					CachedTokens:        384,
+					CacheWriteTokens:    13,
 					CacheCreationTokens: 13,
 				},
 			},
@@ -1975,6 +2047,7 @@ func TestChatCompletionResponseUsage(t *testing.T) {
 				"prompt_tokens_details": {
 					"audio_tokens": 8,
 					"cached_tokens": 384,
+					"cache_write_tokens": 13,
 					"cache_creation_input_tokens": 13
 				}
 			}`,
@@ -1996,6 +2069,7 @@ func TestChatCompletionResponseUsage(t *testing.T) {
 					TextTokens:          15,
 					AudioTokens:         8,
 					CachedTokens:        384,
+					CacheWriteTokens:    21,
 					CacheCreationTokens: 21,
 				},
 			},
@@ -2012,6 +2086,7 @@ func TestChatCompletionResponseUsage(t *testing.T) {
 					"text_tokens": 15,
 					"audio_tokens": 8,
 					"cached_tokens": 384,
+					"cache_write_tokens": 21,
 					"cache_creation_input_tokens": 21
 				}
 			}`,

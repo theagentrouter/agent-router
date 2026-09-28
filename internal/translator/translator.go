@@ -15,6 +15,7 @@ import (
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
@@ -136,6 +137,8 @@ type (
 	OpenAICompletionTranslator = Translator[openai.CompletionRequest, tracingapi.CompletionSpan]
 	// CohereRerankTranslator translates the Cohere's /v2/rerank endpoint.
 	CohereRerankTranslator = Translator[cohereschema.RerankV2Request, tracingapi.RerankSpan]
+	// TypeSafeSystemOneTranslator translates the TypeSafe's /v1/systemone endpoint.
+	TypeSafeSystemOneTranslator = Translator[typesafeschema.SystemOneRequest, tracingapi.SystemOneSpan]
 	// AnthropicMessagesTranslator translates the Anthropic's /messages endpoint.
 	AnthropicMessagesTranslator = Translator[anthropicschema.MessagesRequest, tracingapi.MessageSpan]
 	// OpenAIImageGenerationTranslator translates the OpenAI's /images/generations endpoint.

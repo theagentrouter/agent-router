@@ -28,6 +28,10 @@ type compiledAuthorization struct {
 	ResourceMetadataURL string
 	Rules               []compiledAuthorizationRule
 	DefaultAction       filterapi.AuthorizationAction
+	// VerifiedJWT mirrors filterapi.MCPRouteAuthorization.VerifiedJWT: true only when Envoy
+	// verifies the bearer JWT's signature before the request reaches the MCP proxy. JWT
+	// claims/scopes must never be trusted for authorization decisions unless this is true.
+	VerifiedJWT bool
 }
 
 type compiledAuthorizationRule struct {
@@ -45,7 +49,8 @@ func (a *compiledAuthorization) same(other *compiledAuthorization) bool {
 	if a == nil || other == nil {
 		return a == other
 	}
-	if a.ResourceMetadataURL != other.ResourceMetadataURL || a.DefaultAction != other.DefaultAction {
+	if a.ResourceMetadataURL != other.ResourceMetadataURL || a.DefaultAction != other.DefaultAction ||
+		a.VerifiedJWT != other.VerifiedJWT {
 		return false
 	}
 	return slices.EqualFunc(a.Rules, other.Rules, func(ra, rb compiledAuthorizationRule) bool {
@@ -85,6 +90,7 @@ func compileAuthorization(auth *filterapi.MCPRouteAuthorization) (*compiledAutho
 	compiled := &compiledAuthorization{
 		ResourceMetadataURL: auth.ResourceMetadataURL,
 		DefaultAction:       auth.DefaultAction,
+		VerifiedJWT:         auth.VerifiedJWT,
 	}
 
 	for _, rule := range auth.Rules {
@@ -129,9 +135,21 @@ type authzContext struct {
 // newAuthzContext parses the bearer token once. Callers that check many targets against
 // the same request should build this once and reuse it via authorizeRequestWith, instead
 // of re-parsing the token for every target.
-func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest) *authzContext {
+//
+// verifiedJWT must be true only when Envoy has cryptographically verified the bearer JWT
+// before this request reached the MCP proxy (i.e. the route has securityPolicy.oauth
+// configured; see filterapi.MCPRouteAuthorization.VerifiedJWT). When it is false, the token
+// is never parsed and no claims/scopes are exposed: without Envoy-side verification, a
+// caller-supplied JWT (including one with alg=none and forged claims) cannot be trusted, so
+// treating it as authoritative would let an attacker fabricate any claim or scope to satisfy
+// Source.JWT rules or CEL expressions referencing request.auth.jwt.*.
+func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest, verifiedJWT bool) *authzContext {
 	scopeSet := sets.New[string]()
 	claims := jwt.MapClaims{}
+
+	if !verifiedJWT {
+		return &authzContext{claims: claims, scopes: scopeSet}
+	}
 
 	token, err := bearerToken(req.Headers.Get("Authorization"))
 	// This is just a sanity check. The actual JWT verification is performed by Envoy before reaching here, and the token
@@ -139,7 +157,8 @@ func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest) *authzCon
 	if err != nil {
 		m.l.Info("missing or invalid bearer token", slog.String("error", err.Error()))
 	} else {
-		// JWT verification is performed by Envoy before reaching here. So we only need to parse the token without verification.
+		// JWT verification is performed by Envoy before reaching here (verifiedJWT is true). So we
+		// only need to parse the token without verification.
 		if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
 			m.l.Info("failed to parse JWT token", slog.String("error", err.Error()))
 		} else {
@@ -179,7 +198,7 @@ func (m *mcpRequestContext) authorizeRequest(authorization *compiledAuthorizatio
 	if len(authorization.Rules) == 0 {
 		return authorization.DefaultAction == filterapi.AuthorizationActionAllow, nil
 	}
-	return m.authorizeRequestWith(authorization, req, m.newAuthzContext(req))
+	return m.authorizeRequestWith(authorization, req, m.newAuthzContext(req, authorization.VerifiedJWT))
 }
 
 // authorizeRequestWith is authorizeRequest's matching logic, parameterized on an
@@ -193,50 +212,60 @@ func (m *mcpRequestContext) authorizeRequestWith(authorization *compiledAuthoriz
 
 	for i := range authorization.Rules {
 		rule := &authorization.Rules[i]
-		action := rule.Action == filterapi.AuthorizationActionAllow
+		shouldAllow := rule.Action == filterapi.AuthorizationActionAllow
 
-		// Evaluate CEL expression if present.
+		// If no target is specified, the rule matches all targets.
+		if rule.Target != nil && !m.toolMatches(req.Backend, req.Tool, rule.Target) {
+			continue // target does not match, skip to next rule
+		}
+
+		// At this point the target matches.
+
+		if rule.Source != nil {
+			if !claimsSatisfied(ac.claims, rule.Source.JWT.Claims) {
+				continue
+			}
+
+			// Scopes check doesn't make much sense if action is deny, we check it anyway.
+			requiredScopes := rule.Source.JWT.Scopes
+			// Keep track of the smallest set of required scopes for challenge when the action is allow and the request is denied.
+			if shouldAllow && !scopesSatisfied(ac.scopes, requiredScopes) {
+				if len(requiredScopesForChallenge) == 0 || len(requiredScopes) < len(requiredScopesForChallenge) {
+					requiredScopesForChallenge = requiredScopes
+				}
+				continue
+			}
+		}
+
+		// At this point the source matches.
+
+		// CEL expression is the last. We only fail closed on failed to compile CEL expressions if the source and
+		// target match. Otherwise we don't evaluate the CEL expressions because there is no point, and we don't want a CEL
+		// expression in one rule not evaluating properly to deny requests that are not meant for that source or target just
+		// because the CEL expression is not applicable for that request.
 		if rule.celProgram != nil {
 			if celActivation == nil {
 				celActivation = ac.activationFor(req)
 			}
 			match, err := m.evalRuleCEL(rule, celActivation)
 			if err != nil {
-				m.l.Error("failed to evaluate authorization CEL", slog.String("error", err.Error()), slog.String("expression", rule.celExpression))
-				continue
+				// Fail closed: a CEL runtime error (e.g. an attacker-supplied request shape
+				// that causes a missing-key/type error during evaluation) means we cannot
+				// determine whether this rule's condition holds. Treating that the same as
+				// "condition not met" (as a bare `continue` would) lets a request fall through
+				// to a later rule or the route's DefaultAction, silently bypassing Deny rules
+				// that depend on CEL. Deny the whole request instead so evaluation errors can
+				// never be leveraged to bypass authorization.
+				m.l.Error("authorization CEL evaluation error, denying request", slog.String("error", err.Error()), slog.String("expression", rule.celExpression))
+				return false, nil
 			}
 			if !match {
 				continue
 			}
 		}
 
-		// If no target is specified, the rule matches all targets.
-		if rule.Target != nil && !m.toolMatches(req.Backend, req.Tool, rule.Target) {
-			continue
-		}
-
-		// If no source is specified, the rule matches all sources.
-		if rule.Source == nil {
-			return action, nil
-		}
-
-		// Check source if specified.
-		if !claimsSatisfied(ac.claims, rule.Source.JWT.Claims) {
-			continue
-		}
-
-		// Scopes check doesn't make much sense if action is deny, we check it anyway.
-		requiredScopes := rule.Source.JWT.Scopes
-		if scopesSatisfied(ac.scopes, requiredScopes) {
-			return action, nil
-		}
-
-		// Keep track of the smallest set of required scopes for challenge when the action is allow and the request is denied.
-		if action {
-			if len(requiredScopesForChallenge) == 0 || len(requiredScopes) < len(requiredScopesForChallenge) {
-				requiredScopesForChallenge = requiredScopes
-			}
-		}
+		// At this point the rule matched the source, target and CEL (if any). Return the action.
+		return shouldAllow, nil
 	}
 
 	return defaultAction, requiredScopesForChallenge

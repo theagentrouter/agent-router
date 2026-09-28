@@ -132,7 +132,7 @@ func SetupAll(ctx context.Context, clusterName string, aigwOpts AIGatewayHelmOpt
 	return nil
 }
 
-func initKindCluster(ctx context.Context, clusterName string, inferenceExtension bool) (err error) {
+func initKindCluster(ctx context.Context, clusterName string, _ bool) (err error) {
 	initLog("Setting up the kind cluster")
 	start := time.Now()
 	defer func() {
@@ -168,12 +168,6 @@ func initKindCluster(ctx context.Context, clusterName string, inferenceExtension
 		"docker.io/envoyproxy/ai-gateway-testupstream:latest",
 		"docker.io/envoyproxy/ai-gateway-testmcpserver:latest",
 		"docker.io/envoyproxy/ai-gateway-testextauthserver:latest",
-	}
-	if inferenceExtension {
-		loadImages = append(loadImages,
-			// TODO: remvoe this after upstream issue fixed.
-			// see https://github.com/kubernetes-sigs/gateway-api-inference-extension/issues/3035
-			"registry.k8s.io/gateway-api-inference-extension/lwepp:v1.6.0")
 	}
 	for _, image := range loadImages {
 		cmd := testsinternal.GoToolCmdContext(ctx, "kind", "load", "docker-image", image, "--name", clusterName)

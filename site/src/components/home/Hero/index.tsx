@@ -23,6 +23,13 @@ export default function Hero(): React.ReactElement {
           {hero.ctas[1].label}
         </Link>
       </div>
+      <p className={styles.hosted}>
+        <span className={styles.hostedLine}>
+          {hero.hosted.lead}{' '}
+          <Link to={hero.hosted.link.to}>{hero.hosted.link.label}</Link>, {hero.hosted.provider}
+        </span>
+        <Link to={hero.hosted.solutions.to}>{hero.hosted.solutions.label}</Link>
+      </p>
       <p className={styles.sub}>{hero.sub}</p>
     </header>
   );

@@ -18,6 +18,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
@@ -221,6 +222,7 @@ func TestRecorders_operations(t *testing.T) {
 		{name: "transcription", spanName: mustStartName(t, NewTranscriptionRecorder(cfg), &openai.TranscriptionRequest{Model: "m"}), expectedOperation: "transcription m"},
 		{name: "translation", spanName: mustStartName(t, NewTranslationRecorder(cfg), &openai.TranslationRequest{Model: "m"}), expectedOperation: "translation m"},
 		{name: "rerank", spanName: mustStartName(t, NewRerankRecorder(cfg), &cohere.RerankV2Request{Model: "m"}), expectedOperation: "rerank m"},
+		{name: "systemone", spanName: mustStartName(t, NewSystemOneRecorder(cfg), &typesafe.SystemOneRequest{Model: "m"}), expectedOperation: "systemone m"},
 		// Anthropic messages are chat completions, so they share the chat
 		// operation rather than minting an "anthropic" one.
 		{name: "message", spanName: mustStartName(t, NewMessageRecorder(cfg), &anthropic.MessagesRequest{Model: "m"}), expectedOperation: "chat m"},
@@ -442,6 +444,54 @@ func TestEmbeddingsRecorder_RecordResponse(t *testing.T) {
 			},
 		},
 		{name: "empty response", resp: &openai.EmbeddingResponse{}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			span := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+				r.RecordResponse(span, tc.resp)
+				return false
+			})
+			testotel.RequireAttributesEqual(t, tc.expected, span.Attributes)
+			require.Equal(t, codes.Ok, span.Status.Code)
+		})
+	}
+}
+
+// TestSystemOneRecorder_RecordResponse pins that System One reports the
+// resolved model and token usage, omitting whatever is absent.
+func TestSystemOneRecorder_RecordResponse(t *testing.T) {
+	r := NewSystemOneRecorder(NewConfig())
+
+	tests := []struct {
+		name     string
+		resp     *typesafe.SystemOneResponse
+		expected []attribute.KeyValue
+	}{
+		{
+			name: "model and usage",
+			resp: &typesafe.SystemOneResponse{
+				Model: "jev-1.13.0",
+				Usage: &typesafe.SystemOneUsage{InputTokens: ptr(312), OutputTokens: ptr(48)},
+			},
+			expected: []attribute.KeyValue{
+				attribute.String(ResponseModel, "jev-1.13.0"),
+				attribute.Int(UsageInputTokens, 312),
+				attribute.Int(UsageOutputTokens, 48),
+			},
+		},
+		{
+			name: "input tokens only",
+			resp: &typesafe.SystemOneResponse{
+				Model: "jev-1.13.0",
+				Usage: &typesafe.SystemOneUsage{InputTokens: ptr(25)},
+			},
+			expected: []attribute.KeyValue{
+				attribute.String(ResponseModel, "jev-1.13.0"),
+				attribute.Int(UsageInputTokens, 25),
+			},
+		},
+		{name: "empty response", resp: &typesafe.SystemOneResponse{}},
 	}
 
 	for _, tc := range tests {

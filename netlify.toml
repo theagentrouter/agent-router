@@ -31,6 +31,12 @@ command = "npm run build"
   status = 301
   force = true
 
+# Old docs URLs of the form /docs/latest/<page> → current docs.
+[[redirects]]
+  from = "/docs/latest/*"
+  to = "/docs/:splat"
+  status = 301
+
 # Self-hosted brand fonts and hashed build assets are immutable.
 [[headers]]
   for = "/fonts/*"

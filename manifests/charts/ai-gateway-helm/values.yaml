@@ -32,9 +32,11 @@ endpointConfig:
   #   openai: ""           # results in /v1/...
   #   cohere: "/cohere"   # results in /cohere/v2/...
   #   anthropic: "/anthropic" # results in /anthropic/v1/...
+  #   typesafe: "/typesafe"   # results in /typesafe/v1/...
   openai: ""
   cohere: "/cohere"
   anthropic: "/anthropic"
+  typesafe: "/typesafe"
 
 extProc:
   image:
@@ -293,8 +295,20 @@ controller:
     # Configuration for MCP session encryption.
     sessionEncryption:
       # Seed used to derive the MCP session encryption key.
-      # This value should be set to a secure random string in production environments instead of the default below.
-      seed: "default-insecure-seed"
+      # When empty (the default), the chart generates a random seed on install, stores it in a Secret
+      # named "<controller fullname>-mcp-session-encryption", and reuses it on upgrades.
+      # Set this to use your own seed instead. Anyone who knows the seed can decrypt and forge MCP session IDs,
+      # so never use a well-known value such as "default-insecure-seed".
+      #
+      # Note: upgrading from a chart version that used "default-insecure-seed" changes the seed, which ends existing MCP
+      # sessions. To keep them valid during the upgrade, set fallback.seed to "default-insecure-seed" and remove it once
+      # clients have reconnected.
+      seed: ""
+      # Name of an existing Secret in the release namespace that holds the seed under the "seed" key.
+      # When set, the chart does not create a Secret and ignores the seed value above.
+      # Use this with tools that render the chart with "helm template" (for example GitOps controllers), where the chart
+      # cannot look up a previously generated seed and would otherwise generate a new one on every render.
+      existingSecret: ""
       # Number of PBKDF2 iterations to use for deriving the MCP session encryption key.
       # A higher number increases security but also increases CPU usage and time consumed during key derivation.
       # The default value of 100,000 is a reasonable balance for most production environments.

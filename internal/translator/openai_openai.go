@@ -180,8 +180,8 @@ func (o *openAIToOpenAITranslatorV1ChatCompletion) ResponseBody(_ map[string]str
 	tokenUsage.SetOutputTokens(uint32(resp.Usage.CompletionTokens)) //nolint:gosec
 	tokenUsage.SetTotalTokens(uint32(resp.Usage.TotalTokens))       //nolint:gosec
 	if resp.Usage.PromptTokensDetails != nil {
-		tokenUsage.SetCachedInputTokens(uint32(resp.Usage.PromptTokensDetails.CachedTokens))               //nolint:gosec
-		tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.PromptTokensDetails.CacheCreationTokens)) //nolint:gosec
+		tokenUsage.SetCachedInputTokens(uint32(resp.Usage.PromptTokensDetails.CachedTokens))                   //nolint:gosec
+		tokenUsage.SetCacheCreationInputTokens(uint32(resp.Usage.PromptTokensDetails.CacheWriteTokensValue())) //nolint:gosec
 	}
 	if resp.Usage.CompletionTokensDetails != nil {
 		tokenUsage.SetReasoningTokens(uint32(resp.Usage.CompletionTokensDetails.ReasoningTokens)) //nolint:gosec
@@ -224,8 +224,8 @@ func (o *openAIToOpenAITranslatorV1ChatCompletion) extractUsageFromBufferEvent(s
 			tokenUsage.SetOutputTokens(uint32(usage.CompletionTokens)) //nolint:gosec
 			tokenUsage.SetTotalTokens(uint32(usage.TotalTokens))       //nolint:gosec
 			if usage.PromptTokensDetails != nil {
-				tokenUsage.SetCachedInputTokens(uint32(usage.PromptTokensDetails.CachedTokens))               //nolint:gosec
-				tokenUsage.SetCacheCreationInputTokens(uint32(usage.PromptTokensDetails.CacheCreationTokens)) //nolint:gosec
+				tokenUsage.SetCachedInputTokens(uint32(usage.PromptTokensDetails.CachedTokens))                   //nolint:gosec
+				tokenUsage.SetCacheCreationInputTokens(uint32(usage.PromptTokensDetails.CacheWriteTokensValue())) //nolint:gosec
 			}
 			if usage.CompletionTokensDetails != nil {
 				tokenUsage.SetReasoningTokens(uint32(usage.CompletionTokensDetails.ReasoningTokens)) //nolint:gosec

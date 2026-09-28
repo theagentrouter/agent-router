@@ -324,6 +324,41 @@ func TestRerankEndpointSpec_GetTranslator(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported API schema")
 }
 
+func TestSystemOneEndpointSpec_ParseBody(t *testing.T) {
+	spec := SystemOneEndpointSpec{}
+	t.Run("invalid json", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseBody([]byte("{"), false)
+		require.ErrorContains(t, err, "malformed request")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		body := []byte(`{"model":"jev-latest","state":["a","b"],"questions":{"q":{"type":"noul","instructions":{"ask":"is it?"}}}}`)
+		model, parsed, stream, mutated, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.Equal(t, "jev-latest", model)
+		require.False(t, stream)
+		require.Nil(t, mutated)
+		require.JSONEq(t, `["a","b"]`, string(parsed.State))
+		require.Equal(t, "noul", parsed.Questions["q"].Type)
+		require.JSONEq(t, `{"ask":"is it?"}`, string(parsed.Questions["q"].Instructions))
+	})
+
+	t.Run("multipart unsupported", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseMultipartBody(nil, "multipart/form-data", false)
+		require.ErrorIs(t, err, errMultipartNotSupported)
+	})
+}
+
+func TestSystemOneEndpointSpec_GetTranslator(t *testing.T) {
+	spec := SystemOneEndpointSpec{}
+
+	_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe, Version: "v1"}, "override")
+	require.NoError(t, err)
+
+	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
+	require.ErrorContains(t, err, "unsupported API schema")
+}
+
 func TestResponsesEndpointSpec_ParseBody(t *testing.T) {
 	spec := ResponsesEndpointSpec{}
 	t.Run("invalid json", func(t *testing.T) {
@@ -1691,6 +1726,28 @@ func TestRerankEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 	require.NotEqual(t, markerDoc, redacted.Documents[0])
 	require.Equal(t, markerQ, req.Query, "original must not be mutated")
 	require.Equal(t, markerDoc, req.Documents[0], "original must not be mutated")
+}
+
+func TestSystemOneEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	const markerState = "marker-state-content"
+	const markerInstr = "marker-instructions"
+	const markerCrit = "marker-criteria"
+	body := []byte(`{"model":"jev-latest","state":{"text":"` + markerState + `"},"questions":{"q":{"type":"choice","instructions":"` + markerInstr + `","criteria":{"a":"` + markerCrit + `"}},"empty":{"type":"noul"}}}`)
+	_, req, _, _, err := SystemOneEndpointSpec{}.ParseBody(body, false)
+	require.NoError(t, err)
+
+	redacted, err := SystemOneEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+	require.NoError(t, err)
+	out := mustMarshal(t, redacted)
+	require.NotContains(t, out, markerState)
+	require.NotContains(t, out, markerInstr)
+	require.NotContains(t, out, markerCrit)
+	require.Contains(t, out, "[REDACTED LENGTH=")
+	require.Equal(t, "jev-latest", redacted.Model)
+	require.Equal(t, "choice", redacted.Questions["q"].Type)
+	require.Empty(t, redacted.Questions["empty"].Instructions, "empty values stay empty")
+	require.Contains(t, mustMarshal(t, req), markerState, "original must not be mutated")
+	require.Contains(t, mustMarshal(t, req), markerCrit, "original must not be mutated")
 }
 
 func TestTokenizeEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {

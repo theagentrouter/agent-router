@@ -826,8 +826,7 @@ func buildClientSelectorActions(
 }
 
 // buildClientSelectorStreamDoneActions is like buildClientSelectorActions but
-// always uses ExpectMatch=true on HeaderValueMatch actions. Distinct headers fall
-// back to GenericKey because per-value bucketing is not applicable at stream-done time.
+// always uses ExpectMatch=true on HeaderValueMatch actions.
 func buildClientSelectorStreamDoneActions(
 	ruleIndex int, selectors []egv1a1.RateLimitSelectCondition,
 ) []*routev3.RateLimit_Action {
@@ -869,18 +868,21 @@ func flattenAndSortClientSelectorHeaders(selectors []egv1a1.RateLimitSelectCondi
 }
 
 // buildStreamDoneHeaderMatchAction is like buildHeaderMatchAction but always uses
-// ExpectMatch=true. Distinct headers are treated as GenericKey.
+// ExpectMatch=true, so an inverted match still reports the cost it incurred.
 func buildStreamDoneHeaderMatchAction(
 	ruleIndex, matchIndex int, header egv1a1.HeaderMatch,
 ) *routev3.RateLimit_Action {
 	descriptorKey := translator.BucketRuleDescriptorKey(ruleIndex, matchIndex, header.Name, headerMatchKeyValue(header))
 
+	// Must mirror buildHeaderMatchAction: a descriptor that doesn't match the
+	// request-time one lands the real cost in a different bucket from the
+	// pre-flight reservation it is meant to settle.
 	if header.Type != nil && *header.Type == egv1a1.HeaderMatchDistinct {
 		return &routev3.RateLimit_Action{
-			ActionSpecifier: &routev3.RateLimit_Action_GenericKey_{
-				GenericKey: &routev3.RateLimit_Action_GenericKey{
-					DescriptorKey:   descriptorKey,
-					DescriptorValue: descriptorKey,
+			ActionSpecifier: &routev3.RateLimit_Action_RequestHeaders_{
+				RequestHeaders: &routev3.RateLimit_Action_RequestHeaders{
+					HeaderName:    header.Name,
+					DescriptorKey: descriptorKey,
 				},
 			},
 		}

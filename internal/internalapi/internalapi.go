@@ -147,6 +147,16 @@ func PerRouteRuleRefBackendName(namespace, name, routeName string, routeRuleInde
 	return fmt.Sprintf("%s/%s/route/%s/rule/%d/ref/%d", namespace, name, routeName, routeRuleIndex, refIndex)
 }
 
+// AIServiceBackendName extracts the "namespace/name" of the AIServiceBackend from a name
+// produced by [PerRouteRuleRefBackendName], and returns the input unchanged when it does
+// not carry the per-route rule suffix.
+func AIServiceBackendName(perRouteRuleRefBackendName string) string {
+	if parts := strings.SplitN(perRouteRuleRefBackendName, "/", 3); len(parts) >= 2 {
+		return parts[0] + "/" + parts[1]
+	}
+	return perRouteRuleRefBackendName
+}
+
 // awsBedrockHostRE matches an AWS Bedrock runtime host — public, FIPS, PrivateLink (VPCE), or the
 // newer api.aws domain — and captures the region, e.g. bedrock-runtime.us-east-1.amazonaws.com,
 // bedrock-runtime-fips.us-east-1.amazonaws.com, vpce-<id>.bedrock-runtime.us-east-1.vpce.amazonaws.com,
@@ -260,6 +270,8 @@ type EndpointPrefixes struct {
 	Cohere string
 	// Anthropic defaults to "/anthropic"
 	Anthropic string
+	// TypeSafe defaults to "/typesafe"
+	TypeSafe string
 }
 
 // ParseEndpointPrefixes parses a comma-separated list of key:value pairs to populate EndpointPrefixes.
@@ -268,10 +280,11 @@ type EndpointPrefixes struct {
 //   - openai
 //   - cohere
 //   - anthropic
+//   - typesafe
 //
 // Format example:
 //
-//	"openai:/,cohere:/cohere,anthropic:/anthropic"
+//	"openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe"
 //
 // Unknown keys cause an error; values must be non-empty.
 func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
@@ -279,6 +292,7 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 		OpenAI:    "/",
 		Cohere:    "/cohere",
 		Anthropic: "/anthropic",
+		TypeSafe:  "/typesafe",
 	}
 	if s == "" {
 		return out, nil
@@ -306,8 +320,10 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 			out.Cohere = value
 		case "anthropic":
 			out.Anthropic = value
+		case "typesafe":
+			out.TypeSafe = value
 		default:
-			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic)", key, i+1)
+			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic, typesafe)", key, i+1)
 		}
 	}
 	return out, nil

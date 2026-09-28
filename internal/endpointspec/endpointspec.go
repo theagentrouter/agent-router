@@ -24,6 +24,7 @@ import (
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -109,6 +110,8 @@ type (
 	MessagesEndpointSpec struct{}
 	// RerankEndpointSpec implements EndpointSpec for /v2/rerank.
 	RerankEndpointSpec struct{}
+	// SystemOneEndpointSpec implements EndpointSpec for TypeSafe's /v1/systemone.
+	SystemOneEndpointSpec struct{}
 	// SpeechEndpointSpec implements EndpointSpec for /v1/audio/speech.
 	SpeechEndpointSpec struct{}
 	// TranscriptionEndpointSpec implements EndpointSpec for /v1/audio/transcriptions.
@@ -517,6 +520,62 @@ func (RerankEndpointSpec) RedactSensitiveInfoFromRequest(req *cohereschema.Reran
 		redacted.Documents[i] = redaction.RedactString(doc)
 	}
 	return &redacted, nil
+}
+
+// ParseBody implements [EndpointSpec.ParseBody].
+func (SystemOneEndpointSpec) ParseBody(
+	body []byte,
+	_ bool,
+) (internalapi.OriginalModel, *typesafeschema.SystemOneRequest, bool, []byte, error) {
+	var req typesafeschema.SystemOneRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", nil, false, nil, fmt.Errorf("%w: failed to parse JSON for /v1/systemone: %w", internalapi.ErrMalformedRequest, err)
+	}
+	return req.Model, &req, false, nil, nil
+}
+
+// ParseMultipartBody implements [Spec.ParseMultipartBody].
+func (SystemOneEndpointSpec) ParseMultipartBody([]byte, string, bool) (internalapi.OriginalModel, *typesafeschema.SystemOneRequest, bool, []byte, error) {
+	return "", nil, false, nil, errMultipartNotSupported
+}
+
+// GetTranslator implements [EndpointSpec.GetTranslator].
+func (SystemOneEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, modelNameOverride string) (translator.TypeSafeSystemOneTranslator, error) {
+	switch schema.Name {
+	case filterapi.APISchemaTypeSafe:
+		return translator.NewSystemOneTypeSafeToTypeSafeTranslator(schema.Version, modelNameOverride), nil
+	default:
+		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+	}
+}
+
+// RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
+// The state and every question's instructions and criteria are user content;
+// the model, question ids and question types are kept for debugging.
+func (SystemOneEndpointSpec) RedactSensitiveInfoFromRequest(req *typesafeschema.SystemOneRequest) (redactedReq *typesafeschema.SystemOneRequest, err error) {
+	redacted := *req
+	redacted.State = redactRawJSON(req.State)
+	if req.Questions != nil {
+		redacted.Questions = make(map[string]typesafeschema.SystemOneQuestion, len(req.Questions))
+		for id, q := range req.Questions {
+			q.Instructions = redactRawJSON(q.Instructions)
+			q.Criteria = redactRawJSON(q.Criteria)
+			redacted.Questions[id] = q
+		}
+	}
+	return &redacted, nil
+}
+
+// redactRawJSON collapses a raw JSON value into a JSON string placeholder
+// carrying only its length and hash. Unlike redactUnionField it does not keep
+// the JSON shape, because object keys (state fields, choice options) are user
+// content here. Empty values are left as they are.
+func redactRawJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	placeholder, _ := json.Marshal(redaction.RedactString(string(raw)))
+	return placeholder
 }
 
 // ParseBody implements [EndpointSpec.ParseBody].

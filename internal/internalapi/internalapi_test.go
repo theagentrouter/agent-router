@@ -13,12 +13,13 @@ import (
 )
 
 func TestParseEndpointPrefixes_Success(t *testing.T) {
-	in := "openai:/foo,cohere:/1/2/3,anthropic:/cat"
+	in := "openai:/foo,cohere:/1/2/3,anthropic:/cat,typesafe:/ts"
 	ep, err := ParseEndpointPrefixes(in)
 	require.NoError(t, err)
 	require.Equal(t, "/foo", ep.OpenAI)
 	require.Equal(t, "/1/2/3", ep.Cohere)
 	require.Equal(t, "/cat", ep.Anthropic)
+	require.Equal(t, "/ts", ep.TypeSafe)
 }
 
 func TestParseEndpointPrefixes_EmptyInput(t *testing.T) {
@@ -27,6 +28,7 @@ func TestParseEndpointPrefixes_EmptyInput(t *testing.T) {
 	require.Equal(t, "/", ep.OpenAI)
 	require.Equal(t, "/cohere", ep.Cohere)
 	require.Equal(t, "/anthropic", ep.Anthropic)
+	require.Equal(t, "/typesafe", ep.TypeSafe)
 }
 
 func TestParseEndpointPrefixes_UnknownKey(t *testing.T) {
@@ -262,6 +264,40 @@ func TestFormatRequestHeaderAttributeMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.expected, FormatRequestHeaderAttributeMapping(tt.input))
+		})
+	}
+}
+
+func TestAIServiceBackendName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "per-route rule ref backend name",
+			input:    PerRouteRuleRefBackendName("default", "some-backend", "some-route", 0, 1),
+			expected: "default/some-backend",
+		},
+		{
+			name:     "namespace and name only",
+			input:    "default/some-backend",
+			expected: "default/some-backend",
+		},
+		{
+			name:     "no separator",
+			input:    "some-backend",
+			expected: "some-backend",
+		},
+		{
+			name:     "empty",
+			input:    "",
+			expected: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, AIServiceBackendName(tt.input))
 		})
 	}
 }

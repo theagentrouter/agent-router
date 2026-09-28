@@ -27,7 +27,7 @@ npm run check:brand  # rename-safety assertions (see AGENTS.md)
 - `blog/` — posts under `blog/YYYY/`; authors in `blog/authors.yml`
 - `src/data/home/` — **all homepage copy** (hero, capabilities, quickstart, community, providers)
 - `src/components/home/` — homepage section components (one directory per section, CSS modules)
-- `src/data/` — adopters, talks, release-notes data (JSON)
+- `src/data/` — adopters, solutions, talks, release-notes data (JSON)
 - `src/css/brand/` — vendored brand tokens + A-pattern (do not edit; see its README)
 - `src/css/custom.css` — brand → Infima mapping layer and site chrome
 - `static/img/brand/` — logo cuts, favicons, og cards

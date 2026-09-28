@@ -13,10 +13,18 @@ export const hero = {
   leadStrong:
     'Integrate once. Switch models without rewriting.',
   ctas: [
-    { label: 'Get Started', to: '/docs/getting-started/' },
+    { label: 'Get Started', to: '/#quickstart' },
     { label: 'View on GitHub', to: 'https://github.com/theagentrouter/agent-router' },
   ] satisfies Cta[],
   sub: 'An Agentic AI Foundation project · Powered by Envoy',
+  // third path after the two OSS ones: text-only, names the provider, and
+  // resolves to the vendor-neutral Solutions section
+  hosted: {
+    lead: 'Prefer not to run it yourself?',
+    link: { label: 'Try it as a service', to: 'https://router.tetrate.ai/sign-in' },
+    provider: 'hosted by Tetrate.',
+    solutions: { label: 'See solutions built on Agent Router', to: '/#solutions' },
+  },
 };
 
 export const howItFits = {
@@ -107,14 +115,16 @@ export type QuickstartTab = {
   id: string;
   label: string;
   cta: Cta;
+  /** Small muted line under the CTA, e.g. who provides a hosted option. */
+  note?: string;
   terminal: TerminalLine[];
 };
 
 export const quickstart = {
-  label: 'Get running',
+  label: 'Get started',
   title: 'From laptop to production',
   body:
-    'One command on your laptop. The same configuration ships to a dedicated gateway or a Kubernetes cluster — only the packaging changes.',
+    'One command on your laptop. The same configuration ships to a dedicated gateway or a Kubernetes cluster — only the packaging changes. Or skip the install and use a hosted service.',
   tabs: [
     {
       id: 'local',
@@ -148,7 +158,38 @@ export const quickstart = {
         { kind: 'command', text: `  -d '{"model": "claude-sonnet-5", "messages": [...]}'` },
       ],
     },
+    {
+      id: 'hosted',
+      label: 'Hosted',
+      cta: { label: 'Sign in with Google or GitHub', to: 'https://router.tetrate.ai/sign-in' },
+      note: 'Hosted service provided by Tetrate. Nothing to install.',
+      terminal: [
+        { kind: 'comment', text: '# 1 — sign in at router.tetrate.ai and create an API key' },
+        { kind: 'blank' },
+        { kind: 'comment', text: '# 2 — the only change your agent needs' },
+        { kind: 'command', text: 'export OPENAI_API_KEY=<your key>' },
+        { kind: 'command', text: 'export OPENAI_BASE_URL=https://api.router.tetrate.ai/v1' },
+        { kind: 'blank' },
+        { kind: 'comment', text: '# 3 — send a request' },
+        { kind: 'command', text: 'curl $OPENAI_BASE_URL/chat/completions \\' },
+        { kind: 'command', text: '  -H "Authorization: Bearer $OPENAI_API_KEY" \\' },
+        { kind: 'command', text: `  -d '{"model": "claude-sonnet-5", "messages": [...]}'` },
+      ],
+    },
   ] satisfies QuickstartTab[],
+};
+
+export const solutions = {
+  label: 'Solutions',
+  title: 'Solutions built on Agent Router',
+  standfirst:
+    'Commercial products and managed services that package Agent Router for teams that want support, hosting, or enterprise controls on top of the open source project.',
+  cardLinkLabel: 'Learn more',
+  ctaText: 'Built something on Agent Router?',
+  ctaLink: {
+    label: 'Add your solution →',
+    to: 'https://github.com/theagentrouter/agent-router/edit/main/site/src/data/solutions/solutions.json',
+  },
 };
 
 export type CommunityIcon = 'chat' | 'calendar' | 'github' | 'mic';
