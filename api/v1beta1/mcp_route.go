@@ -66,6 +66,8 @@ type MCPRouteList struct {
 }
 
 // MCPRouteSpec details the MCPRoute configuration.
+//
+// +kubebuilder:validation:XValidation:rule="!(has(self.backendSelector) && self.backendSelector.rules.exists(r, has(r.cel) && r.cel.contains('auth.jwt')) && !(has(self.securityPolicy) && has(self.securityPolicy.oauth)))",message="securityPolicy.oauth must be configured when a backendSelector rule's cel expression references request.auth.jwt"
 type MCPRouteSpec struct {
 	// ParentRefs are the names of the Gateway resources this MCPRoute is being attached to.
 	// Cross namespace references are not supported. In other words, the Gateway resources must be in the
@@ -138,6 +140,11 @@ type MCPRouteSpec struct {
 	// BackendSelector restricts which of this route's backends a given request may fan
 	// out to, evaluated once per candidate backend when a client session is initialized.
 	// If unspecified, all backends on the route are considered.
+	//
+	// Security note: a backendSelector rule whose CEL expression reads request.auth.jwt
+	// (claims or scopes) only reflects verified JWT data when SecurityPolicy.OAuth is
+	// configured for this route; the XValidation below enforces that pairing so that
+	// unauthenticated or forged bearer tokens can't influence backend selection.
 	//
 	// +kubebuilder:validation:Optional
 	// +optional
@@ -411,7 +418,7 @@ type MCPBackendAPIKey struct {
 
 // MCPRouteSecurityPolicy defines the security policy for a MCPRoute.
 //
-// +kubebuilder:validation:XValidation:rule="!(has(self.authorization) && self.authorization.rules.exists(r, has(r.source) && has(r.source.jwt)) && !has(self.oauth))",message="oauth must be configured when any authorization rule uses a jwt source"
+// +kubebuilder:validation:XValidation:rule="!(has(self.authorization) && self.authorization.rules.exists(r, (has(r.source) && has(r.source.jwt)) || (has(r.cel) && r.cel.contains('auth.jwt'))) && !has(self.oauth))",message="oauth must be configured when any authorization rule uses a jwt source or references request.auth.jwt in a cel expression"
 type MCPRouteSecurityPolicy struct {
 	// OAuth defines the configuration for the MCP spec compatible OAuth authentication.
 	//
