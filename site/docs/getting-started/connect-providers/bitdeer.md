@@ -5,7 +5,7 @@ sidebar_position: 7
 ---
 
 import CodeBlock from '@theme/CodeBlock';
-import vars from '../../_vars.json';
+import vars from '../../\_vars.json';
 
 # Connect Bitdeer AI
 
