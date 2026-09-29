@@ -934,6 +934,7 @@ func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.
 // This essentially prepares the request for the future invocation of handleClientToServerResponse.
 func (m *mcpRequestContext) maybeServerToClientRequestModify(ctx context.Context, msg *jsonrpc.Request, backend filterapi.MCPBackendName) error {
 	switch msg.Method {
+	case "ping":
 	case "roots/list":
 		if msg.Params != nil {
 			params := &mcp.ListRootsParams{}
@@ -1034,6 +1035,7 @@ func (m *mcpRequestContext) recordResponse(ctx context.Context, rawMsg jsonrpc.M
 		}
 		knownMethod := true
 		switch msg.Method {
+		case "ping":
 		case "notifications/prompts/list_changed":
 		case "notifications/resources/list_changed":
 		case "notifications/resources/updated":

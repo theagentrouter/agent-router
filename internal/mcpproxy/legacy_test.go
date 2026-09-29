@@ -1068,6 +1068,18 @@ func TestRecordResponse(t *testing.T) {
 			proxy.recordResponse(t.Context(), &msg)
 		}
 	})
+	t.Run("ping is a supported server request", func(t *testing.T) {
+		mr := sdkmetric.NewManualReader()
+		proxy := newTestMCPProxyWithOTEL(mr, noopTracer)
+		msg := jsonrpc.Request{Method: "ping"}
+		proxy.recordResponse(t.Context(), &msg)
+
+		attrs := attribute.NewSet(
+			attribute.String("mcp.method.name", "ping"),
+			attribute.String("status", string(metrics.MCPStatusSuccess)),
+		)
+		require.Equal(t, 1.0, testotel.GetCounterValue(t, mr, "mcp.method.count", attrs))
+	})
 
 	t.Run("unsupported method", func(t *testing.T) {
 		proxy := newTestMCPProxy()
@@ -1713,9 +1725,18 @@ func TestMCPProxy_maybeServerToClientRequestModify(t *testing.T) {
 		verify func(t *testing.T, modified *jsonrpc.Request)
 	}{
 		{
-			name:   "not server-to-client request",
-			msg:    &jsonrpc.Request{Method: "ping"},
-			verify: func(t *testing.T, modified *jsonrpc.Request) { require.Equal(t, "ping", modified.Method) },
+			name: "not server-to-client request",
+			msg:  &jsonrpc.Request{Method: "unknown/server/request"},
+			verify: func(t *testing.T, modified *jsonrpc.Request) {
+				require.Equal(t, "unknown/server/request", modified.Method)
+			},
+		},
+		{
+			name: "ping",
+			msg:  &jsonrpc.Request{ID: f64ID, Method: "ping"},
+			verify: func(t *testing.T, modified *jsonrpc.Request) {
+				require.Equal(t, "1__i__backend", modified.ID.Raw().(string))
+			},
 		},
 		{
 			name:   "roots/list invalid param",
@@ -1777,6 +1798,40 @@ func TestMCPProxy_maybeServerToClientRequestModify(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMCPProxy_backendInitiatedPingResponse(t *testing.T) {
+	proxy := newTestMCPProxy()
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		msg, err := jsonrpc.DecodeMessage(body)
+		require.NoError(t, err)
+		response, ok := msg.(*jsonrpc.Response)
+		require.True(t, ok)
+		require.Equal(t, int64(1), response.ID.Raw())
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(testServer.Close)
+	proxy.backendListenerAddr = testServer.URL
+
+	id, err := jsonrpc.MakeID(float64(1))
+	require.NoError(t, err)
+	request := &jsonrpc.Request{ID: id, Method: "ping"}
+	require.NoError(t, proxy.maybeServerToClientRequestModify(t.Context(), request, "backend1"))
+	require.Equal(t, "1__i__backend1", request.ID.Raw().(string))
+
+	responseID, err := jsonrpc.MakeID(request.ID.Raw())
+	require.NoError(t, err)
+	response := &jsonrpc.Response{ID: responseID, Result: []byte(`{}`)}
+	rr := httptest.NewRecorder()
+	_, err = proxy.handleClientToServerResponse(t.Context(), &session{
+		reqCtx:             proxy,
+		perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{"backend1": {sessionID: "test-session"}},
+		route:              "test-route",
+	}, rr, response)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusAccepted, rr.Code)
 }
 
 func TestMCPProxy_handleClientToServerResponse(t *testing.T) {
