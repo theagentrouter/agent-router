@@ -477,6 +477,12 @@ func (m *mcpRequestContext) mergeToolsList(s *session, responses []broadCastResp
 	}
 
 	applyMergedCachingHints(&resp.Cacheable, responses)
+	// tools/list is filtered by caller-specific authorization above. Mark the
+	// aggregate private even when its backends omitted cache hints or marked
+	// their unfiltered results public.
+	if route.authorization != nil {
+		resp.CacheScope = "private"
+	}
 	return resp
 }
 
