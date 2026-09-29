@@ -90,6 +90,34 @@ func TestChatCompletionsEndpointSpec_ParseBody(t *testing.T) {
 		require.True(t, mutatedReq.StreamOptions.IncludeUsage)
 	})
 
+	t.Run("streaming_preserves_extra_stream_options_fields", func(t *testing.T) {
+		// vLLM supports additional stream_options fields beyond include_usage, e.g.
+		// continuous_usage_stats. Forcing include_usage must not drop them.
+		body := []byte(`{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":false,"continuous_usage_stats":true}}`)
+
+		_, parsed, _, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		require.JSONEq(t, `{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true,"continuous_usage_stats":true}}`, string(mutated))
+	})
+
+	t.Run("streaming_with_duplicate_stream_options_preserves_last_fields", func(t *testing.T) {
+		// With duplicate top-level keys, json.Unmarshal (and therefore `parsed`) takes the
+		// last occurrence. The mutated body must match that behavior and keep its other fields.
+		body := []byte(`{"model":"gpt-4o","stream":true,"stream_options":{"continuous_usage_stats":true},"stream_options":{"include_usage":false,"continuous_usage_stats":false}}`)
+
+		_, parsed, _, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		require.JSONEq(t, `{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true,"continuous_usage_stats":false}}`, string(mutated))
+	})
+
 	t.Run("non_streaming", func(t *testing.T) {
 		req := openai.ChatCompletionRequest{Model: "gpt-4-mini", Stream: false}
 		body, err := json.Marshal(req)
