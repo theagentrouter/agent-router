@@ -414,6 +414,44 @@ data: [DONE]
 		require.True(t, ok)
 		require.Equal(t, uint32(5), outputTokens)
 	})
+
+	t.Run("streaming tool call", func(t *testing.T) {
+		translator := NewResponsesOpenAIToChatCompletionTranslator("v1", "")
+		_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{
+			Model: "gpt-4o", Stream: true,
+			Input: openai.ResponseNewParamsInputUnion{OfString: ptr.To("Get the weather")},
+		}, false)
+		require.NoError(t, err)
+
+		chunks := `data: {"id":"chatcmpl-tool","model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-weather","function":{"name":"get_weather","arguments":"{\"city\":"}}]}}]}` + "\n\n" +
+			`data: {"id":"chatcmpl-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Berlin\"}"}}]}}]}` + "\n\n" +
+			`data: {"id":"chatcmpl-tool","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+			`data: {"id":"chatcmpl-tool","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":6,"total_tokens":18}}` + "\n\n"
+
+		_, body, _, model, err := translator.ResponseBody(nil, bytes.NewReader([]byte(chunks)), true, nil)
+		require.NoError(t, err)
+		require.Equal(t, "gpt-4o", model)
+
+		events := parseSSEEventsFromBytes(body)
+		require.Len(t, events, 8)
+		require.Equal(t, "response.created", events[0].eventType)
+		require.Equal(t, "response.in_progress", events[1].eventType)
+		require.Equal(t, "response.output_item.added", events[2].eventType)
+		require.Equal(t, "response.function_call_arguments.delta", events[3].eventType)
+		require.Equal(t, "response.function_call_arguments.delta", events[4].eventType)
+		require.JSONEq(t, `{"type":"response.function_call_arguments.done","item_id":"call-weather","name":"get_weather","arguments":"{\"city\":\"Berlin\"}","output_index":0,"sequence_number":6}`, events[5].data)
+		require.Equal(t, "response.output_item.done", events[6].eventType)
+		require.Equal(t, "response.completed", events[7].eventType)
+
+		var completed openai.ResponseCompletedEvent
+		require.NoError(t, json.Unmarshal([]byte(events[7].data), &completed))
+		require.Equal(t, "completed", completed.Response.Status)
+		require.Len(t, completed.Response.Output, 1)
+		require.Equal(t, "call-weather", completed.Response.Output[0].OfFunctionCall.CallID)
+		require.JSONEq(t, `{"city":"Berlin"}`, completed.Response.Output[0].OfFunctionCall.Arguments)
+		require.Equal(t, int64(12), completed.Response.Usage.InputTokens)
+		require.Equal(t, int64(6), completed.Response.Usage.OutputTokens)
+	})
 }
 
 func TestResponsesOpenAIToChatCompletion_ResponseError(t *testing.T) {
