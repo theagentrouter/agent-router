@@ -147,6 +147,16 @@ func PerRouteRuleRefBackendName(namespace, name, routeName string, routeRuleInde
 	return fmt.Sprintf("%s/%s/route/%s/rule/%d/ref/%d", namespace, name, routeName, routeRuleIndex, refIndex)
 }
 
+// AIServiceBackendName extracts the "namespace/name" of the AIServiceBackend from a name
+// produced by [PerRouteRuleRefBackendName], and returns the input unchanged when it does
+// not carry the per-route rule suffix.
+func AIServiceBackendName(perRouteRuleRefBackendName string) string {
+	if parts := strings.SplitN(perRouteRuleRefBackendName, "/", 3); len(parts) >= 2 {
+		return parts[0] + "/" + parts[1]
+	}
+	return perRouteRuleRefBackendName
+}
+
 // awsBedrockHostRE matches an AWS Bedrock runtime host — public, FIPS, PrivateLink (VPCE), or the
 // newer api.aws domain — and captures the region, e.g. bedrock-runtime.us-east-1.amazonaws.com,
 // bedrock-runtime-fips.us-east-1.amazonaws.com, vpce-<id>.bedrock-runtime.us-east-1.vpce.amazonaws.com,

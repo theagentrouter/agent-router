@@ -306,6 +306,16 @@ type AIGatewayRouteRule struct {
 	// +optional
 	// +kubebuilder:validation:Format=date-time
 	ModelsCreatedAt *metav1.Time `json:"modelsCreatedAt,omitempty"`
+
+	// ExcludeFromModelsEndpoint prevents models matched by this rule from being returned by the
+	// OpenAI-compatible "/models" endpoint. Requests still match this rule and apply its
+	// configured transformations, including model name overrides.
+	//
+	// This is useful for internal or backwards-compatible aliases, as well as duplicate model
+	// definitions with different schemas.
+	//
+	// +optional
+	ExcludeFromModelsEndpoint bool `json:"excludeFromModelsEndpoint,omitempty"`
 }
 
 // AIGatewayRouteRuleBackendRef is a reference to a backend with a weight.

@@ -741,9 +741,15 @@ func (g gatewayToMCPServerSessionID) String() string { return string(g) }
 // String implements fmt.Stringer.
 func (c clientToGatewaySessionID) String() string { return string(c) }
 
-// backendSessionIDs parses the SessionID and returns a map of MCP backend name to MCP session ID.
-func (c clientToGatewaySessionID) backendSessionIDs() (map[filterapi.MCPBackendName]*compositeSessionEntry, string, error) {
-	perBackendSessionIDs := make(map[filterapi.MCPBackendName]*compositeSessionEntry)
+// backendSessionIDs parses the SessionID and returns a map of MCP backend name to MCP session ID,
+// the route name, and the anti-hijacking subject discriminator embedded in the session ID.
+//
+// The returned subject MUST be compared against the current request's authenticated subject
+// (see extractSubject) by the caller before the session is allowed to be resumed. This function
+// only parses the value — it does not itself enforce the anti-hijacking check because it has no
+// access to the current request.
+func (c clientToGatewaySessionID) backendSessionIDs() (perBackendSessionIDs map[filterapi.MCPBackendName]*compositeSessionEntry, route, subject string, err error) {
+	perBackendSessionIDs = make(map[filterapi.MCPBackendName]*compositeSessionEntry)
 	id := string(c)
 	// The format is: {routeName}@{subject}@{backends}
 	// We use LastIndex to find the backends boundary because the subject may contain '@'
@@ -751,37 +757,37 @@ func (c clientToGatewaySessionID) backendSessionIDs() (map[filterapi.MCPBackendN
 	// cannot contain '@', so LastIndex reliably finds the correct separator.
 	lastAt := strings.LastIndex(id, "@")
 	if lastAt < 0 {
-		return nil, "", fmt.Errorf("invalid session ID: missing '@' separator")
+		return nil, "", "", fmt.Errorf("invalid session ID: missing '@' separator")
 	}
 	backendSessions := id[lastAt+1:]
 	prefix := id[:lastAt] // "{routeName}@{subject}" — subject may itself contain '@'
-	firstAt := strings.Index(prefix, "@")
-	if firstAt < 0 {
-		return nil, "", fmt.Errorf("invalid session ID: missing '@' separator")
+	// The subject is retained inside the encrypted session ID for anti-hijacking purposes.
+	// It is returned to the caller so it can be compared against the current request's
+	// authenticated subject; see the doc comment above.
+	var found bool
+	route, subject, found = strings.Cut(prefix, "@")
+	if !found {
+		return nil, "", "", fmt.Errorf("invalid session ID: missing '@' separator")
 	}
-	route := prefix[:firstAt]
-	// The subject (prefix[firstAt+1:]) is retained inside the encrypted session ID for
-	// anti-hijacking purposes but is not needed during parsing.
 
 	// Each backend segment format: {backendName}:{base64(sessionID)}:{capHex}
 	// The capHex field is optional for backward compatibility with old session IDs.
-	for _, part := range strings.Split(backendSessions, ",") {
+	for part := range strings.SplitSeq(backendSessions, ",") {
 		// Split into at most 3 fields: backendName, base64SessionID, capHex.
 		fields := strings.SplitN(part, ":", 3)
 		if len(fields) < 2 {
-			return nil, "", fmt.Errorf("invalid session ID: missing ':' separator in backend session ID part %q", part)
+			return nil, "", "", fmt.Errorf("invalid session ID: missing ':' separator in backend session ID part %q", part)
 		}
 		backendName := fields[0]
 		if backendName == "" {
-			return nil, "", fmt.Errorf("invalid session ID: empty backend name in part %q", part)
+			return nil, "", "", fmt.Errorf("invalid session ID: empty backend name in part %q", part)
 		}
 		var sessionID gatewayToMCPServerSessionID
 		sessionIDBase64 := fields[1]
 		if sessionIDBase64 != "" { // Some servers are stateless hence no (==empty) session ID.
-			decoded, err := base64.StdEncoding.DecodeString(sessionIDBase64)
-			if err != nil {
-				err = fmt.Errorf("invalid session ID: failed to base64 decode session ID in part %q: %w", part, err)
-				return nil, "", err
+			decoded, decodeErr := base64.StdEncoding.DecodeString(sessionIDBase64)
+			if decodeErr != nil {
+				return nil, "", "", fmt.Errorf("invalid session ID: failed to base64 decode session ID in part %q: %w", part, decodeErr)
 			}
 			sessionID = gatewayToMCPServerSessionID(decoded)
 		}
@@ -799,7 +805,7 @@ func (c clientToGatewaySessionID) backendSessionIDs() (map[filterapi.MCPBackendN
 			capabilities: caps,
 		}
 	}
-	return perBackendSessionIDs, route, nil
+	return perBackendSessionIDs, route, subject, nil
 }
 
 // String implements fmt.Stringer.

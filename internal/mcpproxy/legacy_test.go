@@ -195,7 +195,7 @@ func TestServePOST_InitializeRequest(t *testing.T) {
 
 	decrypted, err := proxy.sessionCrypto.Decrypt(rr.Header().Get(sessionIDHeader))
 	require.NoError(t, err)
-	perBackendSessions, _, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
+	perBackendSessions, _, _, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
 	require.NoError(t, err)
 	require.ElementsMatch(t, []filterapi.MCPBackendName{"backend1"}, slices.Collect(maps.Keys(perBackendSessions)))
 
@@ -1031,7 +1031,7 @@ data: %s
 	rr := httptest.NewRecorder()
 	sessionID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("test-session")))
 	eventID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("_1")))
-	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID))
+	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID), "")
 	require.NoError(t, err)
 
 	proxy.proxyResponseBody(t.Context(), s, rr, httpResp, &jsonrpc.Request{Method: "test", ID: id}, filterapi.MCPBackend{Name: "mybackend"}, nil) //nolint:errcheck

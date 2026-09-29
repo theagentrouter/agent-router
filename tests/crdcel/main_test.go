@@ -325,8 +325,13 @@ func TestMCPRoutes(t *testing.T) {
 		},
 		{
 			name:   "authorization_with_jwt_without_oauth.yaml",
-			expErr: "spec.securityPolicy: Invalid value: \"object\": oauth must be configured when any authorization rule uses a jwt source",
+			expErr: "spec.securityPolicy: Invalid value: \"object\": oauth must be configured when any authorization rule uses a jwt source or references request.auth.jwt in a cel expression",
 		},
+		{
+			name:   "authorization_cel_jwt_without_oauth.yaml",
+			expErr: "spec.securityPolicy: Invalid value: \"object\": oauth must be configured when any authorization rule uses a jwt source or references request.auth.jwt in a cel expression",
+		},
+		{name: "authorization_cel_without_jwt_reference.yaml"},
 		{
 			name:   "authorization_claim_scope_reserved.yaml",
 			expErr: "spec.securityPolicy.authorization.rules[0].source.jwt.claims: Invalid value: \"array\": 'scope' claim name is reserved for OAuth scopes",
@@ -336,6 +341,11 @@ func TestMCPRoutes(t *testing.T) {
 			expErr: "spec.securityPolicy.authorization.rules[0].source.jwt: Invalid value: \"object\": either scopes or claims must be specified",
 		},
 		{name: "authorization_without_jwt_source.yaml"},
+		{
+			name:   "backend_selector_jwt_without_oauth.yaml",
+			expErr: "spec: Invalid value: \"object\": securityPolicy.oauth must be configured when a backendSelector rule's cel expression references request.auth.jwt",
+		},
+		{name: "backend_selector_jwt_with_oauth.yaml"},
 		{name: "mergetype_valid.yaml"},
 		{
 			name:   "mergetype_security_policy_replace_invalid.yaml",
