@@ -1571,6 +1571,47 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_Cache(t *testing.T) {
 		// Check that the developer message, which becomes part of the 'system' prompt, is cached.
 		require.Equal(t, string(constant.ValueOf[constant.Ephemeral]()), result.Get("system.0.cache_control.type").String())
 	})
+	t.Run("developer message per-block caching", func(t *testing.T) {
+		// Two content parts: first cached (static prompt), second not (dynamic context).
+		// Verifies that per-block cache_control is preserved and block boundaries are not collapsed.
+		openAIReq := &openai.ChatCompletionRequest{
+			Model: "gcp.claude-3.5-haiku",
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				{OfDeveloper: &openai.ChatCompletionDeveloperMessageParam{
+					Role: openai.ChatMessageRoleDeveloper,
+					Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{
+						{
+							Type: "text",
+							Text: "You are an expert assistant.",
+							AnthropicContentFields: &openai.AnthropicContentFields{
+								CacheControl: anthropic.CacheControlEphemeralParam{Type: constant.ValueOf[constant.Ephemeral]()},
+							},
+						},
+						{Type: "text", Text: "User context goes here."},
+					}},
+				}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "Hello"},
+				}},
+			},
+			MaxTokens: ptr.To(int64(100)),
+		}
+
+		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
+		_, body, err := translator.RequestBody(nil, openAIReq, false)
+		require.NoError(t, err)
+
+		result := gjson.ParseBytes(body)
+
+		// First block: static prompt, should be cached.
+		require.Equal(t, "You are an expert assistant.", result.Get("system.0.text").String())
+		require.Equal(t, string(constant.ValueOf[constant.Ephemeral]()), result.Get("system.0.cache_control.type").String())
+
+		// Second block: dynamic context, must not be cached.
+		require.Equal(t, "User context goes here.", result.Get("system.1.text").String())
+		require.False(t, result.Get("system.1.cache_control").Exists(), "dynamic block must not carry cache_control")
+	})
 	t.Run("tool definition caching", func(t *testing.T) {
 		// This test verifies that a cache_control field on a
 		// FunctionDefinition (in the 'tools' array) is correctly translated.
