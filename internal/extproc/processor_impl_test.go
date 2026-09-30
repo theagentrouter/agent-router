@@ -38,6 +38,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
+	"github.com/envoyproxy/ai-gateway/internal/translator"
 )
 
 func TestNewFactory(t *testing.T) {
@@ -317,9 +318,15 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseHeaders(t *testin
 		expHeaders := map[string]string{":status": "200", "dog": "cat"}
 		mm := &mockMetrics{}
 		mt := &mockTranslator{t: t, expHeaders: expHeaders}
-		p := &chatCompletionProcessorUpstreamFilter{translator: mt, metrics: mm, parent: &chatCompletionProcessorRouterFilter{stream: true}}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator:               mt,
+			metrics:                  mm,
+			parent:                   &chatCompletionProcessorRouterFilter{stream: true},
+			responseStreamTerminated: true,
+		}
 		res, err := p.ProcessResponseHeaders(t.Context(), inHeaders)
 		require.NoError(t, err)
+		require.False(t, p.responseStreamTerminated)
 		commonRes := res.Response.(*extprocv3.ProcessingResponse_ResponseHeaders).ResponseHeaders.Response
 		require.Empty(t, commonRes.HeaderMutation.SetHeaders)
 		require.Equal(t, []string{"content-length"}, commonRes.HeaderMutation.RemoveHeaders)
@@ -342,6 +349,81 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseHeaders(t *testin
 }
 
 func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T) {
+	const overloadEvent = "data: {\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"
+
+	t.Run("overload as first response event", func(t *testing.T) {
+		inBody := &extprocv3.HttpBody{Body: []byte("overload"), EndOfStream: true}
+		mm := &mockMetrics{}
+		mt := &mockTranslator{
+			t:               t,
+			expResponseBody: inBody,
+			retBodyMutation: []byte(overloadEvent),
+			retErr:          &translator.AnthropicStreamError{Type: "overloaded_error", Message: "Overloaded"},
+		}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator:      mt,
+			metrics:         mm,
+			parent:          &chatCompletionProcessorRouterFilter{stream: true},
+			responseHeaders: map[string]string{":status": "200"},
+		}
+
+		res, err := p.ProcessResponseBody(t.Context(), inBody)
+		require.NoError(t, err)
+		require.Nil(t, res.GetImmediateResponse())
+		require.Equal(t, overloadEvent, string(res.GetResponseBody().GetResponse().GetBodyMutation().GetBody()))
+		require.True(t, p.responseStreamTerminated)
+		mm.RequireRequestFailure(t)
+
+		res, err = p.ProcessResponseBody(t.Context(), &extprocv3.HttpBody{Body: []byte("ignored"), EndOfStream: true})
+		require.NoError(t, err)
+		require.Empty(t, res.GetResponseBody().GetResponse().GetBodyMutation().GetBody())
+		mm.RequireRequestFailure(t)
+	})
+
+	t.Run("overload after response content", func(t *testing.T) {
+		firstBody := &extprocv3.HttpBody{Body: []byte("first")}
+		mm := &mockMetrics{}
+		mt := &mockTranslator{t: t, expResponseBody: firstBody, retBodyMutation: []byte("translated")}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator:      mt,
+			metrics:         mm,
+			parent:          &chatCompletionProcessorRouterFilter{stream: true},
+			responseHeaders: map[string]string{":status": "200"},
+		}
+
+		_, err := p.ProcessResponseBody(t.Context(), firstBody)
+		require.NoError(t, err)
+		mm.RequireRequestNotCompleted(t)
+
+		overloadBody := &extprocv3.HttpBody{Body: []byte("overload")}
+		mt.expResponseBody = overloadBody
+		mt.retBodyMutation = []byte(overloadEvent)
+		mt.retErr = &translator.AnthropicStreamError{Type: "overloaded_error", Message: "Overloaded"}
+		res, err := p.ProcessResponseBody(t.Context(), overloadBody)
+		require.NoError(t, err)
+		require.Equal(t, overloadEvent, string(res.GetResponseBody().GetResponse().GetBodyMutation().GetBody()))
+		require.True(t, p.responseStreamTerminated)
+		mm.RequireRequestFailure(t)
+	})
+
+	t.Run("non-overload Anthropic stream error", func(t *testing.T) {
+		mm := &mockMetrics{}
+		mt := &mockTranslator{
+			t:      t,
+			retErr: &translator.AnthropicStreamError{Type: "api_error", Message: "Upstream error"},
+		}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator: mt,
+			metrics:    mm,
+			parent:     &chatCompletionProcessorRouterFilter{stream: true},
+		}
+
+		res, err := p.ProcessResponseBody(t.Context(), &extprocv3.HttpBody{})
+		require.Nil(t, res)
+		require.ErrorContains(t, err, "anthropic stream error: api_error")
+		mm.RequireRequestFailure(t)
+	})
+
 	t.Run("error translation", func(t *testing.T) {
 		mm := &mockMetrics{}
 		mt := &mockTranslator{t: t}

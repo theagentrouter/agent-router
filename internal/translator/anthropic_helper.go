@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -876,6 +877,17 @@ type anthropicStreamParser struct {
 	created         openai.JSONUNIXTime
 }
 
+// AnthropicStreamError represents an error event received in an Anthropic SSE stream.
+type AnthropicStreamError struct {
+	Type    string
+	Message string
+}
+
+// Error implements error.
+func (e *AnthropicStreamError) Error() string {
+	return fmt.Sprintf("anthropic stream error: %s - %s", e.Type, e.Message)
+}
+
 // newAnthropicStreamParser creates a new parser for a streaming request.
 func newAnthropicStreamParser(requestModel string) *anthropicStreamParser {
 	toolIdx := int64(-1)
@@ -889,6 +901,12 @@ func newAnthropicStreamParser(requestModel string) *anthropicStreamParser {
 func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error {
 	chunk, err := p.parseAndHandleEvent(eventBlock)
 	if err != nil {
+		var streamErr *AnthropicStreamError
+		if errors.As(err, &streamErr) && streamErr.Type == "overloaded_error" {
+			if serializeErr := serializeOpenAIStreamError(streamErr, buf); serializeErr != nil {
+				return serializeErr
+			}
+		}
 		return err
 	}
 	if chunk != nil {
@@ -897,6 +915,31 @@ func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error
 			return err
 		}
 	}
+	return nil
+}
+
+func serializeOpenAIStreamError(streamErr *AnthropicStreamError, buf *[]byte) error {
+	type streamErrorDetail struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	type streamErrorEnvelope struct {
+		Error streamErrorDetail `json:"error"`
+	}
+
+	errorBytes, err := json.Marshal(streamErrorEnvelope{
+		Error: streamErrorDetail{
+			Type:    streamErr.Type,
+			Message: streamErr.Message,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal Anthropic stream error: %w", err)
+	}
+
+	*buf = append(*buf, sseDataPrefixSpace...)
+	*buf = append(*buf, errorBytes...)
+	*buf = append(*buf, '\n', '\n')
 	return nil
 }
 
@@ -1282,7 +1325,7 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		if err := json.Unmarshal(data, &errEvent); err != nil {
 			return nil, fmt.Errorf("unparsable error event: %s", string(data))
 		}
-		return nil, fmt.Errorf("anthropic stream error: %s - %s", errEvent.Error.Type, errEvent.Error.Message)
+		return nil, &AnthropicStreamError{Type: errEvent.Error.Type, Message: errEvent.Error.Message}
 
 	case "ping":
 		// Anthropic sends ping events periodically to keep the stream alive.

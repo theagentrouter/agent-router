@@ -115,19 +115,20 @@ type (
 	upstreamProcessor[ReqT, RespT, RespChunkT any, EndpointSpecT endpointspec.Spec[ReqT, RespT, RespChunkT]] struct {
 		parent *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]
 
-		logger             *slog.Logger
-		requestHeaders     map[string]string
-		responseHeaders    map[string]string
-		responseEncoding   string
-		compressedBuf      []byte // accumulates raw compressed bytes across streaming chunks
-		decompressedOffset int    // tracks decompressed bytes already returned
-		translator         translator.Translator[ReqT, tracingapi.Span[RespT, RespChunkT]]
-		modelNameOverride  internalapi.ModelNameOverride
-		headerMutator      *headermutator.HeaderMutator
-		bodyMutator        *bodymutator.BodyMutator
-		backendName        string
-		routeName          string
-		handler            filterapi.BackendAuthHandler
+		logger                   *slog.Logger
+		requestHeaders           map[string]string
+		responseHeaders          map[string]string
+		responseEncoding         string
+		compressedBuf            []byte // accumulates raw compressed bytes across streaming chunks
+		decompressedOffset       int    // tracks decompressed bytes already returned
+		responseStreamTerminated bool   // a terminal SSE error was returned; discard any later upstream chunks
+		translator               translator.Translator[ReqT, tracingapi.Span[RespT, RespChunkT]]
+		modelNameOverride        internalapi.ModelNameOverride
+		headerMutator            *headermutator.HeaderMutator
+		bodyMutator              *bodymutator.BodyMutator
+		backendName              string
+		routeName                string
+		handler                  filterapi.BackendAuthHandler
 		// cost is the cost of the request that is accumulated during the processing of the response.
 		costs metrics.TokenUsage
 		// metrics tracking.
@@ -501,6 +502,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 	// Reset streaming decompression state for new response (important for retries).
 	u.compressedBuf = nil
 	u.decompressedOffset = 0
+	u.responseStreamTerminated = false
 	newHeaders, err := u.translator.ResponseHeaders(u.responseHeaders)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transform response headers: %w", err)
@@ -535,6 +537,18 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		return &extprocv3.ProcessingResponse{
 			Response: &extprocv3.ProcessingResponse_ResponseBody{
 				ResponseBody: &extprocv3.BodyResponse{},
+			},
+		}, nil
+	}
+	if u.responseStreamTerminated {
+		// The terminal error event has already been sent downstream. Replace any
+		// later provider chunks with an empty body so they cannot appear after it.
+		_, bodyMutation := mutationsFromTranslationResult(nil, []byte{})
+		return &extprocv3.ProcessingResponse{
+			Response: &extprocv3.ProcessingResponse_ResponseBody{
+				ResponseBody: &extprocv3.BodyResponse{
+					Response: &extprocv3.CommonResponse{BodyMutation: bodyMutation},
+				},
 			},
 		}, nil
 	}
@@ -597,6 +611,30 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 
 	newHeaders, newBody, tokenUsage, responseModel, err := u.translator.ResponseBody(u.responseHeaders, decodingResult.reader, body.EndOfStream, u.parent.span)
 	if err != nil {
+		var streamErr *translator.AnthropicStreamError
+		if u.parent.stream && errors.As(err, &streamErr) && streamErr.Type == "overloaded_error" && len(newBody) > 0 {
+			if u.logger != nil {
+				u.logger.Warn("upstream returned an overload error in the response stream")
+			}
+			u.responseStreamTerminated = true
+			recordRequestCompletionErr = true
+			headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
+			headerMutation = removeContentEncodingIfNeeded(headerMutation, bodyMutation, decodingResult.isEncoded)
+			if u.parent.span != nil {
+				code, _ := strconv.Atoi(u.responseHeaders[":status"])
+				u.parent.span.EndSpanOnError(code, newBody)
+			}
+			return &extprocv3.ProcessingResponse{
+				Response: &extprocv3.ProcessingResponse_ResponseBody{
+					ResponseBody: &extprocv3.BodyResponse{
+						Response: &extprocv3.CommonResponse{
+							HeaderMutation: headerMutation,
+							BodyMutation:   bodyMutation,
+						},
+					},
+				},
+			}, nil
+		}
 		return nil, fmt.Errorf("failed to transform response: %w", err)
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
