@@ -500,6 +500,10 @@ func TestResponsesEndpointSpec_GetTranslator(t *testing.T) {
 	_, body, err = awsTranslator.RequestBody(original, &openai.ResponseRequest{Model: "us.openai.gpt-5.6-luna"}, false)
 	require.NoError(t, err)
 	require.Equal(t, original, body)
+
+	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaCohere}, "override")
+	require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+	require.ErrorContains(t, err, "unsupported API schema")
 }
 
 func TestTokenizeEndpointSpec_ParseBody(t *testing.T) {
