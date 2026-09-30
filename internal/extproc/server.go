@@ -305,6 +305,12 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 			l.Debug("request headers processed", slog.Any("response", logContent))
 		}
 		return resp, nil
+	case *extprocv3.ProcessingRequest_RequestTrailers:
+		return &extprocv3.ProcessingResponse{
+			Response: &extprocv3.ProcessingResponse_RequestTrailers{
+				RequestTrailers: &extprocv3.TrailersResponse{},
+			},
+		}, nil
 	case *extprocv3.ProcessingRequest_RequestBody:
 		if s.debugLogEnabled && !s.enableRedaction {
 			l.Debug("request body processing", slog.Any("request", req))

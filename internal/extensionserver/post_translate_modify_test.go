@@ -684,7 +684,6 @@ func Test_maybeModifyCluster_rebuildsOwnFiltersOnExistingChain(t *testing.T) {
 	poAny, err := toAny(&httpv3.HttpProtocolOptions{
 		HttpFilters: []*httpconnectionmanagerv3.HttpFilter{
 			{Name: aiGatewayExtProcName, ConfigType: &httpconnectionmanagerv3.HttpFilter_TypedConfig{TypedConfig: stale}},
-			{Name: aiGatewayHeaderMutationName},
 			{Name: "envoy.filters.http.upstream_codec"},
 		},
 	})
@@ -710,5 +709,5 @@ func Test_maybeModifyCluster_rebuildsOwnFiltersOnExistingChain(t *testing.T) {
 	for _, f := range po.HttpFilters {
 		names = append(names, f.GetName())
 	}
-	require.Equal(t, []string{aiGatewayExtProcName, aiGatewayHeaderMutationName, "envoy.filters.http.upstream_codec"}, names)
+	require.Equal(t, []string{aiGatewayExtProcName, "envoy.filters.http.upstream_codec"}, names)
 }
