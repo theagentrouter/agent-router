@@ -54,7 +54,8 @@ type MCPBackendRef struct {
 	BackendName  string            // References a Backend.Name
 	Path         string            // MCP endpoint path
 	IncludeTools []string          // Only the specified tools will be available
-	APIKey       string            // Optional API key extracted from Authorization: Bearer header
+	APIKey       string            // Optional API key extracted from an Authorization: Bearer header or a single custom header
+	APIKeyHeader string            // Target header name for APIKey. Empty means the default "Authorization" header with a "Bearer " prefix.
 	Headers      map[string]string // Optional arbitrary headers for headerMutation (excluding Authorization)
 }
 

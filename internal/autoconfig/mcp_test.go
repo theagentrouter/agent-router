@@ -89,6 +89,39 @@ func TestAddMCPServersConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "add MCP server with custom auth header",
+			input: &MCPServers{
+				McpServers: map[string]MCPServer{
+					"composio": {
+						Type: "http",
+						URL:  "https://mcp.composio.dev/partner/composio/github",
+						Headers: map[string]string{
+							"x-consumer-api-key": "${COMPOSIO_API_KEY}",
+						},
+					},
+				},
+			},
+			expected: ConfigData{
+				Backends: []Backend{
+					{
+						Name:     "composio",
+						Hostname: "mcp.composio.dev",
+						Port:     443,
+						NeedsTLS: true,
+					},
+				},
+				MCPBackendRefs: []MCPBackendRef{
+					{
+						BackendName:  "composio",
+						Path:         "/partner/composio/github",
+						APIKey:       "${COMPOSIO_API_KEY}",
+						APIKeyHeader: "x-consumer-api-key",
+						Headers:      map[string]string{},
+					},
+				},
+			},
+		},
+		{
 			name: "add multiple MCP servers",
 			input: &MCPServers{
 				McpServers: map[string]MCPServer{
