@@ -232,6 +232,9 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		}
 		return nil, fmt.Errorf("failed to parse request body: %w", err)
 	}
+	// The decoded model aliases the request body; clone it so the header map, metrics, and
+	// other consumers that outlive the request don't retain the body.
+	originalModel = strings.Clone(originalModel)
 
 	// Use the request-scoped logger from context if available, otherwise fall back to processor logger
 	logger := loggerFromContext(ctx)

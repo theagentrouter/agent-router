@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"testing"
+	"unsafe"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3http "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
@@ -139,6 +140,25 @@ func Test_chatCompletionProcessorRouterFilter_ProcessRequestBody(t *testing.T) {
 		require.Equal(t, "/foo", string(setHeaders[1].Header.RawValue))
 		require.Equal(t, internalapi.EnvoyOriginalPathHeader, setHeaders[2].Header.Key)
 		require.Equal(t, "/foo", string(setHeaders[2].Header.RawValue))
+	})
+
+	t.Run("original model does not alias the request body", func(t *testing.T) {
+		headers := map[string]string{":path": "/foo"}
+		p := &chatCompletionProcessorRouterFilter{
+			config:         &filterapi.RuntimeConfig{},
+			requestHeaders: headers,
+			logger:         slog.Default(),
+			tracer:         tracingapi.NoopTracer[openai.ChatCompletionRequest, openai.ChatCompletionResponse, openai.ChatCompletionResponseChunk]{},
+		}
+		body := bodyFromModel(t, "some-model", false, nil)
+		_, err := p.ProcessRequestBody(t.Context(), &extprocv3.HttpBody{Body: body})
+		require.NoError(t, err)
+
+		decoded := unsafe.StringData(p.originalRequestBody.Model)
+		for _, s := range []string{p.originalModel, headers[internalapi.ModelNameHeaderKeyDefault]} {
+			require.Equal(t, "some-model", s)
+			require.NotSame(t, decoded, unsafe.StringData(s))
+		}
 	})
 
 	t.Run("span creation", func(t *testing.T) {
