@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"testing"
+	"unsafe"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3http "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
@@ -197,6 +198,25 @@ func Test_chatCompletionProcessorRouterFilter_ProcessRequestBody(t *testing.T) {
 		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, setHeaders[0].AppendAction)
 		// The in-place request header map is updated too, not just the mutation.
 		require.Equal(t, "some-model", headers[internalapi.ModelNameHeaderKeyDefault])
+	})
+
+	t.Run("original model does not alias the request body", func(t *testing.T) {
+		headers := map[string]string{":path": "/foo"}
+		p := &chatCompletionProcessorRouterFilter{
+			config:         &filterapi.RuntimeConfig{},
+			requestHeaders: headers,
+			logger:         slog.Default(),
+			tracer:         tracingapi.NoopTracer[openai.ChatCompletionRequest, openai.ChatCompletionResponse, openai.ChatCompletionResponseChunk]{},
+		}
+		body := bodyFromModel(t, "some-model", false, nil)
+		_, err := p.ProcessRequestBody(t.Context(), &extprocv3.HttpBody{Body: body})
+		require.NoError(t, err)
+
+		decoded := unsafe.StringData(p.originalRequestBody.Model)
+		for _, s := range []string{p.originalModel, headers[internalapi.ModelNameHeaderKeyDefault]} {
+			require.Equal(t, "some-model", s)
+			require.NotSame(t, decoded, unsafe.StringData(s))
+		}
 	})
 
 	t.Run("span creation", func(t *testing.T) {

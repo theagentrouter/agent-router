@@ -7,6 +7,7 @@ package metrics
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -70,17 +71,21 @@ func (b *metricsImpl) StartRequest(_ map[string]string) {
 // SetOriginalModel sets the original model from the incoming request body before any virtualization applies.
 // This is usually called after parsing the request body. e.g. gpt-5
 func (b *metricsImpl) SetOriginalModel(originalModel internalapi.OriginalModel) {
-	b.originalModel = originalModel
+	// Model strings decoded by sonic alias the whole request body, and attribute sets are retained by
+	// cumulative aggregations for the process lifetime, so keep an independent copy.
+	b.originalModel = strings.Clone(originalModel)
 }
 
 // SetRequestModel sets the model the request. This is usually called after parsing the request body. e.g. gpt-5-nano
 func (b *metricsImpl) SetRequestModel(requestModel internalapi.RequestModel) {
-	b.requestModel = requestModel
+	b.requestModel = strings.Clone(requestModel)
 }
 
 // SetResponseModel is the model that ultimately generated the response. e.g. gpt-5-nano-2025-08-07
 func (b *metricsImpl) SetResponseModel(responseModel internalapi.ResponseModel) {
-	b.responseModel = responseModel
+	if responseModel != b.responseModel {
+		b.responseModel = strings.Clone(responseModel)
+	}
 }
 
 // SetBackend sets the name of the backend to be reported in the metrics according to:

@@ -9,10 +9,12 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -293,6 +295,22 @@ func TestModelNameHeaderKey(t *testing.T) {
 	count, sum := getHistogramValues(t, mr, genaiMetricClientTokenUsage, inputAttrs)
 	assert.Equal(t, uint64(1), count)
 	assert.Equal(t, 10.0, sum)
+}
+
+func TestSetModel_DoesNotRetainSourceBuffer(t *testing.T) {
+	body := `{"model":"orig-model","messages":[]}`
+	model := body[10:20]
+	require.Equal(t, "orig-model", model)
+
+	pm := NewMetricsFactory(noop.NewMeterProvider().Meter("test"), nil, GenAIOperationChat).NewMetrics().(*metricsImpl)
+	pm.SetOriginalModel(model)
+	pm.SetRequestModel(model)
+	pm.SetResponseModel(model)
+
+	for _, s := range []string{pm.originalModel, pm.requestModel, pm.responseModel} {
+		require.Equal(t, model, s)
+		require.NotSame(t, unsafe.StringData(model), unsafe.StringData(s))
+	}
 }
 
 func TestLabels_SetModel_RequestAndResponseDiffer(t *testing.T) {
