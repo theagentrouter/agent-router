@@ -257,16 +257,6 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 	}
 }
 
-func Test_getSecretNameAndNamespace(t *testing.T) {
-	secretRef := &gwapiv1.SecretObjectReference{
-		Name:      "mysecret",
-		Namespace: ptr.To[gwapiv1.Namespace]("default"),
-	}
-	require.Equal(t, "mysecret.default", getSecretNameAndNamespace(secretRef, "foo"))
-	secretRef.Namespace = nil
-	require.Equal(t, "mysecret.foo", getSecretNameAndNamespace(secretRef, "foo"))
-}
-
 func Test_referenceGrantToTargetKindIndexFunc(t *testing.T) {
 	tests := []struct {
 		name           string
