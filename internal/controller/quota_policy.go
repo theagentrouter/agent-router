@@ -68,7 +68,7 @@ func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Req
 			if err = c.deleteQuotaPolicyConfig(ctx, req.NamespacedName); err != nil {
 				return ctrl.Result{}, err
 			}
-			c.notifyAllAIGatewayRoutesInNamespace(ctx, req.Namespace)
+			c.notifyAIGatewayRoutesForNamespace(ctx, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -231,20 +231,29 @@ func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, polic
 	}
 }
 
-// notifyAllAIGatewayRoutesInNamespace sends events for all AIGatewayRoutes in
-// the given namespace. Used on QuotaPolicy deletion when targetRefs are no
-// longer available.
-func (c *QuotaPolicyController) notifyAllAIGatewayRoutesInNamespace(ctx context.Context, namespace string) {
-	var aiGatewayRoutes aigv1b1.AIGatewayRouteList
-	if err := c.client.List(ctx, &aiGatewayRoutes, client.InNamespace(namespace)); err != nil {
-		c.logger.Error(err, "failed to list AIGatewayRoutes in namespace", "namespace", namespace)
+// notifyAIGatewayRoutesForNamespace sends events for every AIGatewayRoute that
+// references an AIServiceBackend in the given namespace, wherever the route lives.
+// Used on QuotaPolicy deletion when targetRefs are no longer available.
+func (c *QuotaPolicyController) notifyAIGatewayRoutesForNamespace(ctx context.Context, namespace string) {
+	var backends aigv1b1.AIServiceBackendList
+	if err := c.client.List(ctx, &backends, client.InNamespace(namespace)); err != nil {
+		c.logger.Error(err, "failed to list AIServiceBackends in namespace", "namespace", namespace)
 		return
 	}
-	for i := range aiGatewayRoutes.Items {
-		route := &aiGatewayRoutes.Items[i]
-		c.logger.Info("notifying AIGatewayRoute of QuotaPolicy deletion",
-			"route", route.Name, "namespace", route.Namespace)
-		c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+	for i := range backends.Items {
+		key := fmt.Sprintf("%s.%s", backends.Items[i].Name, namespace)
+		var aiGatewayRoutes aigv1b1.AIGatewayRouteList
+		if err := c.client.List(ctx, &aiGatewayRoutes,
+			client.MatchingFields{k8sClientIndexBackendToReferencingAIGatewayRoute: key}); err != nil {
+			c.logger.Error(err, "failed to list AIGatewayRoutes for backend", "backend", key)
+			continue
+		}
+		for j := range aiGatewayRoutes.Items {
+			route := &aiGatewayRoutes.Items[j]
+			c.logger.Info("notifying AIGatewayRoute of QuotaPolicy deletion",
+				"route", route.Name, "namespace", route.Namespace)
+			c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+		}
 	}
 }
 

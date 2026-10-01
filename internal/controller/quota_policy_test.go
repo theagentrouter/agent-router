@@ -282,6 +282,89 @@ func TestQuotaPolicyController_Reconcile_Deletion(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Deletion has to reach the same routes an update does, including routes in
+// other namespaces that reference the targeted backend.
+func TestQuotaPolicyController_Reconcile_DeletionNotifiesCrossNamespaceRoutes(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	rateLimitRunner := newTestRunner(t)
+	routeEvents := make(chan event.GenericEvent, 100)
+	c := NewQuotaPolicyController(fakeClient, fake2.NewClientset(), ctrl.Log, rateLimitRunner, routeEvents)
+	const policyNamespace, otherNamespace = "ns-a", "ns-b"
+
+	backend := &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: policyNamespace},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			BackendRef: gwapiv1.BackendObjectReference{
+				Name: "some-service",
+				Port: ptrTo[gwapiv1.PortNumber](8080),
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), backend))
+
+	for _, route := range []*aigv1b1.AIGatewayRoute{
+		newRouteToBackend("local-route", policyNamespace, backend),
+		newRouteToBackend("remote-route", otherNamespace, backend),
+	} {
+		require.NoError(t, fakeClient.Create(t.Context(), route))
+	}
+
+	require.NoError(t, fakeClient.Create(t.Context(), &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "qp", Namespace: policyNamespace},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
+				{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: gwapiv1.ObjectName(backend.Name)},
+			},
+			ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
+			},
+		},
+	}))
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: policyNamespace, Name: "qp"}}
+	want := []string{"ns-a/local-route", "ns-b/remote-route"}
+
+	_, err := c.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	require.ElementsMatch(t, want, drainRouteEvents(routeEvents))
+
+	require.NoError(t, fakeClient.Delete(t.Context(), &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "qp", Namespace: policyNamespace},
+	}))
+	// The first reconcile releases the finalizer and the second sees the policy gone.
+	for range 2 {
+		_, err = c.Reconcile(t.Context(), req)
+		require.NoError(t, err)
+	}
+	require.ElementsMatch(t, want, drainRouteEvents(routeEvents),
+		"a route left out here keeps the deleted policy's rate_limits actions")
+}
+
+func newRouteToBackend(name, namespace string, backend *aigv1b1.AIServiceBackend) *aigv1b1.AIGatewayRoute {
+	return &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			Rules: []aigv1b1.AIGatewayRouteRule{{
+				BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{
+					Name:      backend.Name,
+					Namespace: ptrTo(gwapiv1.Namespace(backend.Namespace)),
+				}},
+			}},
+		},
+	}
+}
+
+func drainRouteEvents(ch chan event.GenericEvent) []string {
+	var got []string
+	for {
+		select {
+		case e := <-ch:
+			got = append(got, e.Object.GetNamespace()+"/"+e.Object.GetName())
+		default:
+			return got
+		}
+	}
+}
+
 func TestQuotaPolicyController_Reconcile_MultipleBackends(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
 	rateLimitRunner := newTestRunner(t)
