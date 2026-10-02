@@ -7,8 +7,12 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	stdjson "encoding/json" //nolint: depguard // byte-stable hashing; sonic does not guarantee stable field order.
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -25,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
@@ -42,8 +47,16 @@ const (
 	// @see https://gateway.envoyproxy.io/contributions/design/metadata/
 	httpRouteBackendRefPriorityAnnotationKey           = egAnnotationPrefix + "backend-ref-priority"
 	httpRouteAnnotationForAIGatewayGeneratedIndication = egAnnotationPrefix + internalapi.AIGatewayGeneratedHTTPRouteAnnotation
-	egOwningGatewayNameLabel                           = egAnnotationPrefix + "owning-gateway-name"
-	egOwningGatewayNamespaceLabel                      = egAnnotationPrefix + "owning-gateway-namespace"
+	// httpRouteQuotaPolicyHashAnnotationKey carries a hash of the QuotaPolicies attached to the
+	// AIServiceBackends referenced by this route. QuotaPolicy is an AI Gateway CRD that Envoy Gateway
+	// does not watch, so a QuotaPolicy change would otherwise regenerate a byte-identical HTTPRoute
+	// (a no-op update) and never force Envoy Gateway to re-translate. Stamping the hash makes the
+	// HTTPRoute genuinely change on a QuotaPolicy update, which triggers Envoy Gateway to re-translate
+	// and re-run the extension server's PostTranslateModify hook (which injects the quota rate limit
+	// filter, cluster, and per-route descriptors). Mirrors stampGatewayConfigHash in gateway.go.
+	httpRouteQuotaPolicyHashAnnotationKey = "aigateway.envoyproxy.io/quota-policy-hash"
+	egOwningGatewayNameLabel              = egAnnotationPrefix + "owning-gateway-name"
+	egOwningGatewayNamespaceLabel         = egAnnotationPrefix + "owning-gateway-namespace"
 	// apiKeyInSecret is the key to store OpenAI API key.
 	apiKeyInSecret = "apiKey"
 	// GatewayConfigAnnotationKey is the annotation key used on Gateway objects to reference a GatewayConfig.
@@ -383,6 +396,19 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 	dst.Annotations[httpRouteBackendRefPriorityAnnotationKey] = buildPriorityAnnotation(aiGatewayRoute.Spec.Rules)
 	dst.Annotations[httpRouteAnnotationForAIGatewayGeneratedIndication] = "true"
 
+	// HACK: Stamp a hash of the QuotaPolicies affecting this route's backends so that a QuotaPolicy
+	// change (which Envoy Gateway does not watch) actually mutates the HTTPRoute, forcing Envoy Gateway
+	// to re-translate and re-run PostTranslateModify. See httpRouteQuotaPolicyHashAnnotationKey.
+	quotaHash, err := c.computeQuotaPolicyHash(ctx, aiGatewayRoute)
+	if err != nil {
+		return fmt.Errorf("failed to compute QuotaPolicy hash: %w", err)
+	}
+	if quotaHash == "" {
+		delete(dst.Annotations, httpRouteQuotaPolicyHashAnnotationKey)
+	} else {
+		dst.Annotations[httpRouteQuotaPolicyHashAnnotationKey] = quotaHash
+	}
+
 	dst.Spec.ParentRefs = aiGatewayRoute.Spec.ParentRefs
 
 	dst.Spec.Hostnames = aiGatewayRoute.Spec.Hostnames
@@ -476,6 +502,75 @@ func (c *AIGatewayRouteController) updateAIGatewayRouteStatus(ctx context.Contex
 	if err != nil {
 		c.logger.Error(err, "failed to update AIGatewayRoute status")
 	}
+}
+
+// computeQuotaPolicyHash returns a stable, short hash of all QuotaPolicies attached to the
+// AIServiceBackends referenced by the given AIGatewayRoute. The hash covers each applicable
+// QuotaPolicy's namespace/name and full spec, so both value-only changes (e.g. a limit bump) and
+// structural changes (e.g. adding a model or bucket rule) produce a new hash. It returns an empty
+// string when no QuotaPolicy applies to the route. See httpRouteQuotaPolicyHashAnnotationKey.
+func (c *AIGatewayRouteController) computeQuotaPolicyHash(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) (string, error) {
+	// Deduplicate policies across rules/backends by namespace/name.
+	seen := make(map[string]*aigv1a1.QuotaPolicy)
+	for i := range aiGatewayRoute.Spec.Rules {
+		rule := &aiGatewayRoute.Spec.Rules[i]
+		for j := range rule.BackendRefs {
+			br := &rule.BackendRefs[j]
+			// QuotaPolicy can only target AIServiceBackends, not InferencePools.
+			if br.IsInferencePool() {
+				continue
+			}
+			backendNamespace := br.GetNamespace(aiGatewayRoute.Namespace)
+			// The QuotaPolicy targetRefs index key is "<targetRef.Name>.<quotaPolicy.Namespace>", and a
+			// QuotaPolicy (LocalPolicyTargetReference) can only target a backend in its own namespace, so
+			// the backend's namespace is also the QuotaPolicy's namespace.
+			key := fmt.Sprintf("%s.%s", br.Name, backendNamespace)
+			var policies aigv1a1.QuotaPolicyList
+			if err := c.client.List(ctx, &policies,
+				client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: key}); err != nil {
+				return "", fmt.Errorf("failed to list QuotaPolicies for backend %s: %w", key, err)
+			}
+			for k := range policies.Items {
+				p := &policies.Items[k]
+				// Skip QuotaPolicies that are being deleted. During a deletion the finalizer callback
+				// notifies routes while the terminating policy may still be listable from the cache; if we
+				// counted it, the recomputed hash would be unchanged, the HTTPRoute update would be a no-op,
+				// and Envoy Gateway would not re-translate. Treating a terminating policy as already-absent
+				// makes the hash change deterministically, regardless of whether the cache has dropped it yet.
+				if !p.DeletionTimestamp.IsZero() {
+					continue
+				}
+				seen[p.Namespace+"/"+p.Name] = p
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return "", nil
+	}
+
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// hashedPolicy is a stable, minimal projection of a QuotaPolicy used only for hashing.
+	type hashedPolicy struct {
+		Namespace string                  `json:"namespace"`
+		Name      string                  `json:"name"`
+		Spec      aigv1a1.QuotaPolicySpec `json:"spec"`
+	}
+	hashed := make([]hashedPolicy, 0, len(keys))
+	for _, k := range keys {
+		p := seen[k]
+		hashed = append(hashed, hashedPolicy{Namespace: p.Namespace, Name: p.Name, Spec: p.Spec})
+	}
+	marshaled, err := stdjson.Marshal(hashed)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal QuotaPolicies for hashing: %w", err)
+	}
+	sum := sha256.Sum256(marshaled)
+	return hex.EncodeToString(sum[:8]), nil
 }
 
 // Build an annotation that contains the priority of each backend ref. This is used to ensure Envoy Gateway reconciles the

@@ -65,17 +65,17 @@ func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Req
 		if client.IgnoreNotFound(err) == nil {
 			c.logger.Info("Deleting QuotaPolicy",
 				"namespace", req.Namespace, "name", req.Name)
-			if err = c.deleteQuotaPolicyConfig(ctx, req.NamespacedName); err != nil {
-				return ctrl.Result{}, err
-			}
-			c.notifyAllAIGatewayRoutesInNamespace(ctx, req.Namespace)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 	c.logger.Info("Reconciling QuotaPolicy", "namespace", req.Namespace, "name", req.Name)
 
-	if handleFinalizer(ctx, c.client, c.logger, &quotaPolicy, func(ctx context.Context, _ *aigv1a1.QuotaPolicy) error {
+	if handleFinalizer(ctx, c.client, c.logger, &quotaPolicy, func(ctx context.Context, o *aigv1a1.QuotaPolicy) error {
+		// Notify the AIGatewayRoutes targeting this policy's backends so their derived HTTPRoutes are
+		// re-reconciled (re-stamping the quota-policy-hash annotation) and Envoy Gateway re-translates
+		// without the deleted policy.
+		c.notifyAIGatewayRoutes(ctx, o)
 		return c.deleteQuotaPolicyConfig(ctx, req.NamespacedName)
 	}) {
 		return ctrl.Result{}, nil
@@ -228,23 +228,6 @@ func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, polic
 				"quotaPolicy", policy.Name)
 			c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
 		}
-	}
-}
-
-// notifyAllAIGatewayRoutesInNamespace sends events for all AIGatewayRoutes in
-// the given namespace. Used on QuotaPolicy deletion when targetRefs are no
-// longer available.
-func (c *QuotaPolicyController) notifyAllAIGatewayRoutesInNamespace(ctx context.Context, namespace string) {
-	var aiGatewayRoutes aigv1b1.AIGatewayRouteList
-	if err := c.client.List(ctx, &aiGatewayRoutes, client.InNamespace(namespace)); err != nil {
-		c.logger.Error(err, "failed to list AIGatewayRoutes in namespace", "namespace", namespace)
-		return
-	}
-	for i := range aiGatewayRoutes.Items {
-		route := &aiGatewayRoutes.Items[i]
-		c.logger.Info("notifying AIGatewayRoute of QuotaPolicy deletion",
-			"route", route.Name, "namespace", route.Namespace)
-		c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
 	}
 }
 
