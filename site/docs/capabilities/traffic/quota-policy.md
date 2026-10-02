@@ -287,12 +287,15 @@ Shadow mode is configured per bucket rule. It cannot be set on the `defaultBucke
 
 The `duration` field selects the sliding-window size. It must be exactly one of the following values:
 
-| Value  | Window     |
-| ------ | ---------- |
-| `"1s"` | One second |
-| `"1m"` | One minute |
-| `"1h"` | One hour   |
-| `"1d"` | One day    |
+| Value   | Window     |
+| ------- | ---------- |
+| `"1s"`  | One second |
+| `"1m"`  | One minute |
+| `"1h"`  | One hour   |
+| `"1d"`  | One day    |
+| `"1w"`  | One week   |
+| `"1mo"` | One month  |
+| `"1y"`  | One year   |
 
 The window is fixed-size — arbitrary multiples such as `"30s"` or `"15m"` are **not** valid and will
 be rejected by the CRD schema. Choose the `limit` to express your budget within one of these windows.
