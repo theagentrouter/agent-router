@@ -6,7 +6,9 @@
 package translator
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -312,7 +314,7 @@ func TestJsonSchemaDereferenceHelper(t *testing.T) {
 				processedRefs = make(map[string]struct{})
 			}
 
-			got, err := jsonSchemaDereferenceHelper(tc.obj, tc.fullSchema, tc.skipKeys, processedRefs, 0)
+			got, err := jsonSchemaDereferenceHelper(tc.obj, tc.fullSchema, tc.skipKeys, processedRefs, newJSONSchemaNodeBudget(), 0)
 
 			if tc.expectedErrMsg != "" {
 				require.ErrorContains(t, err, tc.expectedErrMsg)
@@ -392,7 +394,7 @@ func TestJsonSchemaSkipKeys(t *testing.T) {
 				processedRefs = make(map[string]struct{})
 			}
 
-			got, err := jsonSchemaSkipKeys(tc.obj, tc.fullSchema, processedRefs, 0)
+			got, err := jsonSchemaSkipKeys(tc.obj, tc.fullSchema, processedRefs, newJSONSchemaNodeBudget(), 0)
 
 			if tc.expectedErrMsg != "" {
 				require.ErrorContains(t, err, tc.expectedErrMsg)
@@ -439,6 +441,44 @@ func TestJsonSchemaDereference(t *testing.T) {
 			}
 		})
 	}
+}
+
+// exponentialRefSchema returns a schema where each definition references the one below it twice,
+// so that fully expanding it yields about 2^levels nodes.
+func exponentialRefSchema(levels int) map[string]any {
+	defs := map[string]any{"d0": map[string]any{"type": "string"}}
+	for i := 1; i <= levels; i++ {
+		ref := fmt.Sprintf("#/$defs/d%d", i-1)
+		defs[fmt.Sprintf("d%d", i)] = map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"a": map[string]any{"$ref": ref},
+				"b": map[string]any{"$ref": ref},
+			},
+		}
+	}
+	return map[string]any{"$defs": defs, "$ref": fmt.Sprintf("#/$defs/d%d", levels)}
+}
+
+func TestJsonSchemaDereferenceNodeLimit(t *testing.T) {
+	t.Run("small expansion is allowed", func(t *testing.T) {
+		_, err := jsonSchemaDereference(exponentialRefSchema(8))
+		require.NoError(t, err)
+	})
+
+	t.Run("exponential expansion is rejected", func(t *testing.T) {
+		start := time.Now()
+		_, err := jsonSchemaDereference(exponentialRefSchema(40))
+		require.ErrorIs(t, err, errJSONSchemaMaxNodesExceeded)
+		require.Less(t, time.Since(start), 5*time.Second)
+	})
+
+	t.Run("expansion within skip keys budget is still bounded", func(t *testing.T) {
+		budget := newJSONSchemaNodeBudget()
+		schema := exponentialRefSchema(14)
+		_, err := jsonSchemaDereferenceHelper(schema, schema, []string{"$defs"}, map[string]struct{}{}, budget, 0)
+		require.ErrorIs(t, err, errJSONSchemaMaxNodesExceeded)
+	})
 }
 
 func TestJsonSchemaToGapic(t *testing.T) {
