@@ -139,6 +139,7 @@ func TestRecorder_RecordBackend_allEndpoints(t *testing.T) {
 		"translation":     NewTranslationRecorder(cfg),
 		"rerank":          NewRerankRecorder(cfg),
 		"systemOne":       NewSystemOneRecorder(cfg),
+		"embed":           NewEmbedRecorder(cfg),
 		"message":         NewMessageRecorder(cfg),
 		"tokenize":        NewTokenizeRecorder(cfg),
 	}

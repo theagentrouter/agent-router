@@ -44,6 +44,8 @@ type (
 		RerankTracer() RerankTracer
 		// SystemOneTracer creates spans for TypeSafe System One requests.
 		SystemOneTracer() SystemOneTracer
+		// EmbedTracer creates spans for Cohere embed requests on /v2/embed endpoint.
+		EmbedTracer() EmbedTracer
 		// MessageTracer creates spans for Anthropic messages requests.
 		MessageTracer() MessageTracer
 		// TokenizeTracer creates spans for tokenize requests.
@@ -96,6 +98,8 @@ type (
 	RerankTracer = RequestTracer[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
 	// SystemOneTracer creates spans for TypeSafe System One requests.
 	SystemOneTracer = RequestTracer[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
+	// EmbedTracer creates spans for Cohere embed requests.
+	EmbedTracer = RequestTracer[cohere.EmbedV2Request, cohere.EmbedV2Response, struct{}]
 	// MessageTracer creates spans for Anthropic messages requests.
 	MessageTracer = RequestTracer[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeTracer creates spans for tokenize requests.
@@ -139,6 +143,8 @@ type (
 	RerankSpan = Span[cohere.RerankV2Response, struct{}]
 	// SystemOneSpan represents a TypeSafe System One request span. The chunk type is unused and therefore set to struct{}.
 	SystemOneSpan = Span[typesafe.SystemOneResponse, struct{}]
+	// EmbedSpan represents a Cohere embed request span.
+	EmbedSpan = Span[cohere.EmbedV2Response, struct{}]
 	// MessageSpan represents an Anthropic messages request span.
 	MessageSpan = Span[anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeSpan represents a tokenize request span. The chunk type is unused and therefore set to struct{}.
@@ -196,6 +202,8 @@ type (
 	RerankRecorder = SpanRecorder[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
 	// SystemOneRecorder records attributes to a span according to a semantic convention.
 	SystemOneRecorder = SpanRecorder[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
+	// EmbedRecorder records attributes to a span according to a semantic convention.
+	EmbedRecorder = SpanRecorder[cohere.EmbedV2Request, cohere.EmbedV2Response, struct{}]
 	// MessageRecorder records attributes to a span according to a semantic convention.
 	MessageRecorder = SpanRecorder[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeRecorder records attributes to a span according to a semantic convention.
@@ -297,6 +305,11 @@ func (NoopTracing) SystemOneTracer() SystemOneTracer {
 	return NoopSystemOneTracer{}
 }
 
+// EmbedTracer implements Tracing.EmbedTracer.
+func (NoopTracing) EmbedTracer() EmbedTracer {
+	return NoopEmbedTracer{}
+}
+
 func (NoopTracing) MessageTracer() MessageTracer {
 	return NoopMessageTracer{}
 }
@@ -344,6 +357,8 @@ type (
 	NoopRerankTracer = NoopTracer[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
 	// NoopSystemOneTracer implements SystemOneTracer.
 	NoopSystemOneTracer = NoopTracer[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
+	// NoopEmbedTracer implements EmbedTracer.
+	NoopEmbedTracer = NoopTracer[cohere.EmbedV2Request, cohere.EmbedV2Response, struct{}]
 	// NoopMessageTracer implements MessageTracer.
 	NoopMessageTracer = NoopTracer[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// NoopTokenizeTracer implements TokenizeTracer.

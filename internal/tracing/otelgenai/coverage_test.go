@@ -123,6 +123,15 @@ func TestEndpointCoverage(t *testing.T) {
 			expected: coverage{},
 		},
 		{
+			// Cohere embed maps to the embeddings operation. The conventions define
+			// no attribute for embedding input text or vectors.
+			name:   "embed",
+			actual: coverageOf(t, NewEmbedRecorder(cfg)),
+			expected: coverage{
+				requestAttrs: true, responseAttrs: true,
+			},
+		},
+		{
 			// System One is a custom operation; the response contributes only the
 			// resolved model and token usage.
 			name:     "systemone",
