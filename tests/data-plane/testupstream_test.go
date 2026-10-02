@@ -1170,6 +1170,30 @@ data: {"type":"message_stop"}
 			expStatus: http.StatusOK,
 		},
 		{
+			// Unlike the passthrough case above, this lane rebuilds the body, so the client cannot
+			// read the stream at all if it is still told the response is gzip encoded.
+			name:         "openai - /anthropic/v1/messages - streaming with gzip content-encoding",
+			backend:      "openai",
+			path:         "/anthropic/v1/messages",
+			method:       http.MethodPost,
+			responseType: "sse-gzip",
+			requestBody:  `{"model":"something","max_tokens":1000,"messages":[{"role":"user","content":"say hi"}],"stream":true}`,
+			expPath:      "/v1/chat/completions",
+			responseBody: `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"something","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"something","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":1,"total_tokens":10}}
+
+data: [DONE]
+`,
+			expStatus: http.StatusOK,
+			expResponseBodyFunc: func(t require.TestingT, body []byte) {
+				// Anthropic events, i.e. the translated form, not the OpenAI chunks above.
+				require.Contains(t, string(body), "event: message_start")
+				require.Contains(t, string(body), `"text_delta"`)
+				require.Contains(t, string(body), "event: message_stop")
+			},
+		},
+		{
 			name:            "aws-anthropic - /anthropic/v1/messages",
 			backend:         "aws-anthropic",
 			path:            "/anthropic/v1/messages",
@@ -1974,4 +1998,124 @@ func requestCompletionCount(t *testing.T, adminPort int, backend string) int {
 		total += count
 	}
 	return total
+}
+
+// TestStreamingGzipContentEncoding tests that a gzip encoded upstream stream reaches the client
+// as plaintext without a content-encoding header, on a passthrough lane and on a lane that
+// rebuilds the body. Streamed response headers are sent before the body is translated, so an
+// encoding left in place there can no longer be corrected.
+//
+// This does its own requests rather than joining the table above because that one relies on
+// http.DefaultClient, which transparently decompresses and drops the header being asserted.
+func TestStreamingGzipContentEncoding(t *testing.T) {
+	config := &filterapi.Config{
+		Version: version.Parse(),
+		Backends: []filterapi.Backend{
+			testUpstreamOpenAIBackend,
+			alwaysFailingBackend,
+			{
+				Name:   "testupstream-anthropic",
+				Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAnthropic}, Auth: &filterapi.BackendAuth{
+					AnthropicAPIKey: &filterapi.AnthropicAPIKeyAuth{Key: "anthropic-api-key"},
+				},
+			},
+		},
+	}
+	configBytes, err := yaml.Marshal(config)
+	require.NoError(t, err)
+	env := startTestEnvironment(t, string(configBytes), true, false)
+
+	// The upstream flushes a gzip block per event, so several events exercise the decompression
+	// carried across body chunks, where only the newly decoded bytes may be emitted.
+	for _, tc := range []struct {
+		name string
+		// backend decides whether the translator rebuilds the body or passes it through.
+		backend      string
+		requestBody  string
+		responseBody string
+		// expBodyContains are fragments the client must receive, in this order.
+		expBodyContains []string
+	}{
+		{
+			name:        "passthrough",
+			backend:     "anthropic",
+			requestBody: `{"model":"foo","max_tokens":1000,"messages":[{"role":"user","content":"say hi"}],"stream":true}`,
+			responseBody: `event: message_start
+data: {"type":"message_start","message":{"model":"foo","id":"msg_gzip","type":"message","role":"assistant","content":[],"stop_reason":null,"usage":{"input_tokens":9,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"! How can I help?"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_stop
+data: {"type":"message_stop"}
+`,
+		},
+		{
+			name:        "translated",
+			backend:     "openai",
+			requestBody: `{"model":"something","max_tokens":1000,"messages":[{"role":"user","content":"say hi"}],"stream":true}`,
+			responseBody: `data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"something","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"something","choices":[{"index":0,"delta":{"content":"! How can I help?"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"something","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":10,"total_tokens":19}}
+
+data: [DONE]
+`,
+			expBodyContains: []string{
+				"event: message_start",
+				`"text":"Hi"`,
+				`"text":"! How can I help?"`,
+				"event: message_stop",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, rerr := http.NewRequest(http.MethodPost,
+				fmt.Sprintf("http://localhost:%d/anthropic/v1/messages", env.EnvoyListenerPort()),
+				strings.NewReader(tc.requestBody))
+			require.NoError(t, rerr)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("x-test-backend", tc.backend)
+			req.Header.Set(testupstreamlib.ResponseTypeKey, "sse-gzip")
+			req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(tc.responseBody)))
+
+			// Keep the transport from decompressing, which would also drop the header under test.
+			client := &http.Client{Transport: &http.Transport{DisableCompression: true}}
+			resp, rerr := client.Do(req)
+			require.NoError(t, rerr)
+			defer func() { _ = resp.Body.Close() }()
+			body, rerr := io.ReadAll(resp.Body)
+			require.NoError(t, rerr)
+
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			require.Empty(t, resp.Header.Get("content-encoding"))
+			require.False(t, len(body) > 1 && body[0] == 0x1f && body[1] == 0x8b, "body must not be gzip encoded")
+
+			if tc.expBodyContains == nil {
+				// A passthrough lane delivers the upstream stream as it is, which catches chunks
+				// dropped, duplicated or reordered while decompressing. Trailing newlines differ
+				// because the test upstream re-adds the event delimiter to the last block.
+				require.Equal(t,
+					strings.TrimRight(tc.responseBody, "\n"),
+					strings.TrimRight(string(body), "\n"))
+				return
+			}
+			remaining := string(body)
+			for _, fragment := range tc.expBodyContains {
+				_, after, found := strings.Cut(remaining, fragment)
+				require.True(t, found, "missing %q in %q", fragment, string(body))
+				remaining = after
+			}
+		})
+	}
 }
