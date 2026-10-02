@@ -27,6 +27,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/guardrails"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/redaction"
 )
@@ -79,7 +80,7 @@ func NewServer(logger *slog.Logger, enableRedaction bool) (*Server, error) {
 
 // LoadConfig updates the configuration of the external processor.
 func (s *Server) LoadConfig(ctx context.Context, config *filterapi.Config) error {
-	newConfig, err := filterapi.NewRuntimeConfig(ctx, config, backendauth.NewHandler)
+	newConfig, err := filterapi.NewRuntimeConfig(ctx, config, backendauth.NewHandler, guardrails.NewEvaluator)
 	if err != nil {
 		return fmt.Errorf("cannot create runtime filter config: %w", err)
 	}
