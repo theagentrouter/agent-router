@@ -680,6 +680,12 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			mcpRoute.Backends = append(
 				mcpRoute.Backends, mcpBackend)
 		}
+		// Add the OAuth protected resource metadata for the route. This is independent of the
+		// authorization rules below: the MCP proxy serves the metadata document, and advertises
+		// it in WWW-Authenticate challenges, whenever OAuth is configured at all.
+		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.OAuth != nil {
+			mcpRoute.ProtectedResourceMetadata = mcpRouteOAuth(route.Spec.SecurityPolicy.OAuth)
+		}
 
 		// hasVerifiedJWT is true only when Envoy has been configured (via SecurityPolicy.OAuth)
 		// to cryptographically verify the bearer JWT before the request reaches the MCP proxy.
@@ -693,10 +699,6 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			authorization := route.Spec.SecurityPolicy.Authorization
 			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{
 				VerifiedJWT: hasVerifiedJWT,
-			}
-
-			if route.Spec.SecurityPolicy.OAuth != nil {
-				mcpRoute.Authorization.ResourceMetadataURL = buildResourceMetadataURL(&route.Spec.SecurityPolicy.OAuth.ProtectedResourceMetadata)
 			}
 
 			defaultAction := ptr.Deref(authorization.DefaultAction, egv1a1.AuthorizationActionDeny)

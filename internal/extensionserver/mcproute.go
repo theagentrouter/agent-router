@@ -174,6 +174,14 @@ func (s *Server) maybeUpdateMCPRoutes(routes []*routev3.RouteConfiguration) {
 		for _, vh := range routeConfig.VirtualHosts {
 			for _, route := range vh.Routes {
 				if strings.Contains(route.Name, internalapi.MCPMainHTTPRoutePrefix) {
+					// Unlike the cluster rewrite above, the rule index is the right test here:
+					// this branch is not "the rule that reaches the proxy" but "the rule that
+					// carries MCP traffic". Every other rule, the well-known endpoints included,
+					// must fall through to the authn-filter removal below, which is what keeps
+					// OAuth discovery reachable without a token. Widening this condition to match
+					// any rule forwarding to the proxy would re-apply JWT auth to the metadata
+					// endpoint and break discovery.
+					//
 					// The frontend mcp proxy route(rule/0) forwards to the in-process HTTP MCP proxy.
 					if strings.Contains(route.Name, "rule/0") {
 						// The MCP proxy can only read HTTP headers, so render the trusted shim's
@@ -193,6 +201,33 @@ func (s *Server) maybeUpdateMCPRoutes(routes []*routev3.RouteConfiguration) {
 			}
 		}
 	}
+}
+
+// clusterTargetsMCPProxyBackend reports whether a generated cluster was produced from the MCP
+// proxy Backend, and so needs its endpoint rewritten to the in-process proxy.
+//
+// Envoy Gateway emits one cluster per HTTPRoute rule, and more than one rule on the main MCP
+// HTTPRoute now forwards to the proxy: the MCP traffic rule and the OAuth protected resource
+// metadata rule.
+//
+// The name is the only usable signal here. The endpoint cannot be inspected: a Backend with
+// static IP endpoints becomes an EDS cluster (buildXdsCluster's EndpointTypeStatic case sets
+// Cluster_EDS with an EdsClusterConfig), so endpoints arrive as a separate resource and
+// GetLoadAssignment() is nil on every cluster this sees.
+//
+// Not matching the rule index is what makes this robust to rules being added or reordered.
+// Only rules with a backendRef produce a cluster; the well-known authorization server rules are
+// direct responses and produce none; and every rule on this HTTPRoute that does forward,
+// forwards to the proxy. Per-backend routes to the real MCP servers carry
+// MCPPerBackendRefHTTPRoutePrefix, so they are not matched.
+//
+// Only the name segment is tested. A namespace is a DNS-1123 label and may itself start with
+// the prefix, and a cluster wrongly claimed here would send someone else's traffic to the MCP
+// proxy.
+func clusterTargetsMCPProxyBackend(c *clusterv3.Cluster) bool {
+	// <routeType>/<namespace>/<name>/rule/<N>, per Envoy Gateway's irRoutePrefix.
+	parts := strings.Split(c.GetName(), "/")
+	return len(parts) >= 3 && strings.HasPrefix(parts[2], internalapi.MCPMainHTTPRoutePrefix)
 }
 
 // mcpProxyDynamicMetadataHeaders returns the request header mutations applied on the
@@ -275,11 +310,12 @@ func (s *Server) createRoutesForBackendListener(routes []*routev3.RouteConfigura
 	return mcpRouteConfig
 }
 
-// modifyMCPGatewayGeneratedRoutes finds the mcp proxy dummy IP in the clusters and
-// swaps it to the localhost.
+// modifyMCPGatewayGeneratedCluster points every cluster generated from the MCP proxy Backend at
+// the in-process proxy on localhost. The clusters are identified by name, not by the placeholder
+// address they were built from; see clusterTargetsMCPProxyBackend.
 func (s *Server) modifyMCPGatewayGeneratedCluster(clusters []*clusterv3.Cluster) {
 	for _, c := range clusters {
-		if strings.Contains(c.Name, internalapi.MCPMainHTTPRoutePrefix) && strings.HasSuffix(c.Name, "/rule/0") {
+		if clusterTargetsMCPProxyBackend(c) {
 			name := c.Name
 			*c = clusterv3.Cluster{
 				Name:                 name,

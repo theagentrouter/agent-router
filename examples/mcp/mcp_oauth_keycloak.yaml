@@ -21,7 +21,8 @@ spec:
         remoteJWKS:
           uri: http://localhost:8080/realms/master/protocol/openid-connect/certs
       protectedResourceMetadata:
-        resource: "http://127.0.0.1:1975/mcp"
+        # resource is omitted so the gateway derives it per request. That keeps this example
+        # working whether you reach it on http://127.0.0.1:1975 locally or on a real hostname.
         scopesSupported:
           [
             "openid",
