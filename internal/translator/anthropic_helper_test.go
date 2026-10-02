@@ -891,7 +891,7 @@ func TestOutputConfigAvailable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := outputConfigAvailable(tt.apiSchema, tt.model)
+			result := outputConfigAvailable(tt.apiSchema, tt.model, nil)
 			require.Equal(t, tt.expected, result)
 		})
 	}
@@ -1299,10 +1299,57 @@ func TestEffortAvailable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := effortAvailable(tt.model)
+			result := effortAvailable(tt.model, nil)
 			require.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+// TestOutputConfigAvailableWithHints verifies that translation hints override the model-name heuristic.
+func TestOutputConfigAvailableWithHints(t *testing.T) {
+	// Hint true forces support even for a model the heuristic would reject.
+	require.True(t, outputConfigAvailable(filterapi.APISchemaAWSAnthropic, "claude-3-sonnet", &filterapi.ModelTranslationHints{SupportsOutputConfig: ptr.To(true)}))
+	// Hint false forces no support even for a model the heuristic would accept.
+	require.False(t, outputConfigAvailable(filterapi.APISchemaAWSAnthropic, "claude-opus-4-6-20250514", &filterapi.ModelTranslationHints{SupportsOutputConfig: ptr.To(false)}))
+	// Nil field falls back to the heuristic.
+	require.True(t, outputConfigAvailable(filterapi.APISchemaAWSAnthropic, "claude-opus-4-6-20250514", &filterapi.ModelTranslationHints{}))
+}
+
+// TestEffortAvailableWithHints verifies that translation hints override the model-name heuristic.
+func TestEffortAvailableWithHints(t *testing.T) {
+	require.True(t, effortAvailable("claude-3-sonnet", &filterapi.ModelTranslationHints{SupportsReasoningEffort: ptr.To(true)}))
+	require.False(t, effortAvailable("claude-opus-4-6-20250514", &filterapi.ModelTranslationHints{SupportsReasoningEffort: ptr.To(false)}))
+	require.True(t, effortAvailable("claude-opus-4-6-20250514", &filterapi.ModelTranslationHints{}))
+}
+
+// TestBuildAnthropicParamsMaxTokensFromHints verifies max_tokens defaulting behavior when the client omits it.
+func TestBuildAnthropicParamsMaxTokensFromHints(t *testing.T) {
+	newReq := func() *openai.ChatCompletionRequest {
+		return &openai.ChatCompletionRequest{
+			Model:    "claude-opus-4-6",
+			Messages: []openai.ChatCompletionMessageParamUnion{{OfUser: &openai.ChatCompletionUserMessageParam{Content: openai.StringOrUserRoleContentUnion{Value: "hi"}}}},
+		}
+	}
+
+	t.Run("client omits max_tokens, hint provides default", func(t *testing.T) {
+		params, err := buildAnthropicParams(newReq(), filterapi.APISchemaAWSAnthropic, "", &filterapi.ModelTranslationHints{MaxOutputTokens: ptr.To(int64(32000))})
+		require.NoError(t, err)
+		require.Equal(t, int64(32000), params.MaxTokens)
+	})
+
+	t.Run("client max_tokens takes precedence over hint", func(t *testing.T) {
+		req := newReq()
+		req.MaxTokens = ptr.To(int64(100))
+		params, err := buildAnthropicParams(req, filterapi.APISchemaAWSAnthropic, "", &filterapi.ModelTranslationHints{MaxOutputTokens: ptr.To(int64(32000))})
+		require.NoError(t, err)
+		require.Equal(t, int64(100), params.MaxTokens)
+	})
+
+	t.Run("no hint and no client value keeps existing behavior (0)", func(t *testing.T) {
+		params, err := buildAnthropicParams(newReq(), filterapi.APISchemaAWSAnthropic, "", nil)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), params.MaxTokens)
+	})
 }
 
 func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
@@ -1500,7 +1547,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			params, err := buildAnthropicParams(tt.request, tt.apiSchema, "")
+			params, err := buildAnthropicParams(tt.request, tt.apiSchema, "", nil)
 
 			if tt.expectErr {
 				require.Error(t, err)
@@ -1541,7 +1588,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			},
 		}
 		// The modelNameOverride contains a recognized model identifier.
-		params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "us.anthropic.claude-sonnet-4-5-20250514-v1:0")
+		params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "us.anthropic.claude-sonnet-4-5-20250514-v1:0", nil)
 		require.NoError(t, err)
 		require.NotNil(t, params)
 		require.NotNil(t, params.OutputConfig.Format.Schema)
@@ -1571,7 +1618,7 @@ func TestBuildAnthropicParamsPreservesStructuredOutputPropertyOrder(t *testing.T
 		},
 	}
 
-	params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "")
+	params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "", nil)
 	require.NoError(t, err)
 
 	body, err := json.Marshal(params)
@@ -1708,7 +1755,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			params, err := buildAnthropicParams(tt.request, filterapi.APISchemaAWSAnthropic, "")
+			params, err := buildAnthropicParams(tt.request, filterapi.APISchemaAWSAnthropic, "", nil)
 			require.NoError(t, err)
 			require.NotNil(t, params)
 			require.Equal(t, tt.expectedEffort, params.OutputConfig.Effort)
@@ -1727,7 +1774,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 				}},
 			},
 		}
-		_, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "")
+		_, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "", nil)
 		require.Error(t, err)
 		require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
 		require.Contains(t, err.Error(), "unsupported reasoning effort level")
@@ -1746,7 +1793,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			},
 		}
 		// The modelNameOverride contains a recognized model identifier.
-		params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "us.anthropic.claude-opus-4-5-20250514-v1:0")
+		params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "us.anthropic.claude-opus-4-5-20250514-v1:0", nil)
 		require.NoError(t, err)
 		require.NotNil(t, params)
 		require.Equal(t, anthropic.OutputConfigEffortHigh, params.OutputConfig.Effort)
@@ -1765,7 +1812,7 @@ func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
 			},
 		}
 		// The modelNameOverride points to an unsupported model.
-		params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "us.anthropic.claude-3-sonnet-20240229-v1:0")
+		params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "us.anthropic.claude-3-sonnet-20240229-v1:0", nil)
 		require.NoError(t, err)
 		require.NotNil(t, params)
 		require.Equal(t, anthropic.OutputConfigEffort(""), params.OutputConfig.Effort)

@@ -611,6 +611,8 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutespec)
 - [MCPRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutestatus)
 - [MCPToolFilter](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolfilter)
+- [ModelTranslationHints](#github-com-envoyproxy-ai-gateway-api-v1alpha1-modeltranslationhints)
+- [ModelTranslationHintsEntry](#github-com-envoyproxy-ai-gateway-api-v1alpha1-modeltranslationhintsentry)
 - [PerModelQuota](#github-com-envoyproxy-ai-gateway-api-v1alpha1-permodelquota)
 - [ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1alpha1-protectedresourcemetadata)
 - [QuotaBucketMode](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotabucketmode)
@@ -856,6 +858,11 @@ AIServiceBackendSpec details the AIServiceBackend configuration.
   type="[HTTPBodyMutation](#github-com-envoyproxy-ai-gateway-api-v1alpha1-httpbodymutation)"
   required="false"
   description="BodyMutation defines the mutation of HTTP request body JSON fields that will be applied to the request<br />before sending it to the backend."
+/><ApiField
+  name="modelTranslationHints"
+  type="[ModelTranslationHintsEntry](#github-com-envoyproxy-ai-gateway-api-v1alpha1-modeltranslationhintsentry) array"
+  required="false"
+  description="ModelTranslationHints declares translation hints for models routed through this backend,<br />keyed by the exact ModelNameOverride used in an AIGatewayRouteRuleBackendRef that targets<br />this backend. This is the single source of truth for a model's hints on this backend: any<br />AIGatewayRoute, in any namespace, that references this backend with a matching<br />ModelNameOverride picks up these hints without repeating them.<br />Since an AIServiceBackend has exactly one Schema, hints declared here are inherently scoped<br />to that provider — the same logical model hosted on a different AIServiceBackend (e.g. the<br />same Claude model on AWS Bedrock vs. GCP Vertex AI) is configured as a separate entry on<br />that other backend, which is correct because providers can genuinely support different<br />features for what is nominally the same model."
 />
 
 
@@ -2340,6 +2347,89 @@ a tool must match an include rule AND not match any exclude rule to be allowed.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-modeltranslationhints">ModelTranslationHints</a>
+
+
+
+**Appears in:**
+- [ModelTranslationHintsEntry](#github-com-envoyproxy-ai-gateway-api-v1alpha1-modeltranslationhintsentry)
+
+ModelTranslationHints provides model-specific hints to guide request and response translation.
+When set, translators use these values instead of model-name heuristics. All fields are
+optional; a nil field falls back to the built-in heuristic for backward compatibility.
+
+These hints are typically populated by a control plane from a model registry or catalog that
+tracks per-model metadata such as maximum output token limits and supported features.
+
+##### Fields
+
+
+
+<ApiField
+  name="maxOutputTokens"
+  type="integer"
+  required="false"
+  description="MaxOutputTokens is the maximum number of tokens the model can produce in a single response.<br />When set, translators use this as the default max_tokens value for APIs that require it<br />(e.g., the Anthropic Messages API) when the client request omits max_tokens."
+/><ApiField
+  name="supportsResponseJsonSchema"
+  type="boolean"
+  required="false"
+  description="SupportsResponseJSONSchema indicates whether the model accepts a JSON Schema object in<br />response_format (as opposed to only \{`type`: `json_object`\})."
+/><ApiField
+  name="supportsReasoningEffort"
+  type="boolean"
+  required="false"
+  description="SupportsReasoningEffort indicates whether the model accepts a reasoning effort parameter<br />(Gemini thinking level / Anthropic output_config.effort)."
+/><ApiField
+  name="supportsOutputConfig"
+  type="boolean"
+  required="false"
+  description="SupportsOutputConfig indicates whether the model accepts an Anthropic-style output_config<br />field for structured output (e.g., Claude Opus/Sonnet 4.5 and later)."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-modeltranslationhintsentry">ModelTranslationHintsEntry</a>
+
+
+
+**Appears in:**
+- [AIServiceBackendSpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-aiservicebackendspec)
+
+ModelTranslationHintsEntry associates ModelTranslationHints with a specific model routed
+through this backend.
+
+##### Fields
+
+
+
+<ApiField
+  name="modelNameOverride"
+  type="string"
+  required="true"
+  description="ModelNameOverride identifies which model these hints apply to. Must match the<br />ModelNameOverride configured on an AIGatewayRouteRuleBackendRef that targets this backend<br />for the hints to take effect."
+/><ApiField
+  name="maxOutputTokens"
+  type="integer"
+  required="false"
+  description="MaxOutputTokens is the maximum number of tokens the model can produce in a single response.<br />When set, translators use this as the default max_tokens value for APIs that require it<br />(e.g., the Anthropic Messages API) when the client request omits max_tokens."
+/><ApiField
+  name="supportsResponseJsonSchema"
+  type="boolean"
+  required="false"
+  description="SupportsResponseJSONSchema indicates whether the model accepts a JSON Schema object in<br />response_format (as opposed to only \{`type`: `json_object`\})."
+/><ApiField
+  name="supportsReasoningEffort"
+  type="boolean"
+  required="false"
+  description="SupportsReasoningEffort indicates whether the model accepts a reasoning effort parameter<br />(Gemini thinking level / Anthropic output_config.effort)."
+/><ApiField
+  name="supportsOutputConfig"
+  type="boolean"
+  required="false"
+  description="SupportsOutputConfig indicates whether the model accepts an Anthropic-style output_config<br />field for structured output (e.g., Claude Opus/Sonnet 4.5 and later)."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-permodelquota">PerModelQuota</a>
 
 
@@ -3199,6 +3289,8 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPRouteSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutespec)
 - [MCPRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutestatus)
 - [MCPToolFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolfilter)
+- [ModelTranslationHints](#github-com-envoyproxy-ai-gateway-api-v1beta1-modeltranslationhints)
+- [ModelTranslationHintsEntry](#github-com-envoyproxy-ai-gateway-api-v1beta1-modeltranslationhintsentry)
 - [ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1beta1-protectedresourcemetadata)
 - [ToolCall](#github-com-envoyproxy-ai-gateway-api-v1beta1-toolcall)
 - [VersionedAPISchema](#github-com-envoyproxy-ai-gateway-api-v1beta1-versionedapischema)
@@ -3441,6 +3533,11 @@ AIServiceBackendSpec details the AIServiceBackend configuration.
   type="[HTTPHeaderValueFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefilter) array"
   required="false"
   description="HeaderValueFilters filter individual values out of multi-valued request headers before sending<br />the request to this backend, so that one value an upstream provider does not accept does not<br />fail the whole request. At most one filter per header name.<br />Only GCPAnthropic and AWSAnthropic backends honor this, and today only for the<br />`anthropic-beta` header — a filter naming any other header is accepted but has no effect.<br />Setting it on a backend with any other schema is rejected."
+/><ApiField
+  name="modelTranslationHints"
+  type="[ModelTranslationHintsEntry](#github-com-envoyproxy-ai-gateway-api-v1beta1-modeltranslationhintsentry) array"
+  required="false"
+  description="ModelTranslationHints declares translation hints for models routed through this backend,<br />keyed by the exact ModelNameOverride used in an AIGatewayRouteRuleBackendRef that targets<br />this backend. This is the single source of truth for a model's hints on this backend: any<br />AIGatewayRoute, in any namespace, that references this backend with a matching<br />ModelNameOverride picks up these hints without repeating them.<br />Since an AIServiceBackend has exactly one Schema, hints declared here are inherently scoped<br />to that provider — the same logical model hosted on a different AIServiceBackend (e.g. the<br />same Claude model on AWS Bedrock vs. GCP Vertex AI) is configured as a separate entry on<br />that other backend, which is correct because providers can genuinely support different<br />features for what is nominally the same model."
 />
 
 
@@ -5205,6 +5302,89 @@ a tool must match an include rule AND not match any exclude rule to be allowed.
   type="string array"
   required="false"
   description="ExcludeRegex is a list of RE2-compatible regular expressions that, when matched, exclude the tool.<br />Tools matching these patterns will not be available. Exclude rules take precedence over include rules."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-modeltranslationhints">ModelTranslationHints</a>
+
+
+
+**Appears in:**
+- [ModelTranslationHintsEntry](#github-com-envoyproxy-ai-gateway-api-v1beta1-modeltranslationhintsentry)
+
+ModelTranslationHints provides model-specific hints to guide request and response translation.
+When set, translators use these values instead of model-name heuristics. All fields are
+optional; a nil field falls back to the built-in heuristic for backward compatibility.
+
+These hints are typically populated by a control plane from a model registry or catalog that
+tracks per-model metadata such as maximum output token limits and supported features.
+
+##### Fields
+
+
+
+<ApiField
+  name="maxOutputTokens"
+  type="integer"
+  required="false"
+  description="MaxOutputTokens is the maximum number of tokens the model can produce in a single response.<br />When set, translators use this as the default max_tokens value for APIs that require it<br />(e.g., the Anthropic Messages API) when the client request omits max_tokens."
+/><ApiField
+  name="supportsResponseJsonSchema"
+  type="boolean"
+  required="false"
+  description="SupportsResponseJSONSchema indicates whether the model accepts a JSON Schema object in<br />response_format (as opposed to only \{`type`: `json_object`\})."
+/><ApiField
+  name="supportsReasoningEffort"
+  type="boolean"
+  required="false"
+  description="SupportsReasoningEffort indicates whether the model accepts a reasoning effort parameter<br />(Gemini thinking level / Anthropic output_config.effort)."
+/><ApiField
+  name="supportsOutputConfig"
+  type="boolean"
+  required="false"
+  description="SupportsOutputConfig indicates whether the model accepts an Anthropic-style output_config<br />field for structured output (e.g., Claude Opus/Sonnet 4.5 and later)."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-modeltranslationhintsentry">ModelTranslationHintsEntry</a>
+
+
+
+**Appears in:**
+- [AIServiceBackendSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-aiservicebackendspec)
+
+ModelTranslationHintsEntry associates ModelTranslationHints with a specific model routed
+through this backend.
+
+##### Fields
+
+
+
+<ApiField
+  name="modelNameOverride"
+  type="string"
+  required="true"
+  description="ModelNameOverride identifies which model these hints apply to. Must match the<br />ModelNameOverride configured on an AIGatewayRouteRuleBackendRef that targets this backend<br />for the hints to take effect."
+/><ApiField
+  name="maxOutputTokens"
+  type="integer"
+  required="false"
+  description="MaxOutputTokens is the maximum number of tokens the model can produce in a single response.<br />When set, translators use this as the default max_tokens value for APIs that require it<br />(e.g., the Anthropic Messages API) when the client request omits max_tokens."
+/><ApiField
+  name="supportsResponseJsonSchema"
+  type="boolean"
+  required="false"
+  description="SupportsResponseJSONSchema indicates whether the model accepts a JSON Schema object in<br />response_format (as opposed to only \{`type`: `json_object`\})."
+/><ApiField
+  name="supportsReasoningEffort"
+  type="boolean"
+  required="false"
+  description="SupportsReasoningEffort indicates whether the model accepts a reasoning effort parameter<br />(Gemini thinking level / Anthropic output_config.effort)."
+/><ApiField
+  name="supportsOutputConfig"
+  type="boolean"
+  required="false"
+  description="SupportsOutputConfig indicates whether the model accepts an Anthropic-style output_config<br />field for structured output (e.g., Claude Opus/Sonnet 4.5 and later)."
 />
 
 
