@@ -27,6 +27,7 @@ spec:
   securityPolicy:
     oauth:
       issuer: https://auth.example.com/
+      authorizationServerMetadataUrl: https://auth.example.com/v4/.well-known/openid-configuration
       audiences:
         - example
       jwks:

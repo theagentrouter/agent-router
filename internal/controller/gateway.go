@@ -61,13 +61,14 @@ func NewGatewayController(
 		uf = uuid.NewString
 	}
 	return &GatewayController{
-		client:                client,
-		kube:                  kube,
-		logger:                logger,
-		envoyGatewayNamespace: envoyGatewayNamespace,
-		standAlone:            standAlone,
-		uuidFn:                uf,
-		extProcBuilder:        newExtProcBuilder(options, extProcAsSideCar, logger),
+		client:                  client,
+		kube:                    kube,
+		logger:                  logger,
+		envoyGatewayNamespace:   envoyGatewayNamespace,
+		standAlone:              standAlone,
+		uuidFn:                  uf,
+		extProcBuilder:          newExtProcBuilder(options, extProcAsSideCar, logger),
+		referenceGrantValidator: newReferenceGrantValidator(client),
 	}
 }
 
@@ -83,6 +84,9 @@ type GatewayController struct {
 	// extProcBuilder is shared with the mutating webhook so the template hash
 	// computed here matches the extproc container injected by the webhook.
 	*extProcBuilder
+	// referenceGrantValidator authorizes cross-namespace AIServiceBackend/InferencePool
+	// references (and their BackendSecurityPolicy credentials) via Gateway API ReferenceGrant.
+	referenceGrantValidator *referenceGrantValidator
 }
 
 // Reconcile implements the reconcile.Reconciler for gwapiv1.Gateway.
@@ -435,6 +439,10 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 		injectedQuotaCosts := make(map[string]struct{})
 		for ruleIndex := range spec.Rules {
 			rule := &spec.Rules[ruleIndex]
+			if rule.ExcludeFromModelsEndpoint {
+				continue
+			}
+
 			for _, m := range rule.Matches {
 				for _, h := range m.Headers {
 					// If explicitly set to something that is not an exact match, skip.
@@ -465,6 +473,11 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 					}
 				}
 			}
+		}
+		// Second pass: backends are collected for every rule, including rules excluded from
+		// /v1/models — those rules still route traffic and need their backends in the config.
+		for ruleIndex := range spec.Rules {
+			rule := &spec.Rules[ruleIndex]
 			for backendRefIndex := range rule.BackendRefs {
 				backendRef := &rule.BackendRefs[backendRefIndex]
 				b := filterapi.Backend{}
@@ -473,6 +486,23 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 				var bsp *aigv1b1.BackendSecurityPolicy
 				backendNamespace := backendRef.GetNamespace(aiGatewayRoute.Namespace)
+
+				if backendRef.IsCrossNamespace(aiGatewayRoute.Namespace) {
+					var rgErr error
+					if backendRef.IsInferencePool() {
+						rgErr = c.referenceGrantValidator.validateInferencePoolReference(
+							ctx, aiGatewayRoute.Namespace, backendNamespace, backendRef.Name)
+					} else {
+						rgErr = c.referenceGrantValidator.validateAIServiceBackendReference(
+							ctx, aiGatewayRoute.Namespace, backendNamespace, backendRef.Name)
+					}
+					if rgErr != nil {
+						c.logger.Error(rgErr, "cross-namespace backendRef rejected: no valid ReferenceGrant. Skipping this backend.",
+							"backend_name", backendRef.Name, "aigatewayroute", aiGatewayRoute.Name,
+							"namespace", backendNamespace)
+						continue
+					}
+				}
 
 				if backendRef.IsInferencePool() {
 					// We assume that InferencePools are all OpenAI schema.
@@ -650,10 +680,20 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			mcpRoute.Backends = append(
 				mcpRoute.Backends, mcpBackend)
 		}
+
+		// hasVerifiedJWT is true only when Envoy has been configured (via SecurityPolicy.OAuth)
+		// to cryptographically verify the bearer JWT before the request reaches the MCP proxy.
+		// Without it, the proxy must never trust JWT claims/scopes surfaced to authorization
+		// (Source.JWT or CEL's request.auth.jwt.*), since an attacker can forge an unsigned or
+		// otherwise unverified token. See MCPRouteAuthorization.VerifiedJWT.
+		hasVerifiedJWT := route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.OAuth != nil
+
 		// Add authorization configuration for the route.
 		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.Authorization != nil {
 			authorization := route.Spec.SecurityPolicy.Authorization
-			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{}
+			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{
+				VerifiedJWT: hasVerifiedJWT,
+			}
 
 			if route.Spec.SecurityPolicy.OAuth != nil {
 				mcpRoute.Authorization.ResourceMetadataURL = buildResourceMetadataURL(&route.Spec.SecurityPolicy.OAuth.ProtectedResourceMetadata)
@@ -718,6 +758,7 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			selector := route.Spec.BackendSelector
 			mcpRoute.BackendSelector = &filterapi.MCPRouteAuthorization{
 				DefaultAction: filterapi.AuthorizationAction(ptr.Deref(selector.DefaultAction, egv1a1.AuthorizationActionDeny)),
+				VerifiedJWT:   hasVerifiedJWT,
 			}
 
 			for _, rule := range selector.Rules {

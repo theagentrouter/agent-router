@@ -334,6 +334,21 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 			expectErr: true,
 		},
 		{
+			name: "maps Anthropic web search tool",
+			openAIReq: &openai.ChatCompletionRequest{
+				Tools: []openai.Tool{{
+					Type: openai.ToolTypeAnthropicWebSearch,
+					Name: "web_search",
+				}},
+			},
+			expectedTools: []anthropic.ToolUnionParam{{
+				OfWebSearchTool20260209: &anthropic.WebSearchTool20260209Param{
+					Name: constant.WebSearch("web_search"),
+					Type: constant.WebSearch20260209("web_search_20260209"),
+				},
+			}},
+		},
+		{
 			name: "tool definition without type field",
 			openAIReq: &openai.ChatCompletionRequest{
 				Tools: []openai.Tool{
@@ -505,11 +520,11 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 					require.Equal(t, tt.expectedTools[0].GetName(), tools[0].GetName())
 					require.Equal(t, tt.expectedTools[0].GetType(), tools[0].GetType())
 					require.Equal(t, tt.expectedTools[0].GetDescription(), tools[0].GetDescription())
-					if tt.expectedTools[0].GetInputSchema().Properties != nil {
-						require.Equal(t, tt.expectedTools[0].GetInputSchema().Properties, tools[0].GetInputSchema().Properties)
+					if inputSchema := tt.expectedTools[0].GetInputSchema(); inputSchema != nil && inputSchema.Properties != nil {
+						require.Equal(t, inputSchema.Properties, tools[0].GetInputSchema().Properties)
 					}
-					if tt.expectedTools[0].GetInputSchema().ExtraFields != nil {
-						require.Equal(t, tt.expectedTools[0].GetInputSchema().ExtraFields, tools[0].GetInputSchema().ExtraFields)
+					if inputSchema := tt.expectedTools[0].GetInputSchema(); inputSchema != nil && inputSchema.ExtraFields != nil {
+						require.Equal(t, inputSchema.ExtraFields, tools[0].GetInputSchema().ExtraFields)
 					}
 				}
 			}
@@ -813,6 +828,30 @@ func TestOutputConfigAvailable(t *testing.T) {
 			name:      "claude-fable-5 not supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-fable-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-opus-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-opus-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-opus-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-opus-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-opus-5-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-opus-5-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-opus-5-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-opus-5-5",
 			expected:  false,
 		},
 		// Unsupported models on either backend.
@@ -1227,6 +1266,16 @@ func TestEffortAvailable(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "claude-opus-5 supported",
+			model:    "claude-opus-5",
+			expected: true,
+		},
+		{
+			name:     "claude-opus-5-5 supported",
+			model:    "claude-opus-5-5",
+			expected: true,
+		},
+		{
 			name:     "claude-sonnet-4-5-20250514 not supported",
 			model:    "claude-sonnet-4-5-20250514",
 			expected: false,
@@ -1498,6 +1547,36 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 		require.NotNil(t, params.OutputConfig.Format.Schema)
 		require.Equal(t, constant.JSONSchema("json_schema"), params.OutputConfig.Format.Type)
 	})
+}
+
+func TestBuildAnthropicParamsPreservesStructuredOutputPropertyOrder(t *testing.T) {
+	rawSchema := json.RawMessage(`{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"},"middle":{"type":"boolean"}},"required":["zeta","alpha","middle"]}`)
+	request := &openai.ChatCompletionRequest{
+		Model:               "claude-sonnet-4-6",
+		MaxCompletionTokens: ptr.To(int64(1024)),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			{OfUser: &openai.ChatCompletionUserMessageParam{
+				Role:    "user",
+				Content: openai.StringOrUserRoleContentUnion{Value: "test"},
+			}},
+		},
+		ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
+			OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+				Type: "json_schema",
+				JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+					Name:   "ordered_schema",
+					Schema: rawSchema,
+				},
+			},
+		},
+	}
+
+	params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(params)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"schema":`+string(rawSchema))
 }
 
 func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {

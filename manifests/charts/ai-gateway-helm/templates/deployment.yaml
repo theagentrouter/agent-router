@@ -116,12 +116,18 @@ spec:
             - --quotaRateLimitServiceAddr={{ .Values.controller.quotaRateLimitServiceAddr }}
             - --quotaRateLimitTimeout={{ .Values.controller.quotaRateLimitTimeout }}
             - --quotaRateLimitFailureModeDeny={{ .Values.controller.quotaRateLimitFailureModeDeny }}
-            - --mcpSessionEncryptionSeed={{ .Values.controller.mcp.sessionEncryption.seed }}
+            - --mcpSessionEncryptionSeed=$(MCP_SESSION_ENCRYPTION_SEED)
             - --mcpSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.iterations }}
             {{- if .Values.controller.mcp.sessionEncryption.fallback.seed }}
             - --mcpFallbackSessionEncryptionSeed={{ .Values.controller.mcp.sessionEncryption.fallback.seed }}
             - --mcpFallbackSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.fallback.iterations }}
             {{- end }}
+          # Allow the default two-minute cache sync timeout plus startup overhead.
+          startupProbe:
+            grpc:
+              port: 1063
+            failureThreshold: 75
+            periodSeconds: 2
           livenessProbe:
             grpc:
               port: 1063
@@ -132,6 +138,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: MCP_SESSION_ENCRYPTION_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-gateway-helm.controller.mcpSessionEncryptionSecretName" . }}
+                  key: seed
           {{- if .Values.controller.podEnv }}
           {{- range $key, $val := .Values.controller.podEnv }}
             - name: {{ $key }}

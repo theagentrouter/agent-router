@@ -66,6 +66,8 @@ type MCPRouteList struct {
 }
 
 // MCPRouteSpec details the MCPRoute configuration.
+//
+// +kubebuilder:validation:XValidation:rule="!(has(self.backendSelector) && self.backendSelector.rules.exists(r, has(r.cel) && r.cel.contains('auth.jwt')) && !(has(self.securityPolicy) && has(self.securityPolicy.oauth)))",message="securityPolicy.oauth must be configured when a backendSelector rule's cel expression references request.auth.jwt"
 type MCPRouteSpec struct {
 	// ParentRefs are the names of the Gateway resources this MCPRoute is being attached to.
 	// Cross namespace references are not supported. In other words, the Gateway resources must be in the
@@ -138,6 +140,11 @@ type MCPRouteSpec struct {
 	// BackendSelector restricts which of this route's backends a given request may fan
 	// out to, evaluated once per candidate backend when a client session is initialized.
 	// If unspecified, all backends on the route are considered.
+	//
+	// Security note: a backendSelector rule whose CEL expression reads request.auth.jwt
+	// (claims or scopes) only reflects verified JWT data when SecurityPolicy.OAuth is
+	// configured for this route; the XValidation below enforces that pairing so that
+	// unauthenticated or forged bearer tokens can't influence backend selection.
 	//
 	// +kubebuilder:validation:Optional
 	// +optional
@@ -411,7 +418,7 @@ type MCPBackendAPIKey struct {
 
 // MCPRouteSecurityPolicy defines the security policy for a MCPRoute.
 //
-// +kubebuilder:validation:XValidation:rule="!(has(self.authorization) && self.authorization.rules.exists(r, has(r.source) && has(r.source.jwt)) && !has(self.oauth))",message="oauth must be configured when any authorization rule uses a jwt source"
+// +kubebuilder:validation:XValidation:rule="!(has(self.authorization) && self.authorization.rules.exists(r, (has(r.source) && has(r.source.jwt)) || (has(r.cel) && r.cel.contains('auth.jwt'))) && !has(self.oauth))",message="oauth must be configured when any authorization rule uses a jwt source or references request.auth.jwt in a cel expression"
 type MCPRouteSecurityPolicy struct {
 	// OAuth defines the configuration for the MCP spec compatible OAuth authentication.
 	//
@@ -477,6 +484,24 @@ type MCPRouteOAuth struct {
 	//
 	// +optional
 	JWKS *JWKS `json:"jwks,omitempty"`
+
+	// AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization
+	// Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known
+	// URIs derived from Issuer.
+	//
+	// Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer
+	// of "https://example.com/api/idp/authn" whose document is served only at
+	// "https://example.com/api/idp/v4/authn/.well-known/openid-configuration".
+	//
+	// Issuer is unaffected by this field. It continues to identify the authorization server in the
+	// protected resource metadata the gateway publishes, and to derive the well-known URIs when this
+	// field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Format=uri
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	AuthorizationServerMetadataURL *string `json:"authorizationServerMetadataUrl,omitempty"`
 
 	// ProtectedResourceMetadata defines the OAuth 2.0 Resource Server Metadata as per RFC 8414.
 	// This is used to expose the metadata endpoint for mcp clients to discover the authorization servers,

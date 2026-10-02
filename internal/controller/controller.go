@@ -259,7 +259,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	}
 
 	// ReferenceGrant controller for cross-namespace access validation
-	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan)
+	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan)
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1b1.ReferenceGrant{}).
 		Complete(referenceGrantC); err != nil {
 		return fmt.Errorf("failed to create controller for ReferenceGrant: %w", err)
@@ -472,37 +472,57 @@ func aiGatewayRouteIndexFunc(o client.Object) []string {
 func backendSecurityPolicyIndexFunc(o client.Object) []string {
 	backendSecurityPolicy := o.(*aigv1b1.BackendSecurityPolicy)
 	var key string
-	switch backendSecurityPolicy.Spec.Type {
-	case aigv1b1.BackendSecurityPolicyTypeAPIKey:
-		apiKey := backendSecurityPolicy.Spec.APIKey
-		key = getSecretNameAndNamespace(apiKey.SecretRef, backendSecurityPolicy.Namespace)
-	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
-		awsCreds := backendSecurityPolicy.Spec.AWSCredentials
-		if awsCreds.CredentialsFile != nil {
-			key = getSecretNameAndNamespace(awsCreds.CredentialsFile.SecretRef, backendSecurityPolicy.Namespace)
-		} else if awsCreds.OIDCExchangeToken != nil {
-			key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
-		}
-	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
-		gcpCreds := backendSecurityPolicy.Spec.GCPCredentials
-		if gcpCreds.CredentialsFile != nil {
-			key = getSecretNameAndNamespace(gcpCreds.CredentialsFile.SecretRef, backendSecurityPolicy.Namespace)
-		}
-	case aigv1b1.BackendSecurityPolicyTypeAzureAPIKey:
-		apiKey := backendSecurityPolicy.Spec.AzureAPIKey
-		key = getSecretNameAndNamespace(apiKey.SecretRef, backendSecurityPolicy.Namespace)
-	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
-		apiKey := backendSecurityPolicy.Spec.AnthropicAPIKey
-		key = getSecretNameAndNamespace(apiKey.SecretRef, backendSecurityPolicy.Namespace)
-	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
-		azureCreds := backendSecurityPolicy.Spec.AzureCredentials
-		if azureCreds.ClientSecretRef != nil {
-			key = getSecretNameAndNamespace(azureCreds.ClientSecretRef, backendSecurityPolicy.Namespace)
-		} else if azureCreds.OIDCExchangeToken != nil {
-			key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
+	if name, namespace, ok := backendSecurityPolicySecretRef(backendSecurityPolicy); ok {
+		key = fmt.Sprintf("%s.%s", name, namespace)
+	} else {
+		switch backendSecurityPolicy.Spec.Type {
+		case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
+			if backendSecurityPolicy.Spec.AWSCredentials.OIDCExchangeToken != nil {
+				key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
+			}
+		case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
+			if backendSecurityPolicy.Spec.AzureCredentials.OIDCExchangeToken != nil {
+				key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
+			}
 		}
 	}
 	return []string{key}
+}
+
+// backendSecurityPolicySecretRef returns the name and namespace of the Secret directly referenced by a
+// BackendSecurityPolicy's static credential fields, and whether one is set. OIDC-based credential types
+// don't have a fixed target Secret here (see backendSecurityPolicyIndexFunc, which keys those by the
+// BackendSecurityPolicy itself instead) and are excluded.
+func backendSecurityPolicySecretRef(bsp *aigv1b1.BackendSecurityPolicy) (name, namespace string, ok bool) {
+	var secretRef *gwapiv1.SecretObjectReference
+	switch bsp.Spec.Type {
+	case aigv1b1.BackendSecurityPolicyTypeAPIKey:
+		secretRef = bsp.Spec.APIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
+		if bsp.Spec.AWSCredentials.CredentialsFile != nil {
+			secretRef = bsp.Spec.AWSCredentials.CredentialsFile.SecretRef
+		}
+	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
+		if bsp.Spec.GCPCredentials.CredentialsFile != nil {
+			secretRef = bsp.Spec.GCPCredentials.CredentialsFile.SecretRef
+		}
+	case aigv1b1.BackendSecurityPolicyTypeAzureAPIKey:
+		secretRef = bsp.Spec.AzureAPIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
+		secretRef = bsp.Spec.AnthropicAPIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
+		if bsp.Spec.AzureCredentials.ClientSecretRef != nil {
+			secretRef = bsp.Spec.AzureCredentials.ClientSecretRef
+		}
+	}
+	if secretRef == nil {
+		return "", "", false
+	}
+	namespace = bsp.Namespace
+	if secretRef.Namespace != nil {
+		namespace = string(*secretRef.Namespace)
+	}
+	return string(secretRef.Name), namespace, true
 }
 
 func backendSecurityPolicyTargetRefsIndexFunc(o client.Object) []string {
@@ -521,13 +541,6 @@ func quotaPolicyTargetRefsIndexFunc(o client.Object) []string {
 		ret = append(ret, fmt.Sprintf("%s.%s", targetRef.Name, quotaPolicy.Namespace))
 	}
 	return ret
-}
-
-func getSecretNameAndNamespace(secretRef *gwapiv1.SecretObjectReference, namespace string) string {
-	if secretRef.Namespace != nil {
-		return fmt.Sprintf("%s.%s", secretRef.Name, *secretRef.Namespace)
-	}
-	return fmt.Sprintf("%s.%s", secretRef.Name, namespace)
 }
 
 func getReferenceGrantIndexKey(namespace, kind string) string {

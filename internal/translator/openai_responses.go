@@ -171,20 +171,16 @@ func setTokenUsageFromResponse(tokenUsage *metrics.TokenUsage, resp *openai.Resp
 // response.incomplete or response.failed events.
 func (o *openAIToOpenAITranslatorV1Responses) extractUsageFromBufferEvent(span tracingapi.ResponsesSpan) (tokenUsage metrics.TokenUsage) {
 	for {
-		// SSE event boundary is a blank line: "data: {json}\n\n".
-		i := bytes.Index(o.buffered, []byte("\n\n"))
-		if i == -1 {
+		event, remaining, ok := nextSSEEvent(o.buffered)
+		if !ok {
 			return tokenUsage
 		}
-		event := o.buffered[:i]
-		o.buffered = o.buffered[i+2:]
+		o.buffered = remaining
 		for line := range bytes.SplitSeq(event, []byte("\n")) {
-			// Look for lines carrying the "data" field.
 			data, ok := cutSSEDataPrefix(line)
 			if !ok {
 				continue
 			}
-
 			if len(data) == 0 || bytes.Equal(data, sseDoneMessage) {
 				continue
 			}
