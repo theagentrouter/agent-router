@@ -711,8 +711,12 @@ func (s *Server) maybeModifyListenerAndRoutes(listeners []*listenerv3.Listener, 
 	}
 
 	// listenerToInferencePools builds a matrix of listeners and the inference pools they use.
+	// routeNameToVHRouteNameToInferencePool is keyed per route match, so a pool reached by
+	// several matches appears several times. A pool needs exactly one ext proc filter per
+	// listener, so deduplicate here.
 	listenerToInferencePools := make(map[string][]*gwaiev1.InferencePool)
 	for listener, routeCfgNames := range listenerNameToRouteNames {
+		seen := make(map[string]struct{})
 		for _, name := range routeCfgNames {
 			if routeNameToRoute[name] == nil {
 				continue
@@ -721,6 +725,11 @@ func (s *Server) maybeModifyListenerAndRoutes(listeners []*listenerv3.Listener, 
 				continue
 			}
 			for _, pool := range routeNameToVHRouteNameToInferencePool[name] {
+				key := pool.Namespace + "/" + pool.Name
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
 				if listenerToInferencePools[listener] == nil {
 					listenerToInferencePools[listener] = make([]*gwaiev1.InferencePool, 0)
 				}
@@ -788,7 +797,14 @@ func (s *Server) patchListenerWithInferencePoolFilters(listener *listenerv3.List
 			continue
 		}
 		var poolFilters []*httpconnectionmanagerv3.HttpFilter
+		// poolFilters is spliced into httpConManager.HttpFilters only after this loop, so the
+		// search below cannot see what the loop already added. Track those names separately.
+		added := make(map[string]struct{})
 		for _, pool := range inferencePools {
+			filterName := httpFilterNameForInferencePool(pool)
+			if _, ok := added[filterName]; ok {
+				continue
+			}
 			_, baIndex, searchErr := searchInferencePoolInFilterChain(pool, httpConManager.HttpFilters)
 			if searchErr != nil {
 				s.log.Error(searchErr, "failed to find an inference pool ext proc filter")
@@ -802,6 +818,7 @@ func (s *Server) patchListenerWithInferencePoolFilters(listener *listenerv3.List
 					s.log.Error(err, "failed to build inference pool ext proc filter", "pool", pool.Name)
 					continue
 				}
+				added[filterName] = struct{}{}
 				poolFilters = append(poolFilters, eppExtProc)
 			}
 		}
