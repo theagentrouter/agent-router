@@ -282,6 +282,41 @@ func TestQuotaPolicyController_Reconcile_Deletion(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestQuotaPolicyController_Reconcile_FinalizerError(t *testing.T) {
+	baseClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	policy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "deleting-policy",
+			Namespace: "default",
+		},
+	}
+	require.NoError(t, baseClient.Create(t.Context(), policy))
+
+	clientWithFinalizerError := &finalizerGetErrorClient{
+		Client:       baseClient,
+		err:          context.Canceled,
+		allowGets:    2,
+		markDeleting: true,
+	}
+	var fetchedPolicy aigv1a1.QuotaPolicy
+	require.NoError(t, clientWithFinalizerError.Get(t.Context(), client.ObjectKeyFromObject(policy), &fetchedPolicy))
+	require.NotEmpty(t, fetchedPolicy.Finalizers)
+	require.False(t, fetchedPolicy.DeletionTimestamp.IsZero())
+
+	c := NewQuotaPolicyController(
+		clientWithFinalizerError,
+		fake2.NewClientset(),
+		ctrl.Log,
+		runner.New(ctrl.Log, 0),
+		make(chan event.GenericEvent, 1),
+	)
+	_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{
+		Namespace: policy.Namespace,
+		Name:      policy.Name,
+	}})
+	require.Error(t, err)
+}
+
 func TestQuotaPolicyController_Reconcile_MultipleBackends(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
 	rateLimitRunner := newTestRunner(t)

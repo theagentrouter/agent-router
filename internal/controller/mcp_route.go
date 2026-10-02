@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -40,9 +41,10 @@ const (
 //
 // Exported for testing purposes.
 type MCPRouteController struct {
-	client client.Client
-	kube   kubernetes.Interface
-	logger logr.Logger
+	client    client.Client
+	apiReader client.Reader
+	kube      kubernetes.Interface
+	logger    logr.Logger
 	// gatewayEventChan is a channel to send events to the gateway controller.
 	gatewayEventChan chan event.GenericEvent
 }
@@ -54,6 +56,7 @@ func NewMCPRouteController(
 ) *MCPRouteController {
 	return &MCPRouteController{
 		client:           client,
+		apiReader:        client,
 		kube:             kube,
 		logger:           logger,
 		gatewayEventChan: gatewayEventChan,
@@ -76,10 +79,14 @@ func (c *MCPRouteController) Reconcile(ctx context.Context, req reconcile.Reques
 
 	if err := c.syncMCPRoute(ctx, &MCPRoute); err != nil {
 		c.logger.Error(err, "failed to sync MCPRoute")
-		c.updateMCPRouteStatus(ctx, &MCPRoute, aigv1b1.ConditionTypeNotAccepted, err.Error())
+		if MCPRoute.DeletionTimestamp.IsZero() {
+			c.updateMCPRouteStatus(ctx, &MCPRoute, aigv1b1.ConditionTypeNotAccepted, err.Error())
+		}
 		return ctrl.Result{}, err
 	}
-	c.updateMCPRouteStatus(ctx, &MCPRoute, aigv1b1.ConditionTypeAccepted, "MCP Gateway Route reconciled successfully")
+	if MCPRoute.DeletionTimestamp.IsZero() {
+		c.updateMCPRouteStatus(ctx, &MCPRoute, aigv1b1.ConditionTypeAccepted, "MCP Gateway Route reconciled successfully")
+	}
 	return reconcile.Result{}, nil
 }
 
@@ -88,7 +95,11 @@ func (c *MCPRouteController) Reconcile(ctx context.Context, req reconcile.Reques
 func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
 	// On deletion, propagate to the referenced Gateways and clean up the shared Backend if this
 	// is the last MCPRoute in the namespace.
-	if handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted) {
+	onDelete, err := handleFinalizer(ctx, c.client, c.apiReader, mcpRoute, c.onMCPRouteDeleted)
+	if err != nil {
+		return err
+	}
+	if onDelete {
 		return nil
 	}
 
@@ -501,8 +512,7 @@ func (c *MCPRouteController) syncGateway(ctx context.Context, namespace, name st
 		return fmt.Errorf("failed to get Gateway %s/%s: %w", namespace, name, err)
 	}
 	c.logger.Info("Syncing Gateway", "namespace", gw.Namespace, "name", gw.Name)
-	c.gatewayEventChan <- event.GenericEvent{Object: &gw}
-	return nil
+	return enqueueGenericEvent(c.gatewayEventChan, &gw)
 }
 
 // updateMCPRouteStatus updates the status of the MCPRoute.
@@ -579,53 +589,53 @@ func (c *MCPRouteController) ensureMCPProxyBackend(ctx context.Context, namespac
 // onMCPRouteDeleted runs from the finalizer when an MCPRoute is being deleted: it propagates the
 // deletion to the referenced Gateways and, if this was the last live MCPRoute in the namespace,
 // removes the shared MCP proxy Backend.
+//
+// This callback MUST be idempotent: handleFinalizer re-runs it on every requeue until the
+// finalizer is gone. Errors (including cleanup failures) abort finalizer removal so the
+// object is retried. A successor MCPRoute created between attempts must not lose its Backend.
 func (c *MCPRouteController) onMCPRouteDeleted(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
-	// Run the shared-Backend cleanup even if propagating to Gateways fails. handleFinalizer removes
-	// the finalizer regardless of the returned error, so this is the only chance to avoid leaking
-	// the Backend; skipping it on a transient syncGateways error would orphan it for good.
-	syncErr := c.syncGateways(ctx, mcpRoute)
-	c.cleanupSharedMCPProxyBackend(ctx, mcpRoute)
-	return syncErr
+	// Run cleanup even if Gateway propagation fails so a transient sync error cannot leak
+	// the Backend; Join keeps both errors so either failure retains the finalizer.
+	return errors.Join(c.syncGateways(ctx, mcpRoute), c.cleanupSharedMCPProxyBackend(ctx, mcpRoute))
 }
 
 // cleanupSharedMCPProxyBackend deletes the shared MCP proxy Backend once the MCPRoute being
-// deleted is the last live one in its namespace. Best-effort: if a concurrent delete leaves the
-// Backend behind it is harmless — it is a single placeholder and the next MCPRoute in the
-// namespace reuses it via ensureMCPProxyBackend.
-func (c *MCPRouteController) cleanupSharedMCPProxyBackend(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) {
+// deleted is the last live one in its namespace. List/Get use the API reader so a stale
+// informer cannot miss a successor route. A Backend created at or after this route's
+// deletionTimestamp belongs to a successor and is left alone.
+func (c *MCPRouteController) cleanupSharedMCPProxyBackend(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
+	reader := c.apiReader
+	if reader == nil {
+		reader = c.client
+	}
 	var routes aigv1b1.MCPRouteList
-	if err := c.client.List(ctx, &routes, client.InNamespace(mcpRoute.Namespace)); err != nil {
-		c.logger.Error(err, "failed to list MCPRoutes for shared Backend cleanup", "namespace", mcpRoute.Namespace)
-		return
+	if err := reader.List(ctx, &routes, client.InNamespace(mcpRoute.Namespace)); err != nil {
+		return fmt.Errorf("list MCPRoutes for shared Backend cleanup: %w", err)
 	}
 	for i := range routes.Items {
 		r := &routes.Items[i]
-		// Keep the Backend if any other MCPRoute in the namespace is still live (not being deleted).
-		// The list is namespace-scoped, so name uniquely identifies the route being deleted.
-		if r.Name != mcpRoute.Name && r.GetDeletionTimestamp().IsZero() {
-			return
+		// Fake clients often leave UID empty; fall back to name. Two live
+		// MCPRoutes cannot share a name, so this cannot skip a successor.
+		isSelf := (mcpRoute.UID != "" && r.UID == mcpRoute.UID) ||
+			(mcpRoute.UID == "" && r.Name == mcpRoute.Name)
+		if !isSelf && r.GetDeletionTimestamp().IsZero() {
+			return nil
 		}
 	}
-	// Fetch first and only delete a Backend we created: a user may own a Backend that happens to
-	// share the fixed name, and it lacks our managed-by label. Deleting it would not be ours to do.
 	var backend egv1a1.Backend
-	if err := c.client.Get(ctx, client.ObjectKey{Name: mcpProxySharedBackendName, Namespace: mcpRoute.Namespace}, &backend); err != nil {
-		if !apierrors.IsNotFound(err) {
-			c.logger.Error(err, "failed to get shared MCP proxy Backend for cleanup", "name", mcpProxySharedBackendName)
-		}
-		return
+	if err := reader.Get(ctx, client.ObjectKey{Name: mcpProxySharedBackendName, Namespace: mcpRoute.Namespace}, &backend); err != nil {
+		return client.IgnoreNotFound(err)
 	}
 	if backend.Labels[managedByLabel] != managedByValue {
-		return // Not created by us — leave it alone.
+		return nil
 	}
-	// The owned main HTTPRoute that references this Backend is garbage-collected asynchronously after
-	// the MCPRoute is gone, so there is a brief window where it dangles; harmless, as the whole route
-	// is being torn down.
+	if ts := mcpRoute.GetDeletionTimestamp(); ts != nil && !backend.CreationTimestamp.Time.Before(ts.Time) {
+		// Recreated after we started deleting — belongs to a successor MCPRoute.
+		return nil
+	}
 	c.logger.Info("Deleting shared MCP proxy Backend (last MCPRoute in namespace removed)",
 		"namespace", mcpRoute.Namespace, "name", mcpProxySharedBackendName)
-	if err := c.client.Delete(ctx, &backend); err != nil && !apierrors.IsNotFound(err) {
-		c.logger.Error(err, "failed to delete shared MCP proxy Backend", "name", mcpProxySharedBackendName)
-	}
+	return client.IgnoreNotFound(c.client.Delete(ctx, &backend))
 }
 
 // deleteOldMCPRouteBackend deletes the legacy per-MCPRoute Backend if it still exists and is

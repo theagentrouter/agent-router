@@ -30,6 +30,7 @@ import (
 // QuotaPolicyController implements [reconcile.TypedReconciler] for [aigv1a1.QuotaPolicy].
 type QuotaPolicyController struct {
 	client             client.Client
+	apiReader          client.Reader
 	kube               kubernetes.Interface
 	logger             logr.Logger
 	rateLimitRunner    *runner.Runner
@@ -50,6 +51,7 @@ func NewQuotaPolicyController(
 ) *QuotaPolicyController {
 	return &QuotaPolicyController{
 		client:             client,
+		apiReader:          client,
 		kube:               kube,
 		logger:             logger,
 		rateLimitRunner:    rateLimitRunner,
@@ -75,9 +77,13 @@ func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Req
 	}
 	c.logger.Info("Reconciling QuotaPolicy", "namespace", req.Namespace, "name", req.Name)
 
-	if handleFinalizer(ctx, c.client, c.logger, &quotaPolicy, func(ctx context.Context, _ *aigv1a1.QuotaPolicy) error {
+	onDelete, err := handleFinalizer(ctx, c.client, c.apiReader, &quotaPolicy, func(ctx context.Context, _ *aigv1a1.QuotaPolicy) error {
 		return c.deleteQuotaPolicyConfig(ctx, req.NamespacedName)
-	}) {
+	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if onDelete {
 		return ctrl.Result{}, nil
 	}
 
@@ -226,7 +232,10 @@ func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, polic
 			c.logger.Info("notifying AIGatewayRoute of QuotaPolicy change",
 				"route", route.Name, "namespace", route.Namespace,
 				"quotaPolicy", policy.Name)
-			c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+			if err := enqueueGenericEvent(c.aiGatewayRouteChan, route); err != nil {
+				c.logger.Error(err, "failed to notify AIGatewayRoute of QuotaPolicy change",
+					"route", route.Name, "namespace", route.Namespace)
+			}
 		}
 	}
 }
@@ -244,7 +253,10 @@ func (c *QuotaPolicyController) notifyAllAIGatewayRoutesInNamespace(ctx context.
 		route := &aiGatewayRoutes.Items[i]
 		c.logger.Info("notifying AIGatewayRoute of QuotaPolicy deletion",
 			"route", route.Name, "namespace", route.Namespace)
-		c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+		if err := enqueueGenericEvent(c.aiGatewayRouteChan, route); err != nil {
+			c.logger.Error(err, "failed to notify AIGatewayRoute of QuotaPolicy deletion",
+				"route", route.Name, "namespace", route.Namespace)
+		}
 	}
 }
 
