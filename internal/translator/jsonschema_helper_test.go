@@ -460,6 +460,22 @@ func exponentialRefSchema(levels int) map[string]any {
 	return map[string]any{"$defs": defs, "$ref": fmt.Sprintf("#/$defs/d%d", levels)}
 }
 
+// exponentialAnyOfRefSchema is like exponentialRefSchema, but the duplicated $refs are elements
+// of an anyOf list instead of object properties.
+func exponentialAnyOfRefSchema(levels int) map[string]any {
+	defs := map[string]any{"d0": map[string]any{"type": "string"}}
+	for i := 1; i <= levels; i++ {
+		ref := fmt.Sprintf("#/$defs/d%d", i-1)
+		defs[fmt.Sprintf("d%d", i)] = map[string]any{
+			"anyOf": []any{
+				map[string]any{"$ref": ref},
+				map[string]any{"$ref": ref},
+			},
+		}
+	}
+	return map[string]any{"$defs": defs, "$ref": fmt.Sprintf("#/$defs/d%d", levels)}
+}
+
 func TestJsonSchemaDereferenceNodeLimit(t *testing.T) {
 	t.Run("small expansion is allowed", func(t *testing.T) {
 		_, err := jsonSchemaDereference(exponentialRefSchema(8))
@@ -469,6 +485,18 @@ func TestJsonSchemaDereferenceNodeLimit(t *testing.T) {
 	t.Run("exponential expansion is rejected", func(t *testing.T) {
 		start := time.Now()
 		_, err := jsonSchemaDereference(exponentialRefSchema(40))
+		require.ErrorIs(t, err, errJSONSchemaMaxNodesExceeded)
+		require.Less(t, time.Since(start), 5*time.Second)
+	})
+
+	t.Run("small anyOf expansion is allowed", func(t *testing.T) {
+		_, err := jsonSchemaDereference(exponentialAnyOfRefSchema(8))
+		require.NoError(t, err)
+	})
+
+	t.Run("exponential anyOf expansion is rejected", func(t *testing.T) {
+		start := time.Now()
+		_, err := jsonSchemaDereference(exponentialAnyOfRefSchema(30))
 		require.ErrorIs(t, err, errJSONSchemaMaxNodesExceeded)
 		require.Less(t, time.Since(start), 5*time.Second)
 	})
