@@ -68,8 +68,7 @@ func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Req
 			if err = c.deleteQuotaPolicyConfig(ctx, req.NamespacedName); err != nil {
 				return ctrl.Result{}, err
 			}
-			c.notifyAllAIGatewayRoutesInNamespace(ctx, req.Namespace)
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, c.notifyAIGatewayRoutesForNamespace(ctx, req.Namespace)
 		}
 		return ctrl.Result{}, err
 	}
@@ -191,7 +190,7 @@ func (c *QuotaPolicyController) getMergedConfigsLocked() []*rlsconfv3.RateLimitC
 // when an AIServiceBackend changes, all QuotaPolicies targeting it are re-reconciled.
 func (c *QuotaPolicyController) BackendToQuotaPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
 	var quotaPolicies aigv1a1.QuotaPolicyList
-	key := fmt.Sprintf("%s.%s", obj.GetName(), obj.GetNamespace())
+	key := namespacedNameIndexKey(obj.GetName(), obj.GetNamespace())
 	if err := c.client.List(ctx, &quotaPolicies,
 		client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: key}); err != nil {
 		c.logger.Error(err, "failed to list QuotaPolicies for backend", "backend", key)
@@ -214,7 +213,7 @@ func (c *QuotaPolicyController) BackendToQuotaPolicy(ctx context.Context, obj cl
 // to re-translate xDS and call PostTranslateModify with the updated QuotaPolicy.
 func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, policy *aigv1a1.QuotaPolicy) {
 	for _, ref := range policy.Spec.TargetRefs {
-		key := fmt.Sprintf("%s.%s", ref.Name, policy.Namespace)
+		key := namespacedNameIndexKey(string(ref.Name), policy.Namespace)
 		var aiGatewayRoutes aigv1b1.AIGatewayRouteList
 		if err := c.client.List(ctx, &aiGatewayRoutes,
 			client.MatchingFields{k8sClientIndexBackendToReferencingAIGatewayRoute: key}); err != nil {
@@ -231,21 +230,35 @@ func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, polic
 	}
 }
 
-// notifyAllAIGatewayRoutesInNamespace sends events for all AIGatewayRoutes in
-// the given namespace. Used on QuotaPolicy deletion when targetRefs are no
-// longer available.
-func (c *QuotaPolicyController) notifyAllAIGatewayRoutesInNamespace(ctx context.Context, namespace string) {
-	var aiGatewayRoutes aigv1b1.AIGatewayRouteList
-	if err := c.client.List(ctx, &aiGatewayRoutes, client.InNamespace(namespace)); err != nil {
-		c.logger.Error(err, "failed to list AIGatewayRoutes in namespace", "namespace", namespace)
-		return
+// notifyAIGatewayRoutesForNamespace sends one event for each AIGatewayRoute that
+// references an AIServiceBackend in the given namespace, wherever the route lives.
+// Used on QuotaPolicy deletion when targetRefs are no longer available.
+func (c *QuotaPolicyController) notifyAIGatewayRoutesForNamespace(ctx context.Context, namespace string) error {
+	var backends aigv1b1.AIServiceBackendList
+	if err := c.client.List(ctx, &backends, client.InNamespace(namespace)); err != nil {
+		return fmt.Errorf("failed to list AIServiceBackends in namespace %s: %w", namespace, err)
 	}
-	for i := range aiGatewayRoutes.Items {
-		route := &aiGatewayRoutes.Items[i]
-		c.logger.Info("notifying AIGatewayRoute of QuotaPolicy deletion",
-			"route", route.Name, "namespace", route.Namespace)
-		c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+	notified := make(map[client.ObjectKey]struct{})
+	for i := range backends.Items {
+		key := namespacedNameIndexKey(backends.Items[i].Name, namespace)
+		var aiGatewayRoutes aigv1b1.AIGatewayRouteList
+		if err := c.client.List(ctx, &aiGatewayRoutes,
+			client.MatchingFields{k8sClientIndexBackendToReferencingAIGatewayRoute: key}); err != nil {
+			return fmt.Errorf("failed to list AIGatewayRoutes for backend %s: %w", key, err)
+		}
+		for j := range aiGatewayRoutes.Items {
+			route := &aiGatewayRoutes.Items[j]
+			routeKey := client.ObjectKeyFromObject(route)
+			if _, ok := notified[routeKey]; ok {
+				continue
+			}
+			notified[routeKey] = struct{}{}
+			c.logger.Info("notifying AIGatewayRoute of QuotaPolicy deletion",
+				"route", route.Name, "namespace", route.Namespace)
+			c.aiGatewayRouteChan <- event.GenericEvent{Object: route}
+		}
 	}
+	return nil
 }
 
 // updateQuotaPolicyStatus updates the status of the QuotaPolicy.
