@@ -455,6 +455,11 @@ func aiGatewayRouteToAttachedGatewayIndexFunc(o client.Object) []string {
 	return ret
 }
 
+// namespacedNameIndexKey returns the "name.namespace" key used by the field indexes.
+func namespacedNameIndexKey(name, namespace string) string {
+	return fmt.Sprintf("%s.%s", name, namespace)
+}
+
 func aiGatewayRouteIndexFunc(o client.Object) []string {
 	aiGatewayRoute := o.(*aigv1b1.AIGatewayRoute)
 	var ret []string
@@ -462,7 +467,7 @@ func aiGatewayRouteIndexFunc(o client.Object) []string {
 		for _, backend := range rule.BackendRefs {
 			// Use the namespace from the backend reference, or default to the route's namespace
 			backendNamespace := backend.GetNamespace(aiGatewayRoute.Namespace)
-			key := fmt.Sprintf("%s.%s", backend.Name, backendNamespace)
+			key := namespacedNameIndexKey(backend.Name, backendNamespace)
 			ret = append(ret, key)
 		}
 	}
@@ -538,7 +543,7 @@ func quotaPolicyTargetRefsIndexFunc(o client.Object) []string {
 	quotaPolicy := o.(*aigv1a1.QuotaPolicy)
 	var ret []string
 	for _, targetRef := range quotaPolicy.Spec.TargetRefs {
-		ret = append(ret, fmt.Sprintf("%s.%s", targetRef.Name, quotaPolicy.Namespace))
+		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), quotaPolicy.Namespace))
 	}
 	return ret
 }
