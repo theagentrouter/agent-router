@@ -900,29 +900,20 @@ func (m *mcpRequestContext) maybeUpdateProgressTokenMetadata(ctx context.Context
 }
 
 // maybeResponseModify modifies the client->server response to include the backend name where needed.
+// URI rewriting uses the same raw-JSON helpers as the modern path so unknown
+// fields on tools/call and resources/read results are preserved.
 func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.Request, msg *jsonrpc.Response, backend filterapi.MCPBackendName) error {
 	if msg.Result == nil {
 		return nil
 	}
 	switch req.Method {
 	case "resources/read":
-		result := &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{}}
-		if err := json.Unmarshal(msg.Result, result); err != nil {
-			return fmt.Errorf("failed to unmarshal resources/read result: %w", err)
+		if rewritten, ok := rewriteResourcesReadURIs(json.RawMessage(msg.Result), backend); ok {
+			msg.Result = []byte(rewritten)
 		}
-		for _, res := range result.Contents {
-			res.URI = downstreamResourceURI(res.URI, backend)
-		}
-		msg.Result, _ = json.Marshal(result) // Already decoded result, so ignore error.
 	case "tools/call":
-		result := &mcp.CallToolResult{}
-		if err := json.Unmarshal(msg.Result, result); err != nil {
-			// Non-standard result shape: pass through unchanged since the backend owns this payload.
-			m.l.Debug("tools/call result is not a standard CallToolResult, skipping URI rewrite", slog.String("error", err.Error()))
-			return nil
-		}
-		if rewriteToolResultURIs(result, backend) {
-			msg.Result, _ = json.Marshal(result) // Already decoded result, so ignore error.
+		if rewritten, ok := rewriteToolsCallResult(json.RawMessage(msg.Result), backend); ok {
+			msg.Result = []byte(rewritten)
 		}
 	}
 	return nil

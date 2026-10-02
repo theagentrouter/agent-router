@@ -126,8 +126,8 @@ func (m *mcpEnv) newSessionOTel(t *testing.T) *mcpSession {
 	t.Helper()
 	s := m.newSessionWithoutSpanCheck(t)
 
-	span := m.collector.TakeSpan()
-	require.Equal(t, "initialize", span.Name)
+	// go-sdk v1.7+ may emit a server/discover probe span before initialize.
+	span := takeSpanNamed(t, m.collector, "initialize")
 	attrs := otelSpanAttributes(t, span)
 	require.Equal(t, "initialize", attrs["mcp.method.name"])
 	require.Equal(t, "demo-http-client", attrs["mcp.client.name"])
