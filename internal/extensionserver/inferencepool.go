@@ -85,19 +85,39 @@ func (s *Server) constructInferencePoolsFrom(extensionResources []*egextension.E
 	return inferencePools
 }
 
-// getInferencePoolByMetadata returns the InferencePool from the cluster metadata.
-func getInferencePoolByMetadata(meta *corev3.Metadata) *gwaiev1.InferencePool {
-	var metadata string
-	if meta != nil && meta.FilterMetadata != nil {
-		m, ok := meta.FilterMetadata[internalapi.InternalEndpointMetadataNamespace]
-		if ok && m.Fields != nil {
-			v, ok := m.Fields[internalMetadataInferencePoolKey]
-			if ok {
-				metadata = v.GetStringValue()
-			}
+// getInferencePoolsByMetadata returns the InferencePools stored in the given cluster or route
+// metadata. A cluster or route can reference more than one InferencePool: when Envoy Gateway
+// merges a rule's weighted custom-backend (e.g. InferencePool) backendRefs, it emits a single
+// Envoy cluster/route for all of them since Envoy Gateway doesn't support WeightedClusters for
+// custom backend kinds.
+func getInferencePoolsByMetadata(meta *corev3.Metadata) []*gwaiev1.InferencePool {
+	if meta == nil || meta.FilterMetadata == nil {
+		return nil
+	}
+	m, ok := meta.FilterMetadata[internalapi.InternalEndpointMetadataNamespace]
+	if !ok || m.Fields == nil {
+		return nil
+	}
+	v, ok := m.Fields[internalMetadataInferencePoolKey]
+	if !ok {
+		return nil
+	}
+	list := v.GetListValue()
+	if list == nil {
+		return nil
+	}
+	pools := make([]*gwaiev1.InferencePool, 0, len(list.Values))
+	for _, item := range list.Values {
+		if pool := parseInferencePoolMetadataString(item.GetStringValue()); pool != nil {
+			pools = append(pools, pool)
 		}
 	}
+	return pools
+}
 
+// parseInferencePoolMetadataString parses a single InferencePool reference encoded by
+// buildEPPMetadata as "namespace/name/serviceName/port/bodyMode/allowModeOverride".
+func parseInferencePoolMetadataString(metadata string) *gwaiev1.InferencePool {
 	result := strings.Split(metadata, "/")
 	if len(result) != 6 {
 		return nil
@@ -129,27 +149,27 @@ func getInferencePoolByMetadata(meta *corev3.Metadata) *gwaiev1.InferencePool {
 	}
 }
 
-// buildMetadataForInferencePool adds InferencePool metadata to the cluster for reference by other components.
-// encoded as a string in the format: "namespace/name/serviceName/port/bodyMode/allowModeOverride".
-func buildEPPMetadataForCluster(cluster *clusterv3.Cluster, inferencePool *gwaiev1.InferencePool) {
+// buildEPPMetadataForCluster adds InferencePool metadata to the cluster for reference by other components.
+func buildEPPMetadataForCluster(cluster *clusterv3.Cluster, inferencePools []*gwaiev1.InferencePool) {
 	// Initialize cluster metadata structure if not present.
 	if cluster.Metadata == nil {
 		cluster.Metadata = &corev3.Metadata{}
 	}
-	buildEPPMetadata(cluster.Metadata, inferencePool)
+	buildEPPMetadata(cluster.Metadata, inferencePools)
 }
 
-// buildMetadataForInferencePool adds InferencePool metadata to the route for reference by other components.
-func buildEPPMetadataForRoute(route *routev3.Route, inferencePool *gwaiev1.InferencePool) {
+// buildEPPMetadataForRoute adds InferencePool metadata to the route for reference by other components.
+func buildEPPMetadataForRoute(route *routev3.Route, inferencePools []*gwaiev1.InferencePool) {
 	// Initialize route metadata structure if not present.
 	if route.Metadata == nil {
 		route.Metadata = &corev3.Metadata{}
 	}
-	buildEPPMetadata(route.Metadata, inferencePool)
+	buildEPPMetadata(route.Metadata, inferencePools)
 }
 
-// buildEPPMetadata adds InferencePool metadata to the given metadata structure.
-func buildEPPMetadata(metadata *corev3.Metadata, inferencePool *gwaiev1.InferencePool) {
+// buildEPPMetadata adds a reference to every given InferencePool to the given metadata structure,
+// one encoded string per pool, so getInferencePoolsByMetadata can recover the full set later.
+func buildEPPMetadata(metadata *corev3.Metadata, inferencePools []*gwaiev1.InferencePool) {
 	if metadata.FilterMetadata == nil {
 		metadata.FilterMetadata = make(map[string]*structpb.Struct)
 	}
@@ -164,31 +184,42 @@ func buildEPPMetadata(metadata *corev3.Metadata, inferencePool *gwaiev1.Inferenc
 		m.Fields = make(map[string]*structpb.Value)
 	}
 
-	// Read processing body mode from annotations, default to "duplex" (FULL_DUPLEX_STREAMED)
-	processingBodyMode := getProcessingBodyModeStringFromAnnotations(inferencePool)
-	// Read allow mode override from annotations, default to false
-	allowModeOverride := getAllowModeOverrideStringFromAnnotations(inferencePool)
-
-	// Store InferencePool reference as metadata for later retrieval.
-	// The reference includes all information needed to build EPP clusters and filters.
-	m.Fields[internalMetadataInferencePoolKey] = structpb.NewStringValue(
-		clusterRefInferencePool(
-			inferencePool.Namespace,
-			inferencePool.Name,
-			string(inferencePool.Spec.EndpointPickerRef.Name),
-			portForInferencePool(inferencePool),
-			processingBodyMode,
-			allowModeOverride,
-		),
-	)
+	// Store a reference to each InferencePool as metadata for later retrieval.
+	// Each reference includes all information needed to build EPP clusters and filters.
+	values := make([]*structpb.Value, 0, len(inferencePools))
+	for _, inferencePool := range inferencePools {
+		// Read processing body mode from annotations, default to "duplex" (FULL_DUPLEX_STREAMED)
+		processingBodyMode := getProcessingBodyModeStringFromAnnotations(inferencePool)
+		// Read allow mode override from annotations, default to false
+		allowModeOverride := getAllowModeOverrideStringFromAnnotations(inferencePool)
+		values = append(values, structpb.NewStringValue(
+			clusterRefInferencePool(
+				inferencePool.Namespace,
+				inferencePool.Name,
+				string(inferencePool.Spec.EndpointPickerRef.Name),
+				portForInferencePool(inferencePool),
+				processingBodyMode,
+				allowModeOverride,
+			),
+		))
+	}
+	m.Fields[internalMetadataInferencePoolKey] = structpb.NewListValue(&structpb.ListValue{Values: values})
 }
 
 // buildClustersForInferencePoolEndpointPickers builds and returns a "STRICT_DNS" cluster
-// for each InferencePool's endpoint picker service.
+// for each distinct InferencePool's endpoint picker service referenced by the given clusters,
+// deduplicated by cluster name: a single merged cluster can reference 2+ pools, and two
+// different clusters can reference the same pool.
 func buildClustersForInferencePoolEndpointPickers(clusters []*clusterv3.Cluster) ([]*clusterv3.Cluster, error) {
 	result := make([]*clusterv3.Cluster, 0, len(clusters))
+	seen := make(map[string]struct{})
 	for _, cluster := range clusters {
-		if pool := getInferencePoolByMetadata(cluster.Metadata); pool != nil {
+		for _, pool := range getInferencePoolsByMetadata(cluster.Metadata) {
+			name := clusterNameForInferencePool(pool)
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
 			c, err := buildExtProcClusterForInferencePoolEndpointPicker(pool)
 			if err != nil {
 				return nil, err

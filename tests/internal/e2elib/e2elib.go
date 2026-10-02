@@ -51,6 +51,16 @@ var KeepCluster = func() bool {
 	return v == "true"
 }()
 
+// By default, SetupAll creates the kind cluster and installs the Envoy Gateway, the AI Gateway, and
+// any other test dependencies from scratch. The TEST_SKIP_SETUP environment variable can be set to
+// "true" to skip all of that and reuse an already set up environment instead - for example, a kind
+// cluster left running from a previous run via TEST_KEEP_CLUSTER=true. This is useful when iterating
+// on the tests themselves, since it avoids paying the setup cost on every run.
+var SkipSetup = func() bool {
+	v, _ := os.LookupEnv("TEST_SKIP_SETUP")
+	return v == "true"
+}()
+
 func initLog(msg string) {
 	fmt.Printf("\u001b[32m=== INIT LOG: %s\u001B[0m\n", msg)
 }
@@ -86,7 +96,7 @@ func (a *AIGatewayHelmOption) GetNamespace() string {
 // Inference Pool resources, and the Envoy Gateway configuration which are required for the tests.
 func TestMain(m *testing.M, aigwOpts AIGatewayHelmOption, inferenceExtension, needPrometheus bool) {
 	const defaultKindClusterName = "envoy-ai-gateway"
-	err := SetupAll(context.Background(), defaultKindClusterName, aigwOpts, inferenceExtension, needPrometheus)
+	err := SetupAll(context.TODO(), defaultKindClusterName, aigwOpts, inferenceExtension, needPrometheus)
 	if err != nil {
 		CleanupKindCluster(true, defaultKindClusterName)
 		fmt.Printf("Failed to set up the test environment: %v\n", err)
@@ -99,6 +109,10 @@ func TestMain(m *testing.M, aigwOpts AIGatewayHelmOption, inferenceExtension, ne
 
 // SetupAll sets up the kind cluster, installs the Envoy Gateway, and installs the AI Gateway.
 func SetupAll(ctx context.Context, clusterName string, aigwOpts AIGatewayHelmOption, inferenceExtension, needPrometheus bool) error {
+	if SkipSetup {
+		fmt.Printf("Skipped to set up the test environment")
+		return nil
+	}
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithDeadline(ctx, time.Now().Add(5*time.Minute))
 	defer cancel()
