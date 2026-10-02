@@ -1724,45 +1724,29 @@ type ErrorType struct {
 	EventID *string `json:"event_id,omitempty"`
 }
 
-// UnmarshalJSON allows OpenAI-compatible backends to provide `error.code` as either a JSON string or number.
+// UnmarshalJSON implements json.Unmarshaler for ErrorType. Some OpenAI-compatible
+// backends (e.g. vLLM) do not always follow the OpenAI error schema and can send a
+// non-string value (e.g. a number) for a field documented as a string. A strict
+// struct-tag based unmarshal would fail on such a mismatch and drop the whole error
+// body, so each field is read leniently and coerced to its string representation.
 func (e *ErrorType) UnmarshalJSON(data []byte) error {
-	type errorTypeAlias ErrorType
-	aux := struct {
-		errorTypeAlias
-		Code json.RawMessage `json:"code,omitempty"`
-	}{}
+	e.Type = gjson.GetBytes(data, "type").String()
+	e.Message = gjson.GetBytes(data, "message").String()
+	e.Code = stringFieldOrNil(data, "code")
+	e.Param = stringFieldOrNil(data, "param")
+	e.EventID = stringFieldOrNil(data, "event_id")
+	return nil
+}
 
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-
-	*e = ErrorType(aux.errorTypeAlias)
-	if len(aux.Code) == 0 || string(aux.Code) == "null" {
-		e.Code = nil
+// stringFieldOrNil returns the string representation of the named JSON field, or nil
+// if the field is absent or null.
+func stringFieldOrNil(data []byte, name string) *string {
+	v := gjson.GetBytes(data, name)
+	if !v.Exists() || v.Type == gjson.Null {
 		return nil
 	}
-
-	var code string
-	if err := json.Unmarshal(aux.Code, &code); err == nil {
-		e.Code = &code
-		return nil
-	}
-
-	var codeInt int64
-	if err := json.Unmarshal(aux.Code, &codeInt); err == nil {
-		code = strconv.FormatInt(codeInt, 10)
-		e.Code = &code
-		return nil
-	}
-
-	var codeFloat float64
-	if err := json.Unmarshal(aux.Code, &codeFloat); err == nil {
-		code = strconv.FormatFloat(codeFloat, 'f', -1, 64)
-		e.Code = &code
-		return nil
-	}
-
-	return fmt.Errorf("error.code must be string or number")
+	s := v.String()
+	return &s
 }
 
 // ModelList is described in the OpenAI API documentation
