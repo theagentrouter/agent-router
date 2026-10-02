@@ -11,35 +11,23 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
+	"github.com/envoyproxy/ai-gateway/internal/json"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 )
 
 var (
 	examplesDir = path.Join(internaltesting.FindProjectRoot(), "examples", "mcp")
 
-	// Adjust these as services update, as they can be added, removed or renamed
-
-	allNonGithubTools = []string{
-		// TODO(nacx): Context7 started giving errors due to its certificate:
-		// time=2026-02-20T12:14:12.555+01:00 level=ERROR msg="failed to create MCP session" component=mcp-proxy backend=context7
-		// error="MCP initialize request failed with status code 503 and body=upstream connect error or disconnect/reset before headers.
-		// reset reason: remote connection failure, transport failure reason: TLS_error:|268435563:SSL routines:OPENSSL_internal:BAD_ECC_CERT:TLS_error_end"
-		//
-		// Until those are resolved or figure out, we're just adding kiwi to verify that we can connect to a public MCP server and call a tool.
-		// context7 can be enabled back when the certificate issue is sorted out.
-		//
-		// "context7__query-docs",
-		// "context7__resolve-library-id",
-		"kiwi__feedback-to-devs",
-		"kiwi__search-flight",
-	}
+	// kiwiToolPrefix is used to dynamically discover Kiwi tools instead of
+	// hardcoding names that may change upstream without notice.
+	kiwiToolPrefix = "kiwi__"
 )
 
 func TestMCP_standalone(t *testing.T) {
@@ -64,46 +52,49 @@ func TestMCP_standalone(t *testing.T) {
 		resp, err := session.ListTools(t.Context(), &mcp.ListToolsParams{})
 		require.NoError(t, err)
 
-		var actualNames []string
+		var kiwiTools []string
 		for _, tool := range resp.Tools {
-			actualNames = append(actualNames, tool.Name)
+			if strings.HasPrefix(tool.Name, kiwiToolPrefix) {
+				kiwiTools = append(kiwiTools, tool.Name)
+			}
 		}
-		sort.Strings(actualNames)
-
-		// GitHub tool listing is flaky, so only check non-GitHub tools here.
-		for _, toolName := range allNonGithubTools {
-			require.Contains(t, actualNames, toolName)
-		}
+		// We intentionally assert only that expected tools are present rather than an
+		// exact set: kiwi (and github) are third-party MCP servers that add or rename
+		// tools upstream without notice, and pinning the exact set caused recurring CI
+		// churn (see the revert of #2305).
+		require.NotEmpty(t, kiwiTools, "expected at least one tool with prefix %q", kiwiToolPrefix)
+		t.Logf("discovered kiwi tools: %v", kiwiTools)
 	})
 
 	t.Run("tool calls", func(t *testing.T) {
+		// Discover a kiwi flight search tool dynamically since Kiwi may rename tools upstream.
+		listResp, err := session.ListTools(t.Context(), &mcp.ListToolsParams{})
+		require.NoError(t, err)
+		kiwiFlightTool := findKiwiFlightTool(listResp.Tools)
+
+		tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format("02/01/2006")
+		dayAfter := time.Now().UTC().AddDate(0, 0, 2).Format("02/01/2006")
+
 		type callToolTest struct {
 			toolName string
 			params   map[string]any
+			// expectResults asserts the tool returned a non-empty result set. Kiwi
+			// returns isError=false with zero itineraries for e.g. past dates, so
+			// this is what makes searching a future (tomorrow) date meaningful.
+			expectResults bool
 		}
-		tests := []callToolTest{
-			// {
-			// 	toolName: "context7__resolve-library-id",
-			// 	params: map[string]any{
-			// 		"libraryName": "envoyproxy/ai-gateway",
-			// 		"query":       "how can I route to an LLM bakend",
-			// 	},
-			// },
-			// {
-			// 	toolName: "context7__query-docs",
-			// 	params: map[string]any{
-			// 		"libraryId": "/envoyproxy/ai-gateway",
-			// 		"query":     "how can I route to an LLM bakend",
-			// 	},
-			// },
-			{
-				toolName: "kiwi__search-flight",
+		var tests []callToolTest
+		if kiwiFlightTool != "" {
+			t.Logf("discovered kiwi flight tool: %s", kiwiFlightTool)
+			tests = append(tests, callToolTest{
+				toolName:      kiwiFlightTool,
+				expectResults: true,
 				params: map[string]any{
 					"flyFrom":                "LAX",
 					"flyTo":                  "HND",
-					"departureDate":          "01/12/2026",
+					"departureDate":          tomorrow,
 					"departureDateFlexRange": 1,
-					"returnDate":             "02/12/2026",
+					"returnDate":             dayAfter,
 					"returnDateFlexRange":    1,
 					"passengers": map[string]any{
 						"adults":   1,
@@ -115,7 +106,9 @@ func TestMCP_standalone(t *testing.T) {
 					"curr":       "USD",
 					"locale":     "en",
 				},
-			},
+			})
+		} else {
+			t.Log("no kiwi flight tool found, skipping kiwi tool call test")
 		}
 		if githubConfigured {
 			tests = append(tests, callToolTest{
@@ -137,6 +130,17 @@ func TestMCP_standalone(t *testing.T) {
 				})
 				require.NoError(t, err)
 				require.False(t, resp.IsError, "[[response]]\n%v", resp)
+
+				if tc.expectResults {
+					require.NotEmpty(t, resp.Content)
+					text, ok := resp.Content[0].(*mcp.TextContent)
+					require.True(t, ok, "expected text content, got %T", resp.Content[0])
+					var result struct {
+						ResultsCount int `json:"resultsCount"`
+					}
+					require.NoError(t, json.Unmarshal([]byte(text.Text), &result))
+					require.NotZero(t, result.ResultsCount, "expected non-empty results: %s", text.Text)
+				}
 			})
 		}
 	})
@@ -199,12 +203,25 @@ func TestMCP_standalone_oauth(t *testing.T) {
 		resp, err := session.ListTools(t.Context(), &mcp.ListToolsParams{})
 		require.NoError(t, err)
 
-		var actualNames []string
+		var kiwiTools []string
 		for _, tool := range resp.Tools {
-			actualNames = append(actualNames, tool.Name)
+			if strings.HasPrefix(tool.Name, kiwiToolPrefix) {
+				kiwiTools = append(kiwiTools, tool.Name)
+			}
 		}
-		sort.Strings(actualNames)
-
-		require.Equal(t, allNonGithubTools, actualNames)
+		require.NotEmpty(t, kiwiTools, "expected at least one tool with prefix %q", kiwiToolPrefix)
+		t.Logf("discovered kiwi tools via oauth: %v", kiwiTools)
 	})
+}
+
+// findKiwiFlightTool returns the first Kiwi flight-search tool, or "" if none is
+// present. Kiwi may rename tools upstream, so we match by prefix + substring
+// rather than an exact name.
+func findKiwiFlightTool(tools []*mcp.Tool) string {
+	for _, tool := range tools {
+		if strings.HasPrefix(tool.Name, kiwiToolPrefix) && strings.Contains(tool.Name, "flight") {
+			return tool.Name
+		}
+	}
+	return ""
 }
