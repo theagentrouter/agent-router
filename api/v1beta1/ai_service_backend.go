@@ -57,15 +57,20 @@ type AIServiceBackendSpec struct {
 	//
 	// +kubebuilder:validation:Required
 	APISchema VersionedAPISchema `json:"schema"`
-	// BackendRef is the reference to the Backend resource that this AIServiceBackend corresponds to.
+	// BackendRef is the reference to the backend resource that this AIServiceBackend corresponds to.
 	//
-	// A backend must be a Backend resource of Envoy Gateway. Note that k8s Service will be supported
-	// as a backend in the future. See https://github.com/envoyproxy/ai-gateway/issues/902 for more details.
+	// Supported backend kinds:
+	//   - Backend (gateway.envoyproxy.io): an Envoy Gateway Backend resource.
+	//   - InferencePool (inference.networking.k8s.io): a Gateway API Inference Extension pool,
+	//     enabling KV-cache-aware pod selection via the EndpointPicker (EPP) ext_proc sidecar.
+	//     When an InferencePool is referenced, Envoy chains the AI Gateway schema-translation
+	//     ext_proc with the EPP ext_proc so that Anthropic (or other) requests are translated
+	//     before being routed to the best-available vLLM pod.
 	//
 	// This is required to be set.
 	//
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:XValidation:rule="has(self.kind) && self.kind == 'Backend' && has(self.group) && self.group == 'gateway.envoyproxy.io'",message="BackendRef must be a Backend resource of Envoy Gateway. See https://github.com/envoyproxy/ai-gateway/issues/902 for more details."
+	// +kubebuilder:validation:XValidation:rule="(has(self.kind) && self.kind == 'Backend' && has(self.group) && self.group == 'gateway.envoyproxy.io') || (has(self.kind) && self.kind == 'InferencePool' && has(self.group) && self.group == 'inference.networking.k8s.io')",message="BackendRef must be either an Envoy Gateway Backend (gateway.envoyproxy.io/Backend) or a Gateway API Inference Extension pool (inference.networking.k8s.io/InferencePool)."
 	BackendRef gwapiv1.BackendObjectReference `json:"backendRef"`
 
 	// HeaderMutation defines the mutation of HTTP headers that will be applied to the request
