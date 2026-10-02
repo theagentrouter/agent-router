@@ -2742,3 +2742,67 @@ func TestGCPVertexAIRedactBody(t *testing.T) {
 		require.NotContains(t, *resp.Choices[0].Message.Content, "[REDACTED")
 	})
 }
+
+func TestOpenAIToGCPVertexAI_IncludeThoughts(t *testing.T) {
+	newReq := func(mutate func(*openai.ChatCompletionRequest)) openai.ChatCompletionRequest {
+		req := openai.ChatCompletionRequest{
+			Model: "gemini-3.5-flash",
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "hi"},
+				}},
+			},
+		}
+		mutate(&req)
+		return req
+	}
+
+	tests := []struct {
+		name    string
+		req     openai.ChatCompletionRequest
+		wantCfg *genai.ThinkingConfig
+	}{
+		{
+			// The fix: reasoning_effort sets ThinkingLevel, and a standalone include_thoughts
+			// layers IncludeThoughts onto the SAME config without dropping the level and
+			// without introducing thinking_budget (which Gemini 3 rejects alongside a level).
+			name: "reasoning_effort + include_thoughts coexist",
+			req: newReq(func(r *openai.ChatCompletionRequest) {
+				r.ReasoningEffort = "high"
+				r.IncludeThoughts = ptr.To(true)
+			}),
+			wantCfg: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh, IncludeThoughts: true},
+		},
+		{
+			name: "reasoning_effort alone does not return thoughts (opt-in)",
+			req: newReq(func(r *openai.ChatCompletionRequest) {
+				r.ReasoningEffort = "high"
+			}),
+			wantCfg: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh},
+		},
+		{
+			name: "include_thoughts alone (no level) sets only IncludeThoughts",
+			req: newReq(func(r *openai.ChatCompletionRequest) {
+				r.IncludeThoughts = ptr.To(true)
+			}),
+			wantCfg: &genai.ThinkingConfig{IncludeThoughts: true},
+		},
+		{
+			name: "include_thoughts=false explicitly suppresses",
+			req: newReq(func(r *openai.ChatCompletionRequest) {
+				r.ReasoningEffort = "low"
+				r.IncludeThoughts = ptr.To(false)
+			}),
+			wantCfg: &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelLow, IncludeThoughts: false},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := &openAIToGCPVertexAITranslatorV1ChatCompletion{}
+			gcr, err := o.openAIMessageToGeminiMessage(&tt.req, tt.req.Model)
+			require.NoError(t, err)
+			require.Equal(t, tt.wantCfg, gcr.GenerationConfig.ThinkingConfig)
+		})
+	}
+}
