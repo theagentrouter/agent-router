@@ -115,6 +115,9 @@ type (
 		RecordResponse(resp *RespT)
 		// EndSpanOnError finalizes and ends the span with an error status.
 		EndSpanOnError(statusCode int, body []byte)
+		// EndSpanOnCancel finalizes and ends the span for a request that was terminated before
+		// any response was recorded, e.g. because the downstream client disconnected.
+		EndSpanOnCancel()
 		// EndSpan finalizes and ends the span.
 		EndSpan()
 	}

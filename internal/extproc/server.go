@@ -146,6 +146,10 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 	// Seed the context with the server-level logger as a fallback so that loggerFromContext never returns nil in processMsg.
 	ctx = context.WithValue(ctx, loggerContextKey, s.logger)
 	defer func() {
+		// p is nil when the path carried no processor and the stream was rejected outright.
+		if p != nil {
+			p.OnStreamTerminate()
+		}
 		if !isUpstreamFilter {
 			s.routerProcessorsPerReqIDMutex.Lock()
 			defer s.routerProcessorsPerReqIDMutex.Unlock()

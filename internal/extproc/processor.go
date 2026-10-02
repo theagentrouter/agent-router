@@ -37,10 +37,17 @@ type Processor interface {
 	// routerProcessor is the processor that is the "parent" which was used to determine the route at the
 	// router level. It holds the additional state that can be used to determine the backend to use.
 	SetBackend(ctx context.Context, backend *filterapi.RuntimeBackend, routeName string, routerProcessor Processor) error
+	// OnStreamTerminate is called once the gRPC stream this processor belongs to is torn down,
+	// whether the request completed, the downstream client went away, or the context was canceled.
+	// It gives the processor a chance to finalize state that the response path did not reach.
+	OnStreamTerminate()
 }
 
 // passThroughProcessor implements the Processor interface.
 type passThroughProcessor struct{}
+
+// OnStreamTerminate implements [Processor.OnStreamTerminate].
+func (p passThroughProcessor) OnStreamTerminate() {}
 
 // ProcessRequestHeaders implements [Processor.ProcessRequestHeaders].
 func (p passThroughProcessor) ProcessRequestHeaders(context.Context, *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {

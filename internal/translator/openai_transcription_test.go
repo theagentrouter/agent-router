@@ -352,3 +352,4 @@ func (m *mockTranscriptionSpan) RecordResponseChunk(c *openai.TranscriptionStrea
 }
 func (m *mockTranscriptionSpan) EndSpanOnError(int, []byte) {}
 func (m *mockTranscriptionSpan) EndSpan()                   {}
+func (m *mockTranscriptionSpan) EndSpanOnCancel()           {}
