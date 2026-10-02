@@ -102,7 +102,7 @@ TargetRefs []gwapiv1a2.LocalPolicyTargetReferenceWithSectionName `json:"targetRe
 // +kubebuilder:validation:XValidation:rule="self.name == 'OpenAI'"
 APISchema VersionedAPISchema `json:"schema"`
 // Rules is the list of AIGatewayRouteRule that this AIGatewayRoute will match the traffic to.
-// Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.io/api-types/httproute/).
+// Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.io/reference/api-types/httproute/).
 //
 // AI Gateway controller will generate a HTTPRoute based on the configuration given here with the additional
 // modifications to achieve the necessary jobs, notably inserting the AI Gateway filter responsible for
@@ -113,7 +113,7 @@ APISchema VersionedAPISchema `json:"schema"`
 // from the request content before the routing decision.
 //
 // How multiple rules are matched is the same as the Gateway API. See for the details:
-// https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPRoute
+// https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproute
 //
 // +kubebuilder:validation:Required
 // +kubebuilder:validation:MaxItems=128
@@ -165,7 +165,7 @@ BackendRefs []AIGatewayRouteRuleBackendRef `json:"backendRefs,omitempty"`
 
 // Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.
 // This is a subset of the HTTPRouteMatch in the Gateway API. See for the details:
-// https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPRouteMatch
+// https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproutematch
 //
 // +optional
 // +kubebuilder:validation:MaxItems=128

@@ -641,10 +641,10 @@ AIGatewayRouteRule is a rule that defines the routing behavior of the AIGatewayR
   name="matches"
   type="[AIGatewayRouteRuleMatch](#github-com-envoyproxy-ai-gateway-api-v1alpha1-aigatewayrouterulematch) array"
   required="false"
-  description="Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.<br />This is a subset of the HTTPRouteMatch in the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPRouteMatch"
+  description="Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.<br />This is a subset of the HTTPRouteMatch in the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproutematch"
 /><ApiField
   name="timeouts"
-  type="[HTTPRouteTimeouts](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httproutetimeouts)"
+  type="[HTTPRouteTimeouts](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproutetimeouts)"
   required="false"
   description="Timeouts defines the timeouts that can be configured for an HTTP request.<br />If this field is not set, or the timeout.requestTimeout is nil, Envoy AI Gateway defaults to<br />set 60s for the request timeout as opposed to 15s of the Envoy Gateway's default value.<br />For streaming responses (like chat completions with stream=true), consider setting<br />longer timeouts as the response may take time until the completion."
 /><ApiField
@@ -682,7 +682,7 @@ It can reference either an AIServiceBackend or an InferencePool resource.
   description="Name is the name of the backend resource.<br />When Group and Kind are not specified, this refers to an AIServiceBackend.<br />When Group and Kind are specified, this refers to the resource of the specified type."
 /><ApiField
   name="namespace"
-  type="[Namespace](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#namespace)"
+  type="[Namespace](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#namespace)"
   required="false"
   description="Namespace is the namespace of the backend resource.<br />When unspecified (or empty string), this refers to the local namespace of the AIGatewayRoute.<br />Note that when a namespace different than the local namespace is specified,<br />a ReferenceGrant object is required in the referent namespace to allow that<br />namespace's owner to accept the reference. See the ReferenceGrant<br />documentation for details."
 /><ApiField
@@ -715,7 +715,7 @@ It can reference either an AIServiceBackend or an InferencePool resource.
   type="integer"
   required="false"
   defaultValue="1"
-  description="Weight is the weight of the backend. This is exactly the same as the weight in<br />the BackendRef in the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.BackendRef<br />Default is 1."
+  description="Weight is the weight of the backend. This is exactly the same as the weight in<br />the BackendRef in the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendref<br />Default is 1."
 /><ApiField
   name="priority"
   type="integer"
@@ -740,9 +740,9 @@ It can reference either an AIServiceBackend or an InferencePool resource.
 
 <ApiField
   name="headers"
-  type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheadermatch) array"
+  type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheadermatch) array"
   required="false"
-  description="Headers specifies HTTP request header matchers. See HeaderMatch in the Gateway API for the details:<br />https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPHeaderMatch"
+  description="Headers specifies HTTP request header matchers. See HeaderMatch in the Gateway API for the details:<br />https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheadermatch"
 />
 
 
@@ -761,14 +761,14 @@ AIGatewayRouteSpec details the AIGatewayRoute configuration.
 
 <ApiField
   name="parentRefs"
-  type="[ParentReference](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#parentreference) array"
+  type="[ParentReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#parentreference) array"
   required="false"
   description="ParentRefs are the names of the Gateway resources this AIGatewayRoute is being attached to.<br />Currently, each reference's Kind must be Gateway."
 /><ApiField
   name="rules"
   type="[AIGatewayRouteRule](#github-com-envoyproxy-ai-gateway-api-v1alpha1-aigatewayrouterule) array"
   required="true"
-  description="Rules is the list of AIGatewayRouteRule that this AIGatewayRoute will match the traffic to.<br />Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.io/api-types/httproute/).<br />AI Gateway controller will generate a HTTPRoute based on the configuration given here with the additional<br />modifications to achieve the necessary jobs, notably inserting the AI Gateway filter responsible for<br />the transformation of the request and response, etc.<br />In the matching conditions in the AIGatewayRouteRule, `x-ai-eg-model` header is available<br />if we want to describe the routing behavior based on the model name. The model name is extracted<br />from the request content before the routing decision.<br />How multiple rules are matched is the same as the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPRoute"
+  description="Rules is the list of AIGatewayRouteRule that this AIGatewayRoute will match the traffic to.<br />Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.io/reference/api-types/httproute/).<br />AI Gateway controller will generate a HTTPRoute based on the configuration given here with the additional<br />modifications to achieve the necessary jobs, notably inserting the AI Gateway filter responsible for<br />the transformation of the request and response, etc.<br />In the matching conditions in the AIGatewayRouteRule, `x-ai-eg-model` header is available<br />if we want to describe the routing behavior based on the model name. The model name is extracted<br />from the request content before the routing decision.<br />How multiple rules are matched is the same as the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproute"
 /><ApiField
   name="llmRequestCosts"
   type="[LLMRequestCost](#github-com-envoyproxy-ai-gateway-api-v1alpha1-llmrequestcost) array"
@@ -818,7 +818,7 @@ AIServiceBackendSpec details the AIServiceBackend configuration.
   description="APISchema specifies the API schema of the output format of requests from<br />Envoy that this AIServiceBackend can accept as incoming requests.<br />Based on this schema, the ai-gateway will perform the necessary transformation for<br />the pair of AIGatewayRouteSpec.APISchema and AIServiceBackendSpec.APISchema.<br />This is required to be set."
 /><ApiField
   name="backendRef"
-  type="[BackendObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.BackendObjectReference)"
+  type="[BackendObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendobjectreference)"
   required="true"
   description="BackendRef is the reference to the Backend resource that this AIServiceBackend corresponds to.<br />A backend must be a Backend resource of Envoy Gateway. Note that k8s Service will be supported<br />as a backend in the future. See https://github.com/envoyproxy/ai-gateway/issues/902 for more details.<br />This is required to be set."
 /><ApiField
@@ -925,7 +925,7 @@ Envoy reads the secret file, and the profile to use is specified by the Profile 
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the credential file.<br />The secret should contain the AWS credentials file keyed on `credentials`."
 /><ApiField
@@ -1023,7 +1023,7 @@ BackendSecurityPolicyAPIKey specifies the API key.
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the secret containing the API key.<br />ai-gateway must be given the permission to read this secret.<br />The key of the secret should be `apiKey`."
 />
@@ -1087,7 +1087,7 @@ BackendSecurityPolicyAnthropicAPIKey specifies the Anthropic API key.
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the secret containing the Anthropic API key.<br />ai-gateway must be given the permission to read this secret.<br />The key of the secret should be `apiKey`."
 />
@@ -1108,7 +1108,7 @@ BackendSecurityPolicyAzureAPIKey specifies the Azure OpenAI API key.
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the secret containing the Azure API key.<br />ai-gateway must be given the permission to read this secret.<br />The key of the secret should be `apiKey`."
 />
@@ -1141,7 +1141,7 @@ neither are set.
   description="TenantId is a unique identifier for an Azure Active Directory instance."
 /><ApiField
   name="clientSecretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="false"
   description="ClientSecretRef is the reference to the secret containing the Azure client secret.<br />ai-gateway must be given the permission to read this secret.<br />The key of secret should be `client-secret`."
 /><ApiField
@@ -1240,7 +1240,7 @@ Only one type of BackendSecurityPolicy can be defined.
 
 <ApiField
   name="targetRefs"
-  type="[LocalPolicyTargetReference](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1alpha2.LocalPolicyTargetReference) array"
+  type="[LocalPolicyTargetReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#localpolicytargetreference) array"
   required="false"
   description="TargetRefs are the names of the AIServiceBackend or InferencePool resources this BackendSecurityPolicy is being attached to.<br />Attaching multiple BackendSecurityPolicies to the same resource is invalid and will result in an error<br />during the reconciliation of the resource."
 /><ApiField
@@ -1361,7 +1361,7 @@ GCPCredentialsFile specifies the service account key json file to authenticate w
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the credential file.<br />The secret should contain the GCP service account credentials file keyed on `service_account.json`."
 />
@@ -1598,7 +1598,7 @@ HTTPHeaderMutation defines the mutation of HTTP headers that will be applied to 
 
 <ApiField
   name="set"
-  type="[HTTPHeader](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheader) array"
+  type="[HTTPHeader](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheader) array"
   required="false"
   description="Set overwrites/adds the request with the given header (name, value)<br />before the action.<br />Input:<br />  GET /foo HTTP/1.1<br />  my-header: foo<br />Config:<br />  set:<br />  - name: `my-header`<br />    value: `bar`<br />Output:<br />  GET /foo HTTP/1.1<br />  my-header: bar"
 /><ApiField
@@ -1802,7 +1802,7 @@ When both `header` and `queryParam` are unspecified, the API key will be injecte
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="false"
   description="secretRef is the Kubernetes secret which contains the API keys.<br />The key of the secret should be `apiKey`."
 /><ApiField
@@ -1966,7 +1966,7 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   description="Name is the name of the referent."
 /><ApiField
   name="namespace"
-  type="[Namespace](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#namespace)"
+  type="[Namespace](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#namespace)"
   required="false"
   description="Namespace is the namespace of the backend. When unspecified, the local<br />namespace is inferred.<br />Note that when a namespace different than the local namespace is specified,<br />a ReferenceGrant object is required in the referent namespace to allow that<br />namespace's owner to accept the reference. See the ReferenceGrant<br />documentation for details.<br />Support: Core"
 /><ApiField
@@ -2091,7 +2091,7 @@ MCPRouteSpec details the MCPRoute configuration.
 
 <ApiField
   name="parentRefs"
-  type="[ParentReference](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#parentreference) array"
+  type="[ParentReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#parentreference) array"
   required="true"
   description="ParentRefs are the names of the Gateway resources this MCPRoute is being attached to.<br />Cross namespace references are not supported. In other words, the Gateway resources must be in the<br />same namespace as the MCPRoute. Currently, each reference's Kind must be Gateway."
 /><ApiField
@@ -2102,7 +2102,7 @@ MCPRouteSpec details the MCPRoute configuration.
   description="Path is the HTTP endpoint path that serves MCP requests over the Streamable HTTP transport.<br />If not specified, the default is `/mcp`."
 /><ApiField
   name="headers"
-  type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheadermatch) array"
+  type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheadermatch) array"
   required="false"
   description="Headers are HTTP headers that must match for this route to be selected.<br />Multiple match values are ANDed together, meaning, a request must match all the specified headers to select the route."
 /><ApiField
@@ -2328,7 +2328,7 @@ QuotaPolicySpec specifies rules for computing token based costs of requests.
 
 <ApiField
   name="targetRefs"
-  type="[LocalPolicyTargetReference](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1alpha2.LocalPolicyTargetReference) array"
+  type="[LocalPolicyTargetReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#localpolicytargetreference) array"
   required="false"
   description="TargetRefs are the names of the AIServiceBackend resources this QuotaPolicy is being attached to."
 /><ApiField
@@ -3054,10 +3054,10 @@ AIGatewayRouteRule is a rule that defines the routing behavior of the AIGatewayR
   name="matches"
   type="[AIGatewayRouteRuleMatch](#github-com-envoyproxy-ai-gateway-api-v1beta1-aigatewayrouterulematch) array"
   required="false"
-  description="Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.<br />This is a subset of the HTTPRouteMatch in the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPRouteMatch"
+  description="Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.<br />This is a subset of the HTTPRouteMatch in the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproutematch"
 /><ApiField
   name="timeouts"
-  type="[HTTPRouteTimeouts](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httproutetimeouts)"
+  type="[HTTPRouteTimeouts](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproutetimeouts)"
   required="false"
   description="Timeouts defines the timeouts that can be configured for an HTTP request.<br />If this field is not set, or the timeout.requestTimeout is nil, Envoy AI Gateway defaults to<br />set 60s for the request timeout as opposed to 15s of the Envoy Gateway's default value.<br />For streaming responses (like chat completions with stream=true), consider setting<br />longer timeouts as the response may take time until the completion."
 /><ApiField
@@ -3095,7 +3095,7 @@ It can reference either an AIServiceBackend or an InferencePool resource.
   description="Name is the name of the backend resource.<br />When Group and Kind are not specified, this refers to an AIServiceBackend.<br />When Group and Kind are specified, this refers to the resource of the specified type."
 /><ApiField
   name="namespace"
-  type="[Namespace](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#namespace)"
+  type="[Namespace](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#namespace)"
   required="false"
   description="Namespace is the namespace of the backend resource.<br />When unspecified (or empty string), this refers to the local namespace of the AIGatewayRoute.<br />Note that when a namespace different than the local namespace is specified,<br />a ReferenceGrant object is required in the referent namespace to allow that<br />namespace's owner to accept the reference. See the ReferenceGrant<br />documentation for details."
 /><ApiField
@@ -3128,7 +3128,7 @@ It can reference either an AIServiceBackend or an InferencePool resource.
   type="integer"
   required="false"
   defaultValue="1"
-  description="Weight is the weight of the backend. This is exactly the same as the weight in<br />the BackendRef in the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.BackendRef<br />Default is 1."
+  description="Weight is the weight of the backend. This is exactly the same as the weight in<br />the BackendRef in the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendref<br />Default is 1."
 /><ApiField
   name="priority"
   type="integer"
@@ -3153,9 +3153,9 @@ It can reference either an AIServiceBackend or an InferencePool resource.
 
 <ApiField
   name="headers"
-  type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheadermatch) array"
+  type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheadermatch) array"
   required="false"
-  description="Headers specifies HTTP request header matchers. See HeaderMatch in the Gateway API for the details:<br />https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPHeaderMatch"
+  description="Headers specifies HTTP request header matchers. See HeaderMatch in the Gateway API for the details:<br />https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheadermatch"
 />
 
 
@@ -3174,14 +3174,14 @@ AIGatewayRouteSpec details the AIGatewayRoute configuration.
 
 <ApiField
   name="parentRefs"
-  type="[ParentReference](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#parentreference) array"
+  type="[ParentReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#parentreference) array"
   required="false"
   description="ParentRefs are the names of the Gateway resources this AIGatewayRoute is being attached to.<br />Currently, each reference's Kind must be Gateway."
 /><ApiField
   name="rules"
   type="[AIGatewayRouteRule](#github-com-envoyproxy-ai-gateway-api-v1beta1-aigatewayrouterule) array"
   required="true"
-  description="Rules is the list of AIGatewayRouteRule that this AIGatewayRoute will match the traffic to.<br />Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.io/api-types/httproute/).<br />AI Gateway controller will generate a HTTPRoute based on the configuration given here with the additional<br />modifications to achieve the necessary jobs, notably inserting the AI Gateway filter responsible for<br />the transformation of the request and response, etc.<br />In the matching conditions in the AIGatewayRouteRule, `x-ai-eg-model` header is available<br />if we want to describe the routing behavior based on the model name. The model name is extracted<br />from the request content before the routing decision.<br />How multiple rules are matched is the same as the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPRoute"
+  description="Rules is the list of AIGatewayRouteRule that this AIGatewayRoute will match the traffic to.<br />Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.io/reference/api-types/httproute/).<br />AI Gateway controller will generate a HTTPRoute based on the configuration given here with the additional<br />modifications to achieve the necessary jobs, notably inserting the AI Gateway filter responsible for<br />the transformation of the request and response, etc.<br />In the matching conditions in the AIGatewayRouteRule, `x-ai-eg-model` header is available<br />if we want to describe the routing behavior based on the model name. The model name is extracted<br />from the request content before the routing decision.<br />How multiple rules are matched is the same as the Gateway API. See for the details:<br />https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httproute"
 /><ApiField
   name="llmRequestCosts"
   type="[LLMRequestCost](#github-com-envoyproxy-ai-gateway-api-v1beta1-llmrequestcost) array"
@@ -3231,7 +3231,7 @@ AIServiceBackendSpec details the AIServiceBackend configuration.
   description="APISchema specifies the API schema of the output format of requests from<br />Envoy that this AIServiceBackend can accept as incoming requests.<br />Based on this schema, the ai-gateway will perform the necessary transformation for<br />the pair of AIGatewayRouteSpec.APISchema and AIServiceBackendSpec.APISchema.<br />This is required to be set."
 /><ApiField
   name="backendRef"
-  type="[BackendObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.BackendObjectReference)"
+  type="[BackendObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendobjectreference)"
   required="true"
   description="BackendRef is the reference to the Backend resource that this AIServiceBackend corresponds to.<br />A backend must be a Backend resource of Envoy Gateway. Note that k8s Service will be supported<br />as a backend in the future. See https://github.com/envoyproxy/ai-gateway/issues/902 for more details.<br />This is required to be set."
 /><ApiField
@@ -3338,7 +3338,7 @@ Envoy reads the secret file, and the profile to use is specified by the Profile 
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the credential file.<br />The secret should contain the AWS credentials file keyed on `credentials`."
 /><ApiField
@@ -3436,7 +3436,7 @@ BackendSecurityPolicyAPIKey specifies the API key.
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the secret containing the API key.<br />ai-gateway must be given the permission to read this secret.<br />The key of the secret should be `apiKey`."
 />
@@ -3500,7 +3500,7 @@ BackendSecurityPolicyAnthropicAPIKey specifies the Anthropic API key.
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the secret containing the Anthropic API key.<br />ai-gateway must be given the permission to read this secret.<br />The key of the secret should be `apiKey`."
 />
@@ -3521,7 +3521,7 @@ BackendSecurityPolicyAzureAPIKey specifies the Azure OpenAI API key.
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the secret containing the Azure API key.<br />ai-gateway must be given the permission to read this secret.<br />The key of the secret should be `apiKey`."
 />
@@ -3554,7 +3554,7 @@ neither are set.
   description="TenantId is a unique identifier for an Azure Active Directory instance."
 /><ApiField
   name="clientSecretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="false"
   description="ClientSecretRef is the reference to the secret containing the Azure client secret.<br />ai-gateway must be given the permission to read this secret.<br />The key of secret should be `client-secret`."
 /><ApiField
@@ -3657,7 +3657,7 @@ Only one type of BackendSecurityPolicy can be defined.
 
 <ApiField
   name="targetRefs"
-  type="[LocalPolicyTargetReference](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1alpha2.LocalPolicyTargetReference) array"
+  type="[LocalPolicyTargetReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#localpolicytargetreference) array"
   required="false"
   description="TargetRefs are the names of the AIServiceBackend or InferencePool resources this BackendSecurityPolicy is being attached to.<br />Attaching multiple BackendSecurityPolicies to the same resource is invalid and will result in an error<br />during the reconciliation of the resource."
 /><ApiField
@@ -3778,7 +3778,7 @@ GCPCredentialsFile specifies the service account key json file to authenticate w
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="true"
   description="SecretRef is the reference to the credential file.<br />The secret should contain the GCP service account credentials file keyed on `service_account.json`."
 />
@@ -4015,7 +4015,7 @@ HTTPHeaderMutation defines the mutation of HTTP headers that will be applied to 
 
 <ApiField
   name="set"
-  type="[HTTPHeader](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheader) array"
+  type="[HTTPHeader](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheader) array"
   required="false"
   description="Set overwrites/adds the request with the given header (name, value)<br />before the action.<br />Input:<br />  GET /foo HTTP/1.1<br />  my-header: foo<br />Config:<br />  set:<br />  - name: `my-header`<br />    value: `bar`<br />Output:<br />  GET /foo HTTP/1.1<br />  my-header: bar"
 /><ApiField
@@ -4219,7 +4219,7 @@ When both `header` and `queryParam` are unspecified, the API key will be injecte
 
 <ApiField
   name="secretRef"
-  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#secretobjectreference)"
   required="false"
   description="secretRef is the Kubernetes secret which contains the API keys.<br />The key of the secret should be `apiKey`."
 /><ApiField
@@ -4383,7 +4383,7 @@ MCPRouteBackendRef wraps a EG's BackendObjectReference to reference an MCP serve
   description="Name is the name of the referent."
 /><ApiField
   name="namespace"
-  type="[Namespace](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#namespace)"
+  type="[Namespace](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#namespace)"
   required="false"
   description="Namespace is the namespace of the backend. When unspecified, the local<br />namespace is inferred.<br />Note that when a namespace different than the local namespace is specified,<br />a ReferenceGrant object is required in the referent namespace to allow that<br />namespace's owner to accept the reference. See the ReferenceGrant<br />documentation for details.<br />Support: Core"
 /><ApiField
@@ -4508,7 +4508,7 @@ MCPRouteSpec details the MCPRoute configuration.
 
 <ApiField
   name="parentRefs"
-  type="[ParentReference](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#parentreference) array"
+  type="[ParentReference](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#parentreference) array"
   required="true"
   description="ParentRefs are the names of the Gateway resources this MCPRoute is being attached to.<br />Cross namespace references are not supported. In other words, the Gateway resources must be in the<br />same namespace as the MCPRoute. Currently, each reference's Kind must be Gateway."
 /><ApiField
@@ -4519,7 +4519,7 @@ MCPRouteSpec details the MCPRoute configuration.
   description="Path is the HTTP endpoint path that serves MCP requests over the Streamable HTTP transport.<br />If not specified, the default is `/mcp`."
 /><ApiField
   name="headers"
-  type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheadermatch) array"
+  type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httpheadermatch) array"
   required="false"
   description="Headers are HTTP headers that must match for this route to be selected.<br />Multiple match values are ANDed together, meaning, a request must match all the specified headers to select the route."
 /><ApiField
