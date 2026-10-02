@@ -43,7 +43,11 @@ type (
 		backends        map[filterapi.MCPBackendName]filterapi.MCPBackend
 		toolSelectors   map[filterapi.MCPBackendName]*toolSelector
 		promptSelectors map[filterapi.MCPBackendName]*toolSelector
-		authorization   *compiledAuthorization
+		// toolIntegrity holds the compiled opt-in content-digest verification config for
+		// each backend that declares one. Backends absent from this map (the common case)
+		// are not verified at all.
+		toolIntegrity map[filterapi.MCPBackendName]*compiledToolIntegrity
+		authorization *compiledAuthorization
 		// backendSelector reuses the same compiledAuthorization machinery as authorization
 		// above, but is evaluated once per candidate backend in newSession() instead of
 		// per JSON-RPC method call.
@@ -122,6 +126,11 @@ func (m *mcpProxyConfigRoute) sameTools(other *mcpProxyConfigRoute) bool {
 		return false
 	}
 	if !m.authorization.same(other.authorization) {
+		return false
+	}
+	if !maps.EqualFunc(m.toolIntegrity, other.toolIntegrity, func(a, b *compiledToolIntegrity) bool {
+		return a.same(b)
+	}) {
 		return false
 	}
 	// neverModeToolIndex/neverModePromptIndex catch PrefixMode and include-list changes that
@@ -281,6 +290,7 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 			backends:        make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(route.Backends)),
 			toolSelectors:   make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
 			promptSelectors: make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
+			toolIntegrity:   make(map[filterapi.MCPBackendName]*compiledToolIntegrity, len(route.Backends)),
 			authorization:   compiledAuth,
 			backendSelector: compiledBackendSel,
 			forwardHeaders:  route.ForwardHeaders,
@@ -288,6 +298,9 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 		}
 		for _, backend := range route.Backends {
 			r.backends[backend.Name] = backend
+			if ti := compileToolIntegrity(backend.ToolIntegrity); ti != nil {
+				r.toolIntegrity[backend.Name] = ti
+			}
 			if s := backend.ToolSelector; s != nil {
 				ts, err := buildSelector(s.Include, s.IncludeRegex, s.Exclude, s.ExcludeRegex, "include", "exclude", backend.Name, route.Name)
 				if err != nil {

@@ -735,7 +735,7 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 }
 
 func (m *mcpRequestContext) proxyResponseBody(ctx context.Context, s *session, w http.ResponseWriter, resp *http.Response,
-	req *jsonrpc.Request, backend filterapi.MCPBackend, span tracingapi.MCPSpan,
+	req *jsonrpc.Request, backend filterapi.MCPBackend, span tracingapi.MCPSpan, //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional ToolIntegrity field; not worth pointer-ifying every existing by-value backend param for that.
 ) error {
 	// Some backends (e.g. Slack MCP) send SSE data despite Content-Type: application/json.
 	// Try to decode as a single JSON-RPC message first; if that fails, fall through to the
@@ -1364,7 +1364,7 @@ func copyProxyHeaders(resp *http.Response, w http.ResponseWriter) {
 
 // invokeAndProxyResponse invokes the given JSON-RPC request to the given backend and proxies the response back to the client
 // via w ResponseWriter.
-func (m *mcpRequestContext) invokeAndProxyResponse(ctx context.Context, s *session, w http.ResponseWriter, backend filterapi.MCPBackend, sess *compositeSessionEntry, req *jsonrpc.Request, params mcp.Params, span tracingapi.MCPSpan) error {
+func (m *mcpRequestContext) invokeAndProxyResponse(ctx context.Context, s *session, w http.ResponseWriter, backend filterapi.MCPBackend, sess *compositeSessionEntry, req *jsonrpc.Request, params mcp.Params, span tracingapi.MCPSpan) error { //nolint:gocritic // MCPBackend crossed the hugeParam threshold via the optional ToolIntegrity field; not worth pointer-ifying every existing by-value backend param for that.
 	resp, err := m.invokeJSONRPCRequest(ctx, s.route, backend, sess, req, params)
 	if err != nil {
 		onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("call to %s failed: %v", backend.Name, err))
