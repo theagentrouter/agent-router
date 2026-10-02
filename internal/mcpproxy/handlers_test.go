@@ -153,6 +153,7 @@ func TestMergeToolsList_AuthorizationFiltering(t *testing.T) {
 			}
 
 			result := proxy.mergeToolsList(session, responses)
+			require.Equal(t, "private", result.CacheScope)
 
 			got := make([]string, len(result.Tools))
 			for i, tool := range result.Tools {
