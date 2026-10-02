@@ -579,6 +579,7 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyspec)
 - [BackendSecurityPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicystatus)
 - [BackendSecurityPolicyType](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicytype)
+- [Condition](#github-com-envoyproxy-ai-gateway-api-v1alpha1-condition)
 - [GCPCredentialsFile](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gcpcredentialsfile)
 - [GCPOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gcpoidcexchangetoken)
 - [GCPServiceAccountImpersonationConfig](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gcpserviceaccountimpersonationconfig)
@@ -817,9 +818,9 @@ AIGatewayRouteStatus contains the conditions by the reconciliation result.
 
 <ApiField
   name="conditions"
-  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  type="[Condition](#github-com-envoyproxy-ai-gateway-api-v1alpha1-condition) array"
   required="true"
-  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set."
 />
 
 
@@ -874,9 +875,9 @@ AIServiceBackendStatus contains the conditions by the reconciliation result.
 
 <ApiField
   name="conditions"
-  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  type="[Condition](#github-com-envoyproxy-ai-gateway-api-v1alpha1-condition) array"
   required="true"
-  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set."
 />
 
 
@@ -1331,9 +1332,9 @@ BackendSecurityPolicyStatus contains the conditions by the reconciliation result
 
 <ApiField
   name="conditions"
-  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  type="[Condition](#github-com-envoyproxy-ai-gateway-api-v1alpha1-condition) array"
   required="true"
-  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set."
 />
 
 
@@ -1381,6 +1382,56 @@ BackendSecurityPolicyType specifies the type of auth mechanism used to access a 
   required="false"
   description=""
 />
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-condition">Condition</a>
+
+
+
+**Appears in:**
+- [AIGatewayRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-aigatewayroutestatus)
+- [AIServiceBackendStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-aiservicebackendstatus)
+- [BackendSecurityPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicystatus)
+- [MCPRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutestatus)
+- [QuotaPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotapolicystatus)
+
+Condition contains details for one aspect of the current state of this API Resource.
+
+##### Fields
+
+
+
+<ApiField
+  name="type"
+  type="string"
+  required="true"
+  description="type of condition in CamelCase or in foo.example.com/CamelCase."
+/><ApiField
+  name="status"
+  type="[ConditionStatus](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#conditionstatus-v1-meta)"
+  required="true"
+  description="status of the condition, one of True, False, Unknown."
+/><ApiField
+  name="observedGeneration"
+  type="integer"
+  required="false"
+  description="observedGeneration represents the .metadata.generation that the condition was set based upon."
+/><ApiField
+  name="lastTransitionTime"
+  type="[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#time-v1-meta)"
+  required="true"
+  description="lastTransitionTime is the last time the condition transitioned from one status to another."
+/><ApiField
+  name="reason"
+  type="string"
+  required="true"
+  description="reason contains a programmatic identifier indicating the reason for the condition's last transition."
+/><ApiField
+  name="message"
+  type="string"
+  required="true"
+  description="message is a human readable message indicating details about the transition."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-gcpcredentialsfile">GCPCredentialsFile</a>
 
 
@@ -2296,9 +2347,9 @@ MCPRouteStatus contains the conditions by the reconciliation result.
 
 <ApiField
   name="conditions"
-  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  type="[Condition](#github-com-envoyproxy-ai-gateway-api-v1alpha1-condition) array"
   required="true"
-  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set."
 />
 
 
@@ -2519,9 +2570,9 @@ QuotaPolicyStatus contains the conditions by the reconciliation result.
 
 <ApiField
   name="conditions"
-  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  type="[Condition](#github-com-envoyproxy-ai-gateway-api-v1alpha1-condition) array"
   required="true"
-  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set."
 />
 
 
@@ -3160,6 +3211,7 @@ MCPRouteList contains a list of MCPRoute.
 - [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspec)
 - [BackendSecurityPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicystatus)
 - [BackendSecurityPolicyType](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicytype)
+- [Condition](#github-com-envoyproxy-ai-gateway-api-v1beta1-condition)
 - [CredentialOverrideFromDynamicMetadata](#github-com-envoyproxy-ai-gateway-api-v1beta1-credentialoverridefromdynamicmetadata)
 - [CredentialOverrideFromRequestHeaders](#github-com-envoyproxy-ai-gateway-api-v1beta1-credentialoverridefromrequestheaders)
 - [GCPCredentialsFile](#github-com-envoyproxy-ai-gateway-api-v1beta1-gcpcredentialsfile)
@@ -3397,9 +3449,9 @@ AIGatewayRouteStatus contains the conditions by the reconciliation result.
 
 <ApiField
   name="conditions"
-  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  type="[Condition](#github-com-envoyproxy-ai-gateway-api-v1beta1-condition) array"
   required="true"
-  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set."
 />
 
 
@@ -3459,9 +3511,9 @@ AIServiceBackendStatus contains the conditions by the reconciliation result.
 
 <ApiField
   name="conditions"
-  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  type="[Condition](#github-com-envoyproxy-ai-gateway-api-v1beta1-condition) array"
   required="true"
-  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set."
 />
 
 
@@ -3954,9 +4006,9 @@ BackendSecurityPolicyStatus contains the conditions by the reconciliation result
 
 <ApiField
   name="conditions"
-  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  type="[Condition](#github-com-envoyproxy-ai-gateway-api-v1beta1-condition) array"
   required="true"
-  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set."
 />
 
 
@@ -4004,6 +4056,55 @@ BackendSecurityPolicyType specifies the type of auth mechanism used to access a 
   required="false"
   description=""
 />
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-condition">Condition</a>
+
+
+
+**Appears in:**
+- [AIGatewayRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-aigatewayroutestatus)
+- [AIServiceBackendStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-aiservicebackendstatus)
+- [BackendSecurityPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicystatus)
+- [MCPRouteStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcproutestatus)
+
+Condition contains details for one aspect of the current state of this API Resource.
+
+##### Fields
+
+
+
+<ApiField
+  name="type"
+  type="string"
+  required="true"
+  description="type of condition in CamelCase or in foo.example.com/CamelCase."
+/><ApiField
+  name="status"
+  type="[ConditionStatus](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#conditionstatus-v1-meta)"
+  required="true"
+  description="status of the condition, one of True, False, Unknown."
+/><ApiField
+  name="observedGeneration"
+  type="integer"
+  required="false"
+  description="observedGeneration represents the .metadata.generation that the condition was set based upon."
+/><ApiField
+  name="lastTransitionTime"
+  type="[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#time-v1-meta)"
+  required="true"
+  description="lastTransitionTime is the last time the condition transitioned from one status to another."
+/><ApiField
+  name="reason"
+  type="string"
+  required="true"
+  description="reason contains a programmatic identifier indicating the reason for the condition's last transition."
+/><ApiField
+  name="message"
+  type="string"
+  required="true"
+  description="message is a human readable message indicating details about the transition."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-credentialoverridefromdynamicmetadata">CredentialOverrideFromDynamicMetadata</a>
 
 
@@ -5164,9 +5265,9 @@ MCPRouteStatus contains the conditions by the reconciliation result.
 
 <ApiField
   name="conditions"
-  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  type="[Condition](#github-com-envoyproxy-ai-gateway-api-v1beta1-condition) array"
   required="true"
-  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set."
 />
 
 

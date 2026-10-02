@@ -52,6 +52,12 @@ lint: ## This runs the linter on the codebase.
 	@echo "actionlint => ./..."
 	@$(GO_TOOL) actionlint -shellcheck="" # Disabling shellcheck as it requires additional host dependencies.
 
+.PHONY: lint-api
+lint-api: ## Run kube-api-linter on API directories to validate CRDs against Kubernetes API conventions.
+	@echo "kube-api-linter => ./api/..."
+	@test -f tools/tmp/bin/golangci-kube-api-linter || (cd tools && go tool -modfile go.mod golangci-lint custom)
+	@tools/tmp/bin/golangci-kube-api-linter run --config tools/.golangci-kal.yml ./api/...
+
 .PHONY: spellcheck
 spellcheck:  ## Spell check the codebase.
 	@echo "misspell => ./..."
