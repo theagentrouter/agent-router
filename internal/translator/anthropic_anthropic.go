@@ -116,17 +116,30 @@ func (a *anthropicToAnthropicTranslator) ResponseBody(_ map[string]string, body 
 	}
 
 	usage := anthropicResp.Usage
-	tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
+	cacheCreation5m, cacheCreation1h := cacheCreationByTTL(usage.CacheCreation)
+	tokenUsage = metrics.ExtractTokenUsageFromExplicitCachingWithTTL(
 		int64(usage.InputTokens),
 		int64(usage.OutputTokens),
 		ptr.To(int64(usage.CacheReadInputTokens)),
 		ptr.To(int64(usage.CacheCreationInputTokens)),
+		cacheCreation5m,
+		cacheCreation1h,
 	)
 	if span != nil {
 		span.RecordResponse(anthropicResp)
 	}
 	responseModel = cmp.Or(anthropicResp.Model, a.requestModel)
 	return nil, nil, tokenUsage, responseModel, nil
+}
+
+// cacheCreationByTTL splits Anthropic's cache creation tokens by cache TTL.
+// Returns (nil, nil) when the backend does not report the breakdown, leaving
+// the combined CacheCreationInputTokens as the only signal.
+func cacheCreationByTTL(cc *anthropic.CacheCreation) (fiveMinutes, oneHour *int64) {
+	if cc == nil {
+		return nil, nil
+	}
+	return ptr.To(int64(cc.Ephemeral5mInputTokens)), ptr.To(int64(cc.Ephemeral1hInputTokens))
 }
 
 // extractUsageFromBufferEvent extracts the token usage from the buffered event.
@@ -166,11 +179,14 @@ func (a *anthropicToAnthropicTranslator) reflectStreamingEvent(eventUnion *anthr
 		}
 		// Extract usage from message_start event - this sets the baseline input tokens
 		if u := message.Usage; u != nil {
-			messageStartUsage := metrics.ExtractTokenUsageFromExplicitCaching(
+			startCacheCreation5m, startCacheCreation1h := cacheCreationByTTL(u.CacheCreation)
+			messageStartUsage := metrics.ExtractTokenUsageFromExplicitCachingWithTTL(
 				int64(u.InputTokens),
 				int64(u.OutputTokens),
 				ptr.To(int64(u.CacheReadInputTokens)),
 				ptr.To(int64(u.CacheCreationInputTokens)),
+				startCacheCreation5m,
+				startCacheCreation1h,
 			)
 			// Override with message_start usage (contains input tokens and initial state)
 			a.streamingTokenUsage.Override(messageStartUsage)
@@ -214,6 +230,18 @@ func (a *anthropicToAnthropicTranslator) reflectStreamingEvent(eventUnion *anthr
 			a.streamingTokenUsage.SetCachedInputTokens(cacheRead)
 			a.streamingTokenUsage.SetCacheCreationInputTokens(cacheCreation)
 			a.streamingTokenUsage.SetInputTokens(rawInput + cacheRead + cacheCreation)
+
+			// The TTL breakdown is normally reported once, on message_start. Only
+			// overwrite it when this delta actually carries it, for the same
+			// reason the fields above are merged rather than replaced.
+			if cc := u.CacheCreation; cc != nil {
+				if cc.Ephemeral5mInputTokens > 0 {
+					a.streamingTokenUsage.SetCacheCreation5mInputTokens(uint32(cc.Ephemeral5mInputTokens)) //nolint:gosec
+				}
+				if cc.Ephemeral1hInputTokens > 0 {
+					a.streamingTokenUsage.SetCacheCreation1hInputTokens(uint32(cc.Ephemeral1hInputTokens)) //nolint:gosec
+				}
+			}
 		}
 	}
 }

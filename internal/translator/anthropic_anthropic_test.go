@@ -136,7 +136,10 @@ func TestAnthropicToAnthropic_ResponseBody_non_streaming(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, headerMutation)
 	require.Nil(t, bodyMutation)
-	expected := tokenUsageFrom(9, 0, 0, 16, 25, -1)
+	// The fixture reports `cache_creation` explicitly, so both TTL buckets are
+	// present and zero -- which is not the same as the backend omitting them.
+	expected := tokenUsageFrom(9, 0, 0, 16, 25, -1,
+		cacheTTLTokens{cacheTTL5m, 0}, cacheTTLTokens{cacheTTL1h, 0})
 	require.Equal(t, expected, tokenUsage)
 	require.Equal(t, "claude-sonnet-4-5-20250929", responseModel)
 }
@@ -182,7 +185,8 @@ data: {"type":"message_stop"       }`
 	require.NoError(t, err)
 	require.Nil(t, headerMutation)
 	require.Nil(t, bodyMutation)
-	expected := tokenUsageFrom(10, 1, 0, 0, 10, -1)
+	expected := tokenUsageFrom(10, 1, 0, 0, 10, -1,
+		cacheTTLTokens{cacheTTL5m, 0}, cacheTTLTokens{cacheTTL1h, 0})
 	require.Equal(t, expected, tokenUsage)
 	require.Equal(t, "claude-sonnet-4-5-20250929", responseModel)
 
@@ -190,7 +194,8 @@ data: {"type":"message_stop"       }`
 	require.NoError(t, err)
 	require.Nil(t, headerMutation)
 	require.Nil(t, bodyMutation)
-	expected = tokenUsageFrom(10, 1, 0, 16, 26, -1)
+	expected = tokenUsageFrom(10, 1, 0, 16, 26, -1,
+		cacheTTLTokens{cacheTTL5m, 0}, cacheTTLTokens{cacheTTL1h, 0})
 	require.Equal(t, expected, tokenUsage)
 	require.Equal(t, "claude-sonnet-4-5-20250929", responseModel)
 }
@@ -328,4 +333,52 @@ data:{"type":"message_stop"}`
 	require.NoError(t, err)
 	require.Equal(t, tokenUsageFrom(10, 1, 0, 16, 26, -1), tokenUsage)
 	require.Equal(t, "claude-sonnet-4-5-20250929", responseModel)
+}
+
+// TestAnthropicToAnthropic_CacheCreationTTLBreakdown pins that the cache TTL
+// split survives the translator. Anthropic prices a 1 hour cache write at 2x
+// the base input rate against 1.25x for 5 minutes, so a cost expression that
+// only sees the combined cache_creation_input_tokens cannot price the request.
+func TestAnthropicToAnthropic_CacheCreationTTLBreakdown(t *testing.T) {
+	// Captured from Vertex AI, claude-sonnet-5, with cache_control ttl "1h".
+	const body = `{"model":"claude-sonnet-5","id":"msg_1","type":"message","role":"assistant",
+		"content":[{"type":"text","text":"ok"}],
+		"usage":{"input_tokens":6,"cache_creation_input_tokens":8754,"cache_read_input_tokens":0,
+		"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":8754},
+		"output_tokens":16}}`
+
+	tr := &anthropicToAnthropicTranslator{requestModel: "claude-sonnet-5"}
+	_, _, usage, _, err := tr.ResponseBody(nil, strings.NewReader(body), true, nil)
+	require.NoError(t, err)
+
+	oneHour, ok := usage.CacheCreation1hInputTokens()
+	require.True(t, ok, "the 1 hour breakdown must reach the cost expression")
+	require.Equal(t, uint32(8754), oneHour)
+
+	fiveMinutes, ok := usage.CacheCreation5mInputTokens()
+	require.True(t, ok)
+	require.Zero(t, fiveMinutes)
+
+	// Unchanged behaviour: the combined figure and the unified input total.
+	creation, _ := usage.CacheCreationInputTokens()
+	require.Equal(t, uint32(8754), creation)
+	input, _ := usage.InputTokens()
+	require.Equal(t, uint32(8760), input)
+}
+
+// TestAnthropicToAnthropic_NoCacheCreationBreakdown covers backends that do not
+// report the split: the fields must stay unset rather than reporting zero.
+func TestAnthropicToAnthropic_NoCacheCreationBreakdown(t *testing.T) {
+	const body = `{"model":"claude-sonnet-5","id":"msg_1","type":"message","role":"assistant",
+		"content":[{"type":"text","text":"ok"}],
+		"usage":{"input_tokens":6,"cache_creation_input_tokens":8754,"cache_read_input_tokens":0,"output_tokens":16}}`
+
+	tr := &anthropicToAnthropicTranslator{requestModel: "claude-sonnet-5"}
+	_, _, usage, _, err := tr.ResponseBody(nil, strings.NewReader(body), true, nil)
+	require.NoError(t, err)
+
+	_, ok := usage.CacheCreation1hInputTokens()
+	require.False(t, ok)
+	creation, _ := usage.CacheCreationInputTokens()
+	require.Equal(t, uint32(8754), creation, "the combined figure is unaffected")
 }
