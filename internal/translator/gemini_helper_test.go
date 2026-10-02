@@ -1578,6 +1578,19 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 			requestModel:         "gemini-3-flash",
 		},
 		{
+			name: "high reasoning effort on Pro maps to ThinkingLevelHigh",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortHigh,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelHigh,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "gemini-3-pro",
+		},
+		{
 			name: "reasoning effort unsupported value",
 			input: &openai.ChatCompletionRequest{
 				ReasoningEffort: "invalid_value",
@@ -3454,9 +3467,15 @@ func TestMapReasoningEffortToThinkingLevel(t *testing.T) {
 			expectedThinking: genai.ThinkingLevelHigh,
 		},
 		{
-			name:             "high effort maps to ThinkingLevelHigh",
+			name:             "high effort on Flash maps to ThinkingLevelHigh",
 			reasoningEffort:  openai.ReasoningEffortHigh,
 			model:            "gemini-3-flash",
+			expectedThinking: genai.ThinkingLevelHigh,
+		},
+		{
+			name:             "high effort on Pro maps to ThinkingLevelHigh",
+			reasoningEffort:  openai.ReasoningEffortHigh,
+			model:            "gemini-3-pro",
 			expectedThinking: genai.ThinkingLevelHigh,
 		},
 		{
