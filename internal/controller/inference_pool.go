@@ -9,20 +9,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwaiev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
 // InferencePoolController implements [reconcile.TypedReconciler] for [gwaiev1.InferencePool].
@@ -91,12 +97,97 @@ func (c *InferencePoolController) syncInferencePool(ctx context.Context, inferen
 		return err
 	}
 
+	if err := c.syncFallbackService(ctx, inferencePool); err != nil {
+		return err
+	}
+
 	referencedGateways, err := c.getReferencedGateways(ctx, inferencePool)
 	if err != nil {
 		return err
 	}
 
 	c.logger.Info("Found referenced Gateways", "count", len(referencedGateways), "inferencePool", inferencePool.Name)
+	return nil
+}
+
+// syncFallbackService keeps the pool's fallback Service in line with its failureMode.
+//
+// With failureMode FailOpen, the extension server builds the pool's cluster on this headless
+// Service (see internalapi.InferencePoolFallbackServiceName) so that requests can reach the pool's
+// ready endpoints without the endpoint picker. The Service has the pool's selector and target
+// ports, and the pool as its controller, so it is garbage-collected with the pool. Kubernetes
+// publishes only ready Pods through a headless Service, which gives the fallback the same health
+// view as the pool.
+//
+// With FailClose, the Service is not used; one this pool owns is deleted. A Service of the same
+// name that this pool doesn't own is never modified or deleted.
+func (c *InferencePoolController) syncFallbackService(ctx context.Context, pool *gwaiev1.InferencePool) error {
+	name := internalapi.InferencePoolFallbackServiceName(pool.Name)
+	services := c.kube.CoreV1().Services(pool.Namespace)
+	existing, err := services.Get(ctx, name, metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to get fallback Service %s/%s: %w", pool.Namespace, name, err)
+	}
+	found := err == nil
+
+	failOpen := pool.Spec.EndpointPickerRef != nil && pool.Spec.EndpointPickerRef.FailureMode == gwaiev1.EndpointPickerFailOpen
+	if !failOpen {
+		if found && metav1.IsControlledBy(existing, pool) {
+			c.logger.Info("Deleting fallback Service", "namespace", pool.Namespace, "name", name)
+			if err = services.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("failed to delete fallback Service %s/%s: %w", pool.Namespace, name, err)
+			}
+		}
+		return nil
+	}
+
+	selector := make(map[string]string, len(pool.Spec.Selector.MatchLabels))
+	for k, v := range pool.Spec.Selector.MatchLabels {
+		selector[string(k)] = string(v)
+	}
+	ports := make([]corev1.ServicePort, 0, len(pool.Spec.TargetPorts))
+	for _, p := range pool.Spec.TargetPorts {
+		port := int32(p.Number)
+		ports = append(ports, corev1.ServicePort{
+			Name:       fmt.Sprintf("port-%d", port),
+			Protocol:   corev1.ProtocolTCP,
+			Port:       port,
+			TargetPort: intstr.FromInt32(port),
+		})
+	}
+
+	if !found {
+		desired := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: pool.Namespace},
+			Spec: corev1.ServiceSpec{
+				ClusterIP: corev1.ClusterIPNone,
+				Selector:  selector,
+				Ports:     ports,
+			},
+		}
+		if err = ctrlutil.SetControllerReference(pool, desired, c.client.Scheme()); err != nil {
+			return fmt.Errorf("failed to set controller reference on fallback Service %s/%s: %w", pool.Namespace, name, err)
+		}
+		c.logger.Info("Creating fallback Service", "namespace", pool.Namespace, "name", name)
+		if _, err = services.Create(ctx, desired, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("failed to create fallback Service %s/%s: %w", pool.Namespace, name, err)
+		}
+		return nil
+	}
+
+	if !metav1.IsControlledBy(existing, pool) {
+		return fmt.Errorf("fallback Service %s/%s exists and is not owned by InferencePool %s; "+
+			"rename or delete it to allow failureMode FailOpen", pool.Namespace, name, pool.Name)
+	}
+	if maps.Equal(existing.Spec.Selector, selector) && equality.Semantic.DeepEqual(existing.Spec.Ports, ports) {
+		return nil
+	}
+	existing.Spec.Selector = selector
+	existing.Spec.Ports = ports
+	c.logger.Info("Updating fallback Service", "namespace", pool.Namespace, "name", name)
+	if _, err = services.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("failed to update fallback Service %s/%s: %w", pool.Namespace, name, err)
+	}
 	return nil
 }
 

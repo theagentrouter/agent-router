@@ -12,6 +12,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestInferencePoolFallbackServiceName(t *testing.T) {
+	// A pool name that fits a Service name keeps it readable.
+	assert.Equal(t, "vllm-pool-epp-fallback", InferencePoolFallbackServiceName("vllm-pool"))
+
+	// Names that don't fit an RFC 1035 label of at most 63 characters use a stable hash.
+	for _, tc := range []struct {
+		name     string
+		poolName string
+	}{
+		{name: "too long", poolName: "a-very-long-inference-pool-name-that-leaves-no-room-for-the-suffix"},
+		{name: "contains dots", poolName: "pool.with.dots"},
+		{name: "starts with a digit", poolName: "1pool-starts-with-a-digit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := InferencePoolFallbackServiceName(tc.poolName)
+			require.LessOrEqual(t, len(got), 63)
+			require.Regexp(t, `^epp-fallback-[0-9a-f]{16}$`, got)
+			require.Equal(t, got, InferencePoolFallbackServiceName(tc.poolName), "must be deterministic")
+		})
+	}
+	require.NotEqual(t, InferencePoolFallbackServiceName("pool.a"), InferencePoolFallbackServiceName("pool.b"))
+}
+
 func TestParseEndpointPrefixes_Success(t *testing.T) {
 	in := "openai:/foo,cohere:/1/2/3,anthropic:/cat,typesafe:/ts"
 	ep, err := ParseEndpointPrefixes(in)
