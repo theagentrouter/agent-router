@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -25,6 +27,8 @@ import (
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 )
 
+const inferencePoolStatusRequeueAfter = time.Second
+
 // InferencePoolController implements [reconcile.TypedReconciler] for [gwaiev1.InferencePool].
 //
 // This handles the InferencePool resource and updates its status based on associated Gateways.
@@ -35,6 +39,23 @@ type InferencePoolController struct {
 	kube                   kubernetes.Interface
 	logger                 logr.Logger
 	inferencePoolEventChan chan event.GenericEvent
+
+	// pendingRequeues tracks InferencePools awaiting one convergence follow-up
+	// reconcile so cache-backed route and gateway lists can catch up before
+	// conformance checks observe parent status. The status-equality check in
+	// updateInferencePoolStatus returns false (no change) when the observed
+	// parents already match the written status — including the case where both
+	// are empty because a list cache is lagging. Arming a follow-up on the first
+	// observed sync at a generation (and on every status change), then
+	// requeueing once even when the status did not change, guarantees that a
+	// follow-up reconcile re-reads the (now converged) cache.
+	//
+	// The key is "namespace/name" and the value is the generation at which the
+	// follow-up was armed. A spec change (new generation) overwrites the value,
+	// re-arming the follow-up even after a previous generation reached steady
+	// state, without leaving stale per-generation entries behind.
+	pendingRequeues   map[string]int64
+	pendingRequeuesMu sync.Mutex
 }
 
 // errEndpointPickerRefMissing is returned by validateExtensionReference when the InferencePool's
@@ -54,6 +75,7 @@ func NewInferencePoolController(
 		kube:                   kube,
 		logger:                 logger,
 		inferencePoolEventChan: inferencePoolEventChan,
+		pendingRequeues:        make(map[string]int64),
 	}
 }
 
@@ -64,6 +86,7 @@ func (c *InferencePoolController) Reconcile(ctx context.Context, req reconcile.R
 		if client.IgnoreNotFound(err) == nil {
 			c.logger.Info("Deleting InferencePool",
 				"namespace", req.Namespace, "name", req.Name)
+			c.forgetInferencePoolRequeue(req.Namespace, req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -79,8 +102,80 @@ func (c *InferencePoolController) Reconcile(ctx context.Context, req reconcile.R
 		c.updateInferencePoolStatus(ctx, &inferencePool, reason, err.Error())
 		return ctrl.Result{}, err
 	}
-	c.updateInferencePoolStatus(ctx, &inferencePool, "Accepted", "InferencePool reconciled successfully")
+
+	// A successful sync may still observe a stale parent set because the
+	// controller-runtime cache-backed route and gateway lists can lag related
+	// object events. Crucially, updateInferencePoolStatus returns false (no
+	// change) when the observed parents already match the written status —
+	// including the case where both are empty because a list cache is lagging.
+	// Relying on status mutation alone would then skip the requeue and the
+	// status could stay stale indefinitely if no later event fires.
+	//
+	// To close that gap, schedule a short follow-up reconcile whenever the
+	// observed status is not yet confirmed stable for the current generation:
+	//   - a status change arms a follow-up (the cache may still be catching up
+	//     to the newly written parents), and
+	//   - the first observed sync at a generation arms a follow-up (the cache
+	//     may be lagging and the unchanged status cannot yet be trusted).
+	// The follow-up reconcile re-reads a now-converged cache; once the status
+	// is observed unchanged at the same generation, the controller stops
+	// requeueing. A spec change (new generation) re-arms the follow-up.
+	changed := c.updateInferencePoolStatus(ctx, &inferencePool, "Accepted", "InferencePool reconciled successfully")
+	if c.needInferencePoolFollowUp(&inferencePool, changed) {
+		return ctrl.Result{RequeueAfter: inferencePoolStatusRequeueAfter}, nil
+	}
 	return ctrl.Result{}, nil
+}
+
+// inferencePoolRequeueKey uniquely identifies an InferencePool by namespace
+// and name. The generation is tracked as the map value rather than part of the
+// key, so a spec change overwrites the existing entry and re-arms the
+// convergence follow-up without leaving stale per-generation entries behind.
+func inferencePoolRequeueKey(inferencePool *gwaiev1.InferencePool) string {
+	return fmt.Sprintf("%s/%s", inferencePool.Namespace, inferencePool.Name)
+}
+
+// needInferencePoolFollowUp records the outcome of a successful sync at the
+// InferencePool's current generation and reports whether a short follow-up
+// reconcile is needed for cache convergence.
+//
+// The per-object marker (value = generation) is armed when either the status
+// changed or this is the first observed sync at the generation; it is consumed
+// when a subsequent sync observes an unchanged status, at which point the
+// controller stops requeueing until the status changes or the generation
+// advances.
+func (c *InferencePoolController) needInferencePoolFollowUp(inferencePool *gwaiev1.InferencePool, changed bool) bool {
+	c.pendingRequeuesMu.Lock()
+	defer c.pendingRequeuesMu.Unlock()
+	key := inferencePoolRequeueKey(inferencePool)
+	armedGen, ok := c.pendingRequeues[key]
+
+	// A spec change (or a marker that never existed) means this generation has
+	// not yet been confirmed stable: arm a follow-up. Storing the current
+	// generation overwrites any stale marker from a previous generation.
+	if !ok || armedGen != inferencePool.Generation {
+		c.pendingRequeues[key] = inferencePool.Generation
+		return true
+	}
+
+	// Same generation as an armed follow-up.
+	if changed {
+		// Status changed again before converging: keep the follow-up armed.
+		return true
+	}
+	// Unchanged status at an already-armed generation: this is the convergence
+	// follow-up. Clear the marker and stop requeueing.
+	delete(c.pendingRequeues, key)
+	return false
+}
+
+// forgetInferencePoolRequeue drops any pending convergence marker for the
+// InferencePool, called when it has been deleted so the map does not grow
+// unbounded over the controller's lifetime.
+func (c *InferencePoolController) forgetInferencePoolRequeue(namespace, name string) {
+	c.pendingRequeuesMu.Lock()
+	defer c.pendingRequeuesMu.Unlock()
+	delete(c.pendingRequeues, fmt.Sprintf("%s/%s", namespace, name))
 }
 
 // syncInferencePool is the main logic for reconciling the InferencePool resource.
@@ -243,8 +338,10 @@ func (c *InferencePoolController) httpRouteReferencesInferencePool(route *gwapiv
 	return false
 }
 
-// updateInferencePoolStatus updates the status of the InferencePool.
-func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context, inferencePool *gwaiev1.InferencePool, conditionType string, message string) {
+// updateInferencePoolStatus updates the status of the InferencePool and reports
+// whether the status changed. Requeueing after a change lets cache-backed route
+// and gateway lists converge before conformance checks observe parent status.
+func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context, inferencePool *gwaiev1.InferencePool, conditionType string, message string) bool {
 	// Check if this is an ExtensionReference validation error.
 	isExtensionRefError := conditionType == "NotAccepted" &&
 		(strings.Contains(message, "ExtensionReference service") && strings.Contains(message, "not found"))
@@ -252,7 +349,7 @@ func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context,
 	referencedGateways, err := c.getReferencedGateways(ctx, inferencePool)
 	if err != nil {
 		c.logger.Error(err, "failed to get referenced Gateways for status update")
-		return
+		return false
 	}
 
 	// Build Parents status.
@@ -294,10 +391,69 @@ func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context,
 	// If no Gateways reference this InferencePool, clear all parents.
 	// This correctly reflects that the InferencePool is not currently referenced by any Gateway.
 
+	if inferencePoolParentStatusesEqual(inferencePool.Status.Parents, parents) {
+		return false
+	}
+
 	inferencePool.Status.Parents = parents
 	if err := c.client.Status().Update(ctx, inferencePool); err != nil {
 		c.logger.Error(err, "failed to update InferencePool status")
+		return false
 	}
+	return true
+}
+
+func inferencePoolParentStatusesEqual(a, b []gwaiev1.ParentStatus) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	remaining := make(map[string]gwaiev1.ParentStatus, len(b))
+	for i := range b {
+		parent := &b[i]
+		remaining[inferencePoolParentStatusKey(parent)] = *parent
+	}
+	for i := range a {
+		parent := &a[i]
+		other, ok := remaining[inferencePoolParentStatusKey(parent)]
+		if !ok || !inferencePoolConditionsEqual(parent.Conditions, other.Conditions) {
+			return false
+		}
+		delete(remaining, inferencePoolParentStatusKey(parent))
+	}
+	return len(remaining) == 0
+}
+
+func inferencePoolParentStatusKey(parent *gwaiev1.ParentStatus) string {
+	ref := parent.ParentRef
+	group := ""
+	if ref.Group != nil {
+		group = string(*ref.Group)
+	}
+	return fmt.Sprintf("%s/%s/%s/%s", group, ref.Kind, ref.Namespace, ref.Name)
+}
+
+func inferencePoolConditionsEqual(a, b []metav1.Condition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	remaining := make(map[string]metav1.Condition, len(b))
+	for _, condition := range b {
+		remaining[condition.Type] = condition
+	}
+	for _, condition := range a {
+		other, ok := remaining[condition.Type]
+		if !ok ||
+			condition.Status != other.Status ||
+			condition.Reason != other.Reason ||
+			condition.Message != other.Message ||
+			condition.ObservedGeneration != other.ObservedGeneration {
+			return false
+		}
+		delete(remaining, condition.Type)
+	}
+	return len(remaining) == 0
 }
 
 // buildAcceptedCondition builds a condition for the InferencePool status.
