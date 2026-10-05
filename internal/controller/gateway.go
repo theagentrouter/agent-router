@@ -553,6 +553,14 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 					b.Schema = schemaToFilterAPI(backendObj.Spec.APISchema)
 					b.HeaderValueFilters = headerValueFiltersToFilterAPI(backendObj.Spec.HeaderValueFilters)
+
+					// Wire context caching configuration when present on the backend object.
+					if cc := backendObj.Spec.ContextCache; cc != nil {
+						b.ContextCache = &filterapi.ContextCache{
+							URL:        cc.URL,
+							DefaultTTL: cc.DefaultTTL,
+						}
+					}
 				}
 
 				if bsp != nil {

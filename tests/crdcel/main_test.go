@@ -95,6 +95,17 @@ func TestAIServiceBackends(t *testing.T) {
 	}{
 		{name: "basic.yaml"},
 		{name: "anthropic-schema.yaml"},
+		{name: "context-cache-enabled.yaml"},
+		{
+			name:   "context-cache-invalid-ttl.yaml",
+			expErr: "spec.contextCache.defaultTTL",
+		},
+		{
+			// Url should not be empty, so a missing
+			// url reaches the API server as "" and fails the MinLength rule.
+			name:   "context-cache-missing-url.yaml",
+			expErr: "spec.contextCache.url in body should be at least 1 chars long",
+		},
 		{name: "basic-eg-backend-aws.yaml"},
 		{name: "aws-openai-schema.yaml"},
 		{name: "basic-eg-backend-azure.yaml"},

@@ -10,7 +10,9 @@ import (
 	"fmt"
 
 	"github.com/google/cel-go/cel"
+	"golang.org/x/oauth2"
 
+	"github.com/envoyproxy/ai-gateway/internal/contextcache"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/llmcostcel"
 )
@@ -20,6 +22,20 @@ type BackendAuthHandler interface {
 	// Do performs the backend auth, and make changes to the request headers passed in as `requestHeaders`.
 	// It also returns a list of headers that were added or modified as a slice of key-value pairs.
 	Do(ctx context.Context, requestHeaders map[string]string, mutatedBody []byte) ([]internalapi.Header, error)
+}
+
+// GCPAuthHandler is an optional interface implemented by the GCP backend auth handler.
+// It exposes credentials so that in-process components (e.g. the context-cache resolver) can
+// authenticate to GCP APIs without duplicating credential management.
+type GCPAuthHandler interface {
+	BackendAuthHandler
+	// GCPTokenSource returns the OAuth2 token source used to authenticate requests to GCP.
+	// Callers must call Token() on the returned source to obtain a valid access token.
+	GCPTokenSource() oauth2.TokenSource
+	// GCPRegion returns the GCP region configured for this backend.
+	GCPRegion() string
+	// GCPProject returns the GCP project name configured for this backend.
+	GCPProject() string
 }
 
 // NewBackendAuthHandlerFunc is a function type that creates a new BackendAuthHandler for a given BackendAuth configuration.
@@ -53,6 +69,9 @@ type RuntimeBackend struct {
 	Backend *Backend
 	// Handler is the backend auth handler.
 	Handler BackendAuthHandler
+	// CacheResolver is the in-process context-cache resolver for this backend. Currently
+	// only used for GCP Vertex AI backends with context caching configured.
+	CacheResolver contextcache.CacheResolver
 }
 
 // RuntimeGlobalRequestCost is the configuration for gateway-level default request costs.

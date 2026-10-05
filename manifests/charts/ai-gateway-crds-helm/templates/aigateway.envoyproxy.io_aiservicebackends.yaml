@@ -224,6 +224,36 @@ spec:
                     - path
                     x-kubernetes-list-type: map
                 type: object
+              contextCache:
+                description: |-
+                  ContextCache configures context caching for this backend.
+                  When set, the ai-gateway will automatically resolve or create a context cache
+                  entry for requests that carry Anthropic-style cache_control markers, and inject the
+                  resolved cache resource name into the API request.
+                  Currently only supported for GCP Vertex AI backends.
+                properties:
+                  defaultTTL:
+                    description: |-
+                      DefaultTTL is the default time-to-live for newly created cache entries, expressed
+                      as a GCP duration string (e.g. "600s"). When empty, the default of 300s is used.
+                      Must be at least "60s" per GCP API requirements.
+                    pattern: ^[1-9][0-9]*s$
+                    type: string
+                  url:
+                    description: |-
+                      URL locates the shared Redis store that records which cachedContents entry a given
+                      request prefix resolved to.
+
+                      It is given either as a bare "host:port"
+                      (e.g. "redis.default.svc.cluster.local:6379") or as a full "redis://" URL.
+
+                      If Redis is unreachable at request time, caching is skipped and the request is
+                      served uncached rather than failed.
+                    minLength: 1
+                    type: string
+                required:
+                - url
+                type: object
               headerMutation:
                 description: |-
                   HeaderMutation defines the mutation of HTTP headers that will be applied to the request
@@ -640,6 +670,36 @@ spec:
                     x-kubernetes-list-map-keys:
                     - path
                     x-kubernetes-list-type: map
+                type: object
+              contextCache:
+                description: |-
+                  ContextCache configures context caching for this backend.
+                  When set, the ai-gateway will automatically resolve or create a context cache
+                  entry for requests that carry Anthropic-style cache_control markers, and inject the
+                  resolved cache resource name into the API request.
+                  Currently only supported for GCP Vertex AI backends.
+                properties:
+                  defaultTTL:
+                    description: |-
+                      DefaultTTL is the default time-to-live for newly created cache entries, expressed
+                      as a GCP duration string (e.g. "600s"). When empty, the default of 300s is used.
+                      Must be at least "60s" per GCP API requirements.
+                    pattern: ^[1-9][0-9]*s$
+                    type: string
+                  url:
+                    description: |-
+                      URL locates the shared Redis store that records which cachedContents entry a given
+                      request prefix resolved to.
+
+                      It is given either as a bare "host:port"
+                      (e.g. "redis.default.svc.cluster.local:6379") or as a full "redis://" URL.
+
+                      If Redis is unreachable at request time, caching is skipped and the request is
+                      served uncached rather than failed.
+                    minLength: 1
+                    type: string
+                required:
+                - url
                 type: object
               headerMutation:
                 description: |-

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/google/go-cmp/cmp"
@@ -780,6 +782,71 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			},
 			wantBody: wantBdyWithEnterpriseWebSearch,
 		},
+		{
+			name: "Request with explicit cachedContent vendor field",
+			input: openai.ChatCompletionRequest{
+				Model:     "gemini-1.5-pro",
+				MaxTokens: ptr.To(int64(1024)),
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{
+						OfUser: &openai.ChatCompletionUserMessageParam{
+							Role:    openai.ChatMessageRoleUser,
+							Content: openai.StringOrUserRoleContentUnion{Value: "Summarize the document."},
+						},
+					},
+				},
+				GCPVertexAIVendorFields: &openai.GCPVertexAIVendorFields{
+					CachedContent: "projects/my-project/locations/us-central1/cachedContents/abc123",
+				},
+			},
+			onRetry:   false,
+			wantError: false,
+			wantHeaderMut: []internalapi.Header{
+				{":path", "publishers/google/models/gemini-1.5-pro:generateContent"},
+			},
+			wantBody: []byte(`{
+				"contents": [{"parts": [{"text": "Summarize the document."}], "role": "user"}],
+				"tools": null,
+				"generationConfig": {"maxOutputTokens": 1024},
+				"cachedContent": "projects/my-project/locations/us-central1/cachedContents/abc123"
+			}`),
+		},
+		{
+			name: "Request with both cache_control markers and explicit cachedContent returns error",
+			input: openai.ChatCompletionRequest{
+				Model:     "gemini-1.5-pro",
+				MaxTokens: ptr.To(int64(1024)),
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{
+						OfSystem: &openai.ChatCompletionSystemMessageParam{
+							Role: openai.ChatMessageRoleSystem,
+							Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{
+								{
+									Type: "text",
+									Text: "You are a helpful assistant.",
+									AnthropicContentFields: &openai.AnthropicContentFields{
+										CacheControl: anthropic.CacheControlEphemeralParam{
+											Type: constant.ValueOf[constant.Ephemeral](),
+										},
+									},
+								},
+							}},
+						},
+					},
+					{
+						OfUser: &openai.ChatCompletionUserMessageParam{
+							Role:    openai.ChatMessageRoleUser,
+							Content: openai.StringOrUserRoleContentUnion{Value: "Hello"},
+						},
+					},
+				},
+				GCPVertexAIVendorFields: &openai.GCPVertexAIVendorFields{
+					CachedContent: "projects/my-project/locations/us-central1/cachedContents/abc123",
+				},
+			},
+			onRetry:   true,
+			wantError: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -815,6 +882,118 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			if diff := cmp.Diff(tc.wantBody, bodyMut, bodyMutTransformer(t)); diff != "" {
 				t.Errorf("BodyMutation mismatch (-want +got):\n%s", diff)
 			}
+		})
+	}
+}
+
+func TestGCPRequestHasCacheControlMarkers(t *testing.T) {
+	ephemeral := anthropic.CacheControlEphemeralParam{Type: constant.ValueOf[constant.Ephemeral]()}
+
+	tests := []struct {
+		name string
+		req  openai.ChatCompletionRequest
+		want bool
+	}{
+		{
+			name: "no cache_control markers",
+			req: openai.ChatCompletionRequest{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "hello"},
+					}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "cache_control on system message content part",
+			req: openai.ChatCompletionRequest{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfSystem: &openai.ChatCompletionSystemMessageParam{
+						Role: openai.ChatMessageRoleSystem,
+						Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{
+							{
+								Type: "text",
+								Text: "You are helpful.",
+								AnthropicContentFields: &openai.AnthropicContentFields{
+									CacheControl: ephemeral,
+								},
+							},
+						}},
+					}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "cache_control on user message text content part",
+			req: openai.ChatCompletionRequest{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfUser: &openai.ChatCompletionUserMessageParam{
+						Role: openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{
+							Value: []openai.ChatCompletionContentPartUserUnionParam{
+								{OfText: &openai.ChatCompletionContentPartTextParam{
+									Type: "text",
+									Text: "large context",
+									AnthropicContentFields: &openai.AnthropicContentFields{
+										CacheControl: ephemeral,
+									},
+								}},
+							},
+						},
+					}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "cache_control on tool message",
+			req: openai.ChatCompletionRequest{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfTool: &openai.ChatCompletionToolMessageParam{
+						Role:       openai.ChatMessageRoleTool,
+						ToolCallID: "call_1",
+						Content:    openai.ContentUnion{Value: "result"},
+						AnthropicContentFields: &openai.AnthropicContentFields{
+							CacheControl: ephemeral,
+						},
+					}},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "string user message has no markers",
+			req: openai.ChatCompletionRequest{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "plain string"},
+					}},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "system string content has no markers",
+			req: openai.ChatCompletionRequest{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfSystem: &openai.ChatCompletionSystemMessageParam{
+						Role:    openai.ChatMessageRoleSystem,
+						Content: openai.ContentUnion{Value: "plain system string"},
+					}},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := gcpRequestHasCacheControlMarkers(&tc.req)
+			require.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -2740,5 +2919,147 @@ func TestGCPVertexAIRedactBody(t *testing.T) {
 		// Verify original is completely unchanged
 		require.Equal(t, originalContentCopy, *resp.Choices[0].Message.Content)
 		require.NotContains(t, *resp.Choices[0].Message.Content, "[REDACTED")
+	})
+}
+
+// TestOpenAIToGCPVertexAITranslator_ContextCacheSetter verifies that SetContextCacheResult
+// correctly injects the cache name into the Gemini request, replaces the message list
+// with the filtered remainder, and records cache-write tokens in ResponseBody.
+func TestOpenAIToGCPVertexAITranslator_ContextCacheSetter(t *testing.T) {
+	t.Run("cache name injected into Gemini request", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+
+		// Seed a cache result before RequestBody.
+		tr.SetContextCacheResult(&ContextCacheResult{
+			CacheName:        "projects/p/locations/us-central1/cachedContents/abc",
+			FilteredMessages: []openai.ChatCompletionMessageParamUnion{},
+			Created:          true,
+			WriteTokenCount:  256,
+		})
+
+		req := &openai.ChatCompletionRequest{
+			Model: "gemini-1.5-pro",
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Content: openai.StringOrUserRoleContentUnion{Value: "hello"},
+					Role:    openai.ChatMessageRoleUser,
+				}},
+			},
+		}
+
+		_, bodyBytes, err := tr.RequestBody(nil, req, false)
+		require.NoError(t, err)
+
+		// The Gemini request should carry the cachedContent field.
+		require.Contains(t, string(bodyBytes), `"cachedContent":"projects/p/locations/us-central1/cachedContents/abc"`)
+
+		// cacheWriteTokens should be set for response attribution.
+		require.Equal(t, uint32(256), tr.cacheWriteTokens)
+	})
+
+	t.Run("cached request drops tools, tool config and system instruction", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+		tr.SetContextCacheResult(&ContextCacheResult{
+			CacheName: "projects/p/locations/us-central1/cachedContents/abc",
+			FilteredMessages: []openai.ChatCompletionMessageParamUnion{
+				{OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Content: openai.ContentUnion{Value: "late system"},
+					Role:    openai.ChatMessageRoleSystem,
+				}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Content: openai.StringOrUserRoleContentUnion{Value: "hello"},
+					Role:    openai.ChatMessageRoleUser,
+				}},
+			},
+		})
+		req := &openai.ChatCompletionRequest{
+			Model: "gemini-1.5-pro",
+			Tools: []openai.Tool{{
+				Type:     openai.ToolTypeFunction,
+				Function: &openai.FunctionDefinition{Name: "get_weather"},
+			}},
+			ToolChoice: &openai.ChatCompletionToolChoiceUnion{Value: "auto"},
+		}
+		_, bodyBytes, err := tr.RequestBody(nil, req, false)
+		require.NoError(t, err)
+		body := string(bodyBytes)
+		require.Contains(t, body, `"cachedContent"`)
+		require.NotContains(t, body, "get_weather")
+		require.NotContains(t, body, `"toolConfig":{`)
+		require.NotContains(t, body, "late system")
+		require.Contains(t, body, "hello")
+	})
+
+	t.Run("cache hit does not set write tokens", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+
+		tr.SetContextCacheResult(&ContextCacheResult{
+			CacheName:       "projects/p/locations/us-central1/cachedContents/existing",
+			Created:         false,
+			WriteTokenCount: 0,
+		})
+
+		req := &openai.ChatCompletionRequest{
+			Model:    "gemini-1.5-pro",
+			Messages: []openai.ChatCompletionMessageParamUnion{},
+		}
+		_, _, err := tr.RequestBody(nil, req, false)
+		require.NoError(t, err)
+		require.Equal(t, uint32(0), tr.cacheWriteTokens)
+	})
+
+	t.Run("a hit reports no write tokens even if a count is set", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+		tr.SetContextCacheResult(&ContextCacheResult{CacheName: "c/hit", Created: false, WriteTokenCount: 99})
+		_, _, err := tr.RequestBody(nil, &openai.ChatCompletionRequest{Model: "gemini-1.5-pro"}, false)
+		require.NoError(t, err)
+		require.Zero(t, tr.cacheWriteTokens)
+	})
+
+	t.Run("cache write tokens appear in non-streaming ResponseBody", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+		tr.cacheWriteTokens = 512
+
+		gcpResp := `{
+			"candidates": [{
+				"content": {"parts": [{"text": "hello"}]},
+				"finishReason": "STOP"
+			}],
+			"usageMetadata": {
+				"promptTokenCount": 100,
+				"candidatesTokenCount": 20,
+				"totalTokenCount": 120
+			}
+		}`
+
+		_, _, tokenUsage, _, err := tr.ResponseBody(nil, strings.NewReader(gcpResp), true, nil)
+		require.NoError(t, err)
+
+		cacheCreation, set := tokenUsage.CacheCreationInputTokens()
+		require.True(t, set, "CacheCreationInputTokens must be set when cacheWriteTokens > 0")
+		require.Equal(t, uint32(512), cacheCreation)
+	})
+
+	t.Run("no cache write tokens when not created", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+		// cacheWriteTokens defaults to zero.
+
+		gcpResp := `{
+			"candidates": [{
+				"content": {"parts": [{"text": "hello"}]},
+				"finishReason": "STOP"
+			}],
+			"usageMetadata": {
+				"promptTokenCount": 50,
+				"candidatesTokenCount": 10,
+				"totalTokenCount": 60
+			}
+		}`
+
+		_, _, tokenUsage, _, err := tr.ResponseBody(nil, strings.NewReader(gcpResp), true, nil)
+		require.NoError(t, err)
+
+		_, set := tokenUsage.CacheCreationInputTokens()
+		require.False(t, set, "CacheCreationInputTokens must not be set when no cache was created")
 	})
 }

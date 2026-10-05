@@ -4382,3 +4382,120 @@ func TestGatewayController_warnUndeclaredMetadataNamespaces(t *testing.T) {
 	c.warnUndeclaredMetadataNamespaces(ec, []string{"declared.ns", "missing.ns", "other-missing.ns"}, "gw", "ns")
 	require.Empty(t, logged)
 }
+
+// TestGatewayController_reconcileFilterConfigSecret_ContextCache verifies that the
+// ContextCache field on an AIServiceBackend is propagated to filterapi.Backend in the
+// rendered filter configuration secret.
+func TestGatewayController_reconcileFilterConfigSecret_ContextCache(t *testing.T) {
+	const gwNamespace, someNamespace = "ns", "some-namespace"
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	kube := fake2.NewClientset()
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zap.Options{Development: true, Level: zapcore.DebugLevel})))
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	routes := []aigv1b1.AIGatewayRoute{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "gcproute", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "gcp-backend"}},
+						Matches:     []aigv1b1.AIGatewayRouteRuleMatch{{}},
+					},
+				},
+			},
+		},
+	}
+
+	// Create the AIServiceBackend with ContextCache configured.
+	err := fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "gcp-backend", Namespace: gwNamespace},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			APISchema: aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaGCPVertexAI},
+			BackendRef: gwapiv1.BackendObjectReference{
+				Name:  "gcp-service",
+				Kind:  ptr.To(gwapiv1.Kind("Backend")),
+				Group: ptr.To(gwapiv1.Group("gateway.envoyproxy.io")),
+			},
+			ContextCache: &aigv1b1.ContextCacheSpec{
+				DefaultTTL: "600s",
+				URL:        "redis.default.svc.cluster.local:6379",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "uuid1", nil, nil)
+	require.NoError(t, err)
+
+	fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", gwNamespace)
+
+	// Find the backend that contains "gcp-backend" in its name.
+	var gcpBackend *filterapi.Backend
+	for i := range fc.Backends {
+		if strings.Contains(fc.Backends[i].Name, "gcp-backend") {
+			gcpBackend = &fc.Backends[i]
+			break
+		}
+	}
+	require.NotNil(t, gcpBackend, "expected to find gcp-backend in filter config")
+	require.NotNil(t, gcpBackend.ContextCache, "ContextCache must be populated in filter config")
+	require.Equal(t, "600s", gcpBackend.ContextCache.DefaultTTL)
+	require.Equal(t, "redis.default.svc.cluster.local:6379", gcpBackend.ContextCache.URL,
+		"the redis store location must reach the data plane")
+}
+
+// TestGatewayController_reconcileFilterConfigSecret_ContextCache_NilWhenAbsent verifies that
+// when ContextCache is not set on the AIServiceBackend, filterapi.Backend.ContextCache is nil.
+func TestGatewayController_reconcileFilterConfigSecret_ContextCache_NilWhenAbsent(t *testing.T) {
+	const gwNamespace, someNamespace = "ns2", "some-namespace2"
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	kube := fake2.NewClientset()
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zap.Options{Development: true, Level: zapcore.DebugLevel})))
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	routes := []aigv1b1.AIGatewayRoute{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "gcproute2", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "gcp-backend2"}},
+						Matches:     []aigv1b1.AIGatewayRouteRuleMatch{{}},
+					},
+				},
+			},
+		},
+	}
+
+	err := fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "gcp-backend2", Namespace: gwNamespace},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			APISchema: aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaGCPVertexAI},
+			BackendRef: gwapiv1.BackendObjectReference{
+				Name:  "gcp-service",
+				Kind:  ptr.To(gwapiv1.Kind("Backend")),
+				Group: ptr.To(gwapiv1.Group("gateway.envoyproxy.io")),
+			},
+			// ContextCache intentionally omitted.
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, someNamespace, routes, nil, "uuid2", nil, nil)
+	require.NoError(t, err)
+
+	fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", gwNamespace)
+
+	var gcpBackend *filterapi.Backend
+	for i := range fc.Backends {
+		if strings.Contains(fc.Backends[i].Name, "gcp-backend2") {
+			gcpBackend = &fc.Backends[i]
+			break
+		}
+	}
+	require.NotNil(t, gcpBackend, "expected to find gcp-backend2 in filter config")
+	require.Nil(t, gcpBackend.ContextCache, "ContextCache must be nil when not set on the CRD")
+}

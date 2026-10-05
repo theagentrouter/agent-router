@@ -26,6 +26,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
+	"github.com/envoyproxy/ai-gateway/internal/contextcache/gcpcache"
+	"github.com/envoyproxy/ai-gateway/internal/contextcache/redis"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/redaction"
@@ -61,6 +63,14 @@ type Server struct {
 	routerProcessorsPerReqID      map[string]Processor
 	routerProcessorsPerReqIDMutex sync.RWMutex
 	uuidFn                        func() string
+	// cacheResolvers holds one context-cache resolver per GCP backend, keyed by
+	// "<backend name>|<redis url>". Resolvers are carried across config reloads so a
+	// filterapi update does not tear down and rebuild the Redis connection pool. The
+	// Redis URL is part of the key so that repointing a backend at a different Redis
+	// builds a new resolver rather than reusing a pool aimed at the old one.
+	cacheResolvers map[string]*gcpcache.Resolver
+	// cacheResolversMu guards cacheResolvers against LoadConfig racing Close.
+	cacheResolversMu sync.Mutex
 }
 
 // NewServer creates a new external processor server.
@@ -72,6 +82,7 @@ func NewServer(logger *slog.Logger, enableRedaction bool) (*Server, error) {
 		enableRedaction:          enableRedaction,
 		processorFactories:       make(map[string]ProcessorFactory),
 		routerProcessorsPerReqID: make(map[string]Processor),
+		cacheResolvers:           make(map[string]*gcpcache.Resolver),
 		uuidFn:                   uuid.NewString,
 	}
 	return srv, nil
@@ -83,8 +94,78 @@ func (s *Server) LoadConfig(ctx context.Context, config *filterapi.Config) error
 	if err != nil {
 		return fmt.Errorf("cannot create runtime filter config: %w", err)
 	}
+
+	// LoadConfig is reachable on a Server built directly rather than through NewServer
+	// (notably in tests), so the logger is resolved here rather than assumed non-nil.
+	logger := s.logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
+	// Attach a context-cache resolver to each backend with GCP credentials that
+	// configures context caching. Resolvers are keyed by backend name and Redis URL and
+	// reused across reloads, so a config update does not rebuild their Redis connection
+	// pools; a reused resolver is given the reload's auth handler, since the controller
+	// rotates the token. Resolvers whose backend disappeared, dropped its cache config, or
+	// moved to another Redis are closed, which stops their background syncer.
+	s.cacheResolversMu.Lock()
+	defer s.cacheResolversMu.Unlock()
+	live := make(map[string]*gcpcache.Resolver, len(s.cacheResolvers))
+	for _, rb := range newConfig.Backends {
+		if _, ok := rb.Handler.(filterapi.GCPAuthHandler); !ok {
+			continue
+		}
+		cc := rb.Backend.ContextCache
+		if cc == nil || cc.URL == "" {
+			continue
+		}
+		key := rb.Backend.Name + "|" + cc.URL
+		resolver, ok := s.cacheResolvers[key]
+		if !ok {
+			store, err := redis.NewStore(cc.URL)
+			if err != nil {
+				// A bad URL disables caching for this backend rather than failing the
+				// reload: the store is an optimization, and rejecting the whole config
+				// would take down backends that have nothing to do with caching.
+				logger.Warn("invalid context cache redis url, serving backend uncached",
+					slog.String("backend", rb.Backend.Name), slog.String("error", err.Error()))
+				continue
+			}
+			resolver = gcpcache.New(nil, store, rb.Handler.(filterapi.GCPAuthHandler), logger)
+		} else {
+			// The handler is rebuilt on every reload (the controller rotates the access
+			// token), so hand the reused resolver the current one.
+			resolver.SetAuth(rb.Handler.(filterapi.GCPAuthHandler))
+		}
+		// Start is a no-op for a resolver already running, so reused resolvers are
+		// unaffected. It runs under the resolver's own context, not ctx, which is
+		// cancelled when this reload finishes.
+		resolver.Start()
+		live[key] = resolver
+		rb.CacheResolver = resolver
+	}
+	// Stop the background work of resolvers that were not carried into this config: their
+	// backend was removed, lost its cache config, or was repointed at another Redis.
+	for key, resolver := range s.cacheResolvers {
+		if _, ok := live[key]; ok {
+			continue
+		}
+		_ = resolver.Close()
+	}
+	s.cacheResolvers = live
+
 	s.config = newConfig // This is racey, but we don't care.
 	return nil
+}
+
+// Close stops the background syncer of every context-cache resolver. It is safe to call
+// more than once.
+func (s *Server) Close() {
+	s.cacheResolversMu.Lock()
+	defer s.cacheResolversMu.Unlock()
+	for _, resolver := range s.cacheResolvers {
+		_ = resolver.Close()
+	}
 }
 
 // Register a new processor for the given request path.

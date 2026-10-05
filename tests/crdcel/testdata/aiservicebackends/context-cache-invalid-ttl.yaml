@@ -1,0 +1,21 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: gcp-cache-backend-bad-ttl
+  namespace: default
+spec:
+  schema:
+    name: GCPVertexAI
+  backendRef:
+    name: gcp-service
+    kind: Backend
+    group: gateway.envoyproxy.io
+    port: 443
+  contextCache:
+    url: "redis.default.svc.cluster.local:6379"
+    defaultTTL: "not-a-duration"

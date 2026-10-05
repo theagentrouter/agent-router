@@ -96,3 +96,19 @@ func (g *gcpHandler) Do(_ context.Context, requestHeaders map[string]string, _ [
 	requestHeaders["Authorization"] = fmt.Sprintf("Bearer %s", accessToken)
 	return []internalapi.Header{{":path", newPath}, {"Authorization", fmt.Sprintf("Bearer %s", accessToken)}}, nil
 }
+
+// GCPTokenSource implements [filterapi.GCPAuthHandler].
+// It returns the OAuth2 token source used to authenticate to GCP APIs.
+// When a static access token is configured, it wraps it in a StaticTokenSource.
+func (g *gcpHandler) GCPTokenSource() oauth2.TokenSource {
+	if g.tokenSource != nil {
+		return g.tokenSource
+	}
+	return oauth2.StaticTokenSource(&oauth2.Token{AccessToken: g.gcpAccessToken})
+}
+
+// GCPRegion implements [filterapi.GCPAuthHandler].
+func (g *gcpHandler) GCPRegion() string { return g.region }
+
+// GCPProject implements [filterapi.GCPAuthHandler].
+func (g *gcpHandler) GCPProject() string { return g.projectName }

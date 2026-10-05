@@ -117,6 +117,31 @@ type ResponseRedactor interface {
 	RedactBody(resp *openai.ChatCompletionResponse) *openai.ChatCompletionResponse
 }
 
+// ContextCacheSetter is an optional interface implemented by translators whose provider
+// supports context caching (currently GCP Vertex AI Gemini). The upstream processor calls
+// SetContextCacheResult after the context-cache resolver runs so that the translator can
+// (a) reference the provider cache in the upstream request and (b) record cache-write
+// token counts for cost attribution in the response phase.
+type ContextCacheSetter interface {
+	// SetContextCacheResult forwards the resolved (or newly created) cache entry to the translator.
+	// Must be called before RequestBody.
+	SetContextCacheResult(result *ContextCacheResult)
+}
+
+// ContextCacheResult carries the information returned by the cache resolver that the translator needs.
+type ContextCacheResult struct {
+	// CacheName is the provider's name for the resolved or created cache entry.
+	CacheName string
+	// FilteredMessages is the non-cached remainder of the conversation (messages after the breakpoint).
+	// The translator replaces the original messages with this slice when building the provider request.
+	FilteredMessages []openai.ChatCompletionMessageParamUnion
+	// Created is true when this call created a new cache entry (cache-write cost applies).
+	Created bool
+	// WriteTokenCount is the number of tokens stored in the cache, from the provider's create response.
+	// Only meaningful when Created is true.
+	WriteTokenCount uint32
+}
+
 // AnthropicResponseRedactor is an optional interface that Anthropic translators
 // can implement to support response body redaction for debug logging.
 type AnthropicResponseRedactor interface {

@@ -19,6 +19,7 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
@@ -48,9 +49,198 @@ func requireNewServerWithMockProcessor(t *testing.T) (*Server, *mockProcessor) {
 func TestServer_LoadConfig(t *testing.T) {
 	config := &filterapi.Config{}
 	s := &Server{}
+	t.Cleanup(s.Close)
 	err := s.LoadConfig(t.Context(), config)
 	require.NoError(t, err)
 	require.NotNil(t, s.config)
+}
+
+// TestServer_LoadConfig_GCPCacheResolver verifies that a CacheResolver is attached
+// to a GCP backend only when ContextCache is configured with a store URL.
+func TestServer_LoadConfig_GCPCacheResolver(t *testing.T) {
+	s := &Server{}
+	t.Cleanup(s.Close)
+
+	config := &filterapi.Config{
+		Backends: []filterapi.Backend{
+			{
+				Name:   "gcp-caching-on",
+				Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaGCPVertexAI},
+				Auth: &filterapi.BackendAuth{
+					GCPAuth: &filterapi.GCPAuth{AccessToken: "token"},
+				},
+				ContextCache: &filterapi.ContextCache{URL: "localhost:6379", DefaultTTL: "600s"},
+			},
+			{
+				Name:   "gcp-caching-no-url",
+				Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaGCPVertexAI},
+				Auth: &filterapi.BackendAuth{
+					GCPAuth: &filterapi.GCPAuth{AccessToken: "token"},
+				},
+				ContextCache: &filterapi.ContextCache{},
+			},
+			{
+				Name:   "gcp-no-caching-field",
+				Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaGCPVertexAI},
+				Auth: &filterapi.BackendAuth{
+					GCPAuth: &filterapi.GCPAuth{AccessToken: "token"},
+				},
+				// ContextCache is nil.
+			},
+			{
+				Name:   "non-gcp",
+				Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
+				// No auth handler → not a GCPAuthHandler.
+			},
+		},
+	}
+
+	err := s.LoadConfig(t.Context(), config)
+	require.NoError(t, err)
+
+	rb := s.config.Backends["gcp-caching-on"]
+	require.NotNil(t, rb.CacheResolver, "CacheResolver must be set when ContextCache has a store URL")
+
+	rb = s.config.Backends["gcp-caching-no-url"]
+	require.Nil(t, rb.CacheResolver, "CacheResolver must be nil when ContextCache has no store URL")
+
+	rb = s.config.Backends["gcp-no-caching-field"]
+	require.Nil(t, rb.CacheResolver, "CacheResolver must be nil when ContextCache is absent")
+
+	rb = s.config.Backends["non-gcp"]
+	require.Nil(t, rb.CacheResolver, "CacheResolver must be nil for non-GCP backends")
+}
+
+// gcpBackendWithCaching builds a GCP backend whose context caching points at redisURL.
+func gcpBackendWithCaching(name, redisURL string) filterapi.Backend {
+	return filterapi.Backend{
+		Name:         name,
+		Schema:       filterapi.VersionedAPISchema{Name: filterapi.APISchemaGCPVertexAI},
+		Auth:         &filterapi.BackendAuth{GCPAuth: &filterapi.GCPAuth{AccessToken: "token"}},
+		ContextCache: &filterapi.ContextCache{URL: redisURL, DefaultTTL: "600s"},
+	}
+}
+
+// A resolver owns a Redis connection pool. Rebuilding it on every filterapi update would
+// discard live connections on a hot path that fires whenever any unrelated backend changes.
+func TestServer_LoadConfig_GCPCacheResolver_ReusedAcrossReloads(t *testing.T) {
+	s := &Server{}
+	t.Cleanup(s.Close)
+	config := &filterapi.Config{Backends: []filterapi.Backend{gcpBackendWithCaching("gcp", "localhost:6379")}}
+
+	require.NoError(t, s.LoadConfig(t.Context(), config))
+	first := s.config.Backends["gcp"].CacheResolver
+	require.NotNil(t, first)
+
+	require.NoError(t, s.LoadConfig(t.Context(), config))
+	require.Same(t, first, s.config.Backends["gcp"].CacheResolver,
+		"an unchanged backend must keep its resolver, and with it its connection pool")
+}
+
+// A reused resolver must pick up the handler rebuilt on reload, since the controller
+// rotates the access token without changing the Redis URL.
+func TestServer_LoadConfig_GCPCacheResolver_ReusedResolverGetsNewHandler(t *testing.T) {
+	s := &Server{}
+	t.Cleanup(s.Close)
+	config := &filterapi.Config{Backends: []filterapi.Backend{gcpBackendWithCaching("gcp", "localhost:6379")}}
+
+	require.NoError(t, s.LoadConfig(t.Context(), config))
+	first := s.config.Backends["gcp"].Handler
+
+	require.NoError(t, s.LoadConfig(t.Context(), config))
+	second := s.config.Backends["gcp"].Handler
+	require.NotSame(t, first, second, "the handler is rebuilt on every reload")
+	require.Equal(t, second, s.cacheResolvers["gcp|localhost:6379"].GetAuth(),
+		"the reused resolver must hold the current handler")
+}
+
+// Repointing a backend at a different Redis must not keep reusing a pool dialing the old one.
+func TestServer_LoadConfig_GCPCacheResolver_RebuiltWhenRedisURLChanges(t *testing.T) {
+	s := &Server{}
+	t.Cleanup(s.Close)
+
+	require.NoError(t, s.LoadConfig(t.Context(),
+		&filterapi.Config{Backends: []filterapi.Backend{gcpBackendWithCaching("gcp", "localhost:6379")}}))
+	first := s.config.Backends["gcp"].CacheResolver
+	require.NotNil(t, first)
+
+	require.NoError(t, s.LoadConfig(t.Context(),
+		&filterapi.Config{Backends: []filterapi.Backend{gcpBackendWithCaching("gcp", "localhost:6380")}}))
+	require.NotSame(t, first, s.config.Backends["gcp"].CacheResolver,
+		"a new Redis URL must produce a new resolver")
+}
+
+// Resolvers for backends that vanish must not accumulate: the map is rebuilt each reload.
+func TestServer_LoadConfig_GCPCacheResolver_DroppedWhenBackendDisappears(t *testing.T) {
+	s := &Server{}
+	t.Cleanup(s.Close)
+
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{Backends: []filterapi.Backend{
+		gcpBackendWithCaching("gcp-a", "localhost:6379"),
+		gcpBackendWithCaching("gcp-b", "localhost:6379"),
+	}}))
+	require.Len(t, s.cacheResolvers, 2)
+
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{Backends: []filterapi.Backend{
+		gcpBackendWithCaching("gcp-a", "localhost:6379"),
+	}}))
+	require.Len(t, s.cacheResolvers, 1, "the departed backend's resolver must be released")
+}
+
+// A malformed Redis URL disables caching for that backend rather than failing the whole
+// reload, which would take down backends that have nothing to do with caching.
+func TestServer_LoadConfig_GCPCacheResolver_BadRedisURLDoesNotFailReload(t *testing.T) {
+	s := &Server{}
+	t.Cleanup(s.Close)
+	config := &filterapi.Config{Backends: []filterapi.Backend{
+		gcpBackendWithCaching("gcp-bad-redis", "http://not-a-redis-url"),
+		gcpBackendWithCaching("gcp-ok", "localhost:6379"),
+	}}
+
+	require.NoError(t, s.LoadConfig(t.Context(), config), "a bad redis url must not fail the reload")
+	require.Nil(t, s.config.Backends["gcp-bad-redis"].CacheResolver,
+		"a backend whose store cannot be built is served uncached")
+	require.NotNil(t, s.config.Backends["gcp-ok"].CacheResolver,
+		"an unrelated backend must keep its resolver")
+}
+
+// A resolver evicted by a reload must have its background syncer stopped, or every
+// reload that drops or repoints a backend would leak a goroutine.
+func TestServer_LoadConfig_GCPCacheResolver_EvictedResolverIsClosed(t *testing.T) {
+	before := goleak.IgnoreCurrent()
+	s := &Server{}
+
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{Backends: []filterapi.Backend{
+		gcpBackendWithCaching("gcp-a", "localhost:6379"),
+		gcpBackendWithCaching("gcp-b", "localhost:6379"),
+	}}))
+	kept := s.cacheResolvers["gcp-a|localhost:6379"]
+
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{Backends: []filterapi.Backend{
+		gcpBackendWithCaching("gcp-a", "localhost:6379"),
+	}}))
+	// Closing the one resolver still in the config must leave nothing running. If the
+	// evicted resolver had not been closed by the reload, its syncer would remain.
+	require.NoError(t, kept.Close())
+	goleak.VerifyNone(t, before)
+}
+
+// The reload context is cancelled when the reload finishes. Syncers must not be tied
+// to it, or they would stop seconds after every config load.
+func TestServer_LoadConfig_SyncerOutlivesReloadContext(t *testing.T) {
+	before := goleak.IgnoreCurrent()
+	s := &Server{}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	require.NoError(t, s.LoadConfig(ctx, &filterapi.Config{Backends: []filterapi.Backend{
+		gcpBackendWithCaching("gcp", "localhost:6379"),
+	}}))
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+	require.Error(t, goleak.Find(before), "the syncer must still be running after the reload context ends")
+
+	s.Close()
+	goleak.VerifyNone(t, before)
 }
 
 func TestServer_Check(t *testing.T) {
