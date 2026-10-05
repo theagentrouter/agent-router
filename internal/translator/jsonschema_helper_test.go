@@ -484,7 +484,10 @@ func TestJsonSchemaDereferenceNodeLimit(t *testing.T) {
 
 	t.Run("exponential expansion is rejected", func(t *testing.T) {
 		start := time.Now()
-		_, err := jsonSchemaDereference(exponentialRefSchema(40))
+		// Keep the number of levels low enough to stay under jsonSchemaMaxRecursionDepth (each
+		// level adds 3 frames), so the node limit is the only one that can be hit regardless of
+		// the map iteration order.
+		_, err := jsonSchemaDereference(exponentialRefSchema(25))
 		require.ErrorIs(t, err, errJSONSchemaMaxNodesExceeded)
 		require.Less(t, time.Since(start), 5*time.Second)
 	})
