@@ -26,8 +26,9 @@ permissions:
   id-token: write
 
 env:
-  EG_CURRENT_VERSION: v1.9.2
-  EG_PREVIOUS_VERSION: v1.8.5
+  # Anchors are reused in the test_e2e matrix, where the env context is not available.
+  EG_CURRENT_VERSION: &eg_current_version v1.9.2
+  EG_PREVIOUS_VERSION: &eg_previous_version v1.8.5
 
 jobs:
   changes:
@@ -217,10 +218,10 @@ jobs:
         include:
           - name: latest
             envoy_gateway_version: v0.0.0-latest
-          - name: ${{ env.EG_CURRENT_VERSION }}
-            envoy_gateway_version: ${{ env.EG_CURRENT_VERSION }}
-          - name: ${{ env.EG_PREVIOUS_VERSION }}
-            envoy_gateway_version: ${{ env.EG_PREVIOUS_VERSION }}
+          - name: *eg_current_version
+            envoy_gateway_version: *eg_current_version
+          - name: *eg_previous_version
+            envoy_gateway_version: *eg_previous_version
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
