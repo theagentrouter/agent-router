@@ -25,11 +25,6 @@ permissions:
   packages: write
   id-token: write
 
-env:
-  # Anchors are reused in the test_e2e matrix, where the env context is not available.
-  EG_CURRENT_VERSION: &eg_current_version v1.9.2
-  EG_PREVIOUS_VERSION: &eg_previous_version v1.8.5
-
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -218,10 +213,10 @@ jobs:
         include:
           - name: latest
             envoy_gateway_version: v0.0.0-latest
-          - name: *eg_current_version
-            envoy_gateway_version: *eg_current_version
-          - name: *eg_previous_version
-            envoy_gateway_version: *eg_previous_version
+          - name: v1.9.2
+            envoy_gateway_version: v1.9.2
+          - name: v1.8.5
+            envoy_gateway_version: v1.8.5
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
@@ -279,7 +274,7 @@ jobs:
       - run: make test-e2e-upgrade
         env:
           # We only need to test the upgrade from the latest stable version of EG.
-          EG_VERSION: ${{ env.EG_PREVIOUS_VERSION }}
+          EG_VERSION: v1.8.5
           K8S_VERSION: ${{ matrix.k8s-version }}
 
   test_e2e_inference_extension:
@@ -308,7 +303,7 @@ jobs:
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - run: make test-e2e-inference-extension
         env:
-          EG_VERSION: ${{ env.EG_CURRENT_VERSION }}
+          EG_VERSION: v1.9.2
 
   test_e2e_namespaced:
     needs: changes
@@ -338,7 +333,7 @@ jobs:
         env:
           # We only need to test with the latest stable version of EG, since these e2e tests
           # do not depend on the EG version.
-          EG_VERSION: ${{ env.EG_CURRENT_VERSION }}
+          EG_VERSION: v1.9.2
 
   test_e2e_aigw:
     needs: changes
