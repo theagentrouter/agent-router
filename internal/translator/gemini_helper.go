@@ -459,7 +459,7 @@ func openAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAva
 					if len(paramsMap) > 0 {
 						var err error
 						if functionDecl.Parameters, err = jsonSchemaToGemini(paramsMap); err != nil {
-							return nil, fmt.Errorf("invalid JSON schema for parameters in tool %s: %w", tool.Function.Name, err)
+							return nil, fmt.Errorf("%w: invalid JSON schema for parameters in tool %s: %w", internalapi.ErrInvalidRequestBody, tool.Function.Name, err)
 						}
 					}
 				}
@@ -688,7 +688,7 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 			} else {
 				convertedSchema, err := jsonSchemaToGemini(schemaMap)
 				if err != nil {
-					return nil, responseMode, fmt.Errorf("invalid JSON schema: %w", err)
+					return nil, responseMode, fmt.Errorf("%w: invalid JSON schema: %w", internalapi.ErrInvalidRequestBody, err)
 				}
 				gc.ResponseSchema = convertedSchema
 

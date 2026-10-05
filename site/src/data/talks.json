@@ -1,5 +1,13 @@
 [
     {
+        "date": "2026-06-19",
+        "title": "When LLMs Hit Production: Why You Need an AI Gateway",
+        "url": "https://www.youtube.com/watch?v=u5O_in_LF1E",
+        "event": "KubeCon India 2026",
+        "speaker": "Gavrish Prabhu (Nutanix)",
+        "description": "The surge of Generative AI and large language models (LLMs) is introducing new operational challenges for Kubernetes platforms. This session, presented by the project maintainers, examines Envoy AI Gateway, a CNCF-hosted open source project, and its role as a Kubernetes-native control plane for GenAI workloads.. We’ll break down an end-to-end architecture that uses Envoy AI Gateway to manage and govern traffic across multiple LLM backends both self-hosted and cloud-based while enforcing policies such as token-aware rate limiting, authentication, and dynamic model selection."
+    },
+    {
         "date": "2026-03-25",
         "title": "The Future of AI Traffic: What's New in Envoy AI Gateway 2026",
         "url": "https://kccnceu2026.sched.com/event/372ab7dc653c2138e0485e5ed7e3456a?iframe=no",
