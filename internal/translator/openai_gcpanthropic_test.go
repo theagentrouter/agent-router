@@ -694,9 +694,9 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 				int32(tt.expectedOpenAIResponse.Usage.TotalTokens),                             // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.CompletionTokensDetails.ReasoningTokens), // nolint:gosec
 			)
-			expectedTokenUsage.SetCacheCreation5mInputTokens(
-				uint32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CacheWriteTokens), //nolint:gosec
-			)
+			// The marshaled SDK fixture reports a complete zero-valued TTL breakdown.
+			// Preserve that provider-reported split rather than deriving it from the aggregate.
+			expectedTokenUsage.SetCacheCreation5mInputTokens(0)
 			expectedTokenUsage.SetCacheCreation1hInputTokens(0)
 			require.Equal(t, expectedTokenUsage, usedToken)
 

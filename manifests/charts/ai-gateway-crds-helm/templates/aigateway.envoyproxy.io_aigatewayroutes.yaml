@@ -1,3 +1,8 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -167,23 +172,21 @@ spec:
                         of input tokens. Type: unsigned integer.\n\t* cached_input_tokens:
                         the number of cached read input tokens. Type: unsigned integer.\n\t*
                         cache_creation_input_tokens: the number of cache creation
-                        input tokens. Type: unsigned integer.\n\t* cache_creation_5m_input_tokens:
-                        the number of input tokens written to a five-minute cache.
-                        For Anthropic-compatible responses, a combined cache creation
-                        count without a valid TTL split uses the five-minute lifetime
-                        as a fallback. Type: unsigned integer.\n\t* cache_creation_1h_input_tokens:
-                        the number of input tokens written to a one-hour cache. Type:
-                        unsigned integer.\n\t* output_tokens: the number of output
-                        tokens. Type: unsigned integer.\n\t* total_tokens: the total
-                        number of tokens. Type: unsigned integer.\n\t* reasoning_tokens:
-                        the number of reasoning tokens. Type: unsigned integer.\n\nFor
-                        example, the following expressions are valid:\n\n\t* \"model
-                        == 'llama' ?  input_tokens + output_token * 0.5 : total_tokens\"\n\t*
-                        \"backend == 'foo.default' ?  input_tokens + output_tokens
-                        : total_tokens\"\n\t* \"backend == 'bar.default' ? (input_tokens
-                        - cached_input_tokens - cache_creation_input_tokens) + cached_input_tokens
-                        + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens
-                        * 2u + output_tokens : total_tokens\"\n\t* \"input_tokens
+                        input tokens. Type: unsigned integer.\n\nThe TTL-specific
+                        cache creation variables are populated only when the provider
+                        reports a complete\nbreakdown; otherwise both are zero in
+                        CEL.\n\n\t* cache_creation_5m_input_tokens: the number of
+                        input tokens written to a five-minute cache. Type: unsigned
+                        integer.\n\t* cache_creation_1h_input_tokens: the number of
+                        input tokens written to a one-hour cache. Type: unsigned integer.\n\t*
+                        output_tokens: the number of output tokens. Type: unsigned
+                        integer.\n\t* total_tokens: the total number of tokens. Type:
+                        unsigned integer.\n\t* reasoning_tokens: the number of reasoning
+                        tokens. Type: unsigned integer.\n\nFor example, the following
+                        expressions are valid:\n\n\t* \"model == 'llama' ?  input_tokens
+                        + output_token * 0.5 : total_tokens\"\n\t* \"backend == 'foo.default'
+                        ?  input_tokens + output_tokens : total_tokens\"\n\t* \"cache_creation_5m_input_tokens
+                        + cache_creation_1h_input_tokens * 2u\"\n\t* \"input_tokens
                         + output_tokens + total_tokens\"\n\t* \"input_tokens * output_tokens\""
                       type: string
                     metadataKey:
@@ -194,15 +197,12 @@ spec:
                       description: |-
                         Type specifies the type of the request cost. The default is "OutputToken",
                         and it uses "output token" as the cost. The other types are "InputToken", "TotalToken",
-                        "CachedInputToken", "CacheCreationInputToken", "CacheCreation5mInputToken",
-                        "CacheCreation1hInputToken", "ReasoningToken", and "CEL".
+                        "CachedInputToken", "CacheCreationInputToken", "ReasoningToken", and "CEL".
                       enum:
                       - OutputToken
                       - InputToken
                       - CachedInputToken
                       - CacheCreationInputToken
-                      - CacheCreation5mInputToken
-                      - CacheCreation1hInputToken
                       - TotalToken
                       - ReasoningToken
                       - CEL
@@ -1114,23 +1114,21 @@ spec:
                         of input tokens. Type: unsigned integer.\n\t* cached_input_tokens:
                         the number of cached read input tokens. Type: unsigned integer.\n\t*
                         cache_creation_input_tokens: the number of cache creation
-                        input tokens. Type: unsigned integer.\n\t* cache_creation_5m_input_tokens:
-                        the number of input tokens written to a five-minute cache.
-                        For Anthropic-compatible responses, a combined cache creation
-                        count without a valid TTL split uses the five-minute lifetime
-                        as a fallback. Type: unsigned integer.\n\t* cache_creation_1h_input_tokens:
-                        the number of input tokens written to a one-hour cache. Type:
-                        unsigned integer.\n\t* output_tokens: the number of output
-                        tokens. Type: unsigned integer.\n\t* total_tokens: the total
-                        number of tokens. Type: unsigned integer.\n\t* reasoning_tokens:
-                        the number of reasoning tokens. Type: unsigned integer.\n\nFor
-                        example, the following expressions are valid:\n\n\t* \"model
-                        == 'llama' ?  input_tokens + output_token * 0.5 : total_tokens\"\n\t*
-                        \"backend == 'foo.default' ?  input_tokens + output_tokens
-                        : total_tokens\"\n\t* \"backend == 'bar.default' ? (input_tokens
-                        - cached_input_tokens - cache_creation_input_tokens) + cached_input_tokens
-                        + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens
-                        * 2u + output_tokens : total_tokens\"\n\t* \"input_tokens
+                        input tokens. Type: unsigned integer.\n\nThe TTL-specific
+                        cache creation variables are populated only when the provider
+                        reports a complete\nbreakdown; otherwise both are zero in
+                        CEL.\n\n\t* cache_creation_5m_input_tokens: the number of
+                        input tokens written to a five-minute cache. Type: unsigned
+                        integer.\n\t* cache_creation_1h_input_tokens: the number of
+                        input tokens written to a one-hour cache. Type: unsigned integer.\n\t*
+                        output_tokens: the number of output tokens. Type: unsigned
+                        integer.\n\t* total_tokens: the total number of tokens. Type:
+                        unsigned integer.\n\t* reasoning_tokens: the number of reasoning
+                        tokens. Type: unsigned integer.\n\nFor example, the following
+                        expressions are valid:\n\n\t* \"model == 'llama' ?  input_tokens
+                        + output_token * 0.5 : total_tokens\"\n\t* \"backend == 'foo.default'
+                        ?  input_tokens + output_tokens : total_tokens\"\n\t* \"cache_creation_5m_input_tokens
+                        + cache_creation_1h_input_tokens * 2u\"\n\t* \"input_tokens
                         + output_tokens + total_tokens\"\n\t* \"input_tokens * output_tokens\""
                       type: string
                     metadataKey:
@@ -1141,15 +1139,12 @@ spec:
                       description: |-
                         Type specifies the type of the request cost. The default is "OutputToken",
                         and it uses "output token" as the cost. The other types are "InputToken", "TotalToken",
-                        "CachedInputToken", "CacheCreationInputToken", "CacheCreation5mInputToken",
-                        "CacheCreation1hInputToken", "ReasoningToken", and "CEL".
+                        "CachedInputToken", "CacheCreationInputToken", "ReasoningToken", and "CEL".
                       enum:
                       - OutputToken
                       - InputToken
                       - CachedInputToken
                       - CacheCreationInputToken
-                      - CacheCreation5mInputToken
-                      - CacheCreation1hInputToken
                       - TotalToken
                       - ReasoningToken
                       - CEL

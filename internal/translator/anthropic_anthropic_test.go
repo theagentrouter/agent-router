@@ -181,6 +181,30 @@ func TestAnthropicToAnthropic_ResponseBody_non_streaming(t *testing.T) {
 	require.Equal(t, "claude-sonnet-4-5-20250929", responseModel)
 }
 
+func TestAnthropicToAnthropic_ResponseBody_non_streamingCacheCreationTTL(t *testing.T) {
+	t.Run("complete split is preserved when it differs from aggregate", func(t *testing.T) {
+		translator := NewAnthropicToAnthropicTranslator("", "")
+		const responseBody = `{"model":"claude-sonnet-4-5-20250929","id":"msg_01","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":9,"cache_creation_input_tokens":8,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":2},"output_tokens":1}}`
+
+		_, _, tokenUsage, _, err := translator.ResponseBody(nil, strings.NewReader(responseBody), true, nil)
+		require.NoError(t, err)
+		requireTokenUsageValue(t, 8, tokenUsage.CacheCreationInputTokens)
+		requireTokenUsageValue(t, 5, tokenUsage.CacheCreation5mInputTokens)
+		requireTokenUsageValue(t, 2, tokenUsage.CacheCreation1hInputTokens)
+	})
+
+	t.Run("partial split remains unknown", func(t *testing.T) {
+		translator := NewAnthropicToAnthropicTranslator("", "")
+		const responseBody = `{"model":"claude-sonnet-4-5-20250929","id":"msg_01","type":"message","role":"assistant","content":[],"stop_reason":"end_turn","usage":{"input_tokens":9,"cache_creation_input_tokens":8,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":5},"output_tokens":1}}`
+
+		_, _, tokenUsage, _, err := translator.ResponseBody(nil, strings.NewReader(responseBody), true, nil)
+		require.NoError(t, err)
+		requireTokenUsageValue(t, 8, tokenUsage.CacheCreationInputTokens)
+		requireTokenUsageUnset(t, tokenUsage.CacheCreation5mInputTokens)
+		requireTokenUsageUnset(t, tokenUsage.CacheCreation1hInputTokens)
+	})
+}
+
 func TestAnthropicToAnthropic_ResponseBody_streaming(t *testing.T) {
 	translator := NewAnthropicToAnthropicTranslator("", "")
 	require.NotNil(t, translator)
@@ -246,6 +270,13 @@ func requireTokenUsageValue(t *testing.T, expected uint32, getter func() (uint32
 	require.Equal(t, expected, value)
 }
 
+func requireTokenUsageUnset(t *testing.T, getter func() (uint32, bool)) {
+	t.Helper()
+	value, set := getter()
+	require.False(t, set)
+	require.Zero(t, value)
+}
+
 func TestAnthropicToAnthropic_ResponseBody_streaming_usageOnMessageDelta(t *testing.T) {
 	// Some Anthropic-compatible streaming backends report the final input/cache usage only on the
 	// message_delta event rather than message_start. The translator must merge those fields instead
@@ -268,9 +299,9 @@ data: {"type":"message_stop"}`
 		require.NoError(t, err)
 		// Total input = input_tokens(4522) + cache_creation_input_tokens(4511) = 9033; total = 9033 + 5 = 9038.
 		expected := tokenUsageFrom(9033, 0, 4511, 5, 9038, -1)
-		expected.SetCacheCreation5mInputTokens(4511)
-		expected.SetCacheCreation1hInputTokens(0)
 		require.Equal(t, expected, tokenUsage)
+		requireTokenUsageUnset(t, tokenUsage.CacheCreation5mInputTokens)
+		requireTokenUsageUnset(t, tokenUsage.CacheCreation1hInputTokens)
 	})
 
 	t.Run("cache read tokens", func(t *testing.T) {
@@ -337,7 +368,7 @@ data: {"type":"message_stop"}`
 		requireTokenUsageValue(t, 2, tokenUsage.CacheCreation1hInputTokens)
 	})
 
-	t.Run("TTL split arriving on message_delta replaces fallback", func(t *testing.T) {
+	t.Run("TTL split on message_delta is ignored", func(t *testing.T) {
 		translator := NewAnthropicToAnthropicTranslator("", "")
 		require.NotNil(t, translator)
 		translator.(*anthropicToAnthropicTranslator).stream = true
@@ -354,11 +385,11 @@ data: {"type":"message_stop"}`
 		_, _, tokenUsage, _, err := translator.ResponseBody(nil, strings.NewReader(responseBody), false, nil)
 		require.NoError(t, err)
 		requireTokenUsageValue(t, 7, tokenUsage.CacheCreationInputTokens)
-		requireTokenUsageValue(t, 5, tokenUsage.CacheCreation5mInputTokens)
-		requireTokenUsageValue(t, 2, tokenUsage.CacheCreation1hInputTokens)
+		requireTokenUsageUnset(t, tokenUsage.CacheCreation5mInputTokens)
+		requireTokenUsageUnset(t, tokenUsage.CacheCreation1hInputTokens)
 	})
 
-	t.Run("partial TTL delta updates only the present positive field", func(t *testing.T) {
+	t.Run("partial TTL split on message_delta is ignored", func(t *testing.T) {
 		translator := NewAnthropicToAnthropicTranslator("", "")
 		require.NotNil(t, translator)
 		translator.(*anthropicToAnthropicTranslator).stream = true
@@ -376,10 +407,10 @@ data: {"type":"message_stop"}`
 		require.NoError(t, err)
 		requireTokenUsageValue(t, 8, tokenUsage.CacheCreationInputTokens)
 		requireTokenUsageValue(t, 5, tokenUsage.CacheCreation5mInputTokens)
-		requireTokenUsageValue(t, 3, tokenUsage.CacheCreation1hInputTokens)
+		requireTokenUsageValue(t, 2, tokenUsage.CacheCreation1hInputTokens)
 	})
 
-	t.Run("combined cache delta falls back to five-minute split", func(t *testing.T) {
+	t.Run("combined cache delta preserves message_start split", func(t *testing.T) {
 		translator := NewAnthropicToAnthropicTranslator("", "")
 		require.NotNil(t, translator)
 		translator.(*anthropicToAnthropicTranslator).stream = true
@@ -396,8 +427,8 @@ data: {"type":"message_stop"}`
 		_, _, tokenUsage, _, err := translator.ResponseBody(nil, strings.NewReader(responseBody), false, nil)
 		require.NoError(t, err)
 		requireTokenUsageValue(t, 8, tokenUsage.CacheCreationInputTokens)
-		requireTokenUsageValue(t, 8, tokenUsage.CacheCreation5mInputTokens)
-		requireTokenUsageValue(t, 0, tokenUsage.CacheCreation1hInputTokens)
+		requireTokenUsageValue(t, 5, tokenUsage.CacheCreation5mInputTokens)
+		requireTokenUsageValue(t, 2, tokenUsage.CacheCreation1hInputTokens)
 	})
 }
 

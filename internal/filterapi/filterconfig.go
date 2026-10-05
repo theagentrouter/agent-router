@@ -149,10 +149,6 @@ const (
 	LLMRequestCostTypeCachedInputToken LLMRequestCostType = "CachedInputToken"
 	// LLMRequestCostTypeCacheCreationInputToken specifies that the request cost is calculated from the cache creation input token.
 	LLMRequestCostTypeCacheCreationInputToken LLMRequestCostType = "CacheCreationInputToken"
-	// LLMRequestCostTypeCacheCreation5mInputToken specifies that the request cost is calculated from input tokens written to a five-minute cache.
-	LLMRequestCostTypeCacheCreation5mInputToken LLMRequestCostType = "CacheCreation5mInputToken"
-	// LLMRequestCostTypeCacheCreation1hInputToken specifies that the request cost is calculated from input tokens written to a one-hour cache.
-	LLMRequestCostTypeCacheCreation1hInputToken LLMRequestCostType = "CacheCreation1hInputToken"
 	// LLMRequestCostTypeTotalToken specifies that the request cost is calculated from the total token.
 	LLMRequestCostTypeTotalToken LLMRequestCostType = "TotalToken"
 	// LLMRequestCostTypeReasoningToken specifies that the request cost is calculated from the reasoning token.

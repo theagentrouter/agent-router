@@ -932,12 +932,6 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 	case filterapi.LLMRequestCostTypeCacheCreationInputToken:
 		v, _ := costs.CacheCreationInputTokens()
 		cost = uint64(v)
-	case filterapi.LLMRequestCostTypeCacheCreation5mInputToken:
-		v, _ := costs.CacheCreation5mInputTokens()
-		cost = uint64(v)
-	case filterapi.LLMRequestCostTypeCacheCreation1hInputToken:
-		v, _ := costs.CacheCreation1hInputTokens()
-		cost = uint64(v)
 	case filterapi.LLMRequestCostTypeOutputToken:
 		v, _ := costs.OutputTokens()
 		cost = uint64(v)

@@ -1745,12 +1745,12 @@ LLMRequestCost configures each request cost.
   name="type"
   type="[LLMRequestCostType](#github-com-envoyproxy-ai-gateway-api-v1alpha1-llmrequestcosttype)"
   required="true"
-  description="Type specifies the type of the request cost. The default is `OutputToken`,<br />and it uses `output token` as the cost. The other types are `InputToken`, `TotalToken`,<br />`CachedInputToken`, `CacheCreationInputToken`, `CacheCreation5mInputToken`,<br />`CacheCreation1hInputToken`, `ReasoningToken`, and `CEL`."
+  description="Type specifies the type of the request cost. The default is `OutputToken`,<br />and it uses `output token` as the cost. The other types are `InputToken`, `TotalToken`,<br />`CachedInputToken`, `CacheCreationInputToken`, `ReasoningToken`, and `CEL`."
 /><ApiField
   name="cel"
   type="string"
   required="false"
-  description="CEL is the CEL expression to calculate the cost of the request.<br />The CEL expression must return a signed or unsigned integer. If the<br />return value is negative, it will be error.<br />The expression can use the following variables:<br />	* model: the model name extracted from the request content. Type: string.<br />	* backend: the backend name in the form of `name.namespace`. Type: string.<br />	* input_tokens: the number of input tokens. Type: unsigned integer.<br />	* cached_input_tokens: the number of cached read input tokens. Type: unsigned integer.<br />	* cache_creation_input_tokens: the number of cache creation input tokens. Type: unsigned integer.<br />	* cache_creation_5m_input_tokens: the number of input tokens written to a five-minute cache. For Anthropic-compatible responses, a combined cache creation count without a valid TTL split uses the five-minute lifetime as a fallback. Type: unsigned integer.<br />	* cache_creation_1h_input_tokens: the number of input tokens written to a one-hour cache. Type: unsigned integer.<br />	* output_tokens: the number of output tokens. Type: unsigned integer.<br />	* total_tokens: the total number of tokens. Type: unsigned integer.<br />	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.<br />For example, the following expressions are valid:<br />	* `model == 'llama' ?  input_tokens + output_token * 0.5 : total_tokens`<br />	* `backend == 'foo.default' ?  input_tokens + output_tokens : total_tokens`<br />	* `backend == 'bar.default' ? (input_tokens - cached_input_tokens - cache_creation_input_tokens) + cached_input_tokens + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens * 2u + output_tokens : total_tokens`<br />	* `input_tokens + output_tokens + total_tokens`<br />	* `input_tokens * output_tokens`"
+  description="CEL is the CEL expression to calculate the cost of the request.<br />The CEL expression must return a signed or unsigned integer. If the<br />return value is negative, it will be error.<br />The expression can use the following variables:<br />	* model: the model name extracted from the request content. Type: string.<br />	* backend: the backend name in the form of `name.namespace`. Type: string.<br />	* input_tokens: the number of input tokens. Type: unsigned integer.<br />	* cached_input_tokens: the number of cached read input tokens. Type: unsigned integer.<br />	* cache_creation_input_tokens: the number of cache creation input tokens. Type: unsigned integer.<br />The TTL-specific cache creation variables are populated only when the provider reports a complete<br />breakdown; otherwise both are zero in CEL.<br />	* cache_creation_5m_input_tokens: the number of input tokens written to a five-minute cache. Type: unsigned integer.<br />	* cache_creation_1h_input_tokens: the number of input tokens written to a one-hour cache. Type: unsigned integer.<br />	* output_tokens: the number of output tokens. Type: unsigned integer.<br />	* total_tokens: the total number of tokens. Type: unsigned integer.<br />	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.<br />For example, the following expressions are valid:<br />	* `model == 'llama' ?  input_tokens + output_token * 0.5 : total_tokens`<br />	* `backend == 'foo.default' ?  input_tokens + output_tokens : total_tokens`<br />	* `cache_creation_5m_input_tokens + cache_creation_1h_input_tokens * 2u`<br />	* `input_tokens + output_tokens + total_tokens`<br />	* `input_tokens * output_tokens`"
 />
 
 
@@ -1782,16 +1782,6 @@ LLMRequestCostType specifies the type of the LLMRequestCost.
   type="enum"
   required="false"
   description="LLMRequestCostTypeCacheCreationInputToken is the cost type of all cache creation input tokens.<br />"
-/><ApiField
-  name="CacheCreation5mInputToken"
-  type="enum"
-  required="false"
-  description="LLMRequestCostTypeCacheCreation5mInputToken is the cost type of input tokens written to a five-minute cache.<br />"
-/><ApiField
-  name="CacheCreation1hInputToken"
-  type="enum"
-  required="false"
-  description="LLMRequestCostTypeCacheCreation1hInputToken is the cost type of input tokens written to a one-hour cache.<br />"
 /><ApiField
   name="OutputToken"
   type="enum"
@@ -4607,12 +4597,12 @@ LLMRequestCost configures each request cost.
   name="type"
   type="[LLMRequestCostType](#github-com-envoyproxy-ai-gateway-api-v1beta1-llmrequestcosttype)"
   required="true"
-  description="Type specifies the type of the request cost. The default is `OutputToken`,<br />and it uses `output token` as the cost. The other types are `InputToken`, `TotalToken`,<br />`CachedInputToken`, `CacheCreationInputToken`, `CacheCreation5mInputToken`,<br />`CacheCreation1hInputToken`, `ReasoningToken`, and `CEL`."
+  description="Type specifies the type of the request cost. The default is `OutputToken`,<br />and it uses `output token` as the cost. The other types are `InputToken`, `TotalToken`,<br />`CachedInputToken`, `CacheCreationInputToken`, `ReasoningToken`, and `CEL`."
 /><ApiField
   name="cel"
   type="string"
   required="false"
-  description="CEL is the CEL expression to calculate the cost of the request.<br />The CEL expression must return a signed or unsigned integer. If the<br />return value is negative, it will be error.<br />The expression can use the following variables:<br />	* model: the model name extracted from the request content. Type: string.<br />	* backend: the backend name in the form of `name.namespace`. Type: string.<br />	* input_tokens: the number of input tokens. Type: unsigned integer.<br />	* cached_input_tokens: the number of cached read input tokens. Type: unsigned integer.<br />	* cache_creation_input_tokens: the number of cache creation input tokens. Type: unsigned integer.<br />	* cache_creation_5m_input_tokens: the number of input tokens written to a five-minute cache. For Anthropic-compatible responses, a combined cache creation count without a valid TTL split uses the five-minute lifetime as a fallback. Type: unsigned integer.<br />	* cache_creation_1h_input_tokens: the number of input tokens written to a one-hour cache. Type: unsigned integer.<br />	* output_tokens: the number of output tokens. Type: unsigned integer.<br />	* total_tokens: the total number of tokens. Type: unsigned integer.<br />	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.<br />For example, the following expressions are valid:<br />	* `model == 'llama' ?  input_tokens + output_token * 0.5 : total_tokens`<br />	* `backend == 'foo.default' ?  input_tokens + output_tokens : total_tokens`<br />	* `backend == 'bar.default' ? (input_tokens - cached_input_tokens - cache_creation_input_tokens) + cached_input_tokens + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens * 2u + output_tokens : total_tokens`<br />	* `input_tokens + output_tokens + total_tokens`<br />	* `input_tokens * output_tokens`"
+  description="CEL is the CEL expression to calculate the cost of the request.<br />The CEL expression must return a signed or unsigned integer. If the<br />return value is negative, it will be error.<br />The expression can use the following variables:<br />	* model: the model name extracted from the request content. Type: string.<br />	* backend: the backend name in the form of `name.namespace`. Type: string.<br />	* input_tokens: the number of input tokens. Type: unsigned integer.<br />	* cached_input_tokens: the number of cached read input tokens. Type: unsigned integer.<br />	* cache_creation_input_tokens: the number of cache creation input tokens. Type: unsigned integer.<br />The TTL-specific cache creation variables are populated only when the provider reports a complete<br />breakdown; otherwise both are zero in CEL.<br />	* cache_creation_5m_input_tokens: the number of input tokens written to a five-minute cache. Type: unsigned integer.<br />	* cache_creation_1h_input_tokens: the number of input tokens written to a one-hour cache. Type: unsigned integer.<br />	* output_tokens: the number of output tokens. Type: unsigned integer.<br />	* total_tokens: the total number of tokens. Type: unsigned integer.<br />	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.<br />For example, the following expressions are valid:<br />	* `model == 'llama' ?  input_tokens + output_token * 0.5 : total_tokens`<br />	* `backend == 'foo.default' ?  input_tokens + output_tokens : total_tokens`<br />	* `cache_creation_5m_input_tokens + cache_creation_1h_input_tokens * 2u`<br />	* `input_tokens + output_tokens + total_tokens`<br />	* `input_tokens * output_tokens`"
 />
 
 
@@ -4644,16 +4634,6 @@ LLMRequestCostType specifies the type of the LLMRequestCost.
   type="enum"
   required="false"
   description="LLMRequestCostTypeCacheCreationInputToken is the cost type of all cache creation input tokens.<br />"
-/><ApiField
-  name="CacheCreation5mInputToken"
-  type="enum"
-  required="false"
-  description="LLMRequestCostTypeCacheCreation5mInputToken is the cost type of input tokens written to a five-minute cache.<br />"
-/><ApiField
-  name="CacheCreation1hInputToken"
-  type="enum"
-  required="false"
-  description="LLMRequestCostTypeCacheCreation1hInputToken is the cost type of input tokens written to a one-hour cache.<br />"
 /><ApiField
   name="OutputToken"
   type="enum"

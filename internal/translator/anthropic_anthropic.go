@@ -51,6 +51,15 @@ type anthropicToAnthropicTranslator struct {
 	logger          *slog.Logger
 }
 
+func applyCacheCreationTTLUsageFromPassthroughUsage(tokenUsage *metrics.TokenUsage, ephemeral5mInputTokens, ephemeral1hInputTokens *float64) {
+	if ephemeral5mInputTokens == nil || ephemeral1hInputTokens == nil ||
+		*ephemeral5mInputTokens < 0 || *ephemeral1hInputTokens < 0 {
+		return
+	}
+	tokenUsage.SetCacheCreation5mInputTokens(uint32(*ephemeral5mInputTokens)) //nolint:gosec
+	tokenUsage.SetCacheCreation1hInputTokens(uint32(*ephemeral1hInputTokens)) //nolint:gosec
+}
+
 // RequestBody implements [AnthropicMessagesTranslator.RequestBody].
 func (a *anthropicToAnthropicTranslator) RequestBody(original []byte, body *anthropic.MessagesRequest, forceBodyMutation bool) (
 	newHeaders []internalapi.Header, newBody []byte, err error,
@@ -136,12 +145,11 @@ func (a *anthropicToAnthropicTranslator) ResponseBody(_ map[string]string, body 
 			ptr.To(int64(usage.CacheCreationInputTokens)),
 		)
 		if usage.CacheCreation != nil {
-			applyCacheCreationTTLUsageFloat64(&tokenUsage,
+			applyCacheCreationTTLUsageFromPassthroughUsage(&tokenUsage,
 				usage.CacheCreation.Ephemeral5mInputTokens,
 				usage.CacheCreation.Ephemeral1hInputTokens,
 			)
 		}
-		reconcileCacheCreationTTLUsage(&tokenUsage)
 	}
 	if span != nil {
 		span.RecordResponse(anthropicResp)
@@ -196,26 +204,16 @@ func (a *anthropicToAnthropicTranslator) reflectStreamingEvent(eventUnion *anthr
 			// Override with message_start usage (contains input tokens and initial state)
 			a.streamingTokenUsage.Override(messageStartUsage)
 			if u.CacheCreation != nil {
-				applyCacheCreationTTLUsageFloat64(&a.streamingTokenUsage,
+				applyCacheCreationTTLUsageFromPassthroughUsage(&a.streamingTokenUsage,
 					u.CacheCreation.Ephemeral5mInputTokens,
 					u.CacheCreation.Ephemeral1hInputTokens,
 				)
 			}
-			reconcileCacheCreationTTLUsage(&a.streamingTokenUsage)
 		}
 	case eventUnion.MessageDelta != nil:
 		u := eventUnion.MessageDelta.Usage
-		if u.CacheCreation != nil {
-			applyPositiveCacheCreationTTLUsageFloat64(&a.streamingTokenUsage,
-				u.CacheCreation.Ephemeral5mInputTokens,
-				u.CacheCreation.Ephemeral1hInputTokens,
-			)
-		}
-		// message_delta carries the final counts. Standard Anthropic only reports output_tokens
-		// here, but some Anthropic-compatible backends report the final input/cache counts on
-		// message_delta instead of message_start. See https://github.com/envoyproxy/ai-gateway/issues/2290.
-		//
-		// output_tokens is always the final value on message_delta, so take it unconditionally.
+		// message_delta usage counters are cumulative. Update output and merge any input/cache
+		// aggregates that are present without changing TTL-specific values captured earlier.
 		if u.OutputTokens >= 0 {
 			a.streamingTokenUsage.SetOutputTokens(uint32(u.OutputTokens)) //nolint:gosec
 		}
@@ -248,9 +246,6 @@ func (a *anthropicToAnthropicTranslator) reflectStreamingEvent(eventUnion *anthr
 			a.streamingTokenUsage.SetCachedInputTokens(cacheRead)
 			a.streamingTokenUsage.SetCacheCreationInputTokens(cacheCreation)
 			a.streamingTokenUsage.SetInputTokens(rawInput + cacheRead + cacheCreation)
-		}
-		if u.CacheCreation != nil || u.CacheCreationInputTokens > 0 {
-			reconcileCacheCreationTTLUsage(&a.streamingTokenUsage)
 		}
 	}
 }
