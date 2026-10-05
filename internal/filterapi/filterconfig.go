@@ -326,6 +326,11 @@ type GCPAuth struct {
 	// This is used in URL path templates when making requests to GCP Vertex AI endpoints.
 	// This should be the project where Vertex AI APIs are enabled.
 	ProjectName string `json:"projectName"`
+	// IsPassThrough indicates that no credentials are managed for this backend.
+	// When true, the handler only rewrites the ":path" header and leaves the client's
+	// "Authorization" header untouched, and Region/ProjectName fall back to the per-request
+	// "gcp-region" and "gcp-project" headers when they are empty.
+	IsPassThrough bool `json:"isPassthrough"`
 }
 
 // LogValue implements slog.LogValuer for GCPAuth to redact sensitive information.

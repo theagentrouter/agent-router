@@ -974,6 +974,19 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
 		gcpCreds := spec.GCPCredentials
 
+		// In pass-through mode, project/region come from per-request headers and no
+		// credentials are managed by the controller.
+		if gcpCreds.IsPassThrough {
+			return &filterapi.BackendAuth{
+				GCPAuth: &filterapi.GCPAuth{
+					Region:        gcpCreds.Region,
+					ProjectName:   gcpCreds.ProjectName,
+					IsPassThrough: true,
+				},
+			}, nil
+			// If no credentials file or WIF is configured, use ADC (handled by extproc)
+		}
+
 		// If no credentials file or WIF is configured, use ADC (handled by extproc)
 		if gcpCreds.CredentialsFile == nil && gcpCreds.WorkloadIdentityFederationConfig == nil {
 			auth = &filterapi.BackendAuth{

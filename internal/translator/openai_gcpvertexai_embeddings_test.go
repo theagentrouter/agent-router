@@ -602,7 +602,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			require.Len(t, headerMut, 2) // path and content-length headers
 
 			// Check path header
-			require.Equal(t, pathHeaderName, headerMut[0].Key())
+			require.Equal(t, gcpPathHeaderName, headerMut[0].Key())
 			require.Equal(t, tc.wantPath, headerMut[0].Value())
 
 			// Check content-length header

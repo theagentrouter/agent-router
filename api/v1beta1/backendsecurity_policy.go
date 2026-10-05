@@ -223,17 +223,24 @@ type GCPServiceAccountImpersonationConfig struct {
 // default service account credentials when running on GCP.
 //
 // +kubebuilder:validation:XValidation:rule="!(has(self.credentialsFile) && has(self.workloadIdentityFederationConfig))",message="At most one of credentialsFile or workloadIdentityFederationConfig may be specified"
+// +kubebuilder:validation:XValidation:rule="(has(self.isPassthrough) && self.isPassthrough) || (has(self.projectName) && has(self.region))",message="projectName and region are required unless isPassthrough is true"
 type BackendSecurityPolicyGCPCredentials struct {
 	// ProjectName is the GCP project name.
+	// Required unless IsPassThrough is true, in which case the project is taken from the
+	// per-request "gcp-project" header. If IsPassThrough is true and ProjectName is
+	// configured, the configured value overrides the header.
 	//
-	// +kubebuilder:validation:Required
+	// +optional
 	// +kubebuilder:validation:MinLength=1
-	ProjectName string `json:"projectName"`
+	ProjectName string `json:"projectName,omitempty"`
 	// Region is the GCP region associated with the policy.
+	// Required unless IsPassThrough is true, in which case the region is taken from the
+	// per-request "gcp-region" header. If IsPassThrough is true and Region is configured,
+	// the configured value overrides the header.
 	//
-	// +kubebuilder:validation:Required
+	// +optional
 	// +kubebuilder:validation:MinLength=1
-	Region string `json:"region"`
+	Region string `json:"region,omitempty"`
 
 	// CredentialsFile specifies the service account credentials file to use for the GCP provider.
 	//
@@ -244,6 +251,15 @@ type BackendSecurityPolicyGCPCredentials struct {
 	//
 	// +optional
 	WorkloadIdentityFederationConfig *GCPWorkloadIdentityFederationConfig `json:"workloadIdentityFederationConfig,omitempty"`
+
+	// IsPassThrough indicates that the gateway operates in pass-through mode for this policy.
+	// In pass-through mode, the GCP project and region are taken from the per-request
+	// "gcp-project" and "gcp-region" headers instead of the statically configured ProjectName
+	// and Region, and no credentials are managed by the controller (authentication is expected
+	// to be handled by the caller).
+	//
+	// +optional
+	IsPassThrough bool `json:"isPassthrough,omitempty"`
 }
 
 // BackendSecurityPolicyAzureCredentials contains the supported authentication mechanisms to access Azure.

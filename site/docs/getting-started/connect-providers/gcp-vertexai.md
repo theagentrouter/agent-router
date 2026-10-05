@@ -26,6 +26,7 @@ Agent Router supports three authentication methods for GCP VertexAI:
 1. **Application Default Credentials (ADC)** - Recommended for GKE with Workload Identity
 2. **Service Account Key Files** - For explicit JSON credentials
 3. **Workload Identity Federation** - For cross-cloud authentication
+4. **Pass-Through** - The client supplies its own GCP access token, project, and region
 
 ### Option 1: Application Default Credentials (Recommended for GKE)
 
@@ -60,6 +61,83 @@ For non-GKE environments, use a service account key file:
 :::caution Security Note
 Service account key files should be avoided in production when possible. Use ADC/Workload Identity instead.
 :::
+
+### Option 4: Pass-Through Mode
+
+Pass-through mode makes the gateway credential-less for a backend: it still translates the request
+and builds the VertexAI URL path, but it does not obtain, rotate, or attach any GCP credentials.
+The calling client authenticates to VertexAI itself, and selects the GCP project and region per
+request through headers.
+
+This is useful when tokens already exist on the caller side — for example a multi-tenant platform
+where each caller has its own GCP project and short-lived token, and you do not want the gateway to
+hold credentials for any of them.
+
+Set `isPassthrough: true` and omit `projectName`/`region`:
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: gcp-credentials-passthrough
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: your-backend
+  type: GCPCredentials
+  gcpCredentials:
+    isPassthrough: true
+```
+
+`projectName` and `region` are normally required, but are optional when `isPassthrough` is `true`.
+
+#### Request headers
+
+In pass-through mode the client is responsible for these headers:
+
+| Header          | Required                           | Purpose                                                       |
+| --------------- | ---------------------------------- | ------------------------------------------------------------- |
+| `Authorization` | Yes                                | `Bearer <GCP access token>`. Forwarded to VertexAI unchanged. |
+| `gcp-project`   | Unless `projectName` is configured | GCP project used in the VertexAI URL path.                    |
+| `gcp-region`    | Unless `region` is configured      | GCP location used in the VertexAI URL path.                   |
+
+Configured values take precedence: if `projectName` and/or `region` are set alongside
+`isPassthrough: true`, the configured value wins and the corresponding header is ignored. This lets
+you pin the project while letting callers choose the region, or the other way around.
+
+If a value is neither configured nor present as a header, the request is rejected and the external
+processor logs `gcp-project header must be specified` (or `gcp-region header must be specified`).
+
+Example request:
+
+```shell
+curl -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "gcp-project: YOUR_PROJECT_NAME" \
+  -H "gcp-region: us-central1" \
+  -d '{
+    "model": "gemini-2.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hi."
+      }
+    ]
+  }' \
+  $GATEWAY_URL/v1/chat/completions
+```
+
+#### Things to be aware of
+
+- `gcp-region` only changes the URL path (`/v1/projects/<project>/locations/<region>/...`); it does
+  not change which upstream host the request is sent to. Route to an `AIServiceBackend` whose
+  hostname serves the location you pass — for example `us-central1-aiplatform.googleapis.com` for
+  `us-central1` — otherwise VertexAI rejects the request.
+- The gateway performs no credential rotation or validation in this mode. An expired or
+  insufficiently scoped token surfaces as a 401/403 from VertexAI.
+- Because the caller chooses the project and the token, apply gateway-level authentication and
+  authorization in front of the route so that only trusted clients can use it.
 
 ## Configuration Steps
 

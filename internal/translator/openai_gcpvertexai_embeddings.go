@@ -324,7 +324,7 @@ func (o *openAIToGCPVertexAITranslatorV1Embedding) RequestBody(_ []byte, req *op
 		return nil, nil, fmt.Errorf("error marshaling Gemini request: %w", err)
 	}
 	newHeaders = []internalapi.Header{
-		{pathHeaderName, path},
+		{gcpPathHeaderName, path},
 		{contentLengthHeaderName, strconv.Itoa(len(newBody))},
 	}
 	return

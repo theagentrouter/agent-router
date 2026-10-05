@@ -3821,13 +3821,13 @@ default service account credentials when running on GCP.
 <ApiField
   name="projectName"
   type="string"
-  required="true"
-  description="ProjectName is the GCP project name."
+  required="false"
+  description="ProjectName is the GCP project name.<br />Required unless IsPassThrough is true, in which case the project is taken from the<br />per-request `gcp-project` header. If IsPassThrough is true and ProjectName is<br />configured, the configured value overrides the header."
 /><ApiField
   name="region"
   type="string"
-  required="true"
-  description="Region is the GCP region associated with the policy."
+  required="false"
+  description="Region is the GCP region associated with the policy.<br />Required unless IsPassThrough is true, in which case the region is taken from the<br />per-request `gcp-region` header. If IsPassThrough is true and Region is configured,<br />the configured value overrides the header."
 /><ApiField
   name="credentialsFile"
   type="[GCPCredentialsFile](#github-com-envoyproxy-ai-gateway-api-v1beta1-gcpcredentialsfile)"
@@ -3838,6 +3838,11 @@ default service account credentials when running on GCP.
   type="[GCPWorkloadIdentityFederationConfig](#github-com-envoyproxy-ai-gateway-api-v1beta1-gcpworkloadidentityfederationconfig)"
   required="false"
   description="WorkloadIdentityFederationConfig is the configuration for the GCP Workload Identity Federation."
+/><ApiField
+  name="isPassthrough"
+  type="boolean"
+  required="false"
+  description="IsPassThrough indicates that the gateway operates in pass-through mode for this policy.<br />In pass-through mode, the GCP project and region are taken from the per-request<br />`gcp-project` and `gcp-region` headers instead of the statically configured ProjectName<br />and Region, and no credentials are managed by the controller (authentication is expected<br />to be handled by the caller)."
 />
 
 

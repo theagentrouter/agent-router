@@ -402,11 +402,14 @@ func validateGCPCredentialsParams(gcpCreds *aigv1b1.BackendSecurityPolicyGCPCred
 	if gcpCreds == nil {
 		return fmt.Errorf("invalid backend security policy, gcp credentials cannot be nil")
 	}
-	if gcpCreds.ProjectName == "" {
-		return fmt.Errorf("invalid GCP credentials configuration: projectName cannot be empty")
-	}
-	if gcpCreds.Region == "" {
-		return fmt.Errorf("invalid GCP credentials configuration: region cannot be empty")
+
+	if !gcpCreds.IsPassThrough {
+		if gcpCreds.ProjectName == "" {
+			return fmt.Errorf("invalid GCP credentials configuration: projectName cannot be empty")
+		}
+		if gcpCreds.Region == "" {
+			return fmt.Errorf("invalid GCP credentials configuration: region cannot be empty")
+		}
 	}
 
 	wifConfig := gcpCreds.WorkloadIdentityFederationConfig

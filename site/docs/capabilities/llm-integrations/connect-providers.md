@@ -170,7 +170,7 @@ The secret must contain the Azure client secret with the key name `"client-secre
 
 ##### GCP Credentials
 
-Used for connecting to GCP Vertex AI and Anthropic on GCP. Supports three authentication methods:
+Used for connecting to GCP Vertex AI and Anthropic on GCP. Supports four authentication methods:
 
 1. Application Default Credentials (Recommended for GKE):
    When running on GKE with Workload Identity configured, you can use Application Default Credentials (ADC) without managing service account keys. Simply specify the project and region:
@@ -240,6 +240,32 @@ spec:
             name: "gcp-client-secret"
             namespace: default
 ```
+
+4. Pass-Through:
+   In pass-through mode the gateway manages no GCP credentials at all. The client sends its own
+   `Authorization: Bearer <GCP access token>` header, which is forwarded to Vertex AI unchanged, and
+   selects the target project and location with the `gcp-project` and `gcp-region` request headers.
+   `projectName` and `region` become optional; when either is configured it overrides the
+   corresponding header.
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: gcp-auth-passthrough
+  namespace: default
+spec:
+  type: GCPCredentials
+  gcpCredentials:
+    isPassthrough: true
+```
+
+:::note
+`gcp-region` only affects the Vertex AI URL path, not the upstream host, so the request must still be
+routed to an `AIServiceBackend` whose hostname serves that location. See
+[Connect GCP VertexAI](../../getting-started/connect-providers/gcp-vertexai.md#option-4-pass-through-mode)
+for details.
+:::
 
 #### Security Best Practices
 
