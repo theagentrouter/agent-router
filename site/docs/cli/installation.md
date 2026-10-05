@@ -31,7 +31,7 @@ To use the latest version, you can use the following commands to clone the repo 
 
 ```shell
 git clone https://github.com/theagentrouter/agent-router.git
-cd ai-gateway
+cd agent-router
 go install ./cmd/aigw
 ```
 
