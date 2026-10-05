@@ -225,8 +225,8 @@ func TestChatCompletionRecorder_usageDetails(t *testing.T) {
 				PromptTokens:     100,
 				CompletionTokens: 50,
 				PromptTokensDetails: &openai.PromptTokensDetails{
-					CachedTokens:        80,
-					CacheCreationTokens: 20,
+					CachedTokens:     80,
+					CacheWriteTokens: 20,
 				},
 				CompletionTokensDetails: &openai.CompletionTokensDetails{
 					ReasoningTokens: 30,

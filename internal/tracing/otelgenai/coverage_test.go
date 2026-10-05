@@ -123,6 +123,13 @@ func TestEndpointCoverage(t *testing.T) {
 			expected: coverage{},
 		},
 		{
+			// System One is a custom operation; the response contributes only the
+			// resolved model and token usage.
+			name:     "systemone",
+			actual:   coverageOf(t, NewSystemOneRecorder(cfg)),
+			expected: coverage{responseAttrs: true},
+		},
+		{
 			// TODO: reuses the chat and completion mapping once those land.
 			name:     "tokenize",
 			actual:   coverageOf(t, NewTokenizeRecorder(cfg)),

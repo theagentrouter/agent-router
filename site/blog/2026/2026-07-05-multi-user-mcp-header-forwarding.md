@@ -4,10 +4,10 @@ title: "Multi-User MCP in Production: Per-User Identity at the Gateway Layer"
 authors: [mohitgurnani]
 tags: [features]
 description: How Envoy AI Gateway's header forwarding gives MCP tool calls per-user identity without OAuth infrastructure — and when you need OAuth instead.
-image: /img/blog/multi-user-mcp-feature.png
+image: /img/og/blog/multi-user-mcp-header-forwarding.png
 ---
 
-![Per-user identity at the gateway layer](/img/blog/multi-user-mcp-feature.png)
+![Per-user identity at the gateway layer](/img/og/blog/multi-user-mcp-header-forwarding.png)
 
 When teams first deploy MCP servers in production, the path of least resistance is a shared service account: one API token for Jira, one for Slack, one for GitHub — stored as Kubernetes Secrets and used for every request, regardless of who triggered the agent. This works until it doesn't. Comments post under the wrong name, users see data their own accounts can't access, and the RBAC rules carefully configured in your enterprise tools are silently bypassed.
 

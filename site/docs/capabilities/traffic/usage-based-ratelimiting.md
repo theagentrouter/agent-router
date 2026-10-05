@@ -9,8 +9,11 @@ import TabItem from '@theme/TabItem';
 
 This guide focuses on AI Gateway's specific capabilities for token-based rate limiting in LLM requests. For general rate limiting concepts and configurations, refer to [Envoy Gateway's Rate Limiting documentation](https://gateway.envoyproxy.io/docs/tasks/traffic/global-rate-limit/).
 
-:::info Quota Policy vs. Rate Limiting
-AI Gateway also provides [Quota Policy](./quota-policy.md) for managing **total consumption budgets** (for example, 100,000 tokens per hour). Use QuotaPolicy when you need to cap cumulative token spend, and usage-based rate limiting (this page) when you need to control **request velocity**.
+:::info Quota Policy vs. usage-based rate limiting
+`QuotaPolicy` manages the platform's upstream consumption budget for a provider backend and model
+across all routes and consumers. Usage-based rate limiting (this page) manages each client's allowance
+on a route. Both can count tokens and return `429 Too Many Requests`. See [Choosing a policy](./quota-policy.md#choosing-a-policy)
+for a comparison of enforcement behavior, scope, and time windows.
 :::
 
 ## Overview
@@ -71,7 +74,7 @@ matching requests are limited until the window has enough capacity again.
 
 Rate limiting requires two components to be configured:
 
-1. **Redis Deployment**: A Redis instance must be running to store rate limit data. See the [redis.yaml example](https://github.com/envoyproxy/ai-gateway/blob/main/examples/token_ratelimit/redis.yaml) for a simple deployment.
+1. **Redis Deployment**: A Redis instance must be running to store rate limit data. See the [redis.yaml example](https://github.com/theagentrouter/agent-router/blob/main/examples/token_ratelimit/redis.yaml) for a simple deployment.
 
 2. **Envoy Gateway Configuration**: Envoy Gateway must be configured at installation time to enable rate limiting and point to your Redis instance. See [Envoy Gateway Installation Guide](../../getting-started/prerequisites.md#additional-features-rate-limiting-inferencepool-etc)
 

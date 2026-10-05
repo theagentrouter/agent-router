@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 
@@ -60,6 +62,13 @@ func tryDecodeJSONRPCMessage(body []byte) (jsonrpc.Message, bool) {
 		return nil, false
 	}
 	return msg, true
+}
+
+// isJSONContentType reports whether value has application/json as its media
+// type, regardless of optional parameters such as charset.
+func isJSONContentType(value string) bool {
+	mediaType, _, err := mime.ParseMediaType(value)
+	return err == nil && strings.EqualFold(mediaType, "application/json")
 }
 
 // next reads the next SSE event from the stream.

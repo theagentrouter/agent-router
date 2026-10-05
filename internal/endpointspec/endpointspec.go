@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"k8s.io/utils/ptr"
 
@@ -24,6 +25,7 @@ import (
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -109,6 +111,8 @@ type (
 	MessagesEndpointSpec struct{}
 	// RerankEndpointSpec implements EndpointSpec for /v2/rerank.
 	RerankEndpointSpec struct{}
+	// SystemOneEndpointSpec implements EndpointSpec for TypeSafe's /v1/systemone.
+	SystemOneEndpointSpec struct{}
 	// SpeechEndpointSpec implements EndpointSpec for /v1/audio/speech.
 	SpeechEndpointSpec struct{}
 	// TranscriptionEndpointSpec implements EndpointSpec for /v1/audio/transcriptions.
@@ -142,17 +146,51 @@ func (ChatCompletionsEndpointSpec) ParseBody(
 		// Rewrite the original bytes to include the stream_options.include_usage=true so that forcing the request body
 		// mutation, which uses this raw body, will also result in the stream_options.include_usage=true.
 		var err error
-		mutatedBody, err = sjson.SetBytesOptions(body, "stream_options.include_usage", true, &sjson.Options{
-			Optimistic: true,
-			// Note: it is safe to do in-place replacement since this route level processor is executed once per request,
-			// and the result can be safely shared among possible multiple retries.
-			ReplaceInPlace: true,
-		})
+		mutatedBody, err = forceStreamOptionsIncludeUsage(body)
 		if err != nil {
 			return "", nil, false, nil, fmt.Errorf("%w: failed to set stream_options.include_usage", internalapi.ErrMalformedRequest)
 		}
 	}
 	return req.Model, &req, req.Stream, mutatedBody, nil
+}
+
+// forceStreamOptionsIncludeUsage rewrites body so that it has exactly one top-level
+// "stream_options" key with include_usage forced to true. Other fields on it (e.g. vLLM's
+// continuous_usage_stats) are preserved. If the body contains duplicate top-level
+// "stream_options" keys, only the last one is kept -- matching the semantics of
+// json.Unmarshal, which is what populates the already-parsed request -- so that the mutated
+// body cannot disagree with the parsed request about which stream_options applies.
+func forceStreamOptionsIncludeUsage(body []byte) ([]byte, error) {
+	mutatedBody := body
+	streamOptions := "{}"
+	for {
+		res := gjson.GetBytes(mutatedBody, "stream_options")
+		if !res.Exists() {
+			break
+		}
+		streamOptions = res.Raw
+		var err error
+		mutatedBody, err = sjson.DeleteBytes(mutatedBody, "stream_options")
+		if err != nil {
+			return nil, fmt.Errorf("failed to remove existing stream_options: %w", err)
+		}
+	}
+
+	streamOptions, err := sjson.SetRawOptions(streamOptions, "include_usage", "true", &sjson.Options{Optimistic: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to set include_usage on stream_options: %w", err)
+	}
+
+	mutatedBody, err = sjson.SetRawBytesOptions(mutatedBody, "stream_options", []byte(streamOptions), &sjson.Options{
+		Optimistic: true,
+		// Note: it is safe to do in-place replacement since this route level processor is executed once per request,
+		// and the result can be safely shared among possible multiple retries.
+		ReplaceInPlace: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to set stream_options.include_usage: %w", err)
+	}
+	return mutatedBody, nil
 }
 
 // ParseMultipartBody implements [Spec.ParseMultipartBody].
@@ -165,6 +203,8 @@ func (ChatCompletionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISc
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return translator.NewChatCompletionOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+	case filterapi.APISchemaAWSOpenAI:
+		return translator.NewChatCompletionOpenAIToAWSOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	case filterapi.APISchemaAWSBedrock:
 		return translator.NewChatCompletionOpenAIToAWSBedrockTranslator(modelNameOverride), nil
 	case filterapi.APISchemaAWSAnthropic:
@@ -176,7 +216,7 @@ func (ChatCompletionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISc
 	case filterapi.APISchemaGCPAnthropic:
 		return translator.NewChatCompletionOpenAIToGCPAnthropicTranslator(schema.Version, modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -228,7 +268,7 @@ func (CompletionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema
 	case filterapi.APISchemaOpenAI:
 		return translator.NewCompletionOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -271,7 +311,7 @@ func (EmbeddingsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema,
 	case filterapi.APISchemaAWSBedrock:
 		return translator.NewEmbeddingOpenAIToAWSBedrockTranslator(modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -320,7 +360,7 @@ func (ImageGenerationEndpointSpec) GetTranslator(schema filterapi.VersionedAPISc
 	case filterapi.APISchemaOpenAI:
 		return translator.NewImageGenerationOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -354,10 +394,12 @@ func (ResponsesEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, 
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return translator.NewResponsesOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+	case filterapi.APISchemaAWSOpenAI:
+		return translator.NewResponsesOpenAIToAWSOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	case filterapi.APISchemaAzureOpenAI:
 		return translator.NewResponsesOpenAIToAzureOpenAITranslator(schema.Version, modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -413,7 +455,7 @@ func (MessagesEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, m
 	case filterapi.APISchemaAWSBedrock:
 		return translator.NewAnthropicToAWSBedrockTranslator(modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("/v1/messages endpoint only supports backends that return native Anthropic format (Anthropic, GCPAnthropic, AWSAnthropic). OpenAI and AWSBedrock translation is also supported. Backend %s uses different model format", schema.Name)
+		return nil, fmt.Errorf("%w: /v1/messages endpoint only supports backends that return native Anthropic format (Anthropic, GCPAnthropic, AWSAnthropic). OpenAI and AWSBedrock translation is also supported. Backend %s uses different model format", internalapi.ErrInvalidRequestBody, schema.Name)
 	}
 }
 
@@ -462,7 +504,7 @@ func (MessagesCountTokensEndpointSpec) GetTranslator(schema filterapi.VersionedA
 	case filterapi.APISchemaAnthropic:
 		return translator.NewCountTokensToAnthropicTranslator(modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for /v1/messages/count_tokens: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for /v1/messages/count_tokens: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -499,7 +541,7 @@ func (RerankEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, mod
 	case filterapi.APISchemaCohere:
 		return translator.NewRerankCohereToCohereTranslator(schema.Version, modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -513,6 +555,62 @@ func (RerankEndpointSpec) RedactSensitiveInfoFromRequest(req *cohereschema.Reran
 		redacted.Documents[i] = redaction.RedactString(doc)
 	}
 	return &redacted, nil
+}
+
+// ParseBody implements [EndpointSpec.ParseBody].
+func (SystemOneEndpointSpec) ParseBody(
+	body []byte,
+	_ bool,
+) (internalapi.OriginalModel, *typesafeschema.SystemOneRequest, bool, []byte, error) {
+	var req typesafeschema.SystemOneRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", nil, false, nil, fmt.Errorf("%w: failed to parse JSON for /v1/systemone: %w", internalapi.ErrMalformedRequest, err)
+	}
+	return req.Model, &req, false, nil, nil
+}
+
+// ParseMultipartBody implements [Spec.ParseMultipartBody].
+func (SystemOneEndpointSpec) ParseMultipartBody([]byte, string, bool) (internalapi.OriginalModel, *typesafeschema.SystemOneRequest, bool, []byte, error) {
+	return "", nil, false, nil, errMultipartNotSupported
+}
+
+// GetTranslator implements [EndpointSpec.GetTranslator].
+func (SystemOneEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, modelNameOverride string) (translator.TypeSafeSystemOneTranslator, error) {
+	switch schema.Name {
+	case filterapi.APISchemaTypeSafe:
+		return translator.NewSystemOneTypeSafeToTypeSafeTranslator(schema.Version, modelNameOverride), nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
+	}
+}
+
+// RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
+// The state and every question's instructions and criteria are user content;
+// the model, question ids and question types are kept for debugging.
+func (SystemOneEndpointSpec) RedactSensitiveInfoFromRequest(req *typesafeschema.SystemOneRequest) (redactedReq *typesafeschema.SystemOneRequest, err error) {
+	redacted := *req
+	redacted.State = redactRawJSON(req.State)
+	if req.Questions != nil {
+		redacted.Questions = make(map[string]typesafeschema.SystemOneQuestion, len(req.Questions))
+		for id, q := range req.Questions {
+			q.Instructions = redactRawJSON(q.Instructions)
+			q.Criteria = redactRawJSON(q.Criteria)
+			redacted.Questions[id] = q
+		}
+	}
+	return &redacted, nil
+}
+
+// redactRawJSON collapses a raw JSON value into a JSON string placeholder
+// carrying only its length and hash. Unlike redactUnionField it does not keep
+// the JSON shape, because object keys (state fields, choice options) are user
+// content here. Empty values are left as they are.
+func redactRawJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	placeholder, _ := json.Marshal(redaction.RedactString(string(raw)))
+	return placeholder
 }
 
 // ParseBody implements [EndpointSpec.ParseBody].
@@ -556,7 +654,7 @@ func (TokenizeEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, m
 	case filterapi.APISchemaAWSBedrock:
 		return translator.NewTokenizeToAWSBedrockTranslator(modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for tokenize endpoint: backend=%s", schema.Name)
+		return nil, fmt.Errorf("%w: unsupported API schema for tokenize endpoint: backend=%s", internalapi.ErrInvalidRequestBody, schema.Name)
 	}
 }
 
@@ -847,7 +945,7 @@ func (SpeechEndpointSpec) GetTranslator(
 			modelNameOverride,
 		), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for speech: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for speech: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -978,7 +1076,7 @@ func (TranscriptionEndpointSpec) GetTranslator(
 	case filterapi.APISchemaOpenAI:
 		return translator.NewTranscriptionOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for audio transcription: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for audio transcription: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -1083,7 +1181,7 @@ func (TranslationEndpointSpec) GetTranslator(
 	case filterapi.APISchemaOpenAI:
 		return translator.NewTranslationOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for audio translation: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for audio translation: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -1117,7 +1215,7 @@ func (ResponsesInputTokensEndpointSpec) GetTranslator(
 	case filterapi.APISchemaAzureOpenAI:
 		return translator.NewResponsesInputTokensOpenAIToAzureOpenAITranslator(schema.Version, modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for /v1/responses/input_tokens: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for /v1/responses/input_tokens: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 

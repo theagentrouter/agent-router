@@ -4,6 +4,7 @@ title: Introducing Envoy AI Gateway
 description: Open collaboration to bring AI Gateway features to the Envoy community
 authors: [missberg]
 tags: [news]
+image: /img/og/blog/introducing-envoy-ai-gateway.png
 ---
 
 **The industry is embracing Generative AI functionality, and we need to evolve how we handle traffic on an industry-wide scale. Keeping AI traffic handling features exclusive to enterprise licenses is counterproductive to the industry’s needs. This approach limits incentives to a single commercial entity and its customers. Even single-company open-source initiatives do not promote open multi-company collaboration.**

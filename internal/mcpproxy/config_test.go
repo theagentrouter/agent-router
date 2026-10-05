@@ -6,6 +6,7 @@
 package mcpproxy
 
 import (
+	"io"
 	"log/slog"
 	"regexp"
 	"sync"
@@ -625,4 +626,185 @@ func TestLoadConfig_AuthorizationChangeTriggersNotification(t *testing.T) {
 	err := proxy.LoadConfig(t.Context(), config)
 	require.NoError(t, err)
 	wg.Wait()
+}
+
+// TestLoadConfig_NeverModeToolIndex verifies that LoadConfig computes a static, route-level
+// bare-tool-name → backend index for every effectively-Never-mode backend, from its declared
+// toolSelector.include (minus excludes). This index is what tool-call routing consults instead
+// of session-scoped state, so it must be correct and stable across reloads.
+func TestLoadConfig_NeverModeToolIndex(t *testing.T) {
+	proxy := &ProxyConfig{
+		mcpProxyConfig:     &mcpProxyConfig{},
+		toolChangeSignaler: newMultiWatcherSignaler(),
+	}
+
+	config := &filterapi.Config{
+		MCPConfig: &filterapi.MCPConfig{
+			BackendListenerAddr: "http://localhost:8080",
+			Routes: []filterapi.MCPRoute{
+				{
+					Name:       "route1",
+					PrefixMode: filterapi.PrefixModeNever, // route-level default.
+					Backends: []filterapi.MCPBackend{
+						{
+							Name: "backend1",
+							ToolSelector: &filterapi.MCPToolSelector{
+								Include: []string{"search", "fetch"},
+								Exclude: []string{"fetch"}, // excluded, so should not appear in the index.
+							},
+						},
+						{
+							// Explicit per-backend override back to Always: should NOT appear in the index
+							// even though it declares a toolSelector.
+							Name:       "backend2",
+							PrefixMode: filterapi.PrefixModeAlways,
+							ToolSelector: &filterapi.MCPToolSelector{
+								Include: []string{"list"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := proxy.LoadConfig(t.Context(), config)
+	require.NoError(t, err)
+
+	route := proxy.routes["route1"]
+	require.NotNil(t, route)
+	require.Equal(t, map[string]string{"search": "backend1"}, route.neverModeToolIndex)
+	require.Empty(t, route.neverModePromptIndex)
+}
+
+// TestLoadConfig_NeverModePromptIndex verifies that PromptSelector.Include is opt-in: only
+// backends that declare it get their prompts indexed for bare exposure under PrefixMode=Never.
+func TestLoadConfig_NeverModePromptIndex(t *testing.T) {
+	proxy := &ProxyConfig{
+		mcpProxyConfig:     &mcpProxyConfig{},
+		toolChangeSignaler: newMultiWatcherSignaler(),
+	}
+
+	config := &filterapi.Config{
+		MCPConfig: &filterapi.MCPConfig{
+			BackendListenerAddr: "http://localhost:8080",
+			Routes: []filterapi.MCPRoute{
+				{
+					Name:       "route1",
+					PrefixMode: filterapi.PrefixModeNever,
+					Backends: []filterapi.MCPBackend{
+						{
+							Name: "backend1",
+							ToolSelector: &filterapi.MCPToolSelector{
+								Include: []string{"search"},
+							},
+							PromptSelector: &filterapi.MCPPromptSelector{
+								Include: []string{"greeting", "farewell"},
+								Exclude: []string{"farewell"},
+							},
+						},
+						{
+							// Never mode but no PromptSelector declared: opts out of bare prompt
+							// naming, so this backend's prompts must not appear in the index.
+							Name: "backend2",
+							ToolSelector: &filterapi.MCPToolSelector{
+								Include: []string{"list"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := proxy.LoadConfig(t.Context(), config)
+	require.NoError(t, err)
+
+	route := proxy.routes["route1"]
+	require.NotNil(t, route)
+	require.Equal(t, map[string]string{"greeting": "backend1"}, route.neverModePromptIndex)
+}
+
+// TestLoadConfig_NeverModeToolIndexCollision verifies the defensive, config-load-time
+// collision handling: this should never happen because admission-time validation
+// (validatePerBackendPrefixMode) already rejects overlapping declarations, but if it does, the
+// first backend to claim a name should win rather than LoadConfig failing outright.
+func TestLoadConfig_NeverModeToolIndexCollision(t *testing.T) {
+	proxy := &ProxyConfig{
+		mcpProxyConfig:     &mcpProxyConfig{},
+		toolChangeSignaler: newMultiWatcherSignaler(),
+		l:                  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	config := &filterapi.Config{
+		MCPConfig: &filterapi.MCPConfig{
+			BackendListenerAddr: "http://localhost:8080",
+			Routes: []filterapi.MCPRoute{
+				{
+					Name:       "route1",
+					PrefixMode: filterapi.PrefixModeNever,
+					Backends: []filterapi.MCPBackend{
+						{Name: "backend1", ToolSelector: &filterapi.MCPToolSelector{Include: []string{"search"}}},
+						{Name: "backend2", ToolSelector: &filterapi.MCPToolSelector{Include: []string{"search"}}},
+					},
+				},
+			},
+		},
+	}
+
+	err := proxy.LoadConfig(t.Context(), config)
+	require.NoError(t, err)
+
+	route := proxy.routes["route1"]
+	require.NotNil(t, route)
+	require.Equal(t, map[string]string{"search": "backend1"}, route.neverModeToolIndex)
+}
+
+// TestLoadConfig_PrefixModeChangeTriggersNotification verifies that flipping a backend's
+// effective PrefixMode (with its toolSelector.include left unchanged) is detected as a tools
+// change, even though the backend set and toolSelectors content are otherwise identical.
+func TestLoadConfig_PrefixModeChangeTriggersNotification(t *testing.T) {
+	toolChangeSignaler := newMultiWatcherSignaler()
+	watcher := toolChangeSignaler.Watch()
+
+	proxy := &ProxyConfig{
+		mcpProxyConfig:     &mcpProxyConfig{},
+		toolChangeSignaler: toolChangeSignaler,
+	}
+
+	baseBackend := filterapi.MCPBackend{
+		Name:         "backend1",
+		ToolSelector: &filterapi.MCPToolSelector{Include: []string{"search"}},
+	}
+	initial := &filterapi.Config{
+		MCPConfig: &filterapi.MCPConfig{
+			BackendListenerAddr: "http://localhost:8080",
+			Routes:              []filterapi.MCPRoute{{Name: "route1", Backends: []filterapi.MCPBackend{baseBackend}}},
+		},
+	}
+	require.NoError(t, proxy.LoadConfig(t.Context(), initial))
+	require.Empty(t, proxy.routes["route1"].neverModeToolIndex)
+
+	// Only PrefixMode changes; the backend set and toolSelector.include are identical.
+	changedBackend := baseBackend
+	changedBackend.PrefixMode = filterapi.PrefixModeNever
+	changed := &filterapi.Config{
+		MCPConfig: &filterapi.MCPConfig{
+			BackendListenerAddr: "http://localhost:8080",
+			Routes:              []filterapi.MCPRoute{{Name: "route1", Backends: []filterapi.MCPBackend{changedBackend}}},
+		},
+	}
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		select {
+		case <-watcher:
+		case <-time.After(100 * time.Millisecond):
+			t.Error("expected tools changed notification on PrefixMode change but didn't receive one")
+		}
+	})
+
+	require.NoError(t, proxy.LoadConfig(t.Context(), changed))
+	wg.Wait()
+	require.Equal(t, map[string]string{"search": "backend1"}, proxy.routes["route1"].neverModeToolIndex)
 }

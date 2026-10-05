@@ -7,7 +7,7 @@ sidebar_position: 7
 import CodeBlock from '@theme/CodeBlock';
 import vars from '../../\_vars.json';
 
-Envoy AI Gateway's router joins and records distributed traces when supplied
+Agent Router's router joins and records distributed traces when supplied
 with an [OpenTelemetry](https://opentelemetry.io/) collector endpoint.
 
 This guide provides an overview of the spans recorded by the AI Gateway and how
@@ -15,7 +15,7 @@ export them to your choice of OpenTelemetry collector.
 
 ## Overview
 
-Envoy AI Gateway's router joins and records distributed traces when supplied
+Agent Router's router joins and records distributed traces when supplied
 with an [OpenTelemetry](https://opentelemetry.io/) collector endpoint.
 
 Requests to the OpenAI Chat Completions, Completions (legacy), and Embeddings
@@ -260,7 +260,7 @@ There's no standard name for session ID headers, but there is a common attribute
 in OpenTelemetry, [session.id][otel-session], which has special handling in some
 OpenTelemetry platforms such as [Phoenix][phoenix-session].
 
-To bridge this gap, Envoy AI Gateway lets you map HTTP request headers to
+To bridge this gap, Agent Router lets you map HTTP request headers to
 OpenTelemetry attributes. You can define a base mapping shared by metrics,
 spans, and access logs, plus optional per-signal mappings for metrics, spans,
 and access logs.

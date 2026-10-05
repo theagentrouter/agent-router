@@ -172,6 +172,16 @@ func translateOpenAItoAnthropicTools(openAITools []openai.Tool, openAIToolChoice
 	if len(openAITools) > 0 {
 		anthropicTools := make([]anthropic.ToolUnionParam, 0, len(openAITools))
 		for _, openAITool := range openAITools {
+			if openAITool.Type == openai.ToolTypeAnthropicWebSearch {
+				anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{
+					OfWebSearchTool20260209: &anthropic.WebSearchTool20260209Param{
+						Name: constant.WebSearch(openAITool.Name),
+						Type: constant.WebSearch20260209(openAITool.Type),
+					},
+				})
+				continue
+			}
+
 			if openAITool.Type != openai.ToolTypeFunction {
 				err = fmt.Errorf("%w: unsupported tool type: %s", internalapi.ErrInvalidRequestBody, openAITool.Type)
 				return
@@ -189,6 +199,10 @@ func translateOpenAItoAnthropicTools(openAITools []openai.Tool, openAIToolChoice
 				toolParam.Strict = anthropic.Bool(true)
 			}
 
+			if openAITool.Function.EagerInputStreaming != nil {
+				toolParam.EagerInputStreaming = anthropic.Bool(*openAITool.Function.EagerInputStreaming)
+			}
+
 			if isCacheEnabled(openAITool.Function.AnthropicContentFields) {
 				toolParam.CacheControl = anthropic.NewCacheControlEphemeralParam()
 			}
@@ -201,9 +215,9 @@ func translateOpenAItoAnthropicTools(openAITools []openai.Tool, openAIToolChoice
 			}
 
 			anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{OfTool: &toolParam})
-			if len(anthropicTools) > 0 {
-				tools = anthropicTools
-			}
+		}
+		if len(anthropicTools) > 0 {
+			tools = anthropicTools
 		}
 
 		// 2. Handle the tool_choice parameter.
@@ -639,9 +653,10 @@ var awsOutputConfigModels = []string{
 }
 
 // gcpOutputConfigModels lists model identifiers that support structured outputs
-// on GCP Vertex AI: Claude Fable 5, Claude Mythos 5, Claude Opus 4.8, Claude
-// Mythos Preview, Claude Opus 4.7, Claude Opus 4.6, Claude Sonnet 5, Claude
-// Sonnet 4.6, Claude Sonnet 4.5, Claude Opus 4.5, and Claude Haiku 4.5.
+// on GCP Vertex AI: Claude Fable 5, Claude Mythos 5, Claude Opus 5.5,
+// Claude Opus 5, Claude Opus 4.8, Claude Mythos Preview, Claude Opus 4.7,
+// Claude Opus 4.6, Claude Sonnet 5, Claude Sonnet 4.6, Claude Sonnet 4.5,
+// Claude Opus 4.5, and Claude Haiku 4.5.
 var gcpOutputConfigModels = []string{
 	"opus-4-5",       // Claude Opus 4.5
 	"sonnet-4-5",     // Claude Sonnet 4.5
@@ -650,6 +665,8 @@ var gcpOutputConfigModels = []string{
 	"sonnet-4-6",     // Claude Sonnet 4.6
 	"opus-4-7",       // Claude Opus 4.7
 	"opus-4-8",       // Claude Opus 4.8
+	"opus-5",         // Claude Opus 5
+	"opus-5-5",       // Claude Opus 5.5
 	"sonnet-5",       // Claude Sonnet 5
 	"fable-5",        // Claude Fable 5
 	"mythos-5",       // Claude Mythos 5
@@ -668,14 +685,18 @@ func outputConfigAvailable(apiSchema filterapi.APISchemaName, model internalapi.
 }
 
 // effortModels lists model identifiers that support the output_config.effort parameter.
-// The effort parameter is supported by Claude Fable 5, Claude Mythos 5, Claude Opus 4.8, Claude Mythos Preview,
-// Claude Opus 4.7, Claude Opus 4.6, Claude Sonnet 5, Claude Sonnet 4.6, and Claude Opus 4.5.
+// The effort parameter is supported by Claude Fable 5, Claude Mythos 5,
+// Claude Opus 5.5, Claude Opus 5, Claude Opus 4.8, Claude Mythos Preview,
+// Claude Opus 4.7, Claude Opus 4.6, Claude Sonnet 5, Claude Sonnet 4.6,
+// and Claude Opus 4.5.
 // See: https://platform.claude.com/docs/en/build-with-claude/effort
 var effortModels = []string{
 	"opus-4-5",       // Claude Opus 4.5
 	"opus-4-6",       // Claude Opus 4.6
 	"opus-4-7",       // Claude Opus 4.7
 	"opus-4-8",       // Claude Opus 4.8
+	"opus-5",         // Claude Opus 5
+	"opus-5-5",       // Claude Opus 5.5
 	"sonnet-4-6",     // Claude Sonnet 4.6
 	"sonnet-5",       // Claude Sonnet 5
 	"fable-5",        // Claude Fable 5
@@ -751,16 +772,23 @@ func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema fil
 		featureCheckModel = modelNameOverride
 	}
 	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil && outputConfigAvailable(apiSchema, featureCheckModel) {
-		// Convert OpenAI JSON schema to Anthropic OutputConfig format
+		// Validate that the OpenAI JSON schema is an object while retaining its
+		// original bytes. Anthropic's SDK sorts map keys when marshaling, which
+		// would otherwise change the property order seen by Claude.
+		rawSchema := openAIReq.ResponseFormat.OfJSONSchema.JSONSchema.Schema
 		var schemaMap map[string]any
-		if err = json.Unmarshal(openAIReq.ResponseFormat.OfJSONSchema.JSONSchema.Schema, &schemaMap); err != nil {
+		if err = json.Unmarshal(rawSchema, &schemaMap); err != nil {
 			return nil, fmt.Errorf("failed to parse JSON schema: %w", err)
 		}
+		format := anthropic.JSONOutputFormatParam{
+			Type:   constant.JSONSchema("json_schema"),
+			Schema: schemaMap,
+		}
+		// Override only the serialized schema with the validated raw JSON. Keeping
+		// Schema populated above preserves the typed representation for callers.
+		format.SetExtraFields(map[string]any{"schema": rawSchema})
 		params.OutputConfig = anthropic.OutputConfigParam{
-			Format: anthropic.JSONOutputFormatParam{
-				Type:   constant.JSONSchema("json_schema"),
-				Schema: schemaMap,
-			},
+			Format: format,
 		}
 	}
 
@@ -987,8 +1015,8 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 				CompletionTokens: int(outputTokens),
 				TotalTokens:      int(totalTokens),
 				PromptTokensDetails: &openai.PromptTokensDetails{
-					CachedTokens:        int(cachedTokens),
-					CacheCreationTokens: int(cacheCreationTokens),
+					CachedTokens:     int(cachedTokens),
+					CacheWriteTokens: int(cacheCreationTokens),
 				},
 				CompletionTokensDetails: &openai.CompletionTokensDetails{
 					ReasoningTokens: int(reasoningTokens),
@@ -1195,8 +1223,15 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		}
 		switch event.Delta.Type {
 		case string(constant.ValueOf[constant.TextDelta]()), string(constant.ValueOf[constant.ThinkingDelta]()):
-			// Treat thinking_delta just like a text_delta.
-			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &event.Delta.Text}
+			// Treat thinking_delta just like a text_delta, but read the field
+			// that belongs to the variant: RawContentBlockDeltaUnion.Text is
+			// only populated for text_delta, and .Thinking only for
+			// thinking_delta.
+			text := event.Delta.Text
+			if event.Delta.Type == string(constant.ValueOf[constant.ThinkingDelta]()) {
+				text = event.Delta.Thinking
+			}
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &text}
 			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
 		case string(constant.ValueOf[constant.InputJSONDelta]()):
 			tool, ok := p.activeToolCalls[p.toolIndex]
@@ -1314,8 +1349,8 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 		PromptTokens:     int(inputTokens),
 		TotalTokens:      int(totalTokens),
 		PromptTokensDetails: &openai.PromptTokensDetails{
-			CachedTokens:        int(cachedTokens),
-			CacheCreationTokens: int(cacheCreationTokens),
+			CachedTokens:     int(cachedTokens),
+			CacheWriteTokens: int(cacheCreationTokens),
 		},
 		CompletionTokensDetails: &openai.CompletionTokensDetails{
 			ReasoningTokens: int(reasoningTokens),

@@ -141,6 +141,9 @@ type VersionedAPISchema struct {
 
 // OpenAIPrefix returns the OpenAI API prefix for the VersionedAPISchema.
 func (v VersionedAPISchema) OpenAIPrefix() string {
+	if v.Name == APISchemaAWSOpenAI && v.Prefix == "" {
+		return "openai/v1"
+	}
 	return v.Prefix
 }
 
@@ -178,6 +181,10 @@ const (
 	// Used for Claude models hosted on AWS Bedrock. Supports both OpenAI and Anthropic input formats
 	// depending on the endpoint path, similar to APISchemaGCPAnthropic.
 	APISchemaAWSAnthropic APISchemaName = "AWSAnthropic"
+	// APISchemaAWSOpenAI represents the AWS OpenAI-compatible API schema.
+	APISchemaAWSOpenAI APISchemaName = "AWSOpenAI"
+	// APISchemaTypeSafe represents the native TypeSafe AI System One API schema (Jev).
+	APISchemaTypeSafe APISchemaName = "TypeSafe"
 )
 
 // RouteRuleName is the name of the route rule.

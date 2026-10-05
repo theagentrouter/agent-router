@@ -6,7 +6,7 @@ sidebar_position: 2
 
 # Resources
 
-The Envoy AI Gateway uses several custom resources to manage AI traffic. Here's an overview of the key resources and how they relate to each other:
+The Agent Router uses several custom resources to manage AI traffic. Here's an overview of the key resources and how they relate to each other:
 
 ## Resource Reference
 

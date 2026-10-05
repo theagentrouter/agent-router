@@ -8,7 +8,7 @@
     "name": "Tetrate",
     "logoUrl": "/img/adopters/tetrate.svg",
     "url": "https://tetrate.io/",
-    "description": "Tetrate provides trusted connectivity and control for AI. Empower developers while safeguarding the business. Built atop the proven Envoy proxy & Envoy AI Gateway."
+    "description": "Tetrate provides trusted connectivity and control for AI. Empower developers while safeguarding the business. Built atop the proven Envoy proxy & Agent Router."
   },
   {
     "name": "Nutanix",
@@ -62,6 +62,6 @@
     "name": "Your Logo Here",
     "logoUrl": "/img/adopters/placeholder-company.svg",
     "description": "Add your logo to show support for the project",
-    "url": "https://github.com/envoyproxy/ai-gateway/edit/main/site/src/data/adopters/adopters.json"
+    "url": "https://github.com/theagentrouter/agent-router/edit/main/site/src/data/adopters/adopters.json"
   }
 ]

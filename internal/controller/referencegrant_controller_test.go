@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
@@ -78,9 +79,10 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 
 		// Create a buffered channel to avoid blocking
 		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -104,9 +106,10 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 			Build()
 
 		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKey{
@@ -121,6 +124,90 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 
 		// No events should be sent when grant is deleted
 		require.Empty(t, aiGatewayRouteChan)
+	})
+
+	t.Run("ReferenceGrant being deleted - triggers affected AIGatewayRoutes before removal", func(t *testing.T) {
+		referenceGrant := &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-grant",
+				Namespace: "backend-ns",
+			},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{
+					{
+						Group:     aiServiceBackendGroup,
+						Kind:      aiGatewayRouteKind,
+						Namespace: "route-ns",
+					},
+				},
+				To: []gwapiv1b1.ReferenceGrantTo{
+					{
+						Group: aiServiceBackendGroup,
+						Kind:  aiServiceBackendKind,
+					},
+				},
+			},
+		}
+
+		affectedRoute := &aigv1b1.AIGatewayRoute{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "affected-route",
+				Namespace: "route-ns",
+			},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+							{
+								Name:      "backend",
+								Namespace: ptr.To(gwapiv1.Namespace("backend-ns")),
+							},
+						},
+					},
+				},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(referenceGrant, affectedRoute).
+			Build()
+
+		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
+		logger := logr.Discard()
+
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+
+		req := reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
+		}
+
+		// First reconcile adds the finalizer and fires the "created" event.
+		_, err := controller.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		require.Len(t, aiGatewayRouteChan, 1)
+		<-aiGatewayRouteChan
+
+		var grant gwapiv1b1.ReferenceGrant
+		require.NoError(t, fakeClient.Get(context.Background(), client.ObjectKeyFromObject(referenceGrant), &grant))
+		require.Contains(t, grant.Finalizers, aiGatewayControllerFinalizer)
+
+		// Deleting the grant should not remove it right away since the finalizer is present.
+		require.NoError(t, fakeClient.Delete(context.Background(), &grant))
+
+		// Second reconcile should still see the grant (deletion in progress), fire the event for the
+		// route it used to authorize, and then remove the finalizer so the grant is actually deleted.
+		result, err := controller.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, reconcile.Result{}, result)
+
+		require.Len(t, aiGatewayRouteChan, 1)
+		got := <-aiGatewayRouteChan
+		require.Equal(t, affectedRoute.Name, got.Object.GetName())
+
+		err = fakeClient.Get(context.Background(), client.ObjectKeyFromObject(referenceGrant), &grant)
+		require.True(t, apierrors.IsNotFound(err))
 	})
 
 	t.Run("ReferenceGrant with no affected routes", func(t *testing.T) {
@@ -152,9 +239,10 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 			Build()
 
 		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -235,9 +323,10 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 			Build()
 
 		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -272,14 +361,16 @@ func TestNewReferenceGrantController(t *testing.T) {
 		Build()
 
 	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
 
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 	require.NotNil(t, controller)
 	require.Equal(t, fakeClient, controller.client)
 	require.Equal(t, logger, controller.logger)
 	require.Equal(t, aiGatewayRouteChan, controller.aiGatewayRouteChan)
+	require.Equal(t, backendSecurityPolicyChan, controller.backendSecurityPolicyChan)
 }
 
 // TestReferenceGrantController_Reconcile_GetError tests reconcile when Get returns error
@@ -294,9 +385,10 @@ func TestReferenceGrantController_Reconcile_GetError(t *testing.T) {
 		Build()
 
 	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
 
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 	// Try to reconcile a non-existent ReferenceGrant - this should be handled gracefully
 	req := reconcile.Request{
@@ -345,9 +437,10 @@ func TestReferenceGrantController_Reconcile_GetAffectedRoutesError(t *testing.T)
 		Build()
 
 	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
 
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 	req := reconcile.Request{
 		NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -537,8 +630,9 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 				Build()
 
 			aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+			backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 			logger := logr.Discard()
-			controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+			controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 			affectedRoutes, err := controller.getAffectedAIGatewayRoutes(
 				context.Background(),
@@ -565,8 +659,9 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 			Build()
 
 		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 		grant := &gwapiv1b1.ReferenceGrant{
 			ObjectMeta: metav1.ObjectMeta{
@@ -605,8 +700,9 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes_WithNonMatchingFrom
 
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
 	grant := &gwapiv1b1.ReferenceGrant{
 		ObjectMeta: metav1.ObjectMeta{
@@ -633,4 +729,300 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes_WithNonMatchingFrom
 	routes, err := controller.getAffectedAIGatewayRoutes(context.Background(), grant)
 	require.NoError(t, err)
 	require.Empty(t, routes, "should not return any routes when From doesn't match")
+}
+
+func TestReferenceGrantController_Reconcile_BackendSecurityPolicy(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = gwapiv1b1.Install(scheme)
+	_ = aigv1b1.AddToScheme(scheme)
+
+	t.Run("ReferenceGrant created - triggers affected BackendSecurityPolicy", func(t *testing.T) {
+		referenceGrant := &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-grant",
+				Namespace: "secret-ns",
+			},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{
+					{
+						Group:     aiServiceBackendGroup,
+						Kind:      backendSecurityPolicyKind,
+						Namespace: "bsp-ns",
+					},
+				},
+				To: []gwapiv1b1.ReferenceGrantTo{
+					{
+						Group: secretGroup,
+						Kind:  secretKind,
+					},
+				},
+			},
+		}
+
+		affectedBSP := &aigv1b1.BackendSecurityPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "affected-bsp",
+				Namespace: "bsp-ns",
+			},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+					SecretRef: &gwapiv1.SecretObjectReference{
+						Name:      "api-key-secret",
+						Namespace: ptr.To(gwapiv1.Namespace("secret-ns")),
+					},
+				},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(referenceGrant, affectedBSP).
+			Build()
+
+		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
+		logger := logr.Discard()
+
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+
+		req := reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
+		}
+
+		result, err := controller.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, reconcile.Result{}, result)
+
+		require.Empty(t, aiGatewayRouteChan)
+		require.Len(t, backendSecurityPolicyChan, 1)
+		got := <-backendSecurityPolicyChan
+		require.Equal(t, affectedBSP.Name, got.Object.GetName())
+		require.Equal(t, affectedBSP.Namespace, got.Object.GetNamespace())
+	})
+
+	t.Run("ReferenceGrant unrelated to any BackendSecurityPolicy triggers no event", func(t *testing.T) {
+		referenceGrant := &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-grant",
+				Namespace: "secret-ns",
+			},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{
+					{
+						Group:     aiServiceBackendGroup,
+						Kind:      backendSecurityPolicyKind,
+						Namespace: "bsp-ns",
+					},
+				},
+				To: []gwapiv1b1.ReferenceGrantTo{
+					{
+						Group: secretGroup,
+						Kind:  secretKind,
+					},
+				},
+			},
+		}
+
+		// BSP's secret is in a different namespace than the grant, so it is unaffected.
+		unaffectedBSP := &aigv1b1.BackendSecurityPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "unaffected-bsp",
+				Namespace: "bsp-ns",
+			},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+					SecretRef: &gwapiv1.SecretObjectReference{
+						Name:      "api-key-secret",
+						Namespace: ptr.To(gwapiv1.Namespace("other-secret-ns")),
+					},
+				},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(referenceGrant, unaffectedBSP).
+			Build()
+
+		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
+		logger := logr.Discard()
+
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+
+		req := reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
+		}
+
+		result, err := controller.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, reconcile.Result{}, result)
+
+		require.Empty(t, backendSecurityPolicyChan)
+	})
+
+	t.Run("ReferenceGrant being deleted - triggers affected BackendSecurityPolicies before removal", func(t *testing.T) {
+		referenceGrant := &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-grant",
+				Namespace: "secret-ns",
+			},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{
+					{
+						Group:     aiServiceBackendGroup,
+						Kind:      backendSecurityPolicyKind,
+						Namespace: "bsp-ns",
+					},
+				},
+				To: []gwapiv1b1.ReferenceGrantTo{
+					{
+						Group: secretGroup,
+						Kind:  secretKind,
+					},
+				},
+			},
+		}
+
+		affectedBSP := &aigv1b1.BackendSecurityPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "affected-bsp",
+				Namespace: "bsp-ns",
+			},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+					SecretRef: &gwapiv1.SecretObjectReference{
+						Name:      "api-key-secret",
+						Namespace: ptr.To(gwapiv1.Namespace("secret-ns")),
+					},
+				},
+			},
+		}
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(referenceGrant, affectedBSP).
+			Build()
+
+		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
+		logger := logr.Discard()
+
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+
+		req := reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
+		}
+
+		// First reconcile adds the finalizer and fires the "created" event.
+		_, err := controller.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		require.Len(t, backendSecurityPolicyChan, 1)
+		<-backendSecurityPolicyChan
+
+		var grant gwapiv1b1.ReferenceGrant
+		require.NoError(t, fakeClient.Get(context.Background(), client.ObjectKeyFromObject(referenceGrant), &grant))
+		require.Contains(t, grant.Finalizers, aiGatewayControllerFinalizer)
+
+		// Deleting the grant should not remove it right away since the finalizer is present.
+		require.NoError(t, fakeClient.Delete(context.Background(), &grant))
+
+		// Second reconcile should still see the grant (deletion in progress), fire the event for the
+		// BackendSecurityPolicy it used to authorize, and then remove the finalizer so the grant is
+		// actually deleted.
+		result, err := controller.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, reconcile.Result{}, result)
+
+		require.Len(t, backendSecurityPolicyChan, 1)
+		got := <-backendSecurityPolicyChan
+		require.Equal(t, affectedBSP.Name, got.Object.GetName())
+
+		err = fakeClient.Get(context.Background(), client.ObjectKeyFromObject(referenceGrant), &grant)
+		require.True(t, apierrors.IsNotFound(err))
+	})
+}
+
+func TestReferenceGrantController_GetAffectedBackendSecurityPolicies(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = gwapiv1b1.Install(scheme)
+	_ = aigv1b1.AddToScheme(scheme)
+
+	grant := gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-grant",
+			Namespace: "secret-ns",
+		},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{
+				{
+					Group:     aiServiceBackendGroup,
+					Kind:      backendSecurityPolicyKind,
+					Namespace: "bsp-ns",
+				},
+			},
+			To: []gwapiv1b1.ReferenceGrantTo{
+				{
+					Group: secretGroup,
+					Kind:  secretKind,
+				},
+			},
+		},
+	}
+
+	affectedBSP := aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "affected-bsp", Namespace: "bsp-ns"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+				SecretRef: &gwapiv1.SecretObjectReference{
+					Name:      "api-key-secret",
+					Namespace: ptr.To(gwapiv1.Namespace("secret-ns")),
+				},
+			},
+		},
+	}
+	sameNamespaceBSP := aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "same-ns-bsp", Namespace: "bsp-ns"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+				SecretRef: &gwapiv1.SecretObjectReference{Name: "local-secret"},
+			},
+		},
+	}
+	otherNamespaceBSP := aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "other-ns-bsp", Namespace: "other-bsp-ns"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+				SecretRef: &gwapiv1.SecretObjectReference{
+					Name:      "api-key-secret",
+					Namespace: ptr.To(gwapiv1.Namespace("secret-ns")),
+				},
+			},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(&affectedBSP, &sameNamespaceBSP, &otherNamespaceBSP).
+		Build()
+
+	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
+	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
+	logger := logr.Discard()
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+
+	affected, err := controller.getAffectedBackendSecurityPolicies(context.Background(), &grant)
+	require.NoError(t, err)
+
+	names := make([]string, len(affected))
+	for i, bsp := range affected {
+		names[i] = bsp.Name
+	}
+	require.ElementsMatch(t, []string{"affected-bsp"}, names)
 }

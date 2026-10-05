@@ -23,30 +23,33 @@ import (
 	"github.com/envoyproxy/ai-gateway/tests/internal/e2elib"
 )
 
+// For InferencePool integration tests, we change to use Envoy Gateway GNM(gateway namespace mode).
+// The namespace of the Gateway resources(e.g. Deployment, Service) changed from "envoy-gateway-system" to "default" namespace.
+const inferenceGatewayNamespace = "default"
+
 // TestInferencePoolIntegration tests the InferencePool integration with AI Gateway.
 func TestInferencePoolIntegration(t *testing.T) {
 	// Apply the base test manifest.
 	const baseManifest = "../../examples/inference-pool/base.yaml"
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), baseManifest))
-
 	// Test inferencePool with AIGatewayRoute.
 	const aiGWRouteManifest = "../../examples/inference-pool/aigwroute.yaml"
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), aiGWRouteManifest))
 
 	egSelector := "gateway.envoyproxy.io/owning-gateway-name=inference-pool-with-aigwroute"
-	e2elib.RequireWaitForGatewayPodReady(t, egSelector)
+	e2elib.RequireWaitForGatewayPodReadyWithNamespace(t, inferenceGatewayNamespace, egSelector)
 
 	// Verify InferencePool status is correctly set for the Gateway.
 	t.Run("verify_inference_pool_status", func(t *testing.T) {
 		// Verify that the mistral InferencePool has correct status for the Gateway.
-		requireInferencePoolStatusValid(t, "default", "mistral", "inference-pool-with-aigwroute")
+		requireInferencePoolStatusValid(t, inferenceGatewayNamespace, "mistral", "inference-pool-with-aigwroute")
 
 		// Verify that the vllm-llama3-8b-instruct InferencePool has correct status for the Gateway.
 		// Note: This InferencePool is referenced in the AIGatewayRoute but may not exist in base.yaml.
 		// We'll check if it exists first.
-		status, err := getInferencePoolStatus(t.Context(), "default", "vllm-llama3-8b-instruct")
+		status, err := getInferencePoolStatus(t.Context(), inferenceGatewayNamespace, "vllm-llama3-8b-instruct")
 		if err == nil && status != nil {
-			requireInferencePoolStatusValid(t, "default", "vllm-llama3-8b-instruct", "inference-pool-with-aigwroute")
+			requireInferencePoolStatusValid(t, inferenceGatewayNamespace, "vllm-llama3-8b-instruct", "inference-pool-with-aigwroute")
 		} else {
 			t.Logf("InferencePool vllm-llama3-8b-instruct not found, skipping status validation: %v", err)
 		}
@@ -103,13 +106,13 @@ func TestInferencePoolIntegration(t *testing.T) {
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), httpRouteManifest))
 
 	egSelector = "gateway.envoyproxy.io/owning-gateway-name=inference-pool-with-httproute"
-	e2elib.RequireWaitForPodReady(t, e2elib.EnvoyGatewayNamespace, egSelector)
+	e2elib.RequireWaitForPodReady(t, inferenceGatewayNamespace, egSelector)
 
 	// Verify InferencePool status is correctly set for the HTTPRoute Gateway.
 	t.Run("verify_inference_pool_status_httproute", func(t *testing.T) {
 		// For HTTPRoute, the referenced InferencePool is "vllm-llama3-8b-instruct".
 		// The HTTPRoute Gateway name should be "inference-pool-with-httproute".
-		requireInferencePoolStatusValid(t, "default", "vllm-llama3-8b-instruct", "inference-pool-with-httproute")
+		requireInferencePoolStatusValid(t, inferenceGatewayNamespace, "vllm-llama3-8b-instruct", "inference-pool-with-httproute")
 	})
 
 	// Test connectivity to inferencePool + inference pods with valid metrics.
@@ -132,7 +135,7 @@ func testInferenceGatewayConnectivityByModel(t *testing.T, egSelector, model str
 // testInferenceGatewayConnectivity tests that the InferenceGateway is working as expected and returns a expected status code.
 func testInferenceGatewayConnectivity(t *testing.T, egSelector, body string, additionalHeaders map[string]string, expectedStatusCode int) {
 	require.Eventually(t, func() bool {
-		fwd := e2elib.RequireNewHTTPPortForwarder(t, e2elib.EnvoyGatewayNamespace, egSelector, e2elib.EnvoyGatewayDefaultServicePort)
+		fwd := e2elib.RequireNewHTTPPortForwarder(t, inferenceGatewayNamespace, egSelector, e2elib.EnvoyGatewayDefaultServicePort)
 		defer fwd.Kill()
 
 		// Set timeout context.

@@ -7,7 +7,7 @@ sidebar_position: 7
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-Envoy AI Gateway provides an advanced model name virtualization capability that allows you to manage and route requests to different AI models seamlessly.
+Agent Router provides an advanced model name virtualization capability that allows you to manage and route requests to different AI models seamlessly.
 This guide covers the key feature and configuration for model virtualization.
 
 ## Motivation
@@ -27,7 +27,7 @@ From downstream GenAI applications' perspective, it is beneficial to have a unif
 
 ## Provider-specific Virtualization
 
-AI providers handle model naming and execution differently to balance flexibility, determinism, and optimization. This section categorizes these behaviors into virtualization types, enabling Envoy AI Gateway to abstract differences for unified downstream access while retaining executed model details where possible.
+AI providers handle model naming and execution differently to balance flexibility, determinism, and optimization. This section categorizes these behaviors into virtualization types, enabling Agent Router to abstract differences for unified downstream access while retaining executed model details where possible.
 
 - **Automatic Routing & Resolution**: Providers select and optimize models at runtime behind generic identifiers, returning the actual executed version for reproducibility and debugging.
 - **Static Model Execution**: Uses direct mapping to immutable identifiers or fixed versions for deterministic execution, ensuring requested models run exactly as specified, ideal for consistent embeddings.
@@ -116,9 +116,9 @@ It also can be thought of as "one-to-many" aliasing of model names, where one un
 
 ## Virtualization for fallback scenarios
 
-As we see in the [Provider Fallback](./provider-fallback) page, Envoy AI Gateway allows you to fallback to a different AI provider if the primary one fails.
+As we see in the [Provider Fallback](./provider-fallback) page, Agent Router allows you to fallback to a different AI provider if the primary one fails.
 However, sometimes we want to fallback to a different model on the same provider.
-For example, it is natural to set up the Envoy AI Gateway in a way that if the primary expensive model fails (rate limit, etc), Envoy retries the request to a less expensive model on the same provider.
+For example, it is natural to set up the Agent Router in a way that if the primary expensive model fails (rate limit, etc), Envoy retries the request to a less expensive model on the same provider.
 More concretely, if the request to `gpt-5-nano` fails, we want to retry it with `gpt-5-nano-mini` on the same OpenAI provider.
 
 `modelNameOverride` can also be used in this scenario to achieve the desired behavior. The configuration would look like this:
@@ -145,7 +145,7 @@ spec:
           priority: 1
 ```
 
-With this configuration, assuming the retry is properly configured as per the [Provider Fallback](./provider-fallback) page, if the request to `gpt-5-nano` fails, Envoy AI Gateway will automatically retry the request to `gpt-5-nano-mini` on the same OpenAI provider without requiring any changes to the downstream application.
+With this configuration, assuming the retry is properly configured as per the [Provider Fallback](./provider-fallback) page, if the request to `gpt-5-nano` fails, Agent Router will automatically retry the request to `gpt-5-nano-mini` on the same OpenAI provider without requiring any changes to the downstream application.
 
 ---
 

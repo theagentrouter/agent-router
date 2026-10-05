@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -75,6 +76,26 @@ type flags struct {
 	quotaRateLimitServiceAddr              string
 	quotaRateLimitTimeout                  int64
 	quotaRateLimitFailureModeDeny          bool
+}
+
+// extensionServerRunnable starts the extension server after the manager cache has synced.
+// It does not require leader election because every replica serves read-only extension requests.
+type extensionServerRunnable struct {
+	server   *grpc.Server
+	listener net.Listener
+}
+
+func (r extensionServerRunnable) Start(ctx context.Context) error {
+	stop := context.AfterFunc(ctx, r.server.GracefulStop)
+	defer stop()
+	if err := r.server.Serve(r.listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+		return fmt.Errorf("failed to serve extension server: %w", err)
+	}
+	return nil
+}
+
+func (extensionServerRunnable) NeedLeaderElection() bool {
+	return false
 }
 
 func setOptionalString(dst **string) func(string) error {
@@ -209,7 +230,7 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 	endpointPrefixes := fs.String(
 		"endpointPrefixes",
 		"",
-		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic.",
+		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe.",
 	)
 	rootPrefix := fs.String(
 		"rootPrefix",
@@ -469,15 +490,10 @@ func main() {
 	}
 	egextension.RegisterEnvoyGatewayExtensionServer(s, extSrv)
 	grpc_health_v1.RegisterHealthServer(s, extSrv)
-	go func() {
-		<-ctx.Done()
-		s.GracefulStop()
-	}()
-	go func() {
-		if err := s.Serve(lis); err != nil {
-			setupLog.Error(err, "failed to serve extension server")
-		}
-	}()
+	if err = mgr.Add(extensionServerRunnable{server: s, listener: lis}); err != nil {
+		setupLog.Error(err, "failed to register extension server")
+		os.Exit(1)
+	}
 
 	// Start the rate limit xDS config server.
 	rlRunner := runner.New(ctrl.Log, runner.DefaultPort)

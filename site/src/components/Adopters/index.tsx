@@ -1,91 +1,60 @@
 import React from 'react';
-import clsx from 'clsx';
-import Heading from '@theme/Heading';
 import Link from '@docusaurus/Link';
+import SectionHeader from '@site/src/components/home/SectionHeader';
+import { community } from '@site/src/data/home';
 import { sortedAdopters, type Adopter } from '@site/src/data/adopters';
 import styles from './styles.module.css';
 
 function AdopterLogo({ name, logoUrl, url, description }: Adopter) {
-  const content = (
-    <div
-      className={styles.adopterCard}
-      aria-label={description ? `${name}: ${description}` : name}
-    >
-      <div className={styles.adopterName}>{name}</div>
-      <div className={styles.logoContainer}>
-        <img
-          src={logoUrl}
-          alt={`${name} logo`}
-          className={styles.adopterLogo}
-          loading="lazy"
-          onError={(e) => {
-            const target = e.target as HTMLImageElement;
-            target.src = '/img/adopters/placeholder-company.svg';
-          }}
-        />
-      </div>
-      {description && (
-        <div className={styles.adopterTooltip}>
-          {description}
-        </div>
-      )}
-    </div>
+  const img = (
+    <img
+      src={logoUrl}
+      alt={`${name} logo`}
+      title={description ? `${name} — ${description}` : name}
+      className={styles.logo}
+      loading="lazy"
+      onError={(e) => {
+        const target = e.target as HTMLImageElement;
+        target.src = '/img/adopters/placeholder-company.svg';
+      }}
+    />
   );
 
   if (url) {
     return (
-      <div className={styles.adopterCol}>
-        <a
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={styles.adopterLink}
-          aria-label={`Visit ${name}${description ? `: ${description}` : ''}`}
-        >
-          {content}
-        </a>
-      </div>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={styles.logoLink}
+        aria-label={`Visit ${name}${description ? `: ${description}` : ''}`}
+      >
+        {img}
+      </a>
     );
   }
-
-  return (
-    <div className={styles.adopterCol}>
-      {content}
-    </div>
-  );
+  return img;
 }
 
-export default function Adopters(): React.ReactElement {
+export default function Adopters({
+  children,
+}: {
+  children?: React.ReactNode;
+}): React.ReactElement {
   return (
-    <section id="adopters" className={styles.adoptersSection}>
+    <section id="adopters" className={styles.section}>
       <div className="container">
-        <div className={styles.sectionHeader}>
-          <Heading as="h2" className={styles.sectionTitle}>
-            Adopters
-          </Heading>
-          <div className={styles.titleUnderline}></div>
-          <p className={styles.sectionDescription}>
-            See who's using Envoy AI Gateway.
-            <br />
-          </p>
-        </div>
-        <div className={styles.adoptersGrid}>
+        <SectionHeader label="Adopters" accent="velvet" title="Adopted by" />
+        <div className={styles.strip}>
           {sortedAdopters.map((adopter, idx) => (
             <AdopterLogo key={idx} {...adopter} />
           ))}
         </div>
-        <div className={styles.ctaSection}>
-          <p className={styles.ctaText}>
-            Using Envoy AI Gateway? We'd love to feature your logo!
-          </p>
-          <Link
-            className="button button--primary button--lg"
-            href="https://github.com/envoyproxy/ai-gateway/edit/main/site/src/data/adopters/adopters.json"
-            target="_blank"
-            rel="noopener noreferrer">
-            Add Your Logo
-          </Link>
-        </div>
+        <p className={styles.ctaLine}>
+          {community.ctaText}{' '}
+          <Link to={community.ctaLink.to}>{community.ctaLink.label}</Link>
+        </p>
+        {children}
       </div>
     </section>
   );

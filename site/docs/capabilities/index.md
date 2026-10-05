@@ -1,12 +1,12 @@
 ---
 id: capabilities
 title: Capabilities
-sidebar_position: 3
+sidebar_position: 5
 ---
 
-# Envoy AI Gateway Capabilities
+# Agent Router Capabilities
 
-Welcome to the Envoy AI Gateway capabilities documentation! This section provides detailed information about the various features and capabilities that Envoy AI Gateway offers to help you manage and optimize your AI/LLM traffic.
+Welcome to the Agent Router capabilities documentation! This section provides detailed information about the various features and capabilities that Agent Router offers to help you manage and optimize your AI/LLM traffic.
 
 ## LLM Providers Integrations
 
@@ -52,6 +52,12 @@ Robust security features for AI gateway deployments:
 Connect AI agents to external tools and data sources:
 
 - **[MCP Gateway](./mcp/)**: Server multiplexing, tool routing, OAuth authentication, and observability for MCP workloads
+
+## Agent2Agent (A2A)
+
+Route traffic between agents:
+
+- **[A2A Traffic (preview)](./a2a/)**: Route A2A agents through the gateway today using Envoy's native A2A filter, ahead of a first-class A2A route type
 
 ## Observability
 

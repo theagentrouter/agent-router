@@ -1,0 +1,17 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: aws-openai-schema
+  namespace: default
+spec:
+  schema:
+    name: AWSOpenAI
+  backendRef:
+    name: aws-openai-schema
+    kind: Backend
+    group: gateway.envoyproxy.io

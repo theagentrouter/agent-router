@@ -9,7 +9,7 @@ import vars from '../../\_vars.json';
 
 # Connect Azure OpenAI
 
-This guide will help you configure Envoy AI Gateway to work with Azure OpenAI's foundation models.
+This guide will help you configure Agent Router to work with Azure OpenAI's foundation models.
 
 There are two ways to do the [Azure OpenAI authentication](https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#authentication): Microsoft Entra ID and API Key.
 
@@ -38,7 +38,7 @@ Before you begin, you'll need:
 ### 1. Download configuration template
 
 <CodeBlock language="shell">
-{`curl -O https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/basic/azure_openai.yaml`}
+{`curl -O https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/basic/azure_openai.yaml`}
 </CodeBlock>
 
 ### 2. Configure Azure Credentials

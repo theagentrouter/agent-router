@@ -42,9 +42,9 @@ In enterprise environments, security is implemented in multiple layers:
 
 ## Credential Management
 
-**Where the providers support short lived access credentials**, the Envoy AI Gateway control plane supports automated credential management with the providers' identity system. This ensures a short-lived proof of authorization, such as an access token, is used when the request is sent to the upstream service.
+**Where the providers support short lived access credentials**, the Agent Router control plane supports automated credential management with the providers' identity system. This ensures a short-lived proof of authorization, such as an access token, is used when the request is sent to the upstream service.
 
-**For providers that support long lived access credentials**, the Envoy AI Gateway control plane supports a manual credential management process. In these cases the credentials, like API keys, are stored in Kubernetes secrets and managed by the administrator.
+**For providers that support long lived access credentials**, the Agent Router control plane supports a manual credential management process. In these cases the credentials, like API keys, are stored in Kubernetes secrets and managed by the administrator.
 
 ### Automated Credential Management
 
@@ -63,7 +63,7 @@ Learn more about connecting to [AWS Bedrock](/docs/getting-started/connect-provi
 
 ### Manual Credential Management
 
-For providers that support long lived access credentials, the Envoy AI Gateway control plane supports a manual credential management process. In these cases the credentials, like API keys, are stored in Kubernetes secrets and managed by the AI Gateway administrator. Envoy AI Gateway will use the credentials from the secret to authenticate with the upstream service, attaching them to each request by securely retrieving them from the secret and attaching them to the request.
+For providers that support long lived access credentials, the Agent Router control plane supports a manual credential management process. In these cases the credentials, like API keys, are stored in Kubernetes secrets and managed by the AI Gateway administrator. Agent Router will use the credentials from the secret to authenticate with the upstream service, attaching them to each request by securely retrieving them from the secret and attaching them to the request.
 
 :::info
 Learn more about connecting to [OpenAI](/docs/getting-started/connect-providers/openai) and adding your API key to the secret. You can use the same approach for other providers that support long lived credentials.
@@ -71,4 +71,4 @@ Learn more about connecting to [OpenAI](/docs/getting-started/connect-providers/
 
 ## Conclusion
 
-Upstream Authentication is a key component of the Envoy AI Gateway's security architecture. It ensures secure communication between the Gateway and upstream AI service providers while supporting modern authentication methods and enterprise security requirements. Leverage Envoy AI Gateway's Upstream Authentication to maintain a secure and compliant AI infrastructure in your enterprise environments.
+Upstream Authentication is a key component of the Agent Router's security architecture. It ensures secure communication between the Gateway and upstream AI service providers while supporting modern authentication methods and enterprise security requirements. Leverage Agent Router's Upstream Authentication to maintain a secure and compliant AI infrastructure in your enterprise environments.

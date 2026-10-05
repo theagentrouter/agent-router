@@ -4,13 +4,13 @@ title: Model Context Protocol (MCP) Gateway
 sidebar_position: 8
 ---
 
-Envoy AI Gateway provides first-class support for [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), enabling AI agents to securely connect to external tools and data sources.
+Agent Router provides first-class support for [Model Context Protocol](https://modelcontextprotocol.io/) (MCP), enabling AI agents to securely connect to external tools and data sources.
 
 This guide provides an overview of the MCP Gateway capabilities and how to configure routing to MCP servers using the `MCPRoute` API.
 
 ## Overview
 
-Envoy AI Gateway's MCP support allows you to:
+Agent Router's MCP support allows you to:
 
 - **Aggregate multiple MCP servers** into a single unified endpoint
 - **Apply security policies** including OAuth authentication, fine-grained access control over the tool access, and upstream API key injection
@@ -32,12 +32,12 @@ The MCP Gateway acts as a transparent proxy between MCP clients (AI agents like 
 
 ## Architecture
 
-The MCP Gateway is implemented as a lightweight proxy component within the Envoy AI Gateway sidecar, leveraging Envoy's battle-tested networking stack for all connection handling.
+The MCP Gateway is implemented as a lightweight proxy component within the Agent Router sidecar, leveraging Envoy's battle-tested networking stack for all connection handling.
 
 ```mermaid
 sequenceDiagram
     participant Client as MCP Client<br/>(AI Agent)
-    participant Gateway as Envoy AI Gateway
+    participant Gateway as Agent Router
     participant MCP1 as MCP Server 1
     participant MCP2 as MCP Server 2
 
@@ -67,7 +67,7 @@ sequenceDiagram
 - **Notification Handling**: Long-lived SSE streams from multiple MCP servers are merged into a single stream for clients, with proper event ID reconstruction.
 - **Request Routing**: Tool names are automatically prefixed with the backend name (e.g., `github__issue_read`) to route calls to the correct upstream server.
 
-For detailed architecture and design decisions, see the [MCP Gateway proposal](https://github.com/envoyproxy/ai-gateway/tree/main/docs/proposals/006-mcp-gateway).
+For detailed architecture and design decisions, see the [MCP Gateway proposal](https://github.com/theagentrouter/agent-router/tree/main/docs/proposals/006-mcp-gateway).
 
 ## Trying it out
 
@@ -251,7 +251,46 @@ Each `forwardHeaders` entry specifies:
 - `name` (required): The header to extract from the incoming client request.
 - `backendHeader` (optional): A different header name to use when forwarding to the backend. If omitted, the original header name is used.
 
+Header **values** are forwarded verbatim. The gateway does not add an auth scheme such as `Bearer `.
+
 Headers are scoped per-backend — during fan-out operations like `tools/list`, only the backends with explicit `forwardHeaders` configuration receive the forwarded headers. Other backends in the same route are unaffected.
+
+To keep a default least-privilege service-account token on a backend while letting callers override it with a personal access token, set `securityPolicy.apiKey.injectionPolicy: IfNotPresent` and map the client token onto the same header with `forwardHeaders`. When the client omits that header, the gateway injects the configured API key (and prefixes it with `Bearer ` when the target is `Authorization`). When the client sends it, the forwarded value is preserved as-is. The default is `injectionPolicy: Always`, which always injects the configured credential.
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-unified
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: github
+      kind: Backend
+      group: gateway.envoyproxy.io
+      securityPolicy:
+        apiKey:
+          secretRef:
+            name: github-sa-token # default least-privilege service account
+          injectionPolicy: IfNotPresent
+      forwardHeaders:
+        - name: X-GitHub-PAT
+          backendHeader: Authorization
+```
+
+For that example, send the full header value the backend expects, including the scheme:
+
+```
+X-GitHub-PAT: Bearer ghp_...
+```
+
+A raw token (`X-GitHub-PAT: ghp_...`) is copied onto `Authorization` unchanged, so the backend typically rejects it. Omit `X-GitHub-PAT` to use the injected service-account key instead.
+
+`injectionPolicy` applies only to header injection. Do not combine `injectionPolicy: IfNotPresent` with `queryParam`. If the MCPRoute itself uses OAuth or API-key client authentication, do not forward inbound `Authorization` (that is the gateway token). Use a dedicated client header and `backendHeader` to map it onto the backend credential header.
 
 ### OAuth Authentication
 
@@ -284,6 +323,25 @@ spec:
           - "profile"
           - "email"
 ```
+
+#### Authorization servers with non-standard metadata locations
+
+By default the gateway discovers the authorization server's endpoints by probing the well-known
+URIs derived from `issuer`, as described in [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414#section-3).
+Some authorization servers publish their metadata somewhere the issuer does not lead to, for example
+at a versioned path. Point `authorizationServerMetadataUrl` at the document in that case:
+
+```yaml
+securityPolicy:
+  oauth:
+    issuer: "https://example.com/api/idp/authn"
+    authorizationServerMetadataUrl: "https://example.com/api/idp/v4/authn/.well-known/openid-configuration"
+```
+
+`issuer` is unaffected by this field: it still identifies the authorization server in the protected
+resource metadata the gateway publishes. When `jwks` is not set, the JWKS URI is also discovered from
+the document fetched here. If that document cannot be fetched, the MCPRoute is not accepted and the
+reason appears in its status conditions.
 
 The OAuth flow follows the MCP specification's authorization code flow with PKCE:
 
@@ -318,7 +376,7 @@ sequenceDiagram
 
 ### Authorization Policies
 
-Envoy AI Gateway supports fine-grained access control over tool access using a combination of:
+Agent Router supports fine-grained access control over tool access using a combination of:
 
 - **JWT Scopes & Claims**: Validate standard OAuth2 scopes and custom claims
 - **Tool Selection**: Restrict access to specific tools
@@ -411,7 +469,7 @@ authorization:
 
 ## See Also
 
-- [MCP Gateway Proposal](https://github.com/envoyproxy/ai-gateway/tree/main/docs/proposals/006-mcp-gateway) - Detailed architecture and design decisions
+- [MCP Gateway Proposal](https://github.com/theagentrouter/agent-router/tree/main/docs/proposals/006-mcp-gateway) - Detailed architecture and design decisions
 - [MCP Specification](https://modelcontextprotocol.io/specification/2025-06-18) - Official Model Context Protocol documentation
-- [MCP Example](https://github.com/envoyproxy/ai-gateway/tree/main/examples/mcp) - Complete working example
+- [MCP Example](https://github.com/theagentrouter/agent-router/tree/main/examples/mcp) - Complete working example
 - [CLI MCP Configuration](/docs/cli/aigwrun#mcp-configuration) - Using MCP with `aigw run` standalone mode

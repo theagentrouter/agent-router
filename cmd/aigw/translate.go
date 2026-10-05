@@ -224,14 +224,13 @@ func translateCustomResourceObjects(
 	fakeClient = builder.Build()
 	fakeClientSet = fake2.NewClientset()
 
-	// Store the user-defined secrets in both fakes so that the controllers can read them.
+	// Store the user-defined secrets in the fake client set so that Gateway controller can read them.
 	userDefinedSecretKeys := map[string]struct{}{}
 	for _, s := range usedDefinedSecrets {
 		if _, err = fakeClientSet.CoreV1().Secrets(s.Namespace).Create(ctx, s, metav1.CreateOptions{}); err != nil {
 			err = fmt.Errorf("error creating secret: %w", err)
 			return
 		}
-		mustCreate(ctx, fakeClient, s.DeepCopy(), logger)
 		userDefinedSecretKeys[fmt.Sprintf("%s/%s", s.Namespace, s.Name)] = struct{}{}
 	}
 

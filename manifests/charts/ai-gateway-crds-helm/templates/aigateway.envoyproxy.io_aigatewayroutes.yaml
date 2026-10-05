@@ -666,6 +666,15 @@ spec:
                             && self.kind == ''InferencePool'')'
                       maxItems: 128
                       type: array
+                    excludeFromModelsEndpoint:
+                      description: |-
+                        ExcludeFromModelsEndpoint prevents models matched by this rule from being returned by the
+                        OpenAI-compatible "/models" endpoint. Requests still match this rule and apply its
+                        configured transformations, including model name overrides.
+
+                        This is useful for internal or backwards-compatible aliases, as well as duplicate model
+                        definitions with different schemas.
+                      type: boolean
                     matches:
                       description: |-
                         Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.
@@ -1595,6 +1604,15 @@ spec:
                             && self.kind == ''InferencePool'')'
                       maxItems: 128
                       type: array
+                    excludeFromModelsEndpoint:
+                      description: |-
+                        ExcludeFromModelsEndpoint prevents models matched by this rule from being returned by the
+                        OpenAI-compatible "/models" endpoint. Requests still match this rule and apply its
+                        configured transformations, including model name overrides.
+
+                        This is useful for internal or backwards-compatible aliases, as well as duplicate model
+                        definitions with different schemas.
+                      type: boolean
                     matches:
                       description: |-
                         Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.

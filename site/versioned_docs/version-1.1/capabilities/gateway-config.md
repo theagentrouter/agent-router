@@ -270,4 +270,4 @@ Possible condition types:
 
 - [Tracing](./observability/tracing.md) - Configure distributed tracing for AI Gateway
 - [Metrics](./observability/metrics.md) - Configure metrics collection
-- [Examples](https://github.com/envoyproxy/ai-gateway/tree/main/examples/gateway-config) - Example YAML files
+- [Examples](https://github.com/theagentrouter/agent-router/tree/main/examples/gateway-config) - Example YAML files

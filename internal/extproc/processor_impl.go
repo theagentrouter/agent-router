@@ -128,6 +128,8 @@ type (
 		backendName        string
 		routeName          string
 		handler            filterapi.BackendAuthHandler
+		// unsupportedBackendErr is set by SetBackend and answered as a 422 in ProcessRequestHeaders.
+		unsupportedBackendErr error
 		// cost is the cost of the request that is accumulated during the processing of the response.
 		costs metrics.TokenUsage
 		// metrics tracking.
@@ -252,6 +254,9 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		}
 		return nil, fmt.Errorf("failed to parse request body: %w", err)
 	}
+	// The decoded model aliases the request body; clone it so the header map, metrics, and
+	// other consumers that outlive the request don't retain the body.
+	originalModel = strings.Clone(originalModel)
 
 	// Use the request-scoped logger from context if available, otherwise fall back to processor logger
 	logger := loggerFromContext(ctx)
@@ -355,6 +360,10 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	// Set the request model for metrics from the original model or override if applied.
 	reqModel := cmp.Or(u.requestHeaders[internalapi.ModelNameHeaderKeyDefault], u.parent.originalModel)
 	u.metrics.SetRequestModel(reqModel)
+
+	if u.unsupportedBackendErr != nil {
+		return u.respondLocally(ctx, 422, "UnprocessableEntity", u.unsupportedBackendErr.Error()), nil
+	}
 
 	// We force the body mutation in the following cases:
 	// * The request is a retry request because the body mutation might have happened the previous iteration.
@@ -635,7 +644,11 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		u.metrics.RecordTokenUsage(ctx, u.costs, u.requestHeaders)
 	}
 
-	if body.EndOfStream && (len(u.parent.config.GlobalRequestCosts) > 0 || len(u.parent.config.RequestCosts) > 0) {
+	// Build dynamic metadata as soon as the accumulated usage changes (i.e. the chunk that carries
+	// the usage payload), not only at end-of-stream. This ensures the access log still captures usage
+	// even if the downstream client disconnects right after the terminal chunk, before EndOfStream
+	// is observed by the extproc. The EndOfStream write below remains as the final refresh.
+	if (body.EndOfStream || !tokenUsage.IsZero()) && (len(u.parent.config.GlobalRequestCosts) > 0 || len(u.parent.config.RequestCosts) > 0) {
 		metadata, err := buildDynamicMetadata(u.parent.config.GlobalRequestCosts, u.parent.config.RequestCosts, &u.costs, u.requestHeaders, u.backendName, u.routeName, responseModel)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build dynamic metadata: %w", err)
@@ -711,6 +724,15 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 
 	u.translator, err = u.parent.eh.GetTranslator(backend.Backend.Schema, u.modelNameOverride)
 	if err != nil {
+		if userFacingErr := internalapi.GetUserFacingError(err); userFacingErr != nil {
+			// The endpoint is not supported for this backend's API schema. That is a mismatch between the
+			// request and the configuration, not an internal failure, so it is answered with a 4xx in
+			// ProcessRequestHeaders instead of failing the stream, which Envoy would turn into a 500.
+			u.logger.Info("backend does not support the requested endpoint",
+				slog.String("backend", backend.Backend.Name), slog.String("error", err.Error()))
+			u.unsupportedBackendErr = userFacingErr
+			return nil
+		}
 		return fmt.Errorf("failed to create translator for backend %s: %w", backend.Backend.Name, err)
 	}
 	if setter, ok := u.translator.(translator.ContentTypeSetter); ok {
@@ -917,8 +939,9 @@ func evalRuntimeRequestCost(rc *filterapi.RuntimeRequestCost, costs *metrics.Tok
 }
 
 // buildDynamicMetadata creates metadata for rate limiting and cost tracking.
-// This function is called by the upstream filter only at the end of the stream (body.EndOfStream=true)
-// when the response is successfully completed. It is not called for failed requests or partial responses.
+// This function is called by the upstream filter at the end of the stream (body.EndOfStream=true), and,
+// for streaming responses, also as soon as a chunk carries new usage so the access log still captures it
+// if the downstream client disconnects before EndOfStream is observed. It is not called for failed requests.
 // The metadata includes token usage costs and model information for downstream processing.
 // Two-tier precedence: for each metadataKey, check route-scoped requestCosts first (matching RouteName == routeName).
 // If found, use it. Otherwise, fall back to globalRequestCosts. If neither exists, the key is not emitted.
@@ -928,10 +951,7 @@ func buildDynamicMetadata(globalRequestCosts []filterapi.RuntimeGlobalRequestCos
 	// Track which metadata keys have been populated by route-scoped costs.
 	populatedKeys := make(map[string]struct{})
 
-	shortBackend := backendName
-	if parts := strings.SplitN(backendName, "/", 3); len(parts) >= 2 {
-		shortBackend = parts[0] + "/" + parts[1]
-	}
+	shortBackend := internalapi.AIServiceBackendName(backendName)
 
 	actualModel := requestHeaders[internalapi.ModelNameHeaderKeyDefault]
 
@@ -975,16 +995,9 @@ func buildDynamicMetadata(globalRequestCosts []filterapi.RuntimeGlobalRequestCos
 		// backend_name itself is emitted by buildBackendDynamicMetadata in the request
 		// headers phase, so it is already on the stream by the time this runs.
 		//
-		// ai_service_backend_name stores the short "namespace/name" format extracted
-		// from the full PerRouteRuleRefBackendName ("{namespace}/{name}/route/...").
-		// This is used by the quota rate limit descriptor actions to match the
-		// rate limit service config which keys on "namespace/backendName".
-		parts := strings.SplitN(backendName, "/", 3)
-		shortName := backendName
-		if len(parts) >= 2 {
-			shortName = parts[0] + "/" + parts[1]
-		}
-		metadata["ai_service_backend_name"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: shortName}}
+		// ai_service_backend_name stores the short "namespace/name" format, which the quota
+		// rate limit descriptor actions match against the rate limit service config.
+		metadata["ai_service_backend_name"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: shortBackend}}
 	}
 	if routeName != "" {
 		metadata["route_name"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: routeName}}

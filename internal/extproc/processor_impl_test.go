@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"testing"
+	"unsafe"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3http "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
@@ -197,6 +198,25 @@ func Test_chatCompletionProcessorRouterFilter_ProcessRequestBody(t *testing.T) {
 		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, setHeaders[0].AppendAction)
 		// The in-place request header map is updated too, not just the mutation.
 		require.Equal(t, "some-model", headers[internalapi.ModelNameHeaderKeyDefault])
+	})
+
+	t.Run("original model does not alias the request body", func(t *testing.T) {
+		headers := map[string]string{":path": "/foo"}
+		p := &chatCompletionProcessorRouterFilter{
+			config:         &filterapi.RuntimeConfig{},
+			requestHeaders: headers,
+			logger:         slog.Default(),
+			tracer:         tracingapi.NoopTracer[openai.ChatCompletionRequest, openai.ChatCompletionResponse, openai.ChatCompletionResponseChunk]{},
+		}
+		body := bodyFromModel(t, "some-model", false, nil)
+		_, err := p.ProcessRequestBody(t.Context(), &extprocv3.HttpBody{Body: body})
+		require.NoError(t, err)
+
+		decoded := unsafe.StringData(p.originalRequestBody.Model)
+		for _, s := range []string{p.originalModel, headers[internalapi.ModelNameHeaderKeyDefault]} {
+			require.Equal(t, "some-model", s)
+			require.NotSame(t, decoded, unsafe.StringData(s))
+		}
 	})
 
 	t.Run("span creation", func(t *testing.T) {
@@ -532,6 +552,48 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 		require.Equal(t, 3, mm.cachedInputTokenCount)
 		require.Equal(t, 21, mm.cacheCreationInputTokenCount)
 	})
+
+	// Verify dynamic metadata (used for the access log) is populated as soon as a chunk carries
+	// usage, even if the stream never reaches EndOfStream (e.g. the downstream client disconnects
+	// right after the terminal SSE frame, before Envoy observes end of stream).
+	t.Run("streaming usage chunk without EndOfStream still sets dynamic metadata", func(t *testing.T) {
+		mm := &mockMetrics{}
+		mt := &mockTranslator{t: t}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator:      mt,
+			metrics:         mm,
+			responseHeaders: map[string]string{":status": "200"},
+			parent: &chatCompletionProcessorRouterFilter{
+				stream: true,
+				config: &filterapi.RuntimeConfig{
+					RequestCosts: []filterapi.RuntimeRequestCost{
+						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeOutputToken, MetadataKey: "output_token_usage"}},
+					},
+				},
+			},
+			routeName: "some_route",
+		}
+
+		// First chunk carries no usage: dynamic metadata must not be set yet.
+		chunk := &extprocv3.HttpBody{Body: []byte("chunk-1"), EndOfStream: false}
+		mt.expResponseBody = chunk
+		mt.retUsedToken = metrics.TokenUsage{}
+		res, err := p.ProcessResponseBody(t.Context(), chunk)
+		require.NoError(t, err)
+		require.Nil(t, res.DynamicMetadata)
+
+		// The chunk carrying the terminal usage payload is not EndOfStream (the client disconnected
+		// right after reading it), but dynamic metadata must be populated from this chunk anyway.
+		usageChunk := &extprocv3.HttpBody{Body: []byte("chunk-usage"), EndOfStream: false}
+		mt.expResponseBody = usageChunk
+		mt.retUsedToken.SetOutputTokens(138)
+		res, err = p.ProcessResponseBody(t.Context(), usageChunk)
+		require.NoError(t, err)
+		md := res.DynamicMetadata
+		require.NotNil(t, md)
+		require.Equal(t, float64(138), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+			GetStructValue().Fields["output_token_usage"].GetNumberValue())
+	})
 }
 
 func bodyFromModel(t *testing.T, model string, stream bool, streamOptions *openai.StreamOptions) []byte {
@@ -550,8 +612,10 @@ func Test_chatCompletionProcessorUpstreamFilter_SetBackend(t *testing.T) {
 	p := &chatCompletionProcessorUpstreamFilter{
 		requestHeaders: headers,
 		metrics:        mm,
+		logger:         slog.Default(),
 	}
-	r := &chatCompletionProcessorRouterFilter{}
+	span := &mockChatCompletionSpan{}
+	r := &chatCompletionProcessorRouterFilter{span: span}
 	err := p.SetBackend(t.Context(), &filterapi.RuntimeBackend{
 		Backend: &filterapi.Backend{
 			Name:              "some-backend",
@@ -559,16 +623,29 @@ func Test_chatCompletionProcessorUpstreamFilter_SetBackend(t *testing.T) {
 			ModelNameOverride: "ai_gateway_llm",
 		},
 	}, "test-route", r)
-	require.ErrorContains(t, err, "unsupported API schema: backend")
-	mm.RequireRequestFailure(t)
-	require.Zero(t, mm.inputTokenCount)
+	require.NoError(t, err, "an unsupported API schema must not fail the stream")
+	mm.RequireRequestNotCompleted(t)
 	mm.RequireSelectedBackend(t, "some-backend")
 	require.Equal(t, r, p.parent)
 	// Verify upstreamFilter is NOT set when translator creation fails.
 	// This prevents a nil-translator panic when the router processes the response
 	// (the nil check on upstreamFilter at ProcessResponseHeaders/ProcessResponseBody
 	// must fall through to passThroughProcessor).
-	require.Nil(t, r.upstreamFilter, "upstreamFilter must remain nil when SetBackend fails")
+	require.Nil(t, r.upstreamFilter, "upstreamFilter must remain nil when translator creation fails")
+
+	// The request is answered locally with a 4xx instead.
+	resp, err := p.ProcessRequestHeaders(t.Context(), nil)
+	require.NoError(t, err)
+	immediateResp, ok := resp.Response.(*extprocv3.ProcessingResponse_ImmediateResponse)
+	require.True(t, ok)
+	require.Equal(t, typev3.StatusCode(422), immediateResp.ImmediateResponse.Status.Code)
+	require.JSONEq(t, `{"type":"error","error":{"type":"UnprocessableEntity","code":"422","message":"invalid request body: unsupported API schema: backend={some-schema v10.0 }"}}`,
+		string(immediateResp.ImmediateResponse.Body))
+	require.True(t, r.localReplyEmitted, "the gateway answered the request itself")
+	mm.RequireRequestFailure(t)
+	require.Zero(t, mm.inputTokenCount)
+	require.Equal(t, 1, span.endedOnErrorCount)
+	require.Equal(t, 422, span.errorStatusCode)
 }
 
 // Test_chatCompletionProcessorUpstreamFilter_SetBackend_recordsBackend pins that
@@ -581,6 +658,7 @@ func Test_chatCompletionProcessorUpstreamFilter_SetBackend_recordsBackend(t *tes
 		p := &chatCompletionProcessorUpstreamFilter{
 			requestHeaders: map[string]string{":path": "/foo"},
 			metrics:        &mockMetrics{},
+			logger:         slog.Default(),
 		}
 		// The schema is unsupported so translator creation fails, but the
 		// backend is recorded before that, which is what this asserts.
@@ -590,7 +668,7 @@ func Test_chatCompletionProcessorUpstreamFilter_SetBackend_recordsBackend(t *tes
 				Schema: filterapi.VersionedAPISchema{Name: "some-schema", Version: "v10.0"},
 			},
 		}, "test-route", &chatCompletionProcessorRouterFilter{span: span})
-		require.Error(t, err)
+		require.NoError(t, err)
 	}
 
 	t.Run("span that records backends", func(t *testing.T) {
@@ -621,6 +699,7 @@ func Test_chatCompletionProcessorUpstreamFilter_SetBackend_unsupportedSchema_noR
 	p := &chatCompletionProcessorUpstreamFilter{
 		requestHeaders: headers,
 		metrics:        mm,
+		logger:         slog.Default(),
 	}
 	r := &chatCompletionProcessorRouterFilter{}
 
@@ -630,7 +709,7 @@ func Test_chatCompletionProcessorUpstreamFilter_SetBackend_unsupportedSchema_noR
 			Schema: filterapi.VersionedAPISchema{Name: "unsupported-schema", Version: "v1"},
 		},
 	}, "", r)
-	require.Error(t, err)
+	require.NoError(t, err)
 	require.Nil(t, r.upstreamFilter, "upstreamFilter must remain nil on translator creation failure")
 
 	// Simulate response arriving after the failed SetBackend.

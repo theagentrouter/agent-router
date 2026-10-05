@@ -89,6 +89,7 @@ const (
 	OperationTranscription   Operation = "transcription"
 	OperationTranslation     Operation = "translation"
 	OperationRerank          Operation = "rerank"
+	OperationSystemOne       Operation = "systemone"
 	OperationTokenize        Operation = "tokenize"
 )
 
@@ -106,4 +107,5 @@ const (
 	ProviderGCPAnthropic Provider = "gcp.anthropic"
 	ProviderAnthropic    Provider = "anthropic"
 	ProviderCohere       Provider = "cohere"
+	ProviderTypeSafe     Provider = "typesafe"
 )

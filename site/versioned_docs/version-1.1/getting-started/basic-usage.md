@@ -20,7 +20,7 @@ For Windows users, note that you are able to use Windows Subsystem for Linux (WS
 Let's start by deploying a basic AI Gateway setup that includes a test backend:
 
 <CodeBlock language="shell">
-{`kubectl apply -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/basic/basic.yaml`}
+{`kubectl apply -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/basic/basic.yaml`}
 </CodeBlock>
 
 Wait for the Gateway pod to be ready:

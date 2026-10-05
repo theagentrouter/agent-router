@@ -6,23 +6,23 @@ sidebar_position: 2
 
 # Architecture
 
-This section provides a detailed look at the architectural components of Envoy AI Gateway. Understanding the architecture will help you better deploy, configure, and maintain your gateway installation.
+This section provides a detailed look at the architectural components of Agent Router. Understanding the architecture will help you better deploy, configure, and maintain your gateway installation.
 
 ## Overview
 
-Envoy AI Gateway follows a modern cloud-native architecture with distinct control and data planes. This separation of concerns allows for better scalability, maintainability, and flexibility in deployment options.
+Agent Router follows a modern cloud-native architecture with distinct control and data planes. This separation of concerns allows for better scalability, maintainability, and flexibility in deployment options.
 
-Envoy AI Gateway integrates with Envoy Gateway for the control plane and Envoy Proxy for the data plane.
+Agent Router integrates with Envoy Gateway for the control plane and Envoy Proxy for the data plane.
 
 ## Key Concepts
 
 ### Control Plane
 
-A control plane is a component that manages the configuration of the data plane. We utilize Envoy Gateway as a central control plane, and Envoy AI Gateway works in conjunction with it to manage the data plane configuration.
+A control plane is a component that manages the configuration of the data plane. We utilize Envoy Gateway as a central control plane, and Agent Router works in conjunction with it to manage the data plane configuration.
 
 ### Data Plane
 
-The data plane is the component that sits in the request path and processes the requests. In the context of Envoy AI Gateway, the data plane consists of Envoy Proxy and the AI Gateway external processor that processes the AI requests.
+The data plane is the component that sits in the request path and processes the requests. In the context of Agent Router, the data plane consists of Envoy Proxy and the AI Gateway external processor that processes the AI requests.
 
 ## In This Section
 
