@@ -9,6 +9,7 @@ import (
 	"context"
 	"testing"
 
+	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -526,7 +527,7 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 			expectedRoutes: []string{"affected-route"},
 		},
 		{
-			name: "Grant with no matching routes",
+			name: "Route outside the grant's from namespaces is still affected",
 			referenceGrant: gwapiv1b1.ReferenceGrant{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-grant",
@@ -568,7 +569,8 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 					},
 				},
 			},
-			expectedRoutes: []string{},
+			// The route may have lost access when the grant was narrowed, so it must be reconciled.
+			expectedRoutes: []string{"route-in-different-ns"},
 		},
 		{
 			name: "Grant for wrong kind",
@@ -613,7 +615,7 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 					},
 				},
 			},
-			expectedRoutes: []string{},
+			expectedRoutes: []string{"route"},
 		},
 	}
 
@@ -636,7 +638,7 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 
 			affectedRoutes, err := controller.getAffectedAIGatewayRoutes(
 				context.Background(),
-				&tt.referenceGrant,
+				tt.referenceGrant.Namespace,
 			)
 			require.NoError(t, err)
 
@@ -663,72 +665,11 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 		logger := logr.Discard()
 		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
-		grant := &gwapiv1b1.ReferenceGrant{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "test-grant",
-				Namespace: "backend-ns",
-			},
-			Spec: gwapiv1b1.ReferenceGrantSpec{
-				From: []gwapiv1b1.ReferenceGrantFrom{
-					{
-						Group:     aiServiceBackendGroup,
-						Kind:      aiGatewayRouteKind,
-						Namespace: "route-ns",
-					},
-				},
-				To: []gwapiv1b1.ReferenceGrantTo{
-					{
-						Group: aiServiceBackendGroup,
-						Kind:  aiServiceBackendKind,
-					},
-				},
-			},
-		}
-
-		routes, err := controller.getAffectedAIGatewayRoutes(context.Background(), grant)
+		routes, err := controller.getAffectedAIGatewayRoutes(context.Background(), "backend-ns")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "failed to list AIGatewayRoutes")
 		require.Nil(t, routes)
 	})
-}
-
-// TestReferenceGrantController_GetAffectedAIGatewayRoutes_WithNonMatchingFrom tests getAffectedAIGatewayRoutes with non-matching From
-func TestReferenceGrantController_GetAffectedAIGatewayRoutes_WithNonMatchingFrom(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = gwapiv1b1.Install(scheme)
-	_ = aigv1b1.AddToScheme(scheme)
-
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
-	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
-	logger := logr.Discard()
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
-
-	grant := &gwapiv1b1.ReferenceGrant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-grant",
-			Namespace: "backend-ns",
-		},
-		Spec: gwapiv1b1.ReferenceGrantSpec{
-			From: []gwapiv1b1.ReferenceGrantFrom{
-				{
-					Group:     "wrong.group", // Wrong group
-					Kind:      aiGatewayRouteKind,
-					Namespace: "route-ns",
-				},
-			},
-			To: []gwapiv1b1.ReferenceGrantTo{
-				{
-					Group: aiServiceBackendGroup,
-					Kind:  aiServiceBackendKind,
-				},
-			},
-		},
-	}
-
-	routes, err := controller.getAffectedAIGatewayRoutes(context.Background(), grant)
-	require.NoError(t, err)
-	require.Empty(t, routes, "should not return any routes when From doesn't match")
 }
 
 func TestReferenceGrantController_Reconcile_BackendSecurityPolicy(t *testing.T) {
@@ -1017,12 +958,105 @@ func TestReferenceGrantController_GetAffectedBackendSecurityPolicies(t *testing.
 	logger := logr.Discard()
 	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
 
-	affected, err := controller.getAffectedBackendSecurityPolicies(context.Background(), &grant)
+	affected, err := controller.getAffectedBackendSecurityPolicies(context.Background(), grant.Namespace)
 	require.NoError(t, err)
 
 	names := make([]string, len(affected))
 	for i, bsp := range affected {
 		names[i] = bsp.Name
 	}
-	require.ElementsMatch(t, []string{"affected-bsp"}, names)
+	// other-ns-bsp is not in the grant's from namespaces, but it references a Secret in the grant's
+	// namespace and may have just lost access, so it must be reconciled too.
+	require.ElementsMatch(t, []string{"affected-bsp", "other-ns-bsp"}, names)
+}
+
+// TestReferenceGrantController_RevokedAccessIsReconciled verifies that the resources that lose access
+// when a ReferenceGrant is narrowed or removed are reconciled, even though the grant's current spec no
+// longer describes them.
+func TestReferenceGrantController_RevokedAccessIsReconciled(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = gwapiv1b1.Install(scheme)
+	_ = aigv1b1.AddToScheme(scheme)
+
+	route := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "app"},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			Rules: []aigv1b1.AIGatewayRouteRule{{
+				BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{
+					Name:      "backend",
+					Namespace: ptr.To(gwapiv1.Namespace("shared")),
+				}},
+			}},
+		},
+	}
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: "app"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+				SecretRef: &gwapiv1.SecretObjectReference{
+					Name:      "secret",
+					Namespace: ptr.To(gwapiv1.Namespace("shared")),
+				},
+			},
+		},
+	}
+	// A grant that was narrowed: it no longer lists the "app" namespace in its from entries.
+	narrowedGrant := &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "grant", Namespace: "shared"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{Group: aiServiceBackendGroup, Kind: aiGatewayRouteKind, Namespace: "other"}},
+			To:   []gwapiv1b1.ReferenceGrantTo{{Group: aiServiceBackendGroup, Kind: aiServiceBackendKind}},
+		},
+	}
+
+	t.Run("narrowed grant", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, bsp, narrowedGrant).Build()
+		routeChan := make(chan event.GenericEvent, 10)
+		bspChan := make(chan event.GenericEvent, 10)
+		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan)
+
+		_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(narrowedGrant)})
+		require.NoError(t, err)
+		require.Len(t, routeChan, 1)
+		require.Equal(t, "route", (<-routeChan).Object.GetName())
+		require.Len(t, bspChan, 1)
+		require.Equal(t, "bsp", (<-bspChan).Object.GetName())
+	})
+
+	t.Run("grant already gone", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, bsp).Build()
+		routeChan := make(chan event.GenericEvent, 10)
+		bspChan := make(chan event.GenericEvent, 10)
+		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan)
+
+		_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKey{Namespace: "shared", Name: "grant"}})
+		require.NoError(t, err)
+		require.Len(t, routeChan, 1)
+		require.Len(t, bspChan, 1)
+	})
+}
+
+func TestReferenceGrantController_BackendSecurityPolicyReferencesNamespace_OIDC(t *testing.T) {
+	c := &ReferenceGrantController{}
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: "app"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
+			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
+				OIDCExchangeToken: &aigv1b1.AWSOIDCExchangeToken{
+					BackendSecurityPolicyOIDC: aigv1b1.BackendSecurityPolicyOIDC{
+						OIDC: egv1a1.OIDC{
+							ClientSecret: gwapiv1.SecretObjectReference{
+								Name:      "oidc-secret",
+								Namespace: ptr.To(gwapiv1.Namespace("shared")),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.True(t, c.backendSecurityPolicyReferencesNamespace(bsp, "shared"))
+	require.False(t, c.backendSecurityPolicyReferencesNamespace(bsp, "other"))
 }

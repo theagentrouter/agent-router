@@ -135,7 +135,7 @@ func (v *referenceGrantValidator) validateReference(
 	// Check if any ReferenceGrant allows this cross-namespace reference.
 	for i := range referenceGrants.Items {
 		grant := &referenceGrants.Items[i]
-		if v.isReferenceGrantValid(grant, fromGroup, fromKind, fromNamespace, targetGroup, targetKind) {
+		if v.isReferenceGrantValid(grant, fromGroup, fromKind, fromNamespace, targetGroup, targetKind, targetName) {
 			return nil
 		}
 	}
@@ -149,7 +149,7 @@ func (v *referenceGrantValidator) validateReference(
 }
 
 // isReferenceGrantValid checks if a ReferenceGrant allows a resource identified by fromGroup/fromKind
-// in fromNamespace to reference the target resource identified by targetGroup/targetKind.
+// in fromNamespace to reference the target resource identified by targetGroup/targetKind/targetName.
 func (v *referenceGrantValidator) isReferenceGrantValid(
 	grant *gwapiv1b1.ReferenceGrant,
 	fromGroup gwapiv1b1.Group,
@@ -157,7 +157,14 @@ func (v *referenceGrantValidator) isReferenceGrantValid(
 	fromNamespace string,
 	targetGroup gwapiv1b1.Group,
 	targetKind gwapiv1b1.Kind,
+	targetName string,
 ) bool {
+	// A ReferenceGrant that is being deleted no longer authorizes anything. Its finalizer keeps it
+	// in the cache while the reconciles it triggers run, and those must see the access as revoked.
+	if !grant.DeletionTimestamp.IsZero() {
+		return false
+	}
+
 	// Check if the grant allows references from fromGroup/fromKind in fromNamespace.
 	fromAllowed := false
 	for _, from := range grant.Spec.From {
@@ -173,7 +180,7 @@ func (v *referenceGrantValidator) isReferenceGrantValid(
 
 	// Check if the grant allows references to the target resource.
 	for _, to := range grant.Spec.To {
-		if v.matchesTo(&to, targetGroup, targetKind) {
+		if v.matchesTo(&to, targetGroup, targetKind, targetName) {
 			return true
 		}
 	}
@@ -206,8 +213,14 @@ func (v *referenceGrantValidator) matchesFrom(
 	return true
 }
 
-// matchesTo checks if a ReferenceGrantTo matches the target resource identified by targetGroup/targetKind.
-func (v *referenceGrantValidator) matchesTo(to *gwapiv1b1.ReferenceGrantTo, targetGroup gwapiv1b1.Group, targetKind gwapiv1b1.Kind) bool {
+// matchesTo checks if a ReferenceGrantTo matches the target resource identified by
+// targetGroup/targetKind/targetName.
+func (v *referenceGrantValidator) matchesTo(
+	to *gwapiv1b1.ReferenceGrantTo,
+	targetGroup gwapiv1b1.Group,
+	targetKind gwapiv1b1.Kind,
+	targetName string,
+) bool {
 	// Check group
 	if to.Group != targetGroup {
 		return false
@@ -218,10 +231,11 @@ func (v *referenceGrantValidator) matchesTo(to *gwapiv1b1.ReferenceGrantTo, targ
 		return false
 	}
 
-	// If a specific name is specified, we would need to check it here,
-	// but ReferenceGrant typically doesn't specify individual resource names
-	// (that's handled by the Name field which is optional in the spec)
-	// For now, we only check group and kind as per Gateway API spec
+	// When a name is set, the grant only applies to that object. When omitted, it applies to all
+	// objects of that group and kind in the namespace.
+	if to.Name != nil && string(*to.Name) != targetName {
+		return false
+	}
 
 	return true
 }
