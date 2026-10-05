@@ -48,6 +48,9 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' }}
     name: Unit Test
+    env:
+      # Pin the version for deterministic behaviour of aigw run
+      ENVOY_VERSION: 1.39.2
     strategy:
       fail-fast: false
       matrix:

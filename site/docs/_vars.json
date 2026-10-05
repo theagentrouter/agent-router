@@ -4,5 +4,5 @@
   "egVersion": "0.0.0-latest",
   "egMinVersion": "1.9.2",
   "k8sMinVersion": "1.32",
-  "gaieVersion": "v1.6.1"
+  "gaieVersion": "v1.6.2"
 }
