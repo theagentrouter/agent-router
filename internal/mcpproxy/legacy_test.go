@@ -1241,7 +1241,7 @@ func Test_maybeResponseModify(t *testing.T) {
 		})
 		require.NoError(t, err)
 		msg := &jsonrpc.Response{Result: raw}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, "test-route", backend))
 		var got mcp.CallToolResult
 		require.NoError(t, json.Unmarshal(msg.Result, &got))
 		require.Equal(t, "ui://backend1/prefab/renderer.html", got.Meta["ui"].(map[string]any)["resourceUri"])
@@ -1253,7 +1253,7 @@ func Test_maybeResponseModify(t *testing.T) {
 		})
 		require.NoError(t, err)
 		msg := &jsonrpc.Response{Result: raw}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, "test-route", backend))
 		var got mcp.CallToolResult
 		require.NoError(t, json.Unmarshal(msg.Result, &got))
 		require.Equal(t, "ui://backend1/prefab/link.html", got.Content[0].(*mcp.ResourceLink).URI)
@@ -1264,14 +1264,14 @@ func Test_maybeResponseModify(t *testing.T) {
 		require.NoError(t, err)
 		before := append([]byte(nil), raw...)
 		msg := &jsonrpc.Response{Result: raw}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, "test-route", backend))
 		require.Equal(t, before, []byte(msg.Result))
 	})
 
 	t.Run("non-standard result shape passes through", func(t *testing.T) {
 		raw := []byte(`{"content":"not-an-array"}`)
 		msg := &jsonrpc.Response{Result: raw}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, "test-route", backend))
 		require.Equal(t, raw, []byte(msg.Result))
 	})
 
@@ -1281,10 +1281,46 @@ func Test_maybeResponseModify(t *testing.T) {
 		})
 		require.NoError(t, err)
 		msg := &jsonrpc.Response{Result: raw}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, "test-route", backend))
 		var got mcp.ReadResourceResult
 		require.NoError(t, json.Unmarshal(msg.Result, &got))
 		require.Equal(t, "ui://backend1/prefab/renderer.html", got.Contents[0].URI)
+	})
+
+	t.Run("resources/read with a matching configured digest still rewrites the URI", func(t *testing.T) {
+		rc := &mcp.ResourceContents{URI: "skill://readme", Text: "do the thing"}
+		digest, err := resourceDigest(rc)
+		require.NoError(t, err)
+		m.routes["test-route"].resourceIntegrity = map[filterapi.MCPBackendName]map[string]string{
+			"backend1": {"skill://readme": digest},
+		}
+		defer func() { m.routes["test-route"].resourceIntegrity = nil }()
+
+		raw, err := json.Marshal(&mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{rc}})
+		require.NoError(t, err)
+		msg := &jsonrpc.Response{Result: raw}
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, "test-route", backend))
+		require.NoError(t, msg.Error)
+		var got mcp.ReadResourceResult
+		require.NoError(t, json.Unmarshal(msg.Result, &got))
+		require.Equal(t, "backend1+skill://readme", got.Contents[0].URI)
+		require.Equal(t, "do the thing", got.Contents[0].Text)
+	})
+
+	t.Run("resources/read with a mismatching configured digest is rejected", func(t *testing.T) {
+		m.routes["test-route"].resourceIntegrity = map[filterapi.MCPBackendName]map[string]string{
+			"backend1": {"skill://readme": strings.Repeat("0", 64)},
+		}
+		defer func() { m.routes["test-route"].resourceIntegrity = nil }()
+
+		raw, err := json.Marshal(&mcp.ReadResourceResult{
+			Contents: []*mcp.ResourceContents{{URI: "skill://readme", Text: "drifted content"}},
+		})
+		require.NoError(t, err)
+		msg := &jsonrpc.Response{Result: raw}
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, "test-route", backend))
+		require.Nil(t, msg.Result)
+		require.Error(t, msg.Error)
 	})
 }
 

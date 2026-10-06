@@ -43,7 +43,11 @@ type (
 		backends        map[filterapi.MCPBackendName]filterapi.MCPBackend
 		toolSelectors   map[filterapi.MCPBackendName]*toolSelector
 		promptSelectors map[filterapi.MCPBackendName]*toolSelector
-		authorization   *compiledAuthorization
+		// resourceIntegrity holds the compiled, opt-in expected-digest map for each backend
+		// that declares one: resource URI -> expected lowercase-hex-encoded SHA-256 digest.
+		// Backends absent from this map (the common case) are not verified at all.
+		resourceIntegrity map[filterapi.MCPBackendName]map[string]string
+		authorization     *compiledAuthorization
 		// backendSelector reuses the same compiledAuthorization machinery as authorization
 		// above, but is evaluated once per candidate backend in newSession() instead of
 		// per JSON-RPC method call.
@@ -278,16 +282,20 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 		}
 
 		r := &mcpProxyConfigRoute{
-			backends:        make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(route.Backends)),
-			toolSelectors:   make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
-			promptSelectors: make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
-			authorization:   compiledAuth,
-			backendSelector: compiledBackendSel,
-			forwardHeaders:  route.ForwardHeaders,
-			routePrefixMode: route.PrefixMode,
+			backends:          make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(route.Backends)),
+			toolSelectors:     make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
+			promptSelectors:   make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
+			resourceIntegrity: make(map[filterapi.MCPBackendName]map[string]string, len(route.Backends)),
+			authorization:     compiledAuth,
+			backendSelector:   compiledBackendSel,
+			forwardHeaders:    route.ForwardHeaders,
+			routePrefixMode:   route.PrefixMode,
 		}
 		for _, backend := range route.Backends {
 			r.backends[backend.Name] = backend
+			if ri := compileResourceIntegrity(backend.ResourceIntegrity); ri != nil {
+				r.resourceIntegrity[backend.Name] = ri
+			}
 			if s := backend.ToolSelector; s != nil {
 				ts, err := buildSelector(s.Include, s.IncludeRegex, s.Exclude, s.ExcludeRegex, "include", "exclude", backend.Name, route.Name)
 				if err != nil {
