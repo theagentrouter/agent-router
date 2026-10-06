@@ -608,6 +608,32 @@ func TestGatewayController_reconcileFilterConfigSecret_CrossNamespaceReferenceGr
 		require.Equal(t, "supersecret", fc.Backends[0].Auth.APIKey.Key)
 	})
 
+	t.Run("BackendSecurityPolicy Secret in another namespace without ReferenceGrant is left out", func(t *testing.T) {
+		grant := referenceGrant(aiServiceBackendGroup, aiGatewayRouteKind, aiServiceBackendGroup, aiServiceBackendKind)
+		c, kube := setup(t, grant)
+
+		// Point the BSP at a Secret in a third namespace that no ReferenceGrant allows. The same-named
+		// Secret in the BSP's own namespace must not be used instead.
+		const secretNamespace = "secret-ns"
+		var bsp aigv1b1.BackendSecurityPolicy
+		require.NoError(t, c.client.Get(t.Context(), client.ObjectKey{Namespace: backendNamespace, Name: "bsp"}, &bsp))
+		bsp.Spec.APIKey.SecretRef.Namespace = ptr.To[gwapiv1.Namespace](secretNamespace)
+		require.NoError(t, c.client.Update(t.Context(), &bsp))
+		_, err := kube.CoreV1().Secrets(secretNamespace).Create(t.Context(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "api-key-secret", Namespace: secretNamespace},
+			Data:       map[string][]byte{apiKeyInSecret: []byte("othersecret")},
+		}, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		const someNamespace = "some-namespace"
+		_, err = c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("AIServiceBackend", "backend1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Empty(t, fc.Backends, "a backend whose credential Secret is not permitted must be left out, not published without auth")
+	})
+
 	t.Run("InferencePool cross-namespace without ReferenceGrant is rejected", func(t *testing.T) {
 		c, kube := setup(t, nil)
 		const someNamespace = "some-namespace"
@@ -1335,11 +1361,17 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 
 func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexes(t)
-	c := newTestGatewayController(fakeClient, fake2.NewClientset(), ctrl.Log, "envoy-gateway-system",
+	kube := fake2.NewClientset()
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
 		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
 
 	ctx := context.Background()
 	namespace := "test-namespace"
+	_, err := kube.CoreV1().Secrets(namespace).Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "wrong-key-secret", Namespace: namespace},
+		Data:       map[string][]byte{"not-" + apiKeyInSecret: []byte("value")},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
 
 	tests := []struct {
 		name          string
@@ -1361,7 +1393,35 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "failed to get secret missing-secret",
+			expectedError: "failed to get secret test-namespace/missing-secret",
+		},
+		{
+			name:    "api key type with secret missing the key",
+			bspName: "api-key-wrong-key-bsp",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "api-key-wrong-key-bsp", Namespace: namespace},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+					APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+						SecretRef: &gwapiv1.SecretObjectReference{
+							Name: "wrong-key-secret",
+						},
+					},
+				},
+			},
+			expectedError: "secret test-namespace/wrong-key-secret does not contain key apiKey",
+		},
+		{
+			name:    "api key type with nil secretRef",
+			bspName: "api-key-nil-ref-bsp",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "api-key-nil-ref-bsp", Namespace: namespace},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type:   aigv1b1.BackendSecurityPolicyTypeAPIKey,
+					APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{},
+				},
+			},
+			expectedError: "secretRef is not set for policy test-namespace/api-key-nil-ref-bsp",
 		},
 		{
 			name:    "aws credentials with credentials file missing secret",
@@ -1380,7 +1440,7 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "failed to get secret missing-aws-secret",
+			expectedError: "failed to get secret test-namespace/missing-aws-secret",
 		},
 	}
 
@@ -1390,6 +1450,136 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.expectedError)
 			require.Nil(t, result)
+		})
+	}
+}
+
+// TestGatewayController_bspToFilterAPIBackendAuth_CrossNamespaceSecret verifies that the static
+// credential types read the Secret from secretRef.namespace, and only when a ReferenceGrant allows a
+// cross-namespace reference. A same-named Secret with a different value always exists in the
+// policy's namespace, so falling back to it would show up as the wrong credential.
+func TestGatewayController_bspToFilterAPIBackendAuth_CrossNamespaceSecret(t *testing.T) {
+	const (
+		bspNamespace    = "app"
+		secretNamespace = "shared-secrets"
+		secretName      = "creds"
+	)
+
+	staticTypes := []struct {
+		name    string
+		dataKey string
+		spec    func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec
+		cred    func(auth *filterapi.BackendAuth) string
+	}{
+		{
+			name:    "APIKey",
+			dataKey: apiKeyInSecret,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type:   aigv1b1.BackendSecurityPolicyTypeAPIKey,
+					APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{SecretRef: ref},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.APIKey.Key },
+		},
+		{
+			name:    "AzureAPIKey",
+			dataKey: apiKeyInSecret,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type:        aigv1b1.BackendSecurityPolicyTypeAzureAPIKey,
+					AzureAPIKey: &aigv1b1.BackendSecurityPolicyAzureAPIKey{SecretRef: ref},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.AzureAPIKey.Key },
+		},
+		{
+			name:    "AnthropicAPIKey",
+			dataKey: apiKeyInSecret,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type:            aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey,
+					AnthropicAPIKey: &aigv1b1.BackendSecurityPolicyAnthropicAPIKey{SecretRef: ref},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.AnthropicAPIKey.Key },
+		},
+		{
+			name:    "AWSCredentialsFile",
+			dataKey: rotators.AwsCredentialsKey,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
+					AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
+						Region:          "us-east-1",
+						CredentialsFile: &aigv1b1.AWSCredentialsFile{SecretRef: ref},
+					},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.AWSAuth.CredentialFileLiteral },
+		},
+	}
+
+	grant := func(fromKind, fromNamespace string) *gwapiv1b1.ReferenceGrant {
+		return &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow", Namespace: secretNamespace},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{Group: aiServiceBackendGroup, Kind: gwapiv1b1.Kind(fromKind), Namespace: gwapiv1b1.Namespace(fromNamespace)}},
+				To:   []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+			},
+		}
+	}
+
+	cases := []struct {
+		name      string
+		namespace *gwapiv1.Namespace
+		grant     *gwapiv1b1.ReferenceGrant
+		expCred   string // Empty means the reference must be rejected.
+	}{
+		{name: "namespace unset", expCred: "from-app"},
+		{name: "same namespace set explicitly", namespace: ptr.To[gwapiv1.Namespace](bspNamespace), expCred: "from-app"},
+		{name: "cross-namespace without ReferenceGrant", namespace: ptr.To[gwapiv1.Namespace](secretNamespace)},
+		{name: "cross-namespace with ReferenceGrant", namespace: ptr.To[gwapiv1.Namespace](secretNamespace), grant: grant(backendSecurityPolicyKind, bspNamespace), expCred: "from-shared"},
+		{name: "ReferenceGrant for another kind", namespace: ptr.To[gwapiv1.Namespace](secretNamespace), grant: grant(aiGatewayRouteKind, bspNamespace)},
+		{name: "ReferenceGrant from another namespace", namespace: ptr.To[gwapiv1.Namespace](secretNamespace), grant: grant(backendSecurityPolicyKind, "other")},
+	}
+
+	for _, st := range staticTypes {
+		t.Run(st.name, func(t *testing.T) {
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					fakeClient := requireNewFakeClientWithIndexes(t)
+					kube := fake2.NewClientset()
+					c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+						"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+					for ns, value := range map[string]string{bspNamespace: "from-app", secretNamespace: "from-shared"} {
+						_, err := kube.CoreV1().Secrets(ns).Create(t.Context(), &corev1.Secret{
+							ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns},
+							StringData: map[string]string{st.dataKey: value},
+						}, metav1.CreateOptions{})
+						require.NoError(t, err)
+					}
+					if tc.grant != nil {
+						require.NoError(t, fakeClient.Create(t.Context(), tc.grant.DeepCopy()))
+					}
+					kube.ClearActions()
+
+					bsp := &aigv1b1.BackendSecurityPolicy{
+						ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: bspNamespace},
+						Spec:       st.spec(&gwapiv1.SecretObjectReference{Name: secretName, Namespace: tc.namespace}),
+					}
+					auth, err := c.bspToFilterAPIBackendAuth(t.Context(), bsp)
+					if tc.expCred == "" {
+						require.ErrorContains(t, err, "is not permitted")
+						require.Nil(t, auth)
+						require.Empty(t, kube.Actions(), "no Secret may be read before the ReferenceGrant check passes")
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, tc.expCred, st.cred(auth))
+				})
+			}
 		})
 	}
 }
@@ -1819,6 +2009,58 @@ func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextDeadlineRea
 	_, getErr := kube.CoreV1().Secrets(configNamespace).Get(t.Context(),
 		FilterConfigBundleIndexSecretName("gw", gwNamespace), metav1.GetOptions{})
 	require.Error(t, getErr, "no filter config may be published when the backend could not be read")
+}
+
+// TestGatewayController_reconcileFilterConfigSecret_BailsOnContextCanceledListingReferenceGrants is
+// the same invariant for the ReferenceGrant lookup that guards a cross-namespace credential Secret.
+func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextCanceledListingReferenceGrants(t *testing.T) {
+	const gwNamespace, configNamespace = "ns", "some-namespace"
+	inner, ok := requireNewFakeClientWithIndexes(t).(client.WithWatch)
+	require.True(t, ok)
+	fakeClient := interceptor.NewClient(inner, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, isGrantList := list.(*gwapiv1b1.ReferenceGrantList); isGrantList {
+				return context.Canceled
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+	kube := fake2.NewClientset()
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	require.NoError(t, inner.Create(t.Context(), &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
+		},
+	}))
+	require.NoError(t, inner.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: gwNamespace},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{SecretRef: &gwapiv1.SecretObjectReference{
+				Name: "api-key", Namespace: ptr.To[gwapiv1.Namespace]("secret-ns"),
+			}},
+			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
+				{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: "apple"},
+			},
+		},
+	}))
+
+	routes := []aigv1b1.AIGatewayRoute{{
+		ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: gwNamespace},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{
+			{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}}},
+		}},
+	}}
+
+	_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, configNamespace, routes, nil, "uuid", nil, nil)
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, getErr := kube.CoreV1().Secrets(configNamespace).Get(t.Context(),
+		FilterConfigBundleIndexSecretName("gw", gwNamespace), metav1.GetOptions{})
+	require.Error(t, getErr, "no filter config may be published when the ReferenceGrant check was interrupted")
 }
 
 func TestGatewayController_annotateGatewayPods(t *testing.T) {
