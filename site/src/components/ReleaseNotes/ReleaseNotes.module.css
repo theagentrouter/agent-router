@@ -108,7 +108,7 @@
 
 /* Release Header */
 .releaseHeader {
-  background: white;
+  background: var(--ifm-background-surface-color);
   border: 1px solid var(--ifm-color-emphasis-300);
   border-radius: 8px;
   padding: 1.5rem;
@@ -223,7 +223,7 @@
   align-items: flex-start;
   gap: 1rem;
   padding: 1rem;
-  background: white;
+  background: var(--ifm-background-surface-color);
   border: 1px solid var(--ifm-color-emphasis-300);
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
@@ -257,7 +257,7 @@
   border-radius: 8px;
   padding: 1.5rem;
   margin: 1.5rem 0;
-  background: white;
+  background: var(--ifm-background-surface-color);
   border: 1px solid var(--ifm-color-emphasis-300);
 }
 
@@ -305,7 +305,7 @@
 
 /* Release Cards */
 .releaseCard {
-  background: white;
+  background: var(--ifm-background-surface-color);
   border: 1px solid var(--ifm-color-emphasis-300);
   border-radius: 8px;
   padding: 2rem;
@@ -607,7 +607,7 @@
 
 .timelineContent {
   flex: 1;
-  background: white;
+  background: var(--ifm-background-surface-color);
   border: 1px solid var(--ifm-color-emphasis-300);
   border-radius: 8px;
   padding: 1rem;
@@ -746,7 +746,7 @@
   font-family: monospace;
   color: var(--ifm-color-emphasis-900);
   display: inline;
-  background: #fff;
+  background: var(--ifm-background-surface-color);
   padding: 0.01rem 0.5rem;
   word-break: break-word;
   white-space: normal;
