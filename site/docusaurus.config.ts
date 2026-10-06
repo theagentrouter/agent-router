@@ -116,7 +116,7 @@ const config: Config = {
           remarkPlugins: [
             [require('@docusaurus/theme-mermaid'), {}],
           ],
-          lastVersion: '1.1',
+          lastVersion: '1.2',
           versions: {
             current: {
               label: 'Next',
@@ -125,9 +125,14 @@ const config: Config = {
               // Intentionally indexable: LLMs and search may see the latest
               // unreleased docs. Only the unmaintained versions are noindexed.
             },
+            '1.2': {
+              label: '1.2',
+              path: '/',
+              banner: 'none'
+            },
             '1.1': {
               label: '1.1',
-              path: '/',
+              path: '1.1',
               banner: 'none'
             },
             '1.0': {
