@@ -1782,6 +1782,25 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 			expectedError:                 "tool bad parameters must be a JSON object",
 		},
 		{
+			name: "tool with unresolvable $ref in parameters - parametersJSONSchemaAvailable=false",
+			openaiTools: []openai.Tool{
+				{
+					Type: openai.ToolTypeFunction,
+					Function: &openai.FunctionDefinition{
+						Name: "bad_ref",
+						Parameters: map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"a": map[string]any{"$ref": "#/nonexistent/path"},
+							},
+						},
+					},
+				},
+			},
+			parametersJSONSchemaAvailable: false,
+			expectedError:                 "invalid JSON schema for parameters in tool bad_ref",
+		},
+		{
 			name: "tool with invalid parameters schema - parametersJSONSchemaAvailable=true",
 			openaiTools: []openai.Tool{
 				{
@@ -2103,6 +2122,7 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 			result, err := openAIToolsToGeminiTools(tc.openaiTools, tc.parametersJSONSchemaAvailable)
 			if tc.expectedError != "" {
 				require.ErrorContains(t, err, tc.expectedError)
+				require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
 			} else {
 				require.NoError(t, err)
 				if d := cmp.Diff(tc.expected, result, cmpopts.IgnoreUnexported(genai.Schema{})); d != "" {
@@ -3319,6 +3339,7 @@ func TestOpenAIReqToGeminiGenerationConfigWithJsonSchemaToGemini(t *testing.T) {
 			got, responseMode, err := openAIReqToGeminiGenerationConfig(tc.input, tc.requestModel)
 			if tc.expectedErrMsg != "" {
 				require.ErrorContains(t, err, tc.expectedErrMsg)
+				require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
 			} else {
 				require.NoError(t, err)
 
