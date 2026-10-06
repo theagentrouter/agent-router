@@ -61,13 +61,14 @@ func NewGatewayController(
 		uf = uuid.NewString
 	}
 	return &GatewayController{
-		client:                client,
-		kube:                  kube,
-		logger:                logger,
-		envoyGatewayNamespace: envoyGatewayNamespace,
-		standAlone:            standAlone,
-		uuidFn:                uf,
-		extProcBuilder:        newExtProcBuilder(options, extProcAsSideCar, logger),
+		client:                  client,
+		kube:                    kube,
+		logger:                  logger,
+		envoyGatewayNamespace:   envoyGatewayNamespace,
+		standAlone:              standAlone,
+		uuidFn:                  uf,
+		extProcBuilder:          newExtProcBuilder(options, extProcAsSideCar, logger),
+		referenceGrantValidator: newReferenceGrantValidator(client),
 	}
 }
 
@@ -83,6 +84,9 @@ type GatewayController struct {
 	// extProcBuilder is shared with the mutating webhook so the template hash
 	// computed here matches the extproc container injected by the webhook.
 	*extProcBuilder
+	// referenceGrantValidator authorizes cross-namespace AIServiceBackend/InferencePool
+	// references (and their BackendSecurityPolicy credentials) via Gateway API ReferenceGrant.
+	referenceGrantValidator *referenceGrantValidator
 }
 
 // Reconcile implements the reconcile.Reconciler for gwapiv1.Gateway.
@@ -482,6 +486,23 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 				var bsp *aigv1b1.BackendSecurityPolicy
 				backendNamespace := backendRef.GetNamespace(aiGatewayRoute.Namespace)
+
+				if backendRef.IsCrossNamespace(aiGatewayRoute.Namespace) {
+					var rgErr error
+					if backendRef.IsInferencePool() {
+						rgErr = c.referenceGrantValidator.validateInferencePoolReference(
+							ctx, aiGatewayRoute.Namespace, backendNamespace, backendRef.Name)
+					} else {
+						rgErr = c.referenceGrantValidator.validateAIServiceBackendReference(
+							ctx, aiGatewayRoute.Namespace, backendNamespace, backendRef.Name)
+					}
+					if rgErr != nil {
+						c.logger.Error(rgErr, "cross-namespace backendRef rejected: no valid ReferenceGrant. Skipping this backend.",
+							"backend_name", backendRef.Name, "aigatewayroute", aiGatewayRoute.Name,
+							"namespace", backendNamespace)
+						continue
+					}
+				}
 
 				if backendRef.IsInferencePool() {
 					// We assume that InferencePools are all OpenAI schema.
@@ -893,24 +914,21 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 
 	switch spec.Type {
 	case aigv1b1.BackendSecurityPolicyTypeAPIKey:
-		secretName := string(spec.APIKey.SecretRef.Name)
-		apiKey, getErr := c.getSecretData(ctx, namespace, secretName, apiKeyInSecret)
+		apiKey, getErr := c.getBSPSecretRefData(ctx, backendSecurityPolicy, apiKeyInSecret)
 		if getErr != nil {
 			return nil, getErr
 		}
 		auth = &filterapi.BackendAuth{APIKey: &filterapi.APIKeyAuth{Key: apiKey}}
 		hasStaticCred = true
 	case aigv1b1.BackendSecurityPolicyTypeAzureAPIKey:
-		secretName := string(spec.AzureAPIKey.SecretRef.Name)
-		apiKey, getErr := c.getSecretData(ctx, namespace, secretName, apiKeyInSecret)
+		apiKey, getErr := c.getBSPSecretRefData(ctx, backendSecurityPolicy, apiKeyInSecret)
 		if getErr != nil {
 			return nil, getErr
 		}
 		auth = &filterapi.BackendAuth{AzureAPIKey: &filterapi.AzureAPIKeyAuth{Key: apiKey}}
 		hasStaticCred = true
 	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
-		secretName := string(spec.AnthropicAPIKey.SecretRef.Name)
-		apiKey, getErr := c.getSecretData(ctx, namespace, secretName, apiKeyInSecret)
+		apiKey, getErr := c.getBSPSecretRefData(ctx, backendSecurityPolicy, apiKeyInSecret)
 		if getErr != nil {
 			return nil, getErr
 		}
@@ -925,13 +943,15 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 			auth = &filterapi.BackendAuth{AWSAuth: &filterapi.AWSAuth{Region: awsCred.Region}}
 		} else {
 			// Otherwise, fetch credentials from secret
-			var secretName string
+			var (
+				credentialsLiteral string
+				getErr             error
+			)
 			if awsCred.CredentialsFile != nil {
-				secretName = string(awsCred.CredentialsFile.SecretRef.Name)
+				credentialsLiteral, getErr = c.getBSPSecretRefData(ctx, backendSecurityPolicy, rotators.AwsCredentialsKey)
 			} else {
-				secretName = rotators.GetBSPSecretName(backendSecurityPolicy.Name)
+				credentialsLiteral, getErr = c.getSecretData(ctx, namespace, rotators.GetBSPSecretName(backendSecurityPolicy.Name), rotators.AwsCredentialsKey)
 			}
-			credentialsLiteral, getErr := c.getSecretData(ctx, namespace, secretName, rotators.AwsCredentialsKey)
 			if getErr != nil {
 				return nil, getErr
 			}
@@ -999,7 +1019,7 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 func (c *GatewayController) getSecretData(ctx context.Context, namespace, name, dataKey string) (string, error) {
 	secret, err := c.kube.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		return "", fmt.Errorf("failed to get secret %s: %w", name, err)
+		return "", fmt.Errorf("failed to get secret %s/%s: %w", namespace, name, err)
 	}
 	if secret.Data != nil {
 		if value, ok := secret.Data[dataKey]; ok {
@@ -1011,7 +1031,21 @@ func (c *GatewayController) getSecretData(ctx context.Context, namespace, name, 
 			return value, nil
 		}
 	}
-	return "", fmt.Errorf("secret %s does not contain key %s", name, dataKey)
+	return "", fmt.Errorf("secret %s/%s does not contain key %s", namespace, name, dataKey)
+}
+
+// getBSPSecretRefData returns dataKey from the Secret referenced by the policy's static credential.
+// It resolves the Secret with backendSecurityPolicySecretRef, like the Secret watch index, so a
+// cross-namespace Secret must also be allowed by a ReferenceGrant.
+func (c *GatewayController) getBSPSecretRefData(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy, dataKey string) (string, error) {
+	name, namespace, ok := backendSecurityPolicySecretRef(bsp)
+	if !ok {
+		return "", fmt.Errorf("secretRef is not set for policy %s/%s", bsp.Namespace, bsp.Name)
+	}
+	if err := c.referenceGrantValidator.validateSecretReference(ctx, bsp.Namespace, namespace, name); err != nil {
+		return "", err
+	}
+	return c.getSecretData(ctx, namespace, name, dataKey)
 }
 
 // injectQuotaPolicyCostExpressions looks up QuotaPolicies targeting the backends

@@ -17,11 +17,16 @@ import (
 // Constants for safety limits
 const (
 	jsonSchemaMaxRecursionDepth = 100
+	// jsonSchemaMaxNodes caps the total number of nodes visited while resolving $refs. The depth
+	// limit alone does not bound the work: sibling $refs to the same definition are expanded
+	// independently, so a small schema can expand exponentially.
+	jsonSchemaMaxNodes = 50000
 )
 
 // Errors for safety violations
 var (
 	errJSONSchemaMaxRecursionDepthExceeded = fmt.Errorf("maximum recursion depth exceeded")
+	errJSONSchemaMaxNodesExceeded          = fmt.Errorf("maximum number of schema nodes exceeded")
 	errInvalidJSONSchema                   = fmt.Errorf("invalid JSON schema")
 )
 
@@ -149,17 +154,40 @@ func jsonSchemaRetrieveRef(path string, schema map[string]any) (any, error) {
 	return nil, fmt.Errorf("%w: unexpected end of ref path traversal for: %s", errInvalidJSONSchema, path)
 }
 
+// jsonSchemaNodeBudget tracks the remaining number of nodes that can be visited while
+// processing a schema.
+type jsonSchemaNodeBudget struct {
+	remaining int
+}
+
+func newJSONSchemaNodeBudget() *jsonSchemaNodeBudget {
+	return &jsonSchemaNodeBudget{remaining: jsonSchemaMaxNodes}
+}
+
+// consume accounts for one visited node and fails once the budget is exhausted.
+func (b *jsonSchemaNodeBudget) consume() error {
+	if b.remaining <= 0 {
+		return fmt.Errorf("%w: limit %d", errJSONSchemaMaxNodesExceeded, jsonSchemaMaxNodes)
+	}
+	b.remaining--
+	return nil
+}
+
 // jsonSchemaDereferenceHelper recursively dereferences JSON schema references.
 func jsonSchemaDereferenceHelper(
 	obj any,
 	fullSchema map[string]any,
 	skipKeys []string,
 	processedRefs map[string]struct{},
+	budget *jsonSchemaNodeBudget,
 	depth int,
 ) (any, error) {
 	// Check recursion depth
 	if depth >= jsonSchemaMaxRecursionDepth {
 		return nil, fmt.Errorf("%w: depth %d", errJSONSchemaMaxRecursionDepthExceeded, depth)
+	}
+	if err := budget.consume(); err != nil {
+		return nil, err
 	}
 
 	// Handle dictionaries (maps)
@@ -201,7 +229,7 @@ func jsonSchemaDereferenceHelper(
 					return nil, fmt.Errorf("failed to retrieve reference %s: %w", refPath, err)
 				}
 
-				fullRef, err := jsonSchemaDereferenceHelper(ref, fullSchema, skipKeys, processedRefs, depth+1)
+				fullRef, err := jsonSchemaDereferenceHelper(ref, fullSchema, skipKeys, processedRefs, budget, depth+1)
 				if err != nil {
 					delete(processedRefs, refPath) // Clean up on error
 					return nil, fmt.Errorf("failed to dereference %s: %w", refPath, err)
@@ -214,13 +242,13 @@ func jsonSchemaDereferenceHelper(
 
 			// Recurse on nested structures
 			if _, isDict := v.(map[string]any); isDict {
-				res, err := jsonSchemaDereferenceHelper(v, fullSchema, skipKeys, processedRefs, depth+1)
+				res, err := jsonSchemaDereferenceHelper(v, fullSchema, skipKeys, processedRefs, budget, depth+1)
 				if err != nil {
 					return nil, err
 				}
 				objOut[k] = res
 			} else if _, isList := v.([]any); isList {
-				res, err := jsonSchemaDereferenceHelper(v, fullSchema, skipKeys, processedRefs, depth+1)
+				res, err := jsonSchemaDereferenceHelper(v, fullSchema, skipKeys, processedRefs, budget, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -236,7 +264,7 @@ func jsonSchemaDereferenceHelper(
 	if list, ok := obj.([]any); ok {
 		listOut := make([]any, len(list))
 		for i, el := range list {
-			res, err := jsonSchemaDereferenceHelper(el, fullSchema, skipKeys, processedRefs, depth+1)
+			res, err := jsonSchemaDereferenceHelper(el, fullSchema, skipKeys, processedRefs, budget, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -254,11 +282,15 @@ func jsonSchemaSkipKeys(
 	obj any,
 	fullSchema map[string]any,
 	processedRefs map[string]struct{},
+	budget *jsonSchemaNodeBudget,
 	depth int,
 ) ([]string, error) {
 	// Check recursion depth
 	if depth >= jsonSchemaMaxRecursionDepth {
 		return nil, fmt.Errorf("%w: depth %d", errJSONSchemaMaxRecursionDepthExceeded, depth)
+	}
+	if err := budget.consume(); err != nil {
+		return nil, err
 	}
 
 	var keys []string
@@ -292,7 +324,7 @@ func jsonSchemaSkipKeys(
 				}
 
 				// Recurse on the referenced schema
-				nestedKeys, err := jsonSchemaSkipKeys(ref, fullSchema, processedRefs, depth+1)
+				nestedKeys, err := jsonSchemaSkipKeys(ref, fullSchema, processedRefs, budget, depth+1)
 				if err != nil {
 					delete(processedRefs, refPath) // Clean up on error
 					return nil, err
@@ -302,13 +334,13 @@ func jsonSchemaSkipKeys(
 				// Clean up after processing
 				delete(processedRefs, refPath)
 			} else if _, isDict := v.(map[string]any); isDict {
-				nestedKeys, err := jsonSchemaSkipKeys(v, fullSchema, processedRefs, depth+1)
+				nestedKeys, err := jsonSchemaSkipKeys(v, fullSchema, processedRefs, budget, depth+1)
 				if err != nil {
 					return nil, err
 				}
 				keys = append(keys, nestedKeys...)
 			} else if _, isList := v.([]any); isList {
-				nestedKeys, err := jsonSchemaSkipKeys(v, fullSchema, processedRefs, depth+1)
+				nestedKeys, err := jsonSchemaSkipKeys(v, fullSchema, processedRefs, budget, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -318,7 +350,7 @@ func jsonSchemaSkipKeys(
 	} else if list, ok := obj.([]any); ok {
 		// Handle lists (slices)
 		for _, el := range list {
-			nestedKeys, err := jsonSchemaSkipKeys(el, fullSchema, processedRefs, depth+1)
+			nestedKeys, err := jsonSchemaSkipKeys(el, fullSchema, processedRefs, budget, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -335,8 +367,10 @@ func jsonSchemaDereference(schemaObj map[string]any) (any, error) {
 		return nil, fmt.Errorf("%w: schema object cannot be nil", errInvalidJSONSchema)
 	}
 
+	// The budget is shared by both passes so the total work is bounded.
+	budget := newJSONSchemaNodeBudget()
 	processedRefs := make(map[string]struct{})
-	skipKeys, err := jsonSchemaSkipKeys(schemaObj, schemaObj, processedRefs, 0)
+	skipKeys, err := jsonSchemaSkipKeys(schemaObj, schemaObj, processedRefs, budget, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine skip keys: %w", err)
 	}
@@ -345,7 +379,7 @@ func jsonSchemaDereference(schemaObj map[string]any) (any, error) {
 	processedRefs = make(map[string]struct{})
 
 	// Call the recursive helper function to perform the dereferencing
-	return jsonSchemaDereferenceHelper(schemaObj, schemaObj, skipKeys, processedRefs, 0)
+	return jsonSchemaDereferenceHelper(schemaObj, schemaObj, skipKeys, processedRefs, budget, 0)
 }
 
 // jsonSchemaToGapic formats a JSON schema for a gapic request with improved safety.

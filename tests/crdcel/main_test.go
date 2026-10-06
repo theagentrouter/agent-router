@@ -226,6 +226,10 @@ func TestBackendSecurityPolicies(t *testing.T) {
 			name:   "gcp_with_apikey.yaml",
 			expErr: "When type is GCPCredentials, only gcpCredentials field should be set",
 		},
+		{
+			name:   "oidc_invalid_issuer.yaml",
+			expErr: "spec.awsCredentials.oidcExchangeToken.oidc.provider.issuer in body should match",
+		},
 		{name: "azure_oidc.yaml"},
 		{name: "azure_valid_credentials.yaml"},
 		{name: "aws_credential_file.yaml"},

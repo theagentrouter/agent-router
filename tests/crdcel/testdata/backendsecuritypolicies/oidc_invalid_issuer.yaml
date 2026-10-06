@@ -16,7 +16,7 @@ spec:
       awsRoleArn: placeholder
       oidc:
         provider:
-          issuer: https://placeholder
+          issuer: placeholder
         clientID: placeholder
         clientSecret:
           name: placeholder

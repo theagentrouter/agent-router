@@ -750,6 +750,91 @@ func TestNewBackendSecurityPolicyController_RotateCredentialGCPCrossNamespaceAll
 	}
 }
 
+// TestBackendSecurityPolicyController_Reconcile_StaticCredentialCrossNamespace verifies that a static
+// credential whose Secret is in another namespace marks the policy NotAccepted unless a ReferenceGrant
+// allows it, and that the targeted backend is synced either way so the Gateway controller re-reads it.
+func TestBackendSecurityPolicyController_Reconcile_StaticCredentialCrossNamespace(t *testing.T) {
+	const bspNamespace, secretNamespace = "app", "shared-secrets"
+	secretRef := &gwapiv1.SecretObjectReference{Name: "creds", Namespace: ptr.To[gwapiv1.Namespace](secretNamespace)}
+	staticTypes := []struct {
+		name string
+		spec aigv1b1.BackendSecurityPolicySpec
+	}{
+		{name: "APIKey", spec: aigv1b1.BackendSecurityPolicySpec{
+			Type:   aigv1b1.BackendSecurityPolicyTypeAPIKey,
+			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{SecretRef: secretRef},
+		}},
+		{name: "AzureAPIKey", spec: aigv1b1.BackendSecurityPolicySpec{
+			Type:        aigv1b1.BackendSecurityPolicyTypeAzureAPIKey,
+			AzureAPIKey: &aigv1b1.BackendSecurityPolicyAzureAPIKey{SecretRef: secretRef},
+		}},
+		{name: "AnthropicAPIKey", spec: aigv1b1.BackendSecurityPolicySpec{
+			Type:            aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey,
+			AnthropicAPIKey: &aigv1b1.BackendSecurityPolicyAnthropicAPIKey{SecretRef: secretRef},
+		}},
+		{name: "AWSCredentialsFile", spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
+			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
+				Region:          "us-east-1",
+				CredentialsFile: &aigv1b1.AWSCredentialsFile{SecretRef: secretRef},
+			},
+		}},
+	}
+
+	for _, st := range staticTypes {
+		t.Run(st.name, func(t *testing.T) {
+			for _, withGrant := range []bool{false, true} {
+				t.Run(fmt.Sprintf("withGrant=%t", withGrant), func(t *testing.T) {
+					eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+					cl := requireNewFakeClientWithIndexes(t)
+					c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+
+					require.NoError(t, cl.Create(t.Context(), &aigv1b1.AIServiceBackend{
+						ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: bspNamespace},
+					}))
+					if withGrant {
+						require.NoError(t, cl.Create(t.Context(), &gwapiv1b1.ReferenceGrant{
+							ObjectMeta: metav1.ObjectMeta{Name: "allow-app", Namespace: secretNamespace},
+							Spec: gwapiv1b1.ReferenceGrantSpec{
+								From: []gwapiv1b1.ReferenceGrantFrom{{
+									Group:     aiServiceBackendGroup,
+									Kind:      backendSecurityPolicyKind,
+									Namespace: bspNamespace,
+								}},
+								To: []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+							},
+						}))
+					}
+					spec := st.spec
+					spec.TargetRefs = []gwapiv1a2.LocalPolicyTargetReference{
+						{Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "backend"},
+					}
+					require.NoError(t, cl.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
+						ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: bspNamespace},
+						Spec:       spec,
+					}))
+
+					_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: bspNamespace, Name: "bsp"}})
+					items := eventCh.RequireItemsEventually(t, 1)
+					require.Equal(t, "backend", items[0].Name, "the targeted backend must be synced whether or not the Secret is allowed")
+
+					var updated aigv1b1.BackendSecurityPolicy
+					require.NoError(t, cl.Get(t.Context(), types.NamespacedName{Namespace: bspNamespace, Name: "bsp"}, &updated))
+					require.Len(t, updated.Status.Conditions, 1)
+					if withGrant {
+						require.NoError(t, err)
+						require.Equal(t, aigv1b1.ConditionTypeAccepted, updated.Status.Conditions[0].Type)
+						return
+					}
+					require.ErrorContains(t, err, "is not permitted")
+					require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updated.Status.Conditions[0].Type)
+					require.Contains(t, updated.Status.Conditions[0].Message, "is not permitted")
+				})
+			}
+		})
+	}
+}
+
 func TestNewBackendSecurityPolicyController_RotateCredentialInvalidType(t *testing.T) {
 	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
 	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()

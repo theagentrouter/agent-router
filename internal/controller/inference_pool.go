@@ -35,6 +35,8 @@ type InferencePoolController struct {
 	kube                   kubernetes.Interface
 	logger                 logr.Logger
 	inferencePoolEventChan chan event.GenericEvent
+	// gatewayEventChan is a channel to send events to the gateway controller.
+	gatewayEventChan chan event.GenericEvent
 }
 
 // errEndpointPickerRefMissing is returned by validateExtensionReference when the InferencePool's
@@ -48,12 +50,14 @@ var errEndpointPickerRefMissing = errors.New("endpointPickerRef is not set")
 func NewInferencePoolController(
 	client client.Client, kube kubernetes.Interface, logger logr.Logger,
 	inferencePoolEventChan chan event.GenericEvent,
+	gatewayEventChan chan event.GenericEvent,
 ) *InferencePoolController {
 	return &InferencePoolController{
 		client:                 client,
 		kube:                   kube,
 		logger:                 logger,
 		inferencePoolEventChan: inferencePoolEventChan,
+		gatewayEventChan:       gatewayEventChan,
 	}
 }
 
@@ -97,6 +101,11 @@ func (c *InferencePoolController) syncInferencePool(ctx context.Context, inferen
 	}
 
 	c.logger.Info("Found referenced Gateways", "count", len(referencedGateways), "inferencePool", inferencePool.Name)
+	// Propagate to the Gateways so that changes to the BackendSecurityPolicy targeting this
+	// InferencePool (e.g. a rotated or revoked credential) are reflected in their filter config.
+	for _, gw := range referencedGateways {
+		c.gatewayEventChan <- event.GenericEvent{Object: gw}
+	}
 	return nil
 }
 
