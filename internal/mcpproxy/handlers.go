@@ -21,6 +21,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
@@ -49,10 +50,81 @@ type postCompletion struct {
 	session *session
 }
 
+// onErrorResponse writes a JSON-RPC error response when no request ID is
+// available (pre-parse failures, body-too-large, etc.). The id is null per
+// JSON-RPC 2.0 §5.1: "If there was an error in detecting the id in the
+// Request object, it MUST be Null."
 func onErrorResponse(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	writeJSONRPCError(w, status, errCodeFromStatus(status), msg, nil)
+}
+
+// onRequestError writes a JSON-RPC error response echoing the request's id.
+// Use this instead of onErrorResponse whenever the parsed request is available.
+func onRequestError(w http.ResponseWriter, status int, code int, msg string, id jsonrpc.ID) {
+	writeJSONRPCError(w, status, code, msg, &id)
+}
+
+func writeJSONRPCError(w http.ResponseWriter, status, code int, msg string, id *jsonrpc.ID) {
+	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"error": map[string]any{
+			"code":    code,
+			"message": msg,
+		},
+	}
+	if id != nil && id.IsValid() {
+		resp["id"] = id.Raw()
+	} else {
+		resp["id"] = nil
+	}
+	encoded, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(msg))
+	_, _ = w.Write(encoded)
+}
+
+// errCodeFromStatus maps an HTTP status to a JSON-RPC error code for callers
+// that only have a status (onErrorResponse / legacy path). Prefer an explicit
+// code via onRequestError when the condition is known.
+func errCodeFromStatus(status int) int {
+	switch status {
+	case http.StatusNotFound:
+		return errCodeMethodNotFound // -32601
+	case http.StatusBadRequest, http.StatusForbidden, http.StatusUnauthorized, http.StatusRequestEntityTooLarge:
+		return errCodeInvalidRequest // -32600
+	default:
+		if status >= 500 {
+			return -32603 // internal error
+		}
+		return errCodeInvalidRequest
+	}
+}
+
+// writeProtocolError writes a protocolError as a structured JSON-RPC error
+// response. The HTTP status comes from the protocolError itself (e.g. 400 for
+// modern validation failures, 200 for legacy JSON-RPC errors). requestID is
+// the client's JSON-RPC id; pass nil when no valid id was parsed.
+func writeProtocolError(w http.ResponseWriter, pe *protocolError, requestID *jsonrpc.ID) {
+	errObj := map[string]any{
+		"code":    pe.Code,
+		"message": pe.Message,
+	}
+	if pe.Data != nil {
+		errObj["data"] = pe.Data
+	}
+	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"error":   errObj,
+	}
+	if requestID != nil && requestID.IsValid() {
+		resp["id"] = requestID.Raw()
+	} else {
+		resp["id"] = nil
+	}
+	encoded, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(pe.HTTPStatus)
+	_, _ = w.Write(encoded)
 }
 
 // servePOST is the era-neutral entry point for MCP POST requests. It reads and
@@ -104,7 +176,28 @@ func (m *mcpRequestContext) servePOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Detect era: modern or legacy
+	// detect the client era and handle the request accordingly.
+	detection := detectClientEra(r, rawMsg)
+	if detection.err != nil {
+		// Extract the request ID (if any) so the JSON-RPC error carries it.
+		var requestID *jsonrpc.ID
+		if req, ok := rawMsg.(*jsonrpc.Request); ok && req != nil && req.ID.IsValid() {
+			requestID = &req.ID
+		}
+		writeProtocolError(w, detection.err, requestID)
+		return
+	}
+
+	// route to modern handler, if the client is using the modern MCP spec.
+	if detection.era == eraModern {
+		req, ok := rawMsg.(*jsonrpc.Request)
+		if !ok || req == nil {
+			onErrorResponse(w, http.StatusBadRequest, "invalid JSON-RPC message: expected request")
+			return
+		}
+		m.serveModernPOST(w, r, req, startAt)
+		return
+	}
 
 	m.serveLegacyPOST(w, r, rawMsg, startAt)
 }
@@ -265,26 +358,157 @@ func rewriteMetaResourceURIs(meta mcp.Meta, backendName filterapi.MCPBackendName
 	return changed
 }
 
-// rewriteToolResultURIs namespaces all resource URIs in a tools/call result: _meta fields
-// (via rewriteMetaResourceURIs) and any ResourceLink / EmbeddedResource entries in Content.
-// Returns true if anything was changed.
-func rewriteToolResultURIs(result *mcp.CallToolResult, backendName filterapi.MCPBackendName) bool {
-	changed := rewriteMetaResourceURIs(result.Meta, backendName)
-	for _, c := range result.Content {
-		switch v := c.(type) {
-		case *mcp.ResourceLink:
-			if v.URI != "" {
-				v.URI = downstreamResourceURI(v.URI, backendName)
-				changed = true
+// rewriteToolsCallResult re-prefixes resource URIs in a complete tools/call
+// result back to the gateway's downstream namespace. Shared by the legacy
+// (maybeResponseModify) and modern paths. Operates on the raw JSON map so
+// unknown fields (caching hints, top-level _meta extras, experimental keys)
+// are preserved. It returns (rewritten, true) when at least one URI was
+// changed, or (nil, false) when the caller should pass the result through
+// verbatim: a non-complete (MRTR input_required) result, a non-object
+// payload, or a result with no URIs to rewrite.
+func rewriteToolsCallResult(resp json.RawMessage, backendName filterapi.MCPBackendName) (json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(resp, &m) != nil {
+		return nil, false
+	}
+	// Non-complete (input_required) results are not standard CallToolResults and
+	// must pass through untouched so MRTR state survives.
+	if rt, ok := m["resultType"]; ok {
+		var s string
+		if json.Unmarshal(rt, &s) == nil && s != "" && s != "complete" {
+			return nil, false
+		}
+	}
+	if _, ok := m["inputRequests"]; ok {
+		return nil, false
+	}
+
+	changed := false
+
+	if raw, ok := m["content"]; ok {
+		var contents []map[string]json.RawMessage
+		if json.Unmarshal(raw, &contents) == nil {
+			contentChanged := false
+			for _, c := range contents {
+				var typ string
+				if tRaw, ok := c["type"]; ok {
+					_ = json.Unmarshal(tRaw, &typ)
+				}
+				switch typ {
+				case "resource_link":
+					if rewriteRawURIField(c, "uri", backendName) {
+						contentChanged = true
+					}
+				case "resource":
+					resRaw, ok := c["resource"]
+					if !ok {
+						continue
+					}
+					var resource map[string]json.RawMessage
+					if json.Unmarshal(resRaw, &resource) != nil {
+						continue
+					}
+					if rewriteRawURIField(resource, "uri", backendName) {
+						if out, err := json.Marshal(resource); err == nil {
+							c["resource"] = out
+							contentChanged = true
+						}
+					}
+				}
 			}
-		case *mcp.EmbeddedResource:
-			if v.Resource != nil && v.Resource.URI != "" {
-				v.Resource.URI = downstreamResourceURI(v.Resource.URI, backendName)
+			if contentChanged {
+				if out, err := json.Marshal(contents); err == nil {
+					m["content"] = out
+					changed = true
+				}
+			}
+		}
+	}
+
+	if raw, ok := m["_meta"]; ok {
+		var meta map[string]any
+		if json.Unmarshal(raw, &meta) == nil && rewriteMetaResourceURIs(mcp.Meta(meta), backendName) {
+			if out, err := json.Marshal(meta); err == nil {
+				m["_meta"] = out
 				changed = true
 			}
 		}
 	}
-	return changed
+
+	if !changed {
+		return nil, false
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// rewriteRawURIField re-prefixes a string "uri" (or similarly named) field in a
+// raw JSON object map. Returns true when the field was present and rewritten.
+func rewriteRawURIField(obj map[string]json.RawMessage, key string, backendName filterapi.MCPBackendName) bool {
+	uriRaw, ok := obj[key]
+	if !ok {
+		return false
+	}
+	var uri string
+	if json.Unmarshal(uriRaw, &uri) != nil || uri == "" {
+		return false
+	}
+	prefixed, err := json.Marshal(downstreamResourceURI(uri, backendName))
+	if err != nil {
+		return false
+	}
+	obj[key] = prefixed
+	return true
+}
+
+// rewriteResourcesReadURIs re-prefixes contents[].uri on a resources/read result
+// while preserving unknown fields. Shared by legacy maybeResponseModify and the
+// modern path (which then injects caching hints). Returns (rewritten, true)
+// when at least one URI changed, or (nil, false) to pass through verbatim.
+func rewriteResourcesReadURIs(result json.RawMessage, backendName string) (json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(result, &m) != nil {
+		return nil, false
+	}
+	if !rewriteResourcesReadContentsURIs(m, backendName) {
+		return nil, false
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// rewriteResourcesReadContentsURIs re-prefixes uri fields inside m["contents"].
+// Mutates m in place; returns true when any URI changed.
+func rewriteResourcesReadContentsURIs(m map[string]json.RawMessage, backendName string) bool {
+	raw, ok := m["contents"]
+	if !ok {
+		return false
+	}
+	var contents []map[string]json.RawMessage
+	if json.Unmarshal(raw, &contents) != nil {
+		return false
+	}
+	changed := false
+	for _, c := range contents {
+		if rewriteRawURIField(c, "uri", backendName) {
+			changed = true
+		}
+	}
+	if !changed {
+		return false
+	}
+	out, err := json.Marshal(contents)
+	if err != nil {
+		return false
+	}
+	m["contents"] = out
+	return true
 }
 
 // extractForwardHeaders reads the configured headers from the incoming request to forward to backends.

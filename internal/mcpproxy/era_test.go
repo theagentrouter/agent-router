@@ -106,7 +106,7 @@ func TestDetectClientEra_DeclaredVersion(t *testing.T) {
 		require.Equal(t, protocolVersion20260728, got.version)
 	})
 
-	for _, v := range []string{"2025-11-25", "2025-06-18"} {
+	for _, v := range []string{"2025-11-25", "2025-06-18", "2025-03-26"} {
 		t.Run("legacy version "+v+" routes to legacy validation", func(t *testing.T) {
 			r := newHTTPRequest(t, http.MethodPost, map[string]string{
 				mcpProtocolVersionHeader: v,
@@ -120,15 +120,44 @@ func TestDetectClientEra_DeclaredVersion(t *testing.T) {
 		})
 	}
 
-	t.Run("unknown version is treated as legacy", func(t *testing.T) {
+	for _, v := range []string{"1999-01-01", "2024-11-05", "2025-99-99", "2026-01-01"} {
+		t.Run("unknown pre-modern date "+v+" is rejected with unsupported protocol version", func(t *testing.T) {
+			r := newHTTPRequest(t, http.MethodPost, map[string]string{
+				mcpProtocolVersionHeader: v,
+				sessionIDHeader:          "sess",
+			})
+			msg := newRequestMsg(t, "tools/call", "id", nil)
+			got := detectClientEra(r, msg)
+			require.NotNil(t, got.err)
+			require.Equal(t, errCodeUnsupportedProtocolVersion, got.err.Code)
+			require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
+			require.Equal(t, &mcp.UnsupportedProtocolVersionData{
+				Supported: []string{"2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"},
+				Requested: v,
+			}, got.err.Data)
+		})
+	}
+
+	t.Run("future version is rejected with unsupported protocol version", func(t *testing.T) {
 		r := newHTTPRequest(t, http.MethodPost, map[string]string{
-			mcpProtocolVersionHeader: "1999-01-01",
+			mcpProtocolVersionHeader: "2027-01-01",
 		})
 		msg := newRequestMsg(t, "tools/call", "id", nil)
 		got := detectClientEra(r, msg)
-		require.Nil(t, got.err)
-		require.Equal(t, eraLegacy, got.era)
-		require.Equal(t, "1999-01-01", got.version)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeUnsupportedProtocolVersion, got.err.Code)
+		require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
+	})
+
+	t.Run("malformed version is rejected with unsupported protocol version", func(t *testing.T) {
+		r := newHTTPRequest(t, http.MethodPost, map[string]string{
+			mcpProtocolVersionHeader: "not-a-version",
+		})
+		msg := newRequestMsg(t, "tools/call", "id", nil)
+		got := detectClientEra(r, msg)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeUnsupportedProtocolVersion, got.err.Code)
+		require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
 	})
 }
 
@@ -168,25 +197,28 @@ func TestDetectClientEra_NoVersionHeader(t *testing.T) {
 		}
 	})
 
-	t.Run("Mcp-Method without version header is treated as legacy", func(t *testing.T) {
-		// Mcp-Method alone is not discriminating: only the version header value
-		// selects the modern path. Without it, the request falls through to legacy.
+	t.Run("Mcp-Method without version header is rejected", func(t *testing.T) {
+		// Mcp-Method alone without a version header is ambiguous: the client
+		// looks modern but didn't declare a version, so the gateway rejects
+		// rather than silently trusting the mirrored header on the legacy path.
 		r := newHTTPRequest(t, http.MethodPost, map[string]string{mcpMethodHeader: "tools/call"})
 		msg := newRequestMsg(t, "tools/call", "id", nil)
 		got := detectClientEra(r, msg)
-		require.Nil(t, got.err)
-		require.Equal(t, eraLegacy, got.era)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeHeaderMismatch, got.err.Code)
+		require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
 	})
 
-	t.Run("Mcp-Method with session ID is still legacy", func(t *testing.T) {
+	t.Run("Mcp-Method with session ID but no version header is rejected", func(t *testing.T) {
 		r := newHTTPRequest(t, http.MethodPost, map[string]string{
 			mcpMethodHeader: "tools/call",
 			sessionIDHeader: "sess",
 		})
 		msg := newRequestMsg(t, "tools/call", "id", nil)
 		got := detectClientEra(r, msg)
-		require.Nil(t, got.err)
-		require.Equal(t, eraLegacy, got.era)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeHeaderMismatch, got.err.Code)
+		require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
 	})
 
 	t.Run("plain request with nothing declared defaults to legacy", func(t *testing.T) {
