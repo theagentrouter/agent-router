@@ -373,12 +373,6 @@ jobs:
         run: go tool -modfile=tools/go.mod func-e run --version
         env:
           FUNC_E_DATA_HOME: ~/.local/share/aigw
-      - name: Install Goose
-        env:
-          GOOSE_VERSION: v1.10.0
-          OS: Linux
-        run: |
-          curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
       - env:
           TEST_GITHUB_ACCESS_TOKEN: ${{ secrets.TEST_GITHUB_ACCESS_TOKEN }}
         run: make test-e2e-aigw
