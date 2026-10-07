@@ -433,6 +433,94 @@ func TestAnthropicToAWSBedrockTranslator_ResponseBody_Streaming(t *testing.T) {
 	assert.Contains(t, bodyStr, `"text":""`)
 }
 
+func TestAnthropicToAWSBedrockTranslator_ResponseBody_StreamingUsageAcrossChunks(t *testing.T) {
+	translator := NewAnthropicToAWSBedrockTranslator("")
+	req := &anthropicschema.MessagesRequest{
+		Model:     "test-model",
+		MaxTokens: 100,
+		Stream:    true,
+		Messages: []anthropicschema.MessageParam{
+			{Role: anthropicschema.MessageRoleUser, Content: anthropicschema.MessageContent{Text: "Hi"}},
+		},
+	}
+	rawBody, err := json.Marshal(req)
+	require.NoError(t, err)
+	_, _, err = translator.RequestBody(rawBody, req, false)
+	require.NoError(t, err)
+	_, err = translator.ResponseHeaders(map[string]string{
+		"content-type":     "application/vnd.amazon.eventstream",
+		"x-amzn-requestid": "stream-req-123",
+	})
+	require.NoError(t, err)
+
+	events := []struct {
+		eventType string
+		payload   map[string]any
+	}{
+		{eventType: "messageStart", payload: map[string]any{"role": "assistant"}},
+		{eventType: "contentBlockStart", payload: map[string]any{"contentBlockIndex": 0}},
+		{
+			eventType: "contentBlockDelta",
+			payload: map[string]any{
+				"contentBlockIndex": 0,
+				"delta":             map[string]any{"text": "Hello"},
+			},
+		},
+		{eventType: "contentBlockStop", payload: map[string]any{"contentBlockIndex": 0}},
+		{eventType: "messageStop", payload: map[string]any{"stopReason": "end_turn"}},
+		{
+			eventType: "metadata",
+			payload: map[string]any{
+				"usage": map[string]any{
+					"inputTokens":           5,
+					"outputTokens":          3,
+					"totalTokens":           17,
+					"cacheReadInputTokens":  7,
+					"cacheWriteInputTokens": 2,
+				},
+			},
+		},
+	}
+
+	var output bytes.Buffer
+	for i, ev := range events {
+		payload, marshalErr := json.Marshal(ev.payload)
+		require.NoError(t, marshalErr)
+		var eventStreamData bytes.Buffer
+		writeEventStreamMessage(t, &eventStreamData, ev.eventType, payload)
+
+		_, body, _, _, responseErr := translator.ResponseBody(nil, &eventStreamData, i == len(events)-1, nil)
+		require.NoError(t, responseErr)
+		output.Write(body)
+
+		if ev.eventType == "messageStop" {
+			assert.NotContains(t, string(body), "event: message_delta")
+			assert.NotContains(t, string(body), "event: message_stop")
+		}
+	}
+
+	parsed := parseSSEEventsFromBytes(output.Bytes())
+	require.Len(t, parsed, 6)
+	assert.Equal(t, "message_delta", parsed[4].eventType)
+	require.JSONEq(t, `{
+		"type":"message_delta",
+		"delta":{"stop_reason":"end_turn","stop_sequence":null},
+		"usage":{
+			"input_tokens":5,
+			"output_tokens":3,
+			"cache_read_input_tokens":7,
+			"cache_creation_input_tokens":2
+		}
+	}`, parsed[4].data)
+	assert.Equal(t, "message_stop", parsed[5].eventType)
+
+	msg := accumulateAnthropicMessage(t, output.Bytes())
+	assert.Equal(t, int64(5), msg.Usage.InputTokens)
+	assert.Equal(t, int64(3), msg.Usage.OutputTokens)
+	assert.Equal(t, int64(7), msg.Usage.CacheReadInputTokens)
+	assert.Equal(t, int64(2), msg.Usage.CacheCreationInputTokens)
+}
+
 func TestAnthropicToAWSBedrockTranslator_ResponseBody_StreamingThinking(t *testing.T) {
 	translator := NewAnthropicToAWSBedrockTranslator("")
 	req := &anthropicschema.MessagesRequest{

@@ -46,6 +46,8 @@ type anthropicToAWSBedrockTranslator struct {
 	pendingBlockStartIdx int
 	// streamingUsage tracks the latest usage from metadata events for emission in SSE.
 	streamingUsage *awsbedrock.TokenUsage
+	// pendingStopReason delays the closing events until a later metadata event supplies usage.
+	pendingStopReason anthropicschema.StopReason
 }
 
 // RequestBody implements [AnthropicMessagesTranslator.RequestBody].
@@ -485,7 +487,7 @@ func (a *anthropicToAWSBedrockTranslator) ResponseHeaders(headers map[string]str
 }
 
 // ResponseBody implements [AnthropicMessagesTranslator.ResponseBody].
-func (a *anthropicToAWSBedrockTranslator) ResponseBody(_ map[string]string, body io.Reader, _ bool, span tracingapi.MessageSpan) (
+func (a *anthropicToAWSBedrockTranslator) ResponseBody(_ map[string]string, body io.Reader, endOfStream bool, span tracingapi.MessageSpan) (
 	newHeaders []internalapi.Header, newBody []byte, tokenUsage metrics.TokenUsage, responseModel internalapi.ResponseModel, err error,
 ) {
 	responseModel = a.requestModel
@@ -513,6 +515,9 @@ func (a *anthropicToAWSBedrockTranslator) ResponseBody(_ map[string]string, body
 					usage.CacheReadInputTokens, usage.CacheWriteInputTokens)
 			}
 			a.convertEventToAnthropicSSE(event, &newBody)
+		}
+		if endOfStream && a.pendingStopReason != "" {
+			a.emitMessageStop(a.pendingStopReason, &newBody)
 		}
 		return
 	}
@@ -747,31 +752,45 @@ func (a *anthropicToAWSBedrockTranslator) convertEventToAnthropicSSE(event *awsb
 			return
 		}
 		stopReason := a.bedrockStopReasonToAnthropicStopReason(*event.StopReason)
-		outputTokens := 0
-		if a.streamingUsage != nil {
-			outputTokens = int(a.streamingUsage.OutputTokens)
+		if a.streamingUsage == nil {
+			a.pendingStopReason = stopReason
+			return
 		}
-		msgDelta := map[string]any{
-			"type": "message_delta",
-			"delta": map[string]any{
-				"stop_reason":   string(stopReason),
-				"stop_sequence": nil,
-			},
-			"usage": map[string]any{
-				"output_tokens": outputTokens,
-			},
-		}
-		a.writeSSEEvent("message_delta", msgDelta, out)
-		msgStop := map[string]any{
-			"type": "message_stop",
-		}
-		a.writeSSEEvent("message_stop", msgStop, out)
+		a.emitMessageStop(stopReason, out)
 
 	case awsbedrock.ConverseStreamEventTypeMetadata.String():
 		if event.Usage != nil {
 			a.streamingUsage = event.Usage
+			if a.pendingStopReason != "" {
+				a.emitMessageStop(a.pendingStopReason, out)
+			}
 		}
 	}
+}
+
+func (a *anthropicToAWSBedrockTranslator) emitMessageStop(stopReason anthropicschema.StopReason, out *[]byte) {
+	usage := map[string]any{"output_tokens": 0}
+	if a.streamingUsage != nil {
+		usage["input_tokens"] = int(a.streamingUsage.InputTokens)
+		usage["output_tokens"] = int(a.streamingUsage.OutputTokens)
+		if a.streamingUsage.CacheReadInputTokens != nil {
+			usage["cache_read_input_tokens"] = int(*a.streamingUsage.CacheReadInputTokens)
+		}
+		if a.streamingUsage.CacheWriteInputTokens != nil {
+			usage["cache_creation_input_tokens"] = int(*a.streamingUsage.CacheWriteInputTokens)
+		}
+	}
+	msgDelta := map[string]any{
+		"type": "message_delta",
+		"delta": map[string]any{
+			"stop_reason":   string(stopReason),
+			"stop_sequence": nil,
+		},
+		"usage": usage,
+	}
+	a.writeSSEEvent("message_delta", msgDelta, out)
+	a.writeSSEEvent("message_stop", map[string]any{"type": "message_stop"}, out)
+	a.pendingStopReason = ""
 }
 
 // flushPendingBlockStart emits a deferred content_block_start with the resolved block type.
