@@ -149,3 +149,4 @@ func (m *mockTranslationSpan) RecordResponse(resp *openai.TranslationResponse) {
 func (m *mockTranslationSpan) RecordResponseChunk(*struct{}) {}
 func (m *mockTranslationSpan) EndSpanOnError(int, []byte)    {}
 func (m *mockTranslationSpan) EndSpan()                      {}
+func (m *mockTranslationSpan) EndSpanOnCancel()              {}

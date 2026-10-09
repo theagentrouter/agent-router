@@ -239,6 +239,7 @@ func TestCohereToCohereTranslatorV2Rerank_ResponseError(t *testing.T) {
 type mockRerankSpanTranslator struct{ recordCalled bool }
 
 func (m *mockRerankSpanTranslator) EndSpan()                   {}
+func (m *mockRerankSpanTranslator) EndSpanOnCancel()           {}
 func (m *mockRerankSpanTranslator) EndSpanOnError(int, []byte) {}
 func (m *mockRerankSpanTranslator) RecordResponse(_ *cohereschema.RerankV2Response) {
 	m.recordCalled = true

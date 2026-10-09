@@ -6,6 +6,8 @@
 package tracing
 
 import (
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
@@ -14,6 +16,13 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
+)
+
+const (
+	// errorTypeAttribute is the OpenTelemetry registry attribute naming the class of error.
+	errorTypeAttribute = "error.type"
+	// cancelledErrorType is the error.type recorded when the downstream client goes away.
+	cancelledErrorType = "cancelled"
 )
 
 type span[RespT, ChunkT any] struct {
@@ -45,6 +54,16 @@ func (s *span[RespT, ChunkT]) EndSpan() {
 	if len(s.chunks) > 0 {
 		s.recorder.RecordResponseChunks(s.span, s.chunks)
 	}
+	s.span.End()
+}
+
+// EndSpanOnCancel implements [tracingapi.Span.EndSpanOnCancel]
+//
+// No response was recorded, so there is nothing for the convention-specific recorder to
+// report: the span is closed with the error status and the cancellation error type.
+func (s *span[RespT, ChunkT]) EndSpanOnCancel() {
+	s.span.SetAttributes(attribute.String(errorTypeAttribute, cancelledErrorType))
+	s.span.SetStatus(codes.Error, "downstream client disconnected before a response was received")
 	s.span.End()
 }
 

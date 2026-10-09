@@ -163,6 +163,7 @@ func (m *mockImageGenerationSpan) RecordResponse(resp *openai.ImageGenerationRes
 
 func (m *mockImageGenerationSpan) EndSpanOnError(int, []byte)    {}
 func (m *mockImageGenerationSpan) EndSpan()                      {}
+func (m *mockImageGenerationSpan) EndSpanOnCancel()              {}
 func (m *mockImageGenerationSpan) RecordResponseChunk(*struct{}) {}
 
 func TestOpenAIToOpenAIImageTranslator_ResponseBody_Usage(t *testing.T) {

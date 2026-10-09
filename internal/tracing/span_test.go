@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -104,6 +105,20 @@ func TestChatCompletionSpan_EndSpanOnError(t *testing.T) {
 		attribute.Int("statusCode", 500),
 		attribute.String("errorBody", msg),
 	}, actualSpan.Attributes)
+}
+
+func TestChatCompletionSpan_EndSpanOnCancel(t *testing.T) {
+	actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+		s := &chatCompletionSpan{span: span, recorder: testChatCompletionRecorder{}}
+		s.EndSpanOnCancel()
+		return true // EndSpanOnCancel ends the underlying span.
+	})
+
+	require.Equal(t, []attribute.KeyValue{
+		attribute.String("error.type", "cancelled"),
+	}, actualSpan.Attributes)
+	require.Equal(t, codes.Error, actualSpan.Status.Code)
+	require.Equal(t, "downstream client disconnected before a response was received", actualSpan.Status.Description)
 }
 
 func TestChatCompletionSpan_EndSpan(t *testing.T) {

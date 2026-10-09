@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3http "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
@@ -98,6 +99,9 @@ type (
 		tracer tracingapi.RequestTracer[ReqT, RespT, RespChunkT]
 		// span is the tracing span for this request, created in ProcessRequestBody.
 		span tracingapi.Span[RespT, RespChunkT]
+		// spanEnded guards span against being ended twice. The router filter and the upstream
+		// filter are served by separate gRPC streams, so both can reach the span concurrently.
+		spanEnded atomic.Bool
 		// upstreamFilterCount is the number of upstream filters that have been processed.
 		// This is used to determine if the request is a retry request.
 		upstreamFilterCount int
@@ -206,9 +210,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) respondLocal
 	u.metrics.RecordRequestCompletion(ctx, false, u.requestHeaders)
 	resp := createUserFacingErrorResponse(statusCode, errorType, message)
 	u.parent.localReplyEmitted = true
-	if u.parent.span != nil {
-		u.parent.span.EndSpanOnError(statusCode, resp.GetImmediateResponse().GetBody())
-	}
+	u.parent.endSpanOnError(statusCode, resp.GetImmediateResponse().GetBody())
 	return resp
 }
 
@@ -336,6 +338,43 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		},
 	}, nil
 }
+
+// OnStreamTerminate implements [Processor.OnStreamTerminate].
+//
+// The response path ends the span whenever a response, an error response or a local reply is
+// produced. When the downstream client goes away before any of that happens, this is the only
+// place left to end it, and a span that is never ended is never exported.
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) OnStreamTerminate() {
+	if r.claimSpan() {
+		r.span.EndSpanOnCancel()
+	}
+}
+
+// endSpan ends the span unless it has already been ended.
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) endSpan() {
+	if r.claimSpan() {
+		r.span.EndSpan()
+	}
+}
+
+// endSpanOnError ends the span with an error status unless it has already been ended.
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) endSpanOnError(statusCode int, body []byte) {
+	if r.claimSpan() {
+		r.span.EndSpanOnError(statusCode, body)
+	}
+}
+
+// claimSpan reports whether the caller is the one that gets to end the span.
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) claimSpan() bool {
+	return r.span != nil && r.spanEnded.CompareAndSwap(false, true)
+}
+
+// OnStreamTerminate implements [Processor.OnStreamTerminate].
+//
+// The span belongs to the router filter, which outlives this processor: a retry replaces the
+// upstream filter while the request is still in flight, so ending the span here would cut the
+// request short.
+func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) OnStreamTerminate() {}
 
 func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) onRetry() bool {
 	return u.parent.upstreamFilterCount > 1
@@ -597,13 +636,11 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
 		// Remove content-encoding header if original body encoded but was mutated in the processor.
 		headerMutation = removeContentEncodingIfNeeded(headerMutation, bodyMutation, decodingResult.isEncoded)
-		if u.parent.span != nil {
-			b := bodyMutation.GetBody()
-			if b == nil {
-				b = body.Body
-			}
-			u.parent.span.EndSpanOnError(code, b)
+		b := bodyMutation.GetBody()
+		if b == nil {
+			b = body.Body
 		}
+		u.parent.endSpanOnError(code, b)
 		// Mark so the deferred handler records failure.
 		recordRequestCompletionErr = true
 		return &extprocv3.ProcessingResponse{
@@ -698,8 +735,8 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		resp.DynamicMetadata = metadata
 	}
 
-	if body.EndOfStream && u.parent.span != nil {
-		u.parent.span.EndSpan()
+	if body.EndOfStream {
+		u.parent.endSpan()
 	}
 	return resp, nil
 }

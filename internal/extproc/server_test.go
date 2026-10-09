@@ -295,6 +295,29 @@ func TestServer_Process(t *testing.T) {
 		err := s.Process(ms)
 		require.ErrorContains(t, err, "context deadline exceeded")
 	})
+	t.Run("stream teardown reaches the processor", func(t *testing.T) {
+		s, p := requireNewServerWithMockProcessor(t)
+		s.debugLogEnabled = false
+
+		var terminated bool
+		hm := &corev3.HeaderMap{Headers: []*corev3.HeaderValue{{Key: ":path", Value: "/"}}}
+		expResponse := &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_RequestHeaders{}}
+		p.t = t
+		p.expHeaderMap = hm
+		p.retProcessingResponse = expResponse
+		p.streamTerminated = &terminated
+
+		req := &extprocv3.ProcessingRequest{
+			Request: &extprocv3.ProcessingRequest_RequestHeaders{RequestHeaders: &extprocv3.HttpHeaders{Headers: hm}},
+		}
+		ms := &disconnectingStream{
+			mockExternalProcessingStream: mockExternalProcessingStream{t: t, ctx: t.Context(), expResponseOnSend: expResponse},
+			pending:                      []*extprocv3.ProcessingRequest{req},
+		}
+
+		require.NoError(t, s.Process(ms))
+		require.True(t, terminated, "the processor must be told the stream is gone")
+	})
 	t.Run("without going through request headers phase", func(t *testing.T) {
 		// This is a regression test as in #419.
 		s, _ := requireNewServerWithMockProcessor(t)
@@ -1187,4 +1210,20 @@ func TestServer_ProcessorForPath_QueryParameterStripping(t *testing.T) {
 			}
 		})
 	}
+}
+
+// disconnectingStream delivers the pending messages, then reports the downstream client going away.
+type disconnectingStream struct {
+	mockExternalProcessingStream
+	pending []*extprocv3.ProcessingRequest
+}
+
+// Recv implements [extprocv3.ExternalProcessor_ProcessServer].
+func (m *disconnectingStream) Recv() (*extprocv3.ProcessingRequest, error) {
+	if len(m.pending) == 0 {
+		return nil, status.Error(codes.Canceled, "client disconnected")
+	}
+	req := m.pending[0]
+	m.pending = m.pending[1:]
+	return req, nil
 }
