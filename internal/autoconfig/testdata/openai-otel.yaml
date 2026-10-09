@@ -59,7 +59,7 @@ spec:
                   service.name: "ai-gateway-service"
                   service.version: "1.2.3"
           format:
-            text: "[%START_TIME%] %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% model=%REQ(X-AI-EG-MODEL)% %RESPONSE_CODE% llm_input_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)% llm_output_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)% %DURATION%ms"
+            text: "[%START_TIME%] %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% model=%REQ(X-AI-EG-MODEL)% %RESPONSE_CODE% llm_input_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)% llm_output_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)% llm_reasoning_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)% %DURATION%ms"
             json:
               # LLM specific fields. Dynamic metadata expressions must match
               # the ones defined in the AIGatewayRoute llmRequestCosts field or
@@ -69,6 +69,7 @@ spec:
               gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
               gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
               gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
               session.id: "%DYNAMIC_METADATA(io.envoy.ai_gateway:session.id)%"
               # Common fields
               start_time: "%START_TIME%"
@@ -166,6 +167,8 @@ spec:
       type: InputToken
     - metadataKey: llm_output_token
       type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend

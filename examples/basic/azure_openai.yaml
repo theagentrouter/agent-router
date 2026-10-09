@@ -55,7 +55,6 @@ spec:
     tenantID: AZURE_TENANT_ID # Replace with your Azure Tenant ID.
     clientSecretRef:
       name: envoy-ai-gateway-basic-azure-client-secret
-      namespace: default
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend
@@ -68,7 +67,7 @@ spec:
         hostname: dummy-azure-resource.openai.azure.com # Replace "dummy-azure-resource" with your Azure OpenAI resource e.g. <azure_resource_name>.openai.azure.com
         port: 443
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: envoy-ai-gateway-basic-azure-tls

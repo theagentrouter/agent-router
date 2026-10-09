@@ -56,9 +56,7 @@ func (o *openAIToOpenAITranslatorV1Translation) RequestBody(original []byte, req
 
 	newHeaders = append(newHeaders, internalapi.Header{pathHeaderName, o.path})
 
-	if forceBodyMutation && len(newBody) == 0 {
-		newBody = original
-	}
+	newBody = forceOriginalBodyIfEmpty(forceBodyMutation, newBody, original)
 
 	if len(newBody) > 0 && o.modelNameOverride == "" {
 		newHeaders = append(newHeaders, internalapi.Header{contentLengthHeaderName, strconv.Itoa(len(newBody))})

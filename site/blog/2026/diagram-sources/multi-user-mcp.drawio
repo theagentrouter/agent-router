@@ -1,0 +1,111 @@
+<mxfile host="app.diagrams.net" agent="claude" pages="2">
+  <diagram id="fanout" name="2-fanout-scoping">
+    <mxGraphModel dx="2716" dy="924" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1160" pageHeight="640" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="ftitle" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=22;fontStyle=1;fontColor=#2D2350;" value="tools/list fan-out — headers reach only opted-in backends" vertex="1">
+          <mxGeometry height="40" width="800" x="180" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="fclient" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6D5BD0;strokeWidth=2;fontSize=13;fontColor=#2D2350;align=left;spacingLeft=12;verticalAlign=middle;" value="MCP client&#xa;(agent for user Priya)&#xa;&#xa;X-Atlassian-Jira-Personal-Token: •••&#xa;X-Atlassian-Confluence-Personal-Token: •••&#xa;Authorization: Bearer •••" vertex="1">
+          <mxGeometry height="150" width="300" x="-10" y="220" as="geometry" />
+        </mxCell>
+        <mxCell id="fgw" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6D5BD0;strokeColor=#4B3F94;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#FFFFFF;verticalAlign=middle;" value="Envoy AI Gateway&#xa;MCPRoute: internal-tools&#xa;&#xa;builds a FRESH upstream request&#xa;per backend — client headers are&#xa;never forwarded by default" vertex="1">
+          <mxGeometry height="180" width="290" x="440" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="fb1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E4F3E8;strokeColor=#3E8E5A;strokeWidth=2;fontSize=13;fontColor=#22543D;align=left;spacingLeft=12;" value="atlassian-mcp&#xa;&#xa;receives:&#xa;X-Atlassian-Jira-Personal-Token&#xa;X-Atlassian-Confluence-Personal-Token" vertex="1">
+          <mxGeometry height="120" width="280" x="990" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="fb2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3EEFB;strokeColor=#3572B0;strokeWidth=2;fontSize=13;fontColor=#1A3E5C;align=left;spacingLeft=12;" value="internal-tool-mcp&#xa;&#xa;receives:&#xa;X-User-Token&#xa;(Authorization renamed via backendHeader)" vertex="1">
+          <mxGeometry height="120" width="280" x="990" y="385" as="geometry" />
+        </mxCell>
+        <mxCell id="fb3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFEFEF;strokeColor=#9E9E9E;strokeWidth=2;fontSize=13;fontColor=#555555;align=left;spacingLeft=12;" value="weather-mcp&#xa;&#xa;receives: no user headers&#xa;(service account via securityPolicy.apiKey)" vertex="1">
+          <mxGeometry height="110" width="280" x="990" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="fe0" edge="1" parent="1" source="fclient" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6D5BD0;strokeWidth=3;endArrow=block;fontSize=13;fontColor=#4B3F94;" target="fgw" value="one tools/list request">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe1" edge="1" parent="1" source="fgw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3E8E5A;strokeWidth=3;endArrow=block;fontSize=13;fontColor=#22543D;" target="fb1" value="forwardHeaders: opted in">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe2" edge="1" parent="1" source="fgw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3572B0;strokeWidth=3;endArrow=block;fontSize=13;fontColor=#1A3E5C;" target="fb2" value="forwardHeaders + rename">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe3" edge="1" parent="1" source="fgw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9E9E9E;strokeWidth=3;endArrow=block;dashed=1;fontSize=13;fontColor=#555555;" target="fb3" value="no forwardHeaders → nothing forwarded">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fnote" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=14;fontStyle=2;fontColor=#5B4FA0;" value="Default-deny: absence of forwardHeaders on a backend = no identity propagation to that service." vertex="1">
+          <mxGeometry height="30" width="760" x="200" y="560" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="decision" name="3-decision-path">
+    <mxGraphModel dx="2337" dy="770" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1040" pageHeight="840" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="dtitle" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=22;fontStyle=1;fontColor=#2D2350;" value="Choosing a downstream identity pattern (per backend)" vertex="1">
+          <mxGeometry height="40" width="800" x="120" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="d0" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6D5BD0;strokeColor=#4B3F94;strokeWidth=2;fontSize=14;fontStyle=1;fontColor=#FFFFFF;" value="Inbound request&#xa;→ authenticate at the gateway front door&#xa;(OIDC / API key — always, in every mode)" vertex="1">
+          <mxGeometry height="80" width="380" x="330" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="q1" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF6E0;strokeColor=#C99A2E;strokeWidth=2;fontSize=14;fontColor=#6B5215;" value="Does this backend care&#xa;who is asking?" vertex="1">
+          <mxGeometry height="100" width="220" x="410" y="200" as="geometry" />
+        </mxCell>
+        <mxCell id="a1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFEFEF;strokeColor=#9E9E9E;strokeWidth=2;fontSize=14;fontColor=#444444;" value="Shared service account&#xa;securityPolicy.apiKey" vertex="1">
+          <mxGeometry height="70" width="230" x="-110" y="215" as="geometry" />
+        </mxCell>
+        <mxCell id="q2" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF6E0;strokeColor=#C99A2E;strokeWidth=2;fontSize=13;fontColor=#6B5215;" value="Is the action really for a specific&#xa;user (per-user permissions)?" vertex="1">
+          <mxGeometry height="100" width="260" x="390" y="350" as="geometry" />
+        </mxCell>
+        <mxCell id="a2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8F8;strokeColor=#8E44AD;strokeWidth=2;fontSize=13;fontColor=#4A235A;" value="Agent acts as itself&#xa;OAuth client credentials&#xa;(machine identity, fixed scope)" vertex="1">
+          <mxGeometry height="80" width="230" x="-110" y="360" as="geometry" />
+        </mxCell>
+        <mxCell id="q3" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF6E0;strokeColor=#C99A2E;strokeWidth=2;fontSize=13;fontColor=#6B5215;" value="Does the user&#39;s existing credential&#xa;already work at this backend?&#xa;(PAT, or same corporate IdP)" vertex="1">
+          <mxGeometry height="110" width="300" x="370" y="500" as="geometry" />
+        </mxCell>
+        <mxCell id="a3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E4F3E8;strokeColor=#3E8E5A;strokeWidth=3;fontSize=15;fontStyle=1;fontColor=#22543D;" value="forwardHeaders&#xa;(this post — zero new infrastructure)" vertex="1">
+          <mxGeometry height="70" width="230" x="-110" y="520" as="geometry" />
+        </mxCell>
+        <mxCell id="q4" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF6E0;strokeColor=#C99A2E;strokeWidth=2;fontSize=13;fontColor=#6B5215;" value="Is a human present&#xa;with a browser?" vertex="1">
+          <mxGeometry height="100" width="220" x="410" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="a4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3EEFB;strokeColor=#3572B0;strokeWidth=2;fontSize=13;fontColor=#1A3E5C;" value="OAuth authorization code&#xa;+ PKCE (MCP spec flow)" vertex="1">
+          <mxGeometry height="70" width="230" x="-110" y="675" as="geometry" />
+        </mxCell>
+        <mxCell id="a5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDEBEC;strokeColor=#C0392B;strokeWidth=2;fontSize=13;fontColor=#78281F;" value="Token exchange (RFC 8693)&#xa;cross-IdP, headless, per-user&#xa;(in review: PR #2092)" vertex="1">
+          <mxGeometry height="70" width="240" x="770" y="675" as="geometry" />
+        </mxCell>
+        <mxCell id="de0" edge="1" parent="1" source="d0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#6D5BD0;strokeWidth=2;endArrow=block;" target="q1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de1" edge="1" parent="1" source="q1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#9E9E9E;strokeWidth=2;endArrow=block;fontSize=13;" target="a1" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de2" edge="1" parent="1" source="q1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#C99A2E;strokeWidth=2;endArrow=block;fontSize=13;" target="q2" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de3" edge="1" parent="1" source="q2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#8E44AD;strokeWidth=2;endArrow=block;fontSize=12;" target="a2" value="no — automation acting on its own behalf">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de4" edge="1" parent="1" source="q2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#C99A2E;strokeWidth=2;endArrow=block;fontSize=13;" target="q3" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de5" edge="1" parent="1" source="q3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3E8E5A;strokeWidth=3;endArrow=block;fontSize=13;" target="a3" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de6" edge="1" parent="1" source="q3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#C99A2E;strokeWidth=2;endArrow=block;fontSize=12;" target="q4" value="no — different identity domain">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de7" edge="1" parent="1" source="q4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#3572B0;strokeWidth=2;endArrow=block;fontSize=13;" target="a4" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de8" edge="1" parent="1" source="q4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;strokeColor=#C0392B;strokeWidth=2;endArrow=block;fontSize=12;" target="a5" value="no — headless">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

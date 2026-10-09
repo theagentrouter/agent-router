@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -465,7 +466,7 @@ func TestExtractUsageFromBufferEvent(t *testing.T) {
 
 	t.Run("valid usage data with cached tokens", func(t *testing.T) {
 		o := &openAIToOpenAITranslatorV1ChatCompletion{}
-		o.buffered = []byte("data: {\"usage\": {\"prompt_tokens\": 5, \"completion_tokens\": 3, \"total_tokens\": 8, \"prompt_tokens_details\": {\"cached_tokens\": 2, \"cache_creation_input_tokens\": 1}}}\n")
+		o.buffered = []byte("data: {\"usage\": {\"prompt_tokens\": 5, \"completion_tokens\": 3, \"total_tokens\": 8, \"prompt_tokens_details\": {\"cached_tokens\": 2, \"cache_write_tokens\": 1}}}\n")
 		usedToken := o.extractUsageFromBufferEvent(nil)
 		require.Equal(t, tokenUsageFrom(5, 2, 1, 3, 8, -1), usedToken)
 		require.Empty(t, o.buffered)
@@ -699,4 +700,32 @@ func TestRedactBody(t *testing.T) {
 		require.Equal(t, originalContentCopy, *resp.Choices[0].Message.Content)
 		require.NotContains(t, *resp.Choices[0].Message.Content, "[REDACTED")
 	})
+}
+
+// The space after "data:" is optional per the SSE specification, and some
+// OpenAI-compatible backends omit it. The stream must still yield usage.
+func TestOpenAIToOpenAI_ResponseBody_streaming_noSpaceAfterColon(t *testing.T) {
+	translator := &openAIToOpenAITranslatorV1ChatCompletion{stream: true}
+
+	const response = `data:{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{"content":"hi"}}]}
+
+data:{"id":"chatcmpl-1","object":"chat.completion.chunk","model":"gpt-4o","choices":[],"usage":{"prompt_tokens":9,"completion_tokens":16,"total_tokens":25}}
+
+data:[DONE]
+
+`
+
+	_, _, tokenUsage, responseModel, err := translator.ResponseBody(nil, strings.NewReader(response), true, nil)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-4o", responseModel)
+
+	input, ok := tokenUsage.InputTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(9), input)
+	output, ok := tokenUsage.OutputTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(16), output)
+	total, ok := tokenUsage.TotalTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(25), total)
 }

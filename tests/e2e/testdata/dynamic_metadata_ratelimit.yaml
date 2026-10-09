@@ -1,0 +1,333 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# Per-tenant LLM token budgets from one shared policy, with no per-tenant routes or policies. Two
+# halves have to meet:
+#
+#   limit -- the tenant's token budget. ext_authz returns it as dynamic metadata and the
+#            BackendTrafficPolicy reads it straight out of the ext_authz namespace. AI Gateway is
+#            not in the middle of this half, which is what the test is here to hold us to.
+#   cost  -- the tokens each request consumed, which only AI Gateway can know because it parses the
+#            LLM's usage out of the response (globalLLMRequestCosts).
+#
+# There are separate input, output and total budgets, which is the shape a tenant plan actually
+# takes. The auth server keys them off x-tenant-tier. The premium/basic/suspended tiers set only a
+# total budget, and an unlisted tier gets no metadata at all so the static budgets below apply. The
+# tri-* tiers set all three, with two left generous so the third is the one that binds.
+#
+# Request-time cost is 0 on every rule, so a request is admitted whenever its budget is not already
+# spent and is charged afterwards. A budget of N against a cost of C therefore allows N/C + 1 calls.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit
+  namespace: default
+  annotations:
+    aigateway.envoyproxy.io/gateway-config: envoy-ai-gateway-dynamic-ratelimit
+spec:
+  gatewayClassName: envoy-ai-gateway-dynamic-ratelimit
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway-dynamic-ratelimit
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit
+  namespace: default
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        container:
+          # Clear the default memory/cpu requirements for local tests.
+          resources: {}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GatewayConfig
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit
+  namespace: default
+spec:
+  # Token usage AI Gateway emits on the response path. The BackendTrafficPolicy charges this against
+  # the budget ext_authz supplied. This is the only half AI Gateway has to provide.
+  globalLLMRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_total_token
+      type: TotalToken
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit
+  namespace: default
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway-dynamic-ratelimit
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: dynamic-ratelimit-model
+      backendRefs:
+        - name: envoy-ai-gateway-dynamic-ratelimit-testupstream
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit-testupstream
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: envoy-ai-gateway-dynamic-ratelimit-testupstream
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit-testupstream
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: envoy-ai-gateway-dynamic-ratelimit-testupstream.default.svc.cluster.local
+        port: 80
+---
+# ext_authz that returns the per-tier budgets as dynamic metadata.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit-extauth
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: envoy-ai-gateway-dynamic-ratelimit
+  extAuth:
+    grpc:
+      backendRefs:
+        - name: ext-auth-server-dynamic-ratelimit
+          port: 1073
+---
+# Token-based rate limits. The per-tenant budget is supplied at request time by ext_authz and read
+# straight from the namespace Envoy files ext_authz metadata under. The amount each request consumes
+# is the LLM token usage AI Gateway emits on the response path. The static `requests` is only the
+# fallback used when ext_authz says nothing.
+#
+# One rule per token kind, each bucketed by x-tenant-id, so a tenant runs out of whichever budget it
+# exhausts first. The input and output fallbacks are deliberately generous, because a tier that sets
+# only a total budget must not be stopped by them.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit-policy
+  namespace: default
+spec:
+  targetRefs:
+    - name: envoy-ai-gateway-dynamic-ratelimit
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rateLimit:
+    type: Global
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-id
+                  type: Distinct
+          limit:
+            requests: 100
+            unit: Hour
+            fromMetadata:
+              namespace: envoy.filters.http.ext_authz
+              key: input_limit
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_input_token
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-id
+                  type: Distinct
+          limit:
+            requests: 100
+            unit: Hour
+            fromMetadata:
+              namespace: envoy.filters.http.ext_authz
+              key: output_limit
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_output_token
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-id
+                  type: Distinct
+          limit:
+            requests: 4
+            unit: Hour
+            fromMetadata:
+              namespace: envoy.filters.http.ext_authz
+              key: total_limit
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_total_token
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # Suffixed so this doesn't collide with the ext-auth-server the MCP ext-auth test creates in the
+  # same namespace.
+  name: ext-auth-server-dynamic-ratelimit
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ext-auth-server-dynamic-ratelimit
+  template:
+    metadata:
+      labels:
+        app: ext-auth-server-dynamic-ratelimit
+    spec:
+      containers:
+        - name: ext-auth-server
+          image: docker.io/envoyproxy/ai-gateway-testextauthserver:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 1073
+          env:
+            # No EXT_AUTH_ALLOWED_VALUE: allow all requests, and stamp the per-tier budgets.
+            - name: EXT_AUTH_DYNAMIC_METADATA_HEADER
+              value: x-tenant-tier
+            # Each budget is emitted as the { requests_per_unit, unit } struct Envoy's rate limit
+            # override reads, so nothing has to transcode it on the way through.
+            #
+            # Budgets per hour, not per minute, so the window can't reset mid-test. A tier not listed
+            # here, like the "unknown" the test sends, gets no metadata, so the static budgets apply.
+            # "suspended" is the 0 case.
+            - name: EXT_AUTH_DYNAMIC_METADATA_BY_HEADER
+              value: |
+                {
+                  "premium":   {"total_limit": {"requests_per_unit": 6, "unit": "HOUR"}},
+                  "basic":     {"total_limit": {"requests_per_unit": 2, "unit": "HOUR"}},
+                  "suspended": {"total_limit": {"requests_per_unit": 0, "unit": "HOUR"}},
+
+                  "tri-input": {"input_limit":  {"requests_per_unit": 6,   "unit": "HOUR"},
+                                "output_limit": {"requests_per_unit": 100, "unit": "HOUR"},
+                                "total_limit":  {"requests_per_unit": 100, "unit": "HOUR"}},
+                  "tri-output": {"input_limit":  {"requests_per_unit": 100, "unit": "HOUR"},
+                                 "output_limit": {"requests_per_unit": 3,   "unit": "HOUR"},
+                                 "total_limit":  {"requests_per_unit": 100, "unit": "HOUR"}},
+                  "tri-total": {"input_limit":  {"requests_per_unit": 100, "unit": "HOUR"},
+                                "output_limit": {"requests_per_unit": 100, "unit": "HOUR"},
+                                "total_limit":  {"requests_per_unit": 12,  "unit": "HOUR"}}
+                }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ext-auth-server-dynamic-ratelimit
+  namespace: default
+spec:
+  selector:
+    app: ext-auth-server-dynamic-ratelimit
+  ports:
+    - protocol: TCP
+      port: 1073
+      targetPort: 1073
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit-testupstream
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: envoy-ai-gateway-dynamic-ratelimit-testupstream
+  template:
+    metadata:
+      labels:
+        app: envoy-ai-gateway-dynamic-ratelimit-testupstream
+    spec:
+      containers:
+        - name: testupstream
+          image: docker.io/envoyproxy/ai-gateway-testupstream:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TESTUPSTREAM_ID
+              value: test
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit-testupstream
+  namespace: default
+spec:
+  selector:
+    app: envoy-ai-gateway-dynamic-ratelimit-testupstream
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP

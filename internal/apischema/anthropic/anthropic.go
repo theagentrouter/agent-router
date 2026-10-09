@@ -1033,9 +1033,12 @@ type (
 	// Tool represents a custom tool definition.
 	// https://platform.claude.com/docs/en/api/messages#tool
 	Tool struct {
-		Type         string          `json:"type"` // Always "custom".
-		Name         string          `json:"name"`
-		InputSchema  ToolInputSchema `json:"input_schema"`
+		Type string `json:"type"` // Always "custom".
+		Name string `json:"name"`
+		// InputSchema is the JSON schema of the tool input, carried as-is. Modeling its
+		// keywords would drop the ones left out, such as "additionalProperties", which
+		// backends require to enable strict schema adherence.
+		InputSchema  json.RawMessage `json:"input_schema"`
 		CacheControl *CacheControl   `json:"cache_control,omitempty"`
 		Description  string          `json:"description,omitempty"`
 	}
@@ -1092,12 +1095,6 @@ type (
 		Country  string `json:"country,omitempty"`
 		Region   string `json:"region,omitempty"`
 		Timezone string `json:"timezone,omitempty"`
-	}
-
-	ToolInputSchema struct {
-		Type       string         `json:"type"` // Always "object".
-		Properties map[string]any `json:"properties,omitempty"`
-		Required   []string       `json:"required,omitempty"`
 	}
 )
 
@@ -1745,6 +1742,64 @@ func (m *MessagesStreamChunk) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("unknown stream event type: %s", typ)
 	}
 	return nil
+}
+
+// ModelList represents the response from the Anthropic "/v1/models" endpoint.
+// https://platform.claude.com/docs/en/api/models-list
+type ModelList struct {
+	Data []Model `json:"data"`
+	// FirstID is the ID of the first model in the list, used for pagination.
+	FirstID string `json:"first_id,omitempty"`
+	// HasMore indicates whether there are more models available beyond this list.
+	HasMore bool `json:"has_more"`
+	// LastID is the ID of the last model in the list, used for pagination.
+	LastID string `json:"last_id,omitempty"`
+}
+
+// Model represents a single model in the Anthropic "/v1/models" endpoint response.
+// https://platform.claude.com/docs/en/api/models-list
+type Model struct {
+	// ID is the model identifier, which can be referenced in the API endpoints.
+	ID string `json:"id"`
+	// Type is always "model".
+	Type string `json:"type"`
+	// DisplayName is a human-readable name for the model.
+	DisplayName string `json:"display_name"`
+	// CreatedAt is the RFC 3339 datetime string representing when the model was released.
+	CreatedAt string `json:"created_at"`
+}
+
+// CountTokensRequest represents a request to the Anthropic Count Tokens API.
+// It is a subset of [MessagesRequest]: count_tokens accepts the same messages,
+// system, tools, tool_choice, and thinking inputs, but omits output-only
+// parameters such as max_tokens, temperature, stream, and stop_sequences (and,
+// unlike Messages, does not require max_tokens). The nested leaf types are
+// reused from [MessagesRequest] so they stay in sync.
+// https://platform.claude.com/docs/en/api/messages/count_tokens
+type CountTokensRequest struct {
+	// Model is the model to use for token counting.
+	Model string `json:"model"`
+
+	// Messages is the list of messages in the conversation.
+	Messages []MessageParam `json:"messages"`
+
+	// System is the system prompt to guide the model's behavior.
+	System *SystemPrompt `json:"system,omitempty"`
+
+	// Thinking is the configuration for the model's "thinking" behavior.
+	Thinking *Thinking `json:"thinking,omitempty"`
+
+	// ToolChoice indicates the tool choice for the model.
+	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
+
+	// Tools is the list of tools available to the model.
+	Tools []ToolUnion `json:"tools,omitempty"`
+}
+
+// CountTokensResponse represents a response from the Anthropic Count Tokens API.
+// https://platform.claude.com/docs/en/api/messages/count_tokens
+type CountTokensResponse struct {
+	InputTokens int64 `json:"input_tokens"`
 }
 
 // ErrorResponse represents an error response from the Anthropic API.

@@ -9,25 +9,20 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 
-	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
-	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
 // gatewayMutator implements [admission.CustomDefaulter].
@@ -40,85 +35,22 @@ type gatewayMutator struct {
 	kube          kubernetes.Interface
 	logger        logr.Logger
 
-	extProcImage                   string
-	extProcImagePullPolicy         corev1.PullPolicy
-	extProcLogLevel                string
-	extProcEnableRedaction         bool
-	udsPath                        string
-	requestHeaderAttributes        *string
-	spanRequestHeaderAttributes    *string
-	metricsRequestHeaderAttributes *string
-	logRequestHeaderAttributes     *string
-	rootPrefix                     string
-	endpointPrefixes               string
-	extProcExtraEnvVars            []corev1.EnvVar
-	extProcImagePullSecrets        []corev1.LocalObjectReference
-	extProcMaxRecvMsgSize          int
-
-	// mcpSessionEncryptionSeed is the seed used to derive the encryption key for MCP session data.
-	mcpSessionEncryptionSeed string
-	// mcpSessionEncryptionIterations is the number of iterations to use for PBKDF2 key derivation for MCP session data.
-	mcpSessionEncryptionIterations int
-	// mcpFallbackSessionEncryptionSeed is the optional fallback seed used for MCP session key rotation.
-	mcpFallbackSessionEncryptionSeed string
-	// mcpFallbackSessionEncryptionIterations is the number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.
-	mcpFallbackSessionEncryptionIterations int
-
-	// Whether to run the extProc container as a sidecar (true) as a normal container (false).
-	// This is essentially a workaround for old k8s versions, and we can remove this in the future.
-	extProcAsSideCar bool
+	// extProcBuilder is the single source of truth for the injected extproc
+	// container. It is shared with the gateway reconciler so that the desired
+	// config hash written to workload templates matches webhook injection.
+	*extProcBuilder
 }
 
 func newGatewayMutator(c client.Client, noCacheReader client.Reader, kube kubernetes.Interface, logger logr.Logger,
-	extProcImage string, extProcImagePullPolicy corev1.PullPolicy, extProcLogLevel string, extProcEnableRedaction bool,
-	udsPath string, requestHeaderAttributes, spanRequestHeaderAttributes, metricsRequestHeaderAttributes, logRequestHeaderAttributes *string, rootPrefix, endpointPrefixes, extProcExtraEnvVars, extProcImagePullSecrets string, extProcMaxRecvMsgSize int,
-	extProcAsSideCar bool,
-	mcpSessionEncryptionSeed string, mcpSessionEncryptionIterations int, mcpFallbackSessionEncryptionSeed string, mcpFallbackSessionEncryptionIterations int,
+	builder *extProcBuilder,
 ) *gatewayMutator {
-	var parsedEnvVars []corev1.EnvVar
-	if extProcExtraEnvVars != "" {
-		var err error
-		parsedEnvVars, err = ParseExtraEnvVars(extProcExtraEnvVars)
-		if err != nil {
-			logger.Error(err, "failed to parse extProc extra env vars, skipping",
-				"envVars", extProcExtraEnvVars)
-		}
-	}
-
-	var parsedImagePullSecrets []corev1.LocalObjectReference
-	if extProcImagePullSecrets != "" {
-		var err error
-		parsedImagePullSecrets, err = ParseImagePullSecrets(extProcImagePullSecrets)
-		if err != nil {
-			logger.Error(err, "failed to parse extProc image pull secrets, skipping",
-				"imagePullSecrets", extProcImagePullSecrets)
-		}
-	}
-
 	return &gatewayMutator{
-		c: c, codec: serializer.NewCodecFactory(Scheme),
-		noCacheReader:                          noCacheReader,
-		kube:                                   kube,
-		extProcImage:                           extProcImage,
-		extProcImagePullPolicy:                 extProcImagePullPolicy,
-		extProcLogLevel:                        extProcLogLevel,
-		extProcEnableRedaction:                 extProcEnableRedaction,
-		logger:                                 logger,
-		udsPath:                                udsPath,
-		requestHeaderAttributes:                requestHeaderAttributes,
-		spanRequestHeaderAttributes:            spanRequestHeaderAttributes,
-		metricsRequestHeaderAttributes:         metricsRequestHeaderAttributes,
-		logRequestHeaderAttributes:             logRequestHeaderAttributes,
-		rootPrefix:                             rootPrefix,
-		endpointPrefixes:                       endpointPrefixes,
-		extProcExtraEnvVars:                    parsedEnvVars,
-		extProcImagePullSecrets:                parsedImagePullSecrets,
-		extProcMaxRecvMsgSize:                  extProcMaxRecvMsgSize,
-		extProcAsSideCar:                       extProcAsSideCar,
-		mcpSessionEncryptionSeed:               mcpSessionEncryptionSeed,
-		mcpSessionEncryptionIterations:         mcpSessionEncryptionIterations,
-		mcpFallbackSessionEncryptionSeed:       mcpFallbackSessionEncryptionSeed,
-		mcpFallbackSessionEncryptionIterations: mcpFallbackSessionEncryptionIterations,
+		c:              c,
+		codec:          serializer.NewCodecFactory(Scheme),
+		noCacheReader:  noCacheReader,
+		kube:           kube,
+		logger:         logger,
+		extProcBuilder: builder,
 	}
 }
 
@@ -139,63 +71,6 @@ func (g *gatewayMutator) Default(ctx context.Context, obj runtime.Object) error 
 		return err
 	}
 	return nil
-}
-
-// buildExtProcArgs builds all command line arguments for the extproc container.
-func (g *gatewayMutator) buildExtProcArgs(filterConfigFullPath, configBundlePath string, extProcAdminPort int, needMCP bool) []string {
-	args := []string{}
-	if filterConfigFullPath != "" {
-		args = append(args, "-configPath", filterConfigFullPath)
-	}
-	if configBundlePath != "" {
-		args = append(args, "-configBundlePath", configBundlePath)
-	}
-	args = append(args,
-		"-logLevel", g.extProcLogLevel,
-		"-extProcAddr", "unix://"+g.udsPath,
-		"-adminPort", fmt.Sprintf("%d", extProcAdminPort),
-		"-rootPrefix", g.rootPrefix,
-		"-maxRecvMsgSize", fmt.Sprintf("%d", g.extProcMaxRecvMsgSize),
-	)
-	if needMCP {
-		args = append(args,
-			"-mcpAddr", ":"+strconv.Itoa(internalapi.MCPProxyPort),
-			"-mcpSessionEncryptionSeed", g.mcpSessionEncryptionSeed,
-			"-mcpSessionEncryptionIterations", strconv.Itoa(g.mcpSessionEncryptionIterations),
-		)
-		if g.mcpFallbackSessionEncryptionSeed != "" {
-			args = append(args,
-				"-mcpFallbackSessionEncryptionSeed", g.mcpFallbackSessionEncryptionSeed,
-				"-mcpFallbackSessionEncryptionIterations", strconv.Itoa(g.mcpFallbackSessionEncryptionIterations),
-			)
-		}
-	}
-
-	if g.requestHeaderAttributes != nil {
-		args = append(args, "-requestHeaderAttributes", *g.requestHeaderAttributes)
-	}
-
-	if g.spanRequestHeaderAttributes != nil {
-		args = append(args, "-spanRequestHeaderAttributes", *g.spanRequestHeaderAttributes)
-	}
-
-	if g.metricsRequestHeaderAttributes != nil {
-		args = append(args, "-metricsRequestHeaderAttributes", *g.metricsRequestHeaderAttributes)
-	}
-
-	if g.logRequestHeaderAttributes != nil {
-		args = append(args, "-logRequestHeaderAttributes", *g.logRequestHeaderAttributes)
-	}
-
-	if g.endpointPrefixes != "" {
-		args = append(args, "-endpointPrefixes", g.endpointPrefixes)
-	}
-
-	if g.extProcEnableRedaction {
-		args = append(args, "-enableRedaction")
-	}
-
-	return args
 }
 
 const (
@@ -265,41 +140,49 @@ func ParseImagePullSecrets(s string) ([]corev1.LocalObjectReference, error) {
 }
 
 func (g *gatewayMutator) listAIGatewayRoutesForGateway(ctx context.Context, gatewayName, gatewayNamespace string) (aigv1b1.AIGatewayRouteList, error) {
+	return listAIGatewayRoutesForGateway(ctx, g.c, g.noCacheReader, gatewayName, gatewayNamespace)
+}
+
+func (g *gatewayMutator) listMCPRoutesForGateway(ctx context.Context, gatewayName, gatewayNamespace string) (aigv1b1.MCPRouteList, error) {
+	return listMCPRoutesForGateway(ctx, g.c, g.noCacheReader, gatewayName, gatewayNamespace)
+}
+
+func listAIGatewayRoutesForGateway(ctx context.Context, cacheReader client.Reader, noCacheReader client.Reader, gatewayName, gatewayNamespace string) (aigv1b1.AIGatewayRouteList, error) {
 	var routes aigv1b1.AIGatewayRouteList
 	key := fmt.Sprintf("%s.%s", gatewayName, gatewayNamespace)
-	cacheErr := g.c.List(ctx, &routes, client.MatchingFields{
+	cacheErr := cacheReader.List(ctx, &routes, client.MatchingFields{
 		k8sClientIndexAIGatewayRouteToAttachedGateway: key,
 	})
 	if cacheErr == nil && len(routes.Items) > 0 {
 		return routes, nil
 	}
-	if g.noCacheReader == nil {
+	if noCacheReader == nil {
 		return routes, cacheErr
 	}
 	// noCacheReader doesn't have access to cache indexes, so list then filter.
 	var all aigv1b1.AIGatewayRouteList
-	if err := g.noCacheReader.List(ctx, &all); err != nil {
+	if err := noCacheReader.List(ctx, &all); err != nil {
 		return routes, fmt.Errorf("failed to list routes: %w", err)
 	}
 	routes.Items = filterAIGatewayRoutesForGateway(all.Items, gatewayName, gatewayNamespace)
 	return routes, nil
 }
 
-func (g *gatewayMutator) listMCPRoutesForGateway(ctx context.Context, gatewayName, gatewayNamespace string) (aigv1b1.MCPRouteList, error) {
+func listMCPRoutesForGateway(ctx context.Context, cacheReader client.Reader, noCacheReader client.Reader, gatewayName, gatewayNamespace string) (aigv1b1.MCPRouteList, error) {
 	var routes aigv1b1.MCPRouteList
 	key := fmt.Sprintf("%s.%s", gatewayName, gatewayNamespace)
-	cacheErr := g.c.List(ctx, &routes, client.MatchingFields{
+	cacheErr := cacheReader.List(ctx, &routes, client.MatchingFields{
 		k8sClientIndexMCPRouteToAttachedGateway: key,
 	})
 	if cacheErr == nil && len(routes.Items) > 0 {
 		return routes, nil
 	}
-	if g.noCacheReader == nil {
+	if noCacheReader == nil {
 		return routes, cacheErr
 	}
 	// noCacheReader doesn't have access to cache indexes, so list then filter.
 	var all aigv1b1.MCPRouteList
-	if err := g.noCacheReader.List(ctx, &all); err != nil {
+	if err := noCacheReader.List(ctx, &all); err != nil {
 		return routes, fmt.Errorf("failed to list MCP routes: %w", err)
 	}
 	routes.Items = filterMCPRoutesForGateway(all.Items, gatewayName, gatewayNamespace)
@@ -361,26 +244,21 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 
 	podspec := &pod.Spec
 
-	// Resolve config secret sources.
-	// Prefer bundled config when available/valid, and fall back to legacy config for compatibility.
-	// If neither exists, skip mutation to avoid blocking Envoy pod creation.
+	// Resolve the config bundle.
+	// If it does not exist, skip mutation to avoid blocking Envoy pod creation.
 	// The controller will later trigger new pod mutations by updating pod/deployment annotations when the config secrets are created.
-	legacyConfigSecretName := legacyFilterConfigSecretName(gatewayName, gatewayNamespace)
 	bundleConfigIndexSecretName := FilterConfigBundleIndexSecretName(gatewayName, gatewayNamespace)
 
 	bundleConfigIndexSecret, err := g.kube.CoreV1().Secrets(pod.Namespace).Get(ctx, bundleConfigIndexSecretName, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
+		g.logger.Info("no filter config secret found, skipping mutation",
+			"gateway_name", gatewayName, "gateway_namespace", gatewayNamespace)
+		return nil
+	}
+	if err != nil {
 		return fmt.Errorf("failed to get bundled filter config secret %s: %w", bundleConfigIndexSecretName, err)
 	}
-	hasBundleConfig := err == nil && bundleConfigIndexSecret != nil
-
-	legacyConfigSecret, err := g.kube.CoreV1().Secrets(pod.Namespace).Get(ctx, legacyConfigSecretName, metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to get legacy filter config secret %s: %w", legacyConfigSecretName, err)
-	}
-	hasLegacyConfig := err == nil && legacyConfigSecret != nil
-
-	if !hasBundleConfig && !hasLegacyConfig {
+	if bundleConfigIndexSecret == nil {
 		g.logger.Info("no filter config secret found, skipping mutation",
 			"gateway_name", gatewayName, "gateway_namespace", gatewayNamespace)
 		return nil
@@ -390,21 +268,9 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 	if err != nil {
 		return fmt.Errorf("failed to fetch GatewayConfig: %w", err)
 	}
-	var (
-		extProcSpec       *aigv1b1.GatewayConfigExtProc
-		kubernetesExtProc *egv1a1.KubernetesContainerSpec
-	)
-	if gatewayConfig != nil {
-		extProcSpec = gatewayConfig.Spec.ExtProc
-		if extProcSpec != nil {
-			kubernetesExtProc = extProcSpec.Kubernetes
-		}
-	}
 
 	// Now we construct the AI Gateway managed containers and volumes.
-	filterConfigVolumeName := legacyFilterConfigVolumeName(gatewayName, gatewayNamespace)
 	filterConfigBundleVolumeName := filterConfigBundleVolumeName(gatewayName, gatewayNamespace)
-	const extProcUDSVolumeName = mutationNamePrefix + "extproc-uds"
 	volumes := []corev1.Volume{
 		{
 			Name: extProcUDSVolumeName,
@@ -413,164 +279,70 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 			},
 		},
 	}
-	if hasLegacyConfig {
-		volumes = append(volumes, corev1.Volume{
-			Name: filterConfigVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{SecretName: legacyConfigSecretName},
-			},
-		})
-	}
-
-	// Mount the shared config secrets if bundled config exists.
-	if hasBundleConfig {
-		projections := []corev1.VolumeProjection{
-			{
-				Secret: &corev1.SecretProjection{
-					LocalObjectReference: corev1.LocalObjectReference{Name: bundleConfigIndexSecretName},
-					Items: []corev1.KeyToPath{
-						{
-							Key:  FilterConfigBundleIndexKey,
-							Path: filterapi.ConfigBundleIndexFileName,
-						},
+	projections := []corev1.VolumeProjection{
+		{
+			Secret: &corev1.SecretProjection{
+				LocalObjectReference: corev1.LocalObjectReference{Name: bundleConfigIndexSecretName},
+				Items: []corev1.KeyToPath{
+					{
+						Key:  FilterConfigBundleIndexKey,
+						Path: filterapi.ConfigBundleIndexFileName,
 					},
 				},
 			},
-		}
-		optional := true
-		for i := range maxFilterConfigBundleSlots {
-			projections = append(projections, corev1.VolumeProjection{
-				Secret: &corev1.SecretProjection{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, i),
-					},
-					Optional: &optional,
-					Items: []corev1.KeyToPath{
-						{
-							Key:  FilterConfigBundlePartKey,
-							Path: filterapi.ConfigBundlePartPath(i),
-						},
+		},
+	}
+	optional := true
+	for i := range maxFilterConfigBundleSlots {
+		projections = append(projections, corev1.VolumeProjection{
+			Secret: &corev1.SecretProjection{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, i),
+				},
+				Optional: &optional,
+				Items: []corev1.KeyToPath{
+					{
+						Key:  FilterConfigBundlePartKey,
+						Path: filterapi.ConfigBundlePartPath(i),
 					},
 				},
-			})
-		}
-		volumes = append(volumes, corev1.Volume{
-			Name: filterConfigBundleVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				Projected: &corev1.ProjectedVolumeSource{Sources: projections},
 			},
 		})
 	}
+	volumes = append(volumes, corev1.Volume{
+		Name: filterConfigBundleVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{Sources: projections},
+		},
+	})
 	podspec.Volumes = append(podspec.Volumes, volumes...)
 
 	// Add imagePullSecrets for extProc if configured
-	if len(g.extProcImagePullSecrets) > 0 {
-		podspec.ImagePullSecrets = append(podspec.ImagePullSecrets, g.extProcImagePullSecrets...)
+	if len(g.imagePullSecrets) > 0 {
+		podspec.ImagePullSecrets = append(podspec.ImagePullSecrets, g.imagePullSecrets...)
 	}
 
-	// Use resources from GatewayConfig if present.
-	var resources corev1.ResourceRequirements
-	if kubernetesExtProc != nil && kubernetesExtProc.Resources != nil {
-		resources = *kubernetesExtProc.Resources
-		g.logger.Info("using resources from GatewayConfig",
-			"gateway_name", gatewayName, "gatewayconfig_name", gatewayConfig.Name)
-	}
-
-	// Merge env vars with GatewayConfig overriding global.
-	envVars := g.mergeEnvVars(gatewayConfig)
-	image := g.resolveExtProcImage(extProcSpec)
-
-	const (
-		extProcAdminPort            = 1064
-		filterConfigMountPath       = "/etc/filter-config"
-		filterConfigFullPath        = filterConfigMountPath + "/" + FilterConfigKeyInSecret
-		filterConfigBundleMountPath = "/etc/filter-config-bundle"
-	)
+	const filterConfigBundleMountPath = "/etc/filter-config-bundle"
 	udsMountPath := filepath.Dir(g.udsPath)
-	securityContext := &corev1.SecurityContext{
-		AllowPrivilegeEscalation: ptr.To(false),
-		Capabilities: &corev1.Capabilities{
-			Drop: []corev1.Capability{"ALL"},
-		},
-		Privileged:   ptr.To(false),
-		RunAsGroup:   ptr.To(int64(65532)),
-		RunAsNonRoot: ptr.To(true),
-		RunAsUser:    ptr.To(int64(65532)),
-		SeccompProfile: &corev1.SeccompProfile{
-			Type: corev1.SeccompProfileTypeRuntimeDefault,
-		},
-	}
-	if kubernetesExtProc != nil && kubernetesExtProc.SecurityContext != nil {
-		securityContext = kubernetesExtProc.SecurityContext
-	}
 
-	container := corev1.Container{
-		Name:            extProcContainerName,
-		Image:           image,
-		ImagePullPolicy: g.extProcImagePullPolicy,
-		Ports: []corev1.ContainerPort{
-			{Name: "aigw-admin", ContainerPort: extProcAdminPort},
-		},
-		Args: func() []string {
-			bundlePath := ""
-			if hasBundleConfig {
-				bundlePath = filterConfigBundleMountPath
-			}
-			configPath := ""
-			if !hasBundleConfig { // for backward compatibility when upgrade from the previous version and the secret is created by the previous version
-				configPath = filterConfigFullPath
-			}
-			return g.buildExtProcArgs(configPath, bundlePath, extProcAdminPort, len(mcpRoutes.Items) > 0)
-		}(),
-		Env: envVars,
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      extProcUDSVolumeName,
-				MountPath: udsMountPath,
-				ReadOnly:  false,
-			},
-		},
-		SecurityContext: securityContext,
-		ReadinessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Port:   intstr.FromInt32(extProcAdminPort),
-					Path:   "/health",
-					Scheme: corev1.URISchemeHTTP,
-				},
-			},
-			InitialDelaySeconds: 2,
-			TimeoutSeconds:      5,
-			PeriodSeconds:       10,
-			SuccessThreshold:    1,
-			FailureThreshold:    1,
-		},
-		Resources: resources,
-	}
+	// Build the extproc container via the shared builder. The builder produces the
+	// base container (image, env, base args, UDS mount, resources, securityContext,
+	// GatewayConfig volumeMounts, readiness probe); the secret-presence-driven parts
+	// (-configBundlePath and its volumeMount) are
+	// added below, since they depend on which filter-config secrets exist at pod
+	// creation time and must stay out of the drift hash.
+	input := extProcContainerInput{gatewayConfig: gatewayConfig, needMCP: len(mcpRoutes.Items) > 0}
+	container := g.buildExtProcContainer(input)
 
-	if kubernetesExtProc != nil && len(kubernetesExtProc.VolumeMounts) > 0 {
-		container.VolumeMounts = append(container.VolumeMounts, kubernetesExtProc.VolumeMounts...)
-	}
-
-	if hasLegacyConfig {
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name:      filterConfigVolumeName,
-			MountPath: filterConfigMountPath,
-			ReadOnly:  true,
-		})
-	}
-
-	if hasBundleConfig {
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name:      filterConfigBundleVolumeName,
-			MountPath: filterConfigBundleMountPath,
-			ReadOnly:  true,
-		})
-	}
+	container.Args = append([]string{"-configBundlePath", filterConfigBundleMountPath}, container.Args...)
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      filterConfigBundleVolumeName,
+		MountPath: filterConfigBundleMountPath,
+		ReadOnly:  true,
+	})
 
 	if g.extProcAsSideCar {
-		// When running as a sidecar, we want to ensure the extProc container is shutdown last after Envoy is shutdown.
-		container.RestartPolicy = ptr.To(corev1.ContainerRestartPolicyAlways)
+		// RestartPolicy is set by the builder for the sidecar case.
 		podspec.InitContainers = append(podspec.InitContainers, container)
 	} else {
 		podspec.Containers = append(podspec.Containers, container)
@@ -626,77 +398,4 @@ func (g *gatewayMutator) fetchGatewayConfig(ctx context.Context, gatewayName, ga
 	g.logger.Info("found GatewayConfig for Gateway",
 		"gateway_name", gatewayName, "gatewayconfig_name", configName)
 	return &gatewayConfig, nil
-}
-
-// mergeEnvVars merges env vars; GatewayConfig overrides global while preserving order.
-func (g *gatewayMutator) mergeEnvVars(gatewayConfig *aigv1b1.GatewayConfig) []corev1.EnvVar {
-	result := make([]corev1.EnvVar, 0, len(g.extProcExtraEnvVars))
-	index := make(map[string]int, len(g.extProcExtraEnvVars))
-
-	// Add global env vars first (lowest precedence) preserving input order.
-	for _, env := range g.extProcExtraEnvVars {
-		result = append(result, env)
-		index[env.Name] = len(result) - 1
-	}
-
-	// Add GatewayConfig env vars (highest precedence) overriding in-place when names collide,
-	// otherwise append in the order they are defined.
-	if gatewayConfig != nil && gatewayConfig.Spec.ExtProc != nil && gatewayConfig.Spec.ExtProc.Kubernetes != nil {
-		for _, env := range gatewayConfig.Spec.ExtProc.Kubernetes.Env {
-			if i, ok := index[env.Name]; ok {
-				result[i] = env
-			} else {
-				result = append(result, env)
-				index[env.Name] = len(result) - 1
-			}
-		}
-	}
-
-	return result
-}
-
-// resolveExtProcImage chooses the extProc image honoring GatewayConfig overrides.
-func (g *gatewayMutator) resolveExtProcImage(extProc *aigv1b1.GatewayConfigExtProc) string {
-	if extProc == nil || extProc.Kubernetes == nil {
-		return g.extProcImage
-	}
-
-	kubernetesExtProc := extProc.Kubernetes
-	switch {
-	case kubernetesExtProc.Image != nil:
-		return *kubernetesExtProc.Image
-	case kubernetesExtProc.ImageRepository != nil:
-		return mergeImageWithRepository(g.extProcImage, *kubernetesExtProc.ImageRepository)
-	default:
-		return g.extProcImage
-	}
-}
-
-// mergeImageWithRepository reuses the tag or digest from baseImage when a repository override is provided.
-func mergeImageWithRepository(baseImage, repository string) string {
-	if repository == "" {
-		return baseImage
-	}
-
-	suffix := imageTagOrDigest(baseImage)
-	if suffix == "" {
-		return repository
-	}
-	return repository + suffix
-}
-
-// imageTagOrDigest extracts the tag (":vX") or digest ("@sha256:...") from an image reference.
-func imageTagOrDigest(image string) string {
-	if image == "" {
-		return ""
-	}
-	if idx := strings.Index(image, "@"); idx != -1 {
-		return image[idx:]
-	}
-	lastSlash := strings.LastIndex(image, "/")
-	lastColon := strings.LastIndex(image, ":")
-	if lastColon != -1 && lastColon > lastSlash {
-		return image[lastColon:]
-	}
-	return ""
 }

@@ -114,6 +114,7 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 		name := "mcp-jwt-provider"
 		jwtProvider := egv1a1.JWTProvider{
 			Name:      name,
+			Issuer:    oauth.Issuer,
 			Audiences: oauth.Audiences,
 		}
 
@@ -124,7 +125,7 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 		} else {
 			// Auto-discover JWKS URI from authorization server metadata.
 			c.logger.Info("Auto-discovering JWKS URI from authorization server metadata", "issuer", oauth.Issuer)
-			jwksURI, discoveryErr := c.discoverJWKSURI(oauth.Issuer)
+			jwksURI, discoveryErr := c.discoverJWKSURI(oauth)
 			if discoveryErr != nil {
 				return fmt.Errorf("failed to auto-discover JWKS URI: %w", discoveryErr)
 			}
@@ -144,6 +145,15 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 				}
 			}
 		}
+
+		// Project the verified "sub" claim into a trusted, gateway-set header so the MCP proxy can
+		// read the authenticated subject without re-parsing the client-controlled bearer token.
+		// Envoy's JWT filter overwrites this header from the verified token, so any client-supplied
+		// value is discarded here.
+		jwtProvider.ClaimToHeaders = append(jwtProvider.ClaimToHeaders, egv1a1.ClaimToHeader{
+			Claim:  "sub",
+			Header: internalapi.MCPSubjectHeader,
+		})
 
 		// Add ClaimToHeaders to extract JWT claims and set them as HTTP headers.
 		// Envoy's JWT filter will extract these claims and add them to the request headers,
@@ -165,6 +175,10 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 		c.logger.Info("Configuring Ext Auth in SecurityPolicy")
 		securityPolicySpec.ExtAuth = extAuth.DeepCopy()
 	}
+
+	// Propagate MergeType so the auto-generated SecurityPolicy can merge with (instead of
+	// overriding) a parent Gateway/Listener-level SecurityPolicy, e.g. an IP allowlist.
+	securityPolicySpec.MergeType = mcpRoute.Spec.SecurityPolicy.MergeType
 
 	// The SecurityPolicy should only apply to the HTTPRoute MCP proxy rule.
 	// However, since HTTPRouteRule name is experimental in Gateway API, and some vendors (e.g. GKE Gateway) do not
@@ -253,6 +267,13 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context
 	}
 
 	ensureCORSHeaders(backendTrafficPolicy.Spec.ResponseOverride[0].Response.Header)
+
+	// Propagate MergeType so the auto-generated OAuth BackendTrafficPolicy can merge with
+	// (instead of overriding) an operator-defined BackendTrafficPolicy targeting the same
+	// route, e.g. one configuring rate limiting.
+	if btp := mcpRoute.Spec.BackendTrafficPolicy; btp != nil {
+		backendTrafficPolicy.Spec.MergeType = btp.MergeType
+	}
 
 	// Target the HTTPRoute MCP proxy rule only.
 	backendTrafficPolicy.Spec.TargetRefs = []gwapiv1.LocalPolicyTargetReferenceWithSectionName{
@@ -436,7 +457,10 @@ func (c *MCPRouteController) ensureOAuthAuthServerMetadataHRF(ctx context.Contex
 	}
 
 	// Build OAuth authorization server metadata JSON response.
-	metadataJSON := c.buildOAuthAuthServerMetadataJSON(mcpRoute.Spec.SecurityPolicy.OAuth)
+	metadataJSON, err := c.buildOAuthAuthServerMetadataJSON(mcpRoute.Spec.SecurityPolicy.OAuth)
+	if err != nil {
+		return err
+	}
 
 	// Configure direct response with OAuth authorization server metadata.
 	httpRouteFilter.Spec = egv1a1.HTTPRouteFilterSpec{
@@ -502,12 +526,13 @@ func buildOAuthProtectedResourceMetadataJSON(auth *aigv1b1.MCPRouteOAuth) string
 }
 
 // buildOAuthAuthServerMetadataJSON constructs the OAuth authorization server metadata JSON response.
-// It first attempts to fetch metadata from the authorization server's well-known endpoint,
-// and falls back to hardcoded values if the fetch fails.
+// It fetches the metadata from the URL configured in AuthorizationServerMetadataURL, or, when that is
+// unset, from the well-known endpoints derived from the issuer. A failure to fetch a configured URL is
+// returned as an error; a failure to discover from the issuer falls back to hardcoded values.
 // References:
 // * https://modelcontextprotocol.io/specification/2025-03-26/basic/authorization#authorization-server-location
 // * https://datatracker.ietf.org/doc/html/rfc8414#section-3.2
-func (c *MCPRouteController) buildOAuthAuthServerMetadataJSON(oauth *aigv1b1.MCPRouteOAuth) string {
+func (c *MCPRouteController) buildOAuthAuthServerMetadataJSON(oauth *aigv1b1.MCPRouteOAuth) (string, error) {
 	// For 2025-03-26 compatibility, we return the authorization server metadata.
 
 	// The authorization server's issuer identifier, which is a URL that uses the "https" scheme and has no query or
@@ -516,16 +541,24 @@ func (c *MCPRouteController) buildOAuthAuthServerMetadataJSON(oauth *aigv1b1.MCP
 	// https://datatracker.ietf.org/doc/html/rfc8414#section-2
 	authServer := strings.TrimSuffix(oauth.Issuer, "/")
 
-	// Try to fetch metadata from the well-known endpoint first.
-	if authServer != "" {
-		fetchedMetadata, err := fetchOAuthAuthServerMetadata(authServer, maxRetryElapsedTime)
+	metadataURL := ptr.Deref(oauth.AuthorizationServerMetadataURL, "")
+
+	// Try to fetch the metadata document before falling back to hardcoded values.
+	if authServer != "" || metadataURL != "" {
+		fetchedMetadata, err := fetchOAuthAuthServerMetadata(authServer, metadataURL, maxRetryElapsedTime)
 		if err == nil && fetchedMetadata != nil {
 			// Convert to JSON string and return.
 			jsonBytes, _ := json.Marshal(fetchedMetadata)
-			return string(jsonBytes)
+			return string(jsonBytes), nil
 		}
 		// If there was an error fetching metadata, log it.
 		if err != nil {
+			// An operator who configured an explicit URL asked for that document specifically.
+			// Substituting defaults would hide the misconfiguration behind endpoints that do not
+			// exist, so surface it instead.
+			if metadataURL != "" {
+				return "", fmt.Errorf("failed to fetch OAuth authorization server metadata from %s: %w", metadataURL, err)
+			}
 			c.logger.Error(err, "failed to fetch OAuth authorization server metadata from well-known endpoint", "authServer", authServer)
 		}
 	}
@@ -550,7 +583,7 @@ func (c *MCPRouteController) buildOAuthAuthServerMetadataJSON(oauth *aigv1b1.MCP
 
 	// Convert to JSON string.
 	jsonBytes, _ := json.Marshal(response)
-	return string(jsonBytes)
+	return string(jsonBytes), nil
 }
 
 // cleanupSecurityPolicyResources deletes existing SecurityPolicy-related resources when SecurityPolicy is nil.
@@ -667,51 +700,31 @@ type httpError struct {
 
 func (h *httpError) Error() string { return fmt.Sprintf("HTTP %d %s", h.statusCode, h.status) }
 
+// invalidMetadataError represents a well-known endpoint that answered with a document we cannot use.
+// Some authorization servers return 200 with an empty JSON object at a well-known path they do not
+// actually implement, which must be treated as a miss rather than a successful discovery.
+type invalidMetadataError struct {
+	url string
+	err error
+}
+
+func (e *invalidMetadataError) Error() string {
+	return fmt.Sprintf("unusable authorization server metadata at %s: %v", e.url, e.err)
+}
+
+func (e *invalidMetadataError) Unwrap() error { return e.err }
+
 // fetchOAuthAuthServerMetadata fetches OAuth authorization server metadata from the well-known endpoint
 // with exponential backoff retry logic. It returns the fetched metadata or an error if all attempts fail.
-func fetchOAuthAuthServerMetadata(authServer string, maxRetryElapsedTime time.Duration) (*OAuthAuthServerMetadata, error) {
-	var (
-		metadata   OAuthAuthServerMetadata
-		httpClient = &http.Client{Timeout: httpClientTimeout}
-	)
-
-	operation := func(wellKnownURL string) error {
-		resp, err := httpClient.Get(wellKnownURL)
+func fetchOAuthAuthServerMetadata(authServer, metadataURL string, maxRetryElapsedTime time.Duration) (*OAuthAuthServerMetadata, error) {
+	// An explicitly configured metadata URL is used verbatim: the whole point of the field is that
+	// the document lives somewhere the issuer does not lead to, so there is nothing to derive.
+	if metadataURL != "" {
+		metadata, err := fetchFirstUsableMetadata([]string{metadataURL}, maxRetryElapsedTime)
 		if err != nil {
-			urlError, dnsError := &url.Error{}, &net.DNSError{}
-			if errors.As(err, &urlError) || errors.As(err, &dnsError) {
-				// These errors are highly likely configuration issues, don't retry.
-				//
-				// ***NOTE***: Do not delete this handling, otherwise all the test case that hitting this
-				// will keep retrying until timeout, which slows the tests significantly.
-				return backoff.Permanent(fmt.Errorf("failed to fetch OAuth authorization server metadata: %w", err))
-			}
-			return err
+			return nil, fmt.Errorf("failed to fetch authorization server metadata from %q: %w", metadataURL, err)
 		}
-		defer resp.Body.Close()
-
-		// Check for successful response.
-		if resp.StatusCode != http.StatusOK {
-			// Retry on 5xx server errors, but not on 4xx client errors.
-			if resp.StatusCode >= 500 && resp.StatusCode < 600 {
-				return &httpError{statusCode: resp.StatusCode, status: resp.Status}
-			}
-			// 4xx errors are permanent, don't retry.
-			return backoff.Permanent(&httpError{statusCode: resp.StatusCode, status: resp.Status})
-		}
-
-		// Read and parse the response body.
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			// I/O errors during reading might be transient.
-			return err
-		}
-
-		if err := json.Unmarshal(body, &metadata); err != nil {
-			// JSON parsing errors are permanent, don't retry.
-			return backoff.Permanent(fmt.Errorf("failed to parse JSON: %w", err))
-		}
-		return nil
+		return metadata, nil
 	}
 
 	authServerURL, err := url.Parse(authServer)
@@ -750,29 +763,101 @@ func fetchOAuthAuthServerMetadata(authServer string, maxRetryElapsedTime time.Du
 		),
 	}
 
-	for _, wellKnownURL := range wellKnownURLVariants {
+	metadata, err := fetchFirstUsableMetadata(wellKnownURLVariants, maxRetryElapsedTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover authorization server metadata for issuer %q: %w", authServer, err)
+	}
+	return metadata, nil
+}
+
+// fetchFirstUsableMetadata tries each candidate URL in order, with exponential backoff per URL,
+// and returns the first usable document. A URL that answers with a 4xx or with a document we
+// cannot use is a miss, and the next URL is tried. Any other failure is returned immediately.
+func fetchFirstUsableMetadata(candidateURLs []string, maxRetryElapsedTime time.Duration) (*OAuthAuthServerMetadata, error) {
+	httpClient := &http.Client{Timeout: httpClientTimeout}
+
+	fetchOnce := func(wellKnownURL string, metadata *OAuthAuthServerMetadata) error {
+		resp, err := httpClient.Get(wellKnownURL)
+		if err != nil {
+			urlError, dnsError := &url.Error{}, &net.DNSError{}
+			if errors.As(err, &urlError) || errors.As(err, &dnsError) {
+				// These errors are highly likely configuration issues, don't retry.
+				//
+				// ***NOTE***: Do not delete this handling, otherwise all the test case that hitting this
+				// will keep retrying until timeout, which slows the tests significantly.
+				return backoff.Permanent(fmt.Errorf("failed to fetch OAuth authorization server metadata: %w", err))
+			}
+			return err
+		}
+		defer resp.Body.Close()
+
+		// Check for successful response.
+		if resp.StatusCode != http.StatusOK {
+			// Retry on 5xx server errors, but not on 4xx client errors.
+			if resp.StatusCode >= 500 && resp.StatusCode < 600 {
+				return &httpError{statusCode: resp.StatusCode, status: resp.Status}
+			}
+			// 4xx errors are permanent, don't retry.
+			return backoff.Permanent(&httpError{statusCode: resp.StatusCode, status: resp.Status})
+		}
+
+		// Read and parse the response body.
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			// I/O errors during reading might be transient.
+			return err
+		}
+
+		var fetched OAuthAuthServerMetadata
+		if err := json.Unmarshal(body, &fetched); err != nil {
+			// A body that is not a metadata document at all, such as the HTML a catch-all route
+			// serves. Retrying this URL will not change the response, so move to the next variant.
+			return backoff.Permanent(&invalidMetadataError{url: wellKnownURL, err: fmt.Errorf("failed to parse JSON: %w", err)})
+		}
+		// RFC 8414 Section 2 makes issuer REQUIRED, so a document without one is not a metadata
+		// document, however well-formed. This is the case for authorization servers that answer 200
+		// with an empty JSON object at a well-known path they do not actually implement.
+		// Anything beyond this is caller-specific: discoverJWKSURI requires jwks_uri, while the
+		// served metadata passes the fetched document through as-is.
+		// https://datatracker.ietf.org/doc/html/rfc8414#section-2
+		if fetched.Issuer == "" {
+			return backoff.Permanent(&invalidMetadataError{url: wellKnownURL, err: errors.New("missing issuer")})
+		}
+		*metadata = fetched
+		return nil
+	}
+
+	var lastErr error
+	for _, wellKnownURL := range candidateURLs {
+		var metadata OAuthAuthServerMetadata
 		b := backoff.NewExponentialBackOff()
 		b.MaxElapsedTime = maxRetryElapsedTime
-		err = backoff.Retry(func() error {
-			return operation(wellKnownURL)
+		err := backoff.Retry(func() error {
+			return fetchOnce(wellKnownURL, &metadata)
 		}, b)
+		if err == nil { // Success.
+			return &metadata, nil
+		}
+		lastErr = err
 
 		var httpErr *httpError
+		var invalidErr *invalidMetadataError
 		switch {
 		case errors.As(err, &httpErr) && httpErr.statusCode >= 400 && httpErr.statusCode < 500:
 			// If it is a 4xx error, try the next URL variant instead of retrying or failing
 			continue
-		case err != nil:
+		case errors.As(err, &invalidErr):
+			// The endpoint answered but the document is unusable, try the next URL variant.
+			continue
+		default:
 			// Other errors, return immediately as the backoff time is exhausted.
 			return nil, err
-		default: // Success
-			return &metadata, nil
 		}
 	}
 
-	// We can only get here if the backoff failed and there were no more URLs to try.
+	// We can only get here if every URL was a 4xx or returned an unusable document.
 	// Return the last failure.
-	return nil, err
+	return nil, fmt.Errorf("no usable metadata at any candidate URL: %w", lastErr)
 }
 
 func oauthProtectedResourceMetadataName(mcpRouteName string) string {
@@ -785,9 +870,9 @@ func oauthAuthServerMetadataFilterName(mcpRouteName string) string {
 
 // discoverJWKSURI attempts to discover the JWKS URI from the OAuth authorization server metadata.
 // It fetches the well-known metadata endpoint and extracts the jwks_uri field.
-func (c *MCPRouteController) discoverJWKSURI(issuer string) (string, error) {
+func (c *MCPRouteController) discoverJWKSURI(oauth *aigv1b1.MCPRouteOAuth) (string, error) {
 	// Fetch OAuth authorization server metadata.
-	metadata, err := fetchOAuthAuthServerMetadata(issuer, maxRetryElapsedTime)
+	metadata, err := fetchOAuthAuthServerMetadata(oauth.Issuer, ptr.Deref(oauth.AuthorizationServerMetadataURL, ""), maxRetryElapsedTime)
 	switch {
 	case err != nil:
 		return "", fmt.Errorf("failed to fetch authorization server metadata: %w", err)

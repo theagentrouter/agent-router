@@ -67,9 +67,7 @@ func (a *anthropicToAnthropicTranslator) RequestBody(original []byte, body *anth
 		a.requestModel = a.modelNameOverride
 	}
 
-	if forceBodyMutation && len(newBody) == 0 {
-		newBody = original
-	}
+	newBody = forceOriginalBodyIfEmpty(forceBodyMutation, newBody, original)
 
 	newHeaders = []internalapi.Header{{pathHeaderName, a.path}}
 	if len(newBody) > 0 {
@@ -143,11 +141,12 @@ func (a *anthropicToAnthropicTranslator) extractUsageFromBufferEvent(s tracingap
 		}
 		line := a.buffered[:i]
 		a.buffered = a.buffered[i+1:]
-		if !bytes.HasPrefix(line, sseDataPrefix) {
+		data, ok := cutSSEDataPrefix(line)
+		if !ok {
 			continue
 		}
 		eventUnion := &anthropic.MessagesStreamChunk{}
-		if err := json.Unmarshal(bytes.TrimPrefix(line, sseDataPrefix), eventUnion); err != nil {
+		if err := json.Unmarshal(data, eventUnion); err != nil {
 			continue
 		}
 		if s != nil {

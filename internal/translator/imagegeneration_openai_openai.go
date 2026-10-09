@@ -51,9 +51,7 @@ func (o *openAIToOpenAIImageGenerationTranslator) RequestBody(original []byte, p
 	o.requestModel = cmp.Or(o.modelNameOverride, p.Model)
 
 	// Always set the path header to the images generations endpoint so that the request is routed correctly.
-	if forceBodyMutation && len(newBody) == 0 {
-		newBody = original
-	}
+	newBody = forceOriginalBodyIfEmpty(forceBodyMutation, newBody, original)
 	newHeaders = []internalapi.Header{{pathHeaderName, o.path}}
 
 	if len(newBody) > 0 {

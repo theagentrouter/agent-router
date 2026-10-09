@@ -26,35 +26,12 @@ type ConfigReceiver interface {
 	LoadConfig(ctx context.Context, config *Config) error
 }
 
-// TODO(huabing): the legacy config watcher can be removed in the next release
-type configWatcher struct {
-	lastMod    time.Time
-	path       string
-	rcv        ConfigReceiver
-	l          *slog.Logger
-	versionStr string
-}
-
 type bundleConfigWatcher struct {
 	lastMod    time.Time
 	path       string
 	rcv        ConfigReceiver
 	l          *slog.Logger
 	versionStr string
-}
-
-// StartLegacyConfigWatcher starts a watcher for the given path and Receiver.
-// Periodically checks the file for changes and calls the Receiver's UpdateConfig method.
-func StartLegacyConfigWatcher(ctx context.Context, path string, rcv ConfigReceiver, l *slog.Logger, tick time.Duration) error {
-	cw := &configWatcher{rcv: rcv, l: l, path: path, versionStr: version.Parse()}
-
-	if err := cw.loadConfig(ctx); err != nil {
-		return fmt.Errorf("failed to load initial config: %w", err)
-	}
-
-	l.Info("start watching the config file", slog.String("path", path), slog.String("interval", tick.String()))
-	go cw.watch(ctx, tick)
-	return nil
 }
 
 // StartConfigBundleWatcher starts a watcher for the sharded bundle directory.
@@ -75,25 +52,6 @@ func StartConfigBundleWatcher(ctx context.Context, bundlePath string, rcv Config
 	return nil
 }
 
-// watch periodically checks the file for changes and calls the update method.
-func (cw *configWatcher) watch(ctx context.Context, tick time.Duration) {
-	ticker := time.NewTicker(tick)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			cw.l.Info("stop watching the config file", slog.String("path", cw.path))
-			return
-		case <-ticker.C:
-			perTickCtx, cancel := context.WithTimeout(ctx, tick)
-			if err := cw.loadConfig(perTickCtx); err != nil {
-				cw.l.Error("failed to update config", slog.String("error", err.Error()))
-			}
-			cancel()
-		}
-	}
-}
-
 func (cw *bundleConfigWatcher) watch(ctx context.Context, tick time.Duration) {
 	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
@@ -110,36 +68,6 @@ func (cw *bundleConfigWatcher) watch(ctx context.Context, tick time.Duration) {
 			cancel()
 		}
 	}
-}
-
-// loadConfig loads a new config from the given path and updates the ConfigReceiver by
-// calling the [ConfigReceiver.Load].
-func (cw *configWatcher) loadConfig(ctx context.Context) error {
-	var cfg *Config
-	stat, err := os.Stat(cw.path)
-	if err != nil {
-		return err
-	}
-
-	if stat.ModTime().Sub(cw.lastMod) <= 0 {
-		return nil
-	}
-	cw.l.Info("loading a new config", slog.String("path", cw.path))
-	cw.lastMod = stat.ModTime()
-	cfg, err = UnmarshalConfigYaml(cw.path)
-	if err != nil {
-		return err
-	}
-
-	if cfg.Version != cw.versionStr {
-		return fmt.Errorf(`config version mismatch: expected %q, got %q. Likely in the middle of rolling update`,
-			cw.versionStr, cfg.Version)
-	}
-
-	if err = cw.rcv.LoadConfig(ctx, cfg); err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-	return nil
 }
 
 func (cw *bundleConfigWatcher) loadConfig(ctx context.Context) error {

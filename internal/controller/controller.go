@@ -65,6 +65,9 @@ var Scheme = runtime.NewScheme()
 type Options struct {
 	// ExtProcLogLevel is the log level for the external processor, e.g., debug, info, warn, or error.
 	ExtProcLogLevel string
+	// ExtProcLogFormat is the log output format for the external processor, "text" or "json".
+	// Empty means the extproc default, which is text.
+	ExtProcLogFormat string
 	// ExtProcEnableRedaction enables redaction of sensitive information in debug logs for the external processor.
 	ExtProcEnableRedaction bool
 	// ExtProcImage is the image for the external processor set on Deployment.
@@ -128,9 +131,14 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	}
 
 	gatewayEventChan := make(chan event.GenericEvent, 100)
+	// The extproc builder is shared by the mutating webhook and the gateway
+	// reconciler. The webhook uses this builder instance to inject the container;
+	// the reconciler builds an identical one from the same options to write the
+	// desired config hash to workload pod templates.
+	extProcBuilder := newExtProcBuilder(options, isKubernetes133OrLater(versionInfo, logger), logger)
 	gatewayC := NewGatewayController(c, kubernetes.NewForConfigOrDie(config),
-		logger.WithName("gateway"), options.EnvoyGatewayNamespace, options.ExtProcImage, options.ExtProcLogLevel,
-		false, uuid.NewString, isKubernetes133OrLater(versionInfo, logger))
+		logger.WithName("gateway"), options.EnvoyGatewayNamespace,
+		false, uuid.NewString, options, isKubernetes133OrLater(versionInfo, logger))
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1.Gateway{}).
 		WatchesRawSource(source.Channel(
 			gatewayEventChan,
@@ -197,7 +205,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	} else {
 		// CRD exists, create the controller.
 		inferencePoolC := NewInferencePoolController(c, kubernetes.NewForConfigOrDie(config), logger.
-			WithName("inference-pool"), inferencePoolEventChan)
+			WithName("inference-pool"), inferencePoolEventChan, gatewayEventChan)
 		if err = TypedControllerBuilderForCRD(mgr, &gwaiev1.InferencePool{}).
 			Watches(&gwapiv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(inferencePoolC.gatewayEventHandler)).
 			Watches(&aigv1b1.AIGatewayRoute{}, handler.EnqueueRequestsFromMapFunc(inferencePoolC.aiGatewayRouteEventHandler)).
@@ -251,7 +259,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	}
 
 	// ReferenceGrant controller for cross-namespace access validation
-	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan)
+	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan)
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1b1.ReferenceGrant{}).
 		Complete(referenceGrantC); err != nil {
 		return fmt.Errorf("failed to create controller for ReferenceGrant: %w", err)
@@ -260,25 +268,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	if !options.DisableMutatingWebhook {
 		h := admission.WithCustomDefaulter(Scheme, &corev1.Pod{}, newGatewayMutator(c, mgr.GetAPIReader(), kube,
 			logger.WithName("gateway-mutator"),
-			options.ExtProcImage,
-			options.ExtProcImagePullPolicy,
-			options.ExtProcLogLevel,
-			options.ExtProcEnableRedaction,
-			options.UDSPath,
-			options.RequestHeaderAttributes,
-			options.TracingRequestHeaderAttributes,
-			options.MetricsRequestHeaderAttributes,
-			options.LogRequestHeaderAttributes,
-			options.RootPrefix,
-			options.EndpointPrefixes,
-			options.ExtProcExtraEnvVars,
-			options.ExtProcImagePullSecrets,
-			options.ExtProcMaxRecvMsgSize,
-			isKubernetes133OrLater(versionInfo, logger),
-			options.MCPSessionEncryptionSeed,
-			options.MCPSessionEncryptionIterations,
-			options.MCPFallbackSessionEncryptionSeed,
-			options.MCPFallbackSessionEncryptionIterations,
+			extProcBuilder,
 		))
 		mgr.GetWebhookServer().Register("/mutate", &webhook.Admission{Handler: h})
 	}
@@ -482,37 +472,57 @@ func aiGatewayRouteIndexFunc(o client.Object) []string {
 func backendSecurityPolicyIndexFunc(o client.Object) []string {
 	backendSecurityPolicy := o.(*aigv1b1.BackendSecurityPolicy)
 	var key string
-	switch backendSecurityPolicy.Spec.Type {
-	case aigv1b1.BackendSecurityPolicyTypeAPIKey:
-		apiKey := backendSecurityPolicy.Spec.APIKey
-		key = getSecretNameAndNamespace(apiKey.SecretRef, backendSecurityPolicy.Namespace)
-	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
-		awsCreds := backendSecurityPolicy.Spec.AWSCredentials
-		if awsCreds.CredentialsFile != nil {
-			key = getSecretNameAndNamespace(awsCreds.CredentialsFile.SecretRef, backendSecurityPolicy.Namespace)
-		} else if awsCreds.OIDCExchangeToken != nil {
-			key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
-		}
-	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
-		gcpCreds := backendSecurityPolicy.Spec.GCPCredentials
-		if gcpCreds.CredentialsFile != nil {
-			key = getSecretNameAndNamespace(gcpCreds.CredentialsFile.SecretRef, backendSecurityPolicy.Namespace)
-		}
-	case aigv1b1.BackendSecurityPolicyTypeAzureAPIKey:
-		apiKey := backendSecurityPolicy.Spec.AzureAPIKey
-		key = getSecretNameAndNamespace(apiKey.SecretRef, backendSecurityPolicy.Namespace)
-	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
-		apiKey := backendSecurityPolicy.Spec.AnthropicAPIKey
-		key = getSecretNameAndNamespace(apiKey.SecretRef, backendSecurityPolicy.Namespace)
-	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
-		azureCreds := backendSecurityPolicy.Spec.AzureCredentials
-		if azureCreds.ClientSecretRef != nil {
-			key = getSecretNameAndNamespace(azureCreds.ClientSecretRef, backendSecurityPolicy.Namespace)
-		} else if azureCreds.OIDCExchangeToken != nil {
-			key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
+	if name, namespace, ok := backendSecurityPolicySecretRef(backendSecurityPolicy); ok {
+		key = fmt.Sprintf("%s.%s", name, namespace)
+	} else {
+		switch backendSecurityPolicy.Spec.Type {
+		case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
+			if backendSecurityPolicy.Spec.AWSCredentials.OIDCExchangeToken != nil {
+				key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
+			}
+		case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
+			if backendSecurityPolicy.Spec.AzureCredentials.OIDCExchangeToken != nil {
+				key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
+			}
 		}
 	}
 	return []string{key}
+}
+
+// backendSecurityPolicySecretRef returns the name and namespace of the Secret directly referenced by a
+// BackendSecurityPolicy's static credential fields, and whether one is set. OIDC-based credential types
+// don't have a fixed target Secret here (see backendSecurityPolicyIndexFunc, which keys those by the
+// BackendSecurityPolicy itself instead) and are excluded.
+func backendSecurityPolicySecretRef(bsp *aigv1b1.BackendSecurityPolicy) (name, namespace string, ok bool) {
+	var secretRef *gwapiv1.SecretObjectReference
+	switch bsp.Spec.Type {
+	case aigv1b1.BackendSecurityPolicyTypeAPIKey:
+		secretRef = bsp.Spec.APIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
+		if bsp.Spec.AWSCredentials.CredentialsFile != nil {
+			secretRef = bsp.Spec.AWSCredentials.CredentialsFile.SecretRef
+		}
+	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
+		if bsp.Spec.GCPCredentials.CredentialsFile != nil {
+			secretRef = bsp.Spec.GCPCredentials.CredentialsFile.SecretRef
+		}
+	case aigv1b1.BackendSecurityPolicyTypeAzureAPIKey:
+		secretRef = bsp.Spec.AzureAPIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
+		secretRef = bsp.Spec.AnthropicAPIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
+		if bsp.Spec.AzureCredentials.ClientSecretRef != nil {
+			secretRef = bsp.Spec.AzureCredentials.ClientSecretRef
+		}
+	}
+	if secretRef == nil {
+		return "", "", false
+	}
+	namespace = bsp.Namespace
+	if secretRef.Namespace != nil {
+		namespace = string(*secretRef.Namespace)
+	}
+	return string(secretRef.Name), namespace, true
 }
 
 func backendSecurityPolicyTargetRefsIndexFunc(o client.Object) []string {
@@ -531,13 +541,6 @@ func quotaPolicyTargetRefsIndexFunc(o client.Object) []string {
 		ret = append(ret, fmt.Sprintf("%s.%s", targetRef.Name, quotaPolicy.Namespace))
 	}
 	return ret
-}
-
-func getSecretNameAndNamespace(secretRef *gwapiv1.SecretObjectReference, namespace string) string {
-	if secretRef.Namespace != nil {
-		return fmt.Sprintf("%s.%s", secretRef.Name, *secretRef.Namespace)
-	}
-	return fmt.Sprintf("%s.%s", secretRef.Name, namespace)
 }
 
 func getReferenceGrantIndexKey(namespace, kind string) string {

@@ -33,6 +33,11 @@ const (
 	gcpMethodRawPredict            = "rawPredict"
 )
 
+// dummyThoughtSignature is Google's documented compatibility escape for clients that cannot echo
+// back a thought_signature on function-call parts in multi-turn requests, see
+// https://ai.google.dev/gemini-api/docs/thought-signatures.
+var dummyThoughtSignature = []byte("skip_thought_signature_validator")
+
 // geminiResponseMode represents the type of response mode for Gemini requests
 type geminiResponseMode string
 
@@ -275,6 +280,21 @@ func assistantMsgToGeminiParts(msg *openai.ChatCompletionAssistantMessageParam) 
 		}
 	}
 
+	// Fall back to the first non-empty signature echoed back via thinking_blocks (see
+	// https://docs.litellm.ai/docs/reasoning_content) when no content-part signature was found.
+	if thoughtSignature == nil {
+		for _, block := range msg.ThinkingBlocks {
+			if block.Signature != "" {
+				sigBytes, err := base64.StdEncoding.DecodeString(block.Signature)
+				if err != nil {
+					return nil, nil, fmt.Errorf("failed to decode thought signature: %w", err)
+				}
+				thoughtSignature = sigBytes
+				break // Only use first signature.
+			}
+		}
+	}
+
 	// Handle tool calls in the assistant message.
 	knownToolCalls := make(map[string]string)
 	for i, toolCall := range msg.ToolCalls {
@@ -290,8 +310,16 @@ func assistantMsgToGeminiParts(msg *openai.ChatCompletionAssistantMessageParam) 
 		funcCallPart := genai.NewPartFromFunctionCall(toolCall.Function.Name, parsedArgs)
 
 		// According to https://ai.google.dev/gemini-api/docs/thought-signatures, if the model generates parallel function calls in a response, the thought_signature is attached only to the first functionCall part. Subsequent  functionCall parts in the same response will not contain a signature.
-		if i == 0 && thoughtSignature != nil {
-			funcCallPart.ThoughtSignature = thoughtSignature
+		if i == 0 {
+			if thoughtSignature != nil {
+				funcCallPart.ThoughtSignature = thoughtSignature
+			} else {
+				// No signature was echoed back by the client at all (e.g. an OpenAI-schema client
+				// that doesn't round-trip thinking_blocks). Gemini 3.x rejects function calls in
+				// multi-turn requests that are missing a thought_signature, so fall back to
+				// Google's documented compatibility escape.
+				funcCallPart.ThoughtSignature = dummyThoughtSignature
+			}
 		}
 
 		parts = append(parts, funcCallPart)
@@ -431,7 +459,7 @@ func openAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAva
 					if len(paramsMap) > 0 {
 						var err error
 						if functionDecl.Parameters, err = jsonSchemaToGemini(paramsMap); err != nil {
-							return nil, fmt.Errorf("invalid JSON schema for parameters in tool %s: %w", tool.Function.Name, err)
+							return nil, fmt.Errorf("%w: invalid JSON schema for parameters in tool %s: %w", internalapi.ErrInvalidRequestBody, tool.Function.Name, err)
 						}
 					}
 				}
@@ -660,7 +688,7 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 			} else {
 				convertedSchema, err := jsonSchemaToGemini(schemaMap)
 				if err != nil {
-					return nil, responseMode, fmt.Errorf("invalid JSON schema: %w", err)
+					return nil, responseMode, fmt.Errorf("%w: invalid JSON schema: %w", internalapi.ErrInvalidRequestBody, err)
 				}
 				gc.ResponseSchema = convertedSchema
 
@@ -668,7 +696,26 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 		}
 	}
 
-	if openAIReq.GuidedChoice != nil {
+	// structured_outputs (vLLM v0.12.0+) supersedes the deprecated top-level guided_* fields.
+	// Resolve the effective values, preferring structured_outputs when present. Reject the
+	// sub-fields that have no Gemini equivalent.
+	guidedChoice, guidedRegex, guidedJSON := openAIReq.GuidedChoice, openAIReq.GuidedRegex, openAIReq.GuidedJSON
+	if so := openAIReq.StructuredOutputs; so != nil {
+		if so.Grammar != "" || len(so.StructuralTag) > 0 || so.WhitespacePattern != "" {
+			return nil, responseMode, fmt.Errorf("%w: structured_outputs grammar/structural_tag/whitespace_pattern are not supported on GCP/Gemini", internalapi.ErrInvalidRequestBody)
+		}
+		if so.Choice != nil {
+			guidedChoice = so.Choice
+		}
+		if so.Regex != "" {
+			guidedRegex = so.Regex
+		}
+		if len(so.JSON) > 0 {
+			guidedJSON = so.JSON
+		}
+	}
+
+	if guidedChoice != nil {
 		formatSpecifiedCount++
 		if existSchema := gc.ResponseSchema != nil || gc.ResponseJsonSchema != nil; existSchema {
 			return nil, responseMode, fmt.Errorf("%w: duplicate json schema specifications", internalapi.ErrInvalidRequestBody)
@@ -676,18 +723,18 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 
 		responseMode = responseModeEnum
 		gc.ResponseMIMEType = mimeTypeApplicationEnum
-		gc.ResponseSchema = &genai.Schema{Type: "STRING", Enum: openAIReq.GuidedChoice}
+		gc.ResponseSchema = &genai.Schema{Type: "STRING", Enum: guidedChoice}
 	}
-	if openAIReq.GuidedRegex != "" {
+	if guidedRegex != "" {
 		formatSpecifiedCount++
 		if existSchema := gc.ResponseSchema != nil || gc.ResponseJsonSchema != nil; existSchema {
 			return nil, responseMode, fmt.Errorf("%w: duplicate json schema specifications", internalapi.ErrInvalidRequestBody)
 		}
 		responseMode = responseModeRegex
 		gc.ResponseMIMEType = mimeTypeApplicationJSON
-		gc.ResponseSchema = &genai.Schema{Type: "STRING", Pattern: openAIReq.GuidedRegex}
+		gc.ResponseSchema = &genai.Schema{Type: "STRING", Pattern: guidedRegex}
 	}
-	if openAIReq.GuidedJSON != nil {
+	if guidedJSON != nil {
 		formatSpecifiedCount++
 		if existSchema := gc.ResponseSchema != nil || gc.ResponseJsonSchema != nil; existSchema {
 			return nil, responseMode, fmt.Errorf("%w: duplicate json schema specifications", internalapi.ErrInvalidRequestBody)
@@ -695,7 +742,7 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 		responseMode = responseModeJSON
 
 		gc.ResponseMIMEType = mimeTypeApplicationJSON
-		gc.ResponseJsonSchema = openAIReq.GuidedJSON
+		gc.ResponseJsonSchema = guidedJSON
 	}
 	if openAIReq.ReasoningEffort != "" && reasoningEffortAvailable(requestModel) {
 		thinkLevel, err := mapReasoningEffortToThinkingLevel(openAIReq.ReasoningEffort, requestModel)
@@ -885,6 +932,13 @@ func extractTextAndThoughtSummaryFromGeminiParts(parts []*genai.Part, responseMo
 					// Here we remove the wrapping double-quotes.
 					part.Text = strings.TrimPrefix(part.Text, "\"")
 					part.Text = strings.TrimSuffix(part.Text, "\"")
+				}
+				if responseMode == responseModeEnum {
+					// GCP's ENUM response mode is expected to return  exactly one of the provided enum values.
+					//  However, sometimes, gemini models can emit surrounding whitespace (e.g. ` negative`
+					// instead of `negative`), which breaks exact-match consumers. Trim it so the
+					// output matches the requested choices verbatim.
+					part.Text = strings.TrimSpace(part.Text)
 				}
 				// ThoughtSignature is only appended with Thought as False
 				if part.ThoughtSignature != nil {

@@ -16,7 +16,7 @@ import (
 // Works with ChatCompletionRequest, CompletionRequest, and EmbeddingRequest.
 func extractModel(requestBody any) string {
 	v := reflect.ValueOf(requestBody)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	modelField := v.FieldByName("Model")

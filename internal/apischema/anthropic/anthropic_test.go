@@ -706,7 +706,7 @@ func TestToolUnion_UnmarshalJSON(t *testing.T) {
 			jsonStr: `{"type":"custom","name":"my_tool","input_schema":{"type":"object"}}`,
 			want: ToolUnion{Tool: &Tool{
 				Type: "custom", Name: "my_tool",
-				InputSchema: ToolInputSchema{Type: "object"},
+				InputSchema: json.RawMessage(`{"type":"object"}`),
 			}},
 		},
 		{
@@ -739,7 +739,7 @@ func TestToolUnion_UnmarshalJSON(t *testing.T) {
 			jsonStr: `{"name":"my_tool","description":"A tool","input_schema":{"type":"object"}}`,
 			want: ToolUnion{Tool: &Tool{
 				Name: "my_tool", Description: "A tool",
-				InputSchema: ToolInputSchema{Type: "object"},
+				InputSchema: json.RawMessage(`{"type":"object"}`),
 			}},
 		},
 		{
@@ -747,7 +747,7 @@ func TestToolUnion_UnmarshalJSON(t *testing.T) {
 			jsonStr: `{"type":"","name":"my_tool","input_schema":{"type":"object"}}`,
 			want: ToolUnion{Tool: &Tool{
 				Type: "", Name: "my_tool",
-				InputSchema: ToolInputSchema{Type: "object"},
+				InputSchema: json.RawMessage(`{"type":"object"}`),
 			}},
 		},
 		{
@@ -780,7 +780,7 @@ func TestToolUnion_MarshalJSON(t *testing.T) {
 	}{
 		{
 			name: "custom tool",
-			tu:   ToolUnion{Tool: &Tool{Type: "custom", Name: "t", InputSchema: ToolInputSchema{Type: "object"}}},
+			tu:   ToolUnion{Tool: &Tool{Type: "custom", Name: "t", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 			want: `{"type":"custom","name":"t","input_schema":{"type":"object"}}`,
 		},
 		{
@@ -1093,7 +1093,7 @@ func TestToolUnion_UnmarshalJSON_ErrorPaths(t *testing.T) {
 		name    string
 		jsonStr string
 	}{
-		{name: "custom invalid", jsonStr: `{"type":"custom","input_schema":"bad"}`},
+		{name: "custom invalid", jsonStr: `{"type":"custom","name":123}`},
 		{name: "bash invalid", jsonStr: `{"type":"bash_20250124","name":123}`},
 		{name: "text_editor_20250124 invalid", jsonStr: `{"type":"text_editor_20250124","name":123}`},
 		{name: "text_editor_20250429 invalid", jsonStr: `{"type":"text_editor_20250429","name":123}`},

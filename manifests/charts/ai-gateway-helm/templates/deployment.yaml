@@ -36,6 +36,9 @@ spec:
       {{- if .Values.controller.hostNetwork }}
       dnsPolicy: ClusterFirstWithHostNet
       {{- end }}
+      {{- with .Values.controller.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.controller.podSecurityContext | nindent 8 }}
       containers:
@@ -50,9 +53,11 @@ spec:
             {{- end }}
           args:
             - -logLevel={{ .Values.controller.logLevel }}
+            - -logFormat={{ .Values.controller.logFormat }}
             - --extProcImage={{ .Values.extProc.image.repository }}:{{ .Values.extProc.image.tag | default .Chart.AppVersion }}
             - --extProcImagePullPolicy={{ .Values.extProc.imagePullPolicy }}
             - --extProcLogLevel={{ .Values.extProc.logLevel }}
+            - --extProcLogFormat={{ .Values.extProc.logFormat }}
             - --envoyGatewayNamespace={{ .Values.envoyGateway.namespace }}
             {{- if .Values.extProc.enableRedaction }}
             - --extProcEnableRedaction=true
@@ -85,6 +90,10 @@ spec:
               {{- $anthropic := .Values.endpointConfig.anthropic -}}
               {{- $endpointPrefixes = append $endpointPrefixes (printf "anthropic:%s" $anthropic) -}}
             {{- end -}}
+            {{- if hasKey .Values.endpointConfig "typesafe" -}}
+              {{- $typesafe := .Values.endpointConfig.typesafe -}}
+              {{- $endpointPrefixes = append $endpointPrefixes (printf "typesafe:%s" $typesafe) -}}
+            {{- end -}}
             {{- if $endpointPrefixes }}
             - "--endpointPrefixes={{ join "," $endpointPrefixes }}"
             {{- end }}
@@ -107,12 +116,18 @@ spec:
             - --quotaRateLimitServiceAddr={{ .Values.controller.quotaRateLimitServiceAddr }}
             - --quotaRateLimitTimeout={{ .Values.controller.quotaRateLimitTimeout }}
             - --quotaRateLimitFailureModeDeny={{ .Values.controller.quotaRateLimitFailureModeDeny }}
-            - --mcpSessionEncryptionSeed={{ .Values.controller.mcp.sessionEncryption.seed }}
+            - --mcpSessionEncryptionSeed=$(MCP_SESSION_ENCRYPTION_SEED)
             - --mcpSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.iterations }}
             {{- if .Values.controller.mcp.sessionEncryption.fallback.seed }}
             - --mcpFallbackSessionEncryptionSeed={{ .Values.controller.mcp.sessionEncryption.fallback.seed }}
             - --mcpFallbackSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.fallback.iterations }}
             {{- end }}
+          # Allow the default two-minute cache sync timeout plus startup overhead.
+          startupProbe:
+            grpc:
+              port: 1063
+            failureThreshold: 75
+            periodSeconds: 2
           livenessProbe:
             grpc:
               port: 1063
@@ -123,6 +138,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: MCP_SESSION_ENCRYPTION_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-gateway-helm.controller.mcpSessionEncryptionSecretName" . }}
+                  key: seed
           {{- if .Values.controller.podEnv }}
           {{- range $key, $val := .Values.controller.podEnv }}
             - name: {{ $key }}

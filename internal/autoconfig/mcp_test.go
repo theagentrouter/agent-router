@@ -207,6 +207,34 @@ func TestAddMCPServersConfig(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "default HTTP port",
+			input: &MCPServers{
+				McpServers: map[string]MCPServer{
+					"local": {
+						Type: "http",
+						URL:  "http://mcp.example.com/mcp",
+					},
+				},
+			},
+			expected: ConfigData{
+				Backends: []Backend{
+					{
+						Name:     "local",
+						Hostname: "mcp.example.com",
+						Port:     80,
+						NeedsTLS: false,
+					},
+				},
+				MCPBackendRefs: []MCPBackendRef{
+					{
+						BackendName: "local",
+						Path:        "/mcp",
+						Headers:     map[string]string{},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

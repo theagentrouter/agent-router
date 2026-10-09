@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -1344,8 +1345,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1371,8 +1372,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 50,
 					TotalTokens:  150,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        25,
-						CacheCreationTokens: 10,
+						CachedTokens:     25,
+						CacheWriteTokens: 10,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1400,8 +1401,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 200,
 					TotalTokens:  250,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 100,
@@ -1428,8 +1429,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1456,8 +1457,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 10,
 					TotalTokens:  15,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1495,8 +1496,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 0,
 					TotalTokens:  0,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1519,8 +1520,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1563,8 +1564,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1610,8 +1611,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1670,8 +1671,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 200,
 					TotalTokens:  300,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        30,
-						CacheCreationTokens: 20,
+						CachedTokens:     30,
+						CacheWriteTokens: 20,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 50,
@@ -1698,5 +1699,17 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 			got := buildResponsesResponseAttributes(tt.resp, tt.config)
 			openinference.RequireAttributesEqual(t, tt.expectedAttrs, got)
 		})
+	}
+}
+
+// An empty response model must not emit llm.model_name at all — on the
+// streaming path an empty value would overwrite the request-time
+// llm.model_name attribute (OTel attributes are last-write-wins).
+func TestBuildResponseAttributesEmptyModelOmitsModelName(t *testing.T) {
+	resp := &openai.ChatCompletionResponse{}
+	attrs := buildResponseAttributes(resp, &openinference.TraceConfig{})
+	for _, attr := range attrs {
+		require.NotEqual(t, openinference.LLMModelName, string(attr.Key),
+			"llm.model_name must not be set from an empty response model")
 	}
 }

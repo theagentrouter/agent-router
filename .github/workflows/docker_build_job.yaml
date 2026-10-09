@@ -2,6 +2,11 @@ name: Docker Build Job
 
 on:
   workflow_call:
+    inputs:
+      tag:
+        description: Additional tag to push, e.g. a GitVersion-computed -dev version. Skipped if empty.
+        required: false
+        type: string
 
 jobs:
   docker_builds:
@@ -33,17 +38,17 @@ jobs:
             ~/go/bin
           key: build-container-${{ hashFiles('**/go.mod', '**/go.sum', '**/Makefile') }}
 
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker buildx
         id: buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login into DockerHub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
@@ -65,3 +70,10 @@ jobs:
           if [[ "$GITHUB_REF" != refs/tags/* ]]; then
             make docker-build.${{ matrix.command_name }} CMD_PATH_PREFIX=${{ matrix.cmd_path_prefix }} ENABLE_MULTI_PLATFORMS=true TAG="latest" DOCKER_BUILD_ARGS="--push"
           fi
+
+      # inputs.tag is the GitVersion-computed -dev version, additional to the SHA tag above
+      # which remains the documented way to pin to a specific commit.
+      - name: Build and Push Image Dev Version
+        if: ${{ inputs.tag != '' }}
+        run: |
+          make docker-build.${{ matrix.command_name }} CMD_PATH_PREFIX=${{ matrix.cmd_path_prefix }} ENABLE_MULTI_PLATFORMS=true TAG=${{ inputs.tag }} DOCKER_BUILD_ARGS="--push"

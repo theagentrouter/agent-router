@@ -42,8 +42,13 @@ func TestAuthorizeRequest(t *testing.T) {
 	proxy := &mcpRequestContext{ProxyConfig: &ProxyConfig{l: logger}}
 
 	tests := []struct {
-		name          string
-		auth          *filterapi.MCPRouteAuthorization
+		name string
+		auth *filterapi.MCPRouteAuthorization
+		// unverifiedJWT models a route with no securityPolicy.oauth configured (Envoy never
+		// verifies the bearer JWT). By default test cases model a route where OAuth *is*
+		// configured, i.e. auth.VerifiedJWT is forced true below, since that's what every
+		// other case here is exercising (claims/scopes trusted after Envoy verification).
+		unverifiedJWT bool
 		backend       string
 		tool          string
 		args          mcp.Params
@@ -550,6 +555,52 @@ func TestAuthorizeRequest(t *testing.T) {
 			expectScopes:  nil,
 		},
 		{
+			// A CEL runtime evaluation error (as opposed to a false result) must not be treated
+			// as "rule does not match" and fall through to a later Allow rule or the route's DefaultAction.
+			// Here the request omits "arguments" entirely, so indexing it with ["folder"] errors at
+			// evaluation time rather than compiling to false. Despite a later Allow rule
+			// whose Source/Target would otherwise match, the request must be denied because
+			// the Deny rule's condition could not be evaluated.
+			name: "CEL runtime error on deny rule fails closed instead of falling through to allow",
+			auth: &filterapi.MCPRouteAuthorization{
+				DefaultAction: "Deny",
+				Rules: []filterapi.MCPRouteAuthorizationRule{
+					{
+						Action: "Deny",
+						Target: &filterapi.MCPAuthorizationTarget{
+							Tools: []filterapi.ToolCall{{
+								Backend: "backend1",
+								Tool:    "listFiles",
+							}},
+						},
+						CEL: ptr.To(`request.mcp.params.arguments["folder"] == "restricted"`),
+					},
+					{
+						Action: "Allow",
+						Source: &filterapi.MCPAuthorizationSource{
+							JWT: filterapi.JWTSource{Scopes: []string{"read"}},
+						},
+						Target: &filterapi.MCPAuthorizationTarget{
+							Tools: []filterapi.ToolCall{{
+								Backend: "backend1",
+								Tool:    "listFiles",
+							}},
+						},
+					},
+				},
+			},
+			headers: http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			backend: "backend1",
+			tool:    "listFiles",
+			args: &mcp.CallToolParams{
+				Name: "p1",
+				// No Arguments set at all, so request.mcp.params.arguments is absent and
+				// indexing it with ["folder"] raises a CEL evaluation error, not a match failure.
+			},
+			expectAllowed: false,
+			expectScopes:  nil,
+		},
+		{
 			name: "no rules default deny",
 			auth: &filterapi.MCPRouteAuthorization{
 				DefaultAction: "Deny",
@@ -960,6 +1011,29 @@ func TestAuthorizeRequest(t *testing.T) {
 			tool:          "tool1",
 			expectAllowed: true,
 		},
+		// Aa CEL rule referencing request.auth.jwt.claims on a route with no securityPolicy.oauth
+		// (VerifiedJWT: false) must never trust an attacker-forged, unsigned (alg=none) JWT.
+		// Without the fix, this forged "admin" claim would satisfy the CEL rule and bypass the Deny default.
+		{
+			name: "CEL rule referencing jwt claims is ignored when JWT is not verified (unverifiedJWT)",
+			auth: &filterapi.MCPRouteAuthorization{
+				DefaultAction: "Deny",
+				Rules: []filterapi.MCPRouteAuthorizationRule{
+					{
+						Action: "Allow",
+						CEL:    ptr.To(`request.auth.jwt.claims["role"] == "admin"`),
+						Target: &filterapi.MCPAuthorizationTarget{
+							Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "tool1"}},
+						},
+					},
+				},
+			},
+			unverifiedJWT: true,
+			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"role": "admin"})}},
+			backend:       "backend1",
+			tool:          "tool1",
+			expectAllowed: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -968,6 +1042,9 @@ func TestAuthorizeRequest(t *testing.T) {
 			if headers == nil {
 				headers = http.Header{}
 			}
+			// Every case here except those opting into unverifiedJWT models a route with
+			// securityPolicy.oauth configured, so Envoy has already verified the bearer JWT.
+			tt.auth.VerifiedJWT = !tt.unverifiedJWT
 			compiled, err := compileAuthorization(tt.auth)
 			if (err != nil) != tt.expectError {
 				t.Fatalf("expected error: %v, got: %v", tt.expectError, err)

@@ -307,3 +307,25 @@ func TestAnthropicToAnthropic_ResponseError(t *testing.T) {
 		})
 	}
 }
+
+// The space after "data:" is optional per the SSE specification, and some
+// Anthropic-compatible backends omit it. The stream must still yield usage.
+func TestAnthropicToAnthropic_ResponseBody_streaming_noSpaceAfterColon(t *testing.T) {
+	translator := NewAnthropicToAnthropicTranslator("", "")
+	require.NotNil(t, translator)
+	translator.(*anthropicToAnthropicTranslator).stream = true
+
+	const response = `event: message_start
+data:{"type":"message_start","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_01","type":"message","role":"assistant","content":[],"usage":{"input_tokens":9,"cache_creation_input_tokens":0,"cache_read_input_tokens":1,"output_tokens":0}}}
+
+event: message_delta
+data:{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":16}}
+
+event: message_stop
+data:{"type":"message_stop"}`
+
+	_, _, tokenUsage, responseModel, err := translator.ResponseBody(nil, strings.NewReader(response), true, nil)
+	require.NoError(t, err)
+	require.Equal(t, tokenUsageFrom(10, 1, 0, 16, 26, -1), tokenUsage)
+	require.Equal(t, "claude-sonnet-4-5-20250929", responseModel)
+}

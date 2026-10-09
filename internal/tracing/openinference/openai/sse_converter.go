@@ -33,11 +33,23 @@ func convertSSEToJSON(chunks []*openai.ChatCompletionResponseChunk) *openai.Chat
 		role         string
 		obfuscation  string
 		finishReason openai.ChatCompletionChoicesFinishReason
+		model        string
 	)
 
 	for _, chunk := range chunks {
 		if firstChunk == nil {
 			firstChunk = chunk
+		}
+
+		// Capture the model from the first chunk that has one: some
+		// upstreams (e.g. Azure OpenAI's leading content-filter chunk)
+		// send their first chunk with an empty model. Unlike the
+		// translator's streamingResponseModel (last-non-empty-wins
+		// across the whole stream), this keeps the first non-empty
+		// value so a later, possibly-anomalous chunk can't silently
+		// override it.
+		if model == "" && chunk.Model != "" {
+			model = chunk.Model
 		}
 
 		// Accumulate content, role, and annotations from delta (assuming single choice at index 0).
@@ -109,7 +121,7 @@ func convertSSEToJSON(chunks []*openai.ChatCompletionResponseChunk) *openai.Chat
 		ID:                firstChunk.ID,
 		Object:            "chat.completion.chunk", // Keep chunk object type for streaming.
 		Created:           firstChunk.Created,
-		Model:             firstChunk.Model,
+		Model:             model,
 		ServiceTier:       firstChunk.ServiceTier,
 		SystemFingerprint: firstChunk.SystemFingerprint,
 		Obfuscation:       obfuscation,

@@ -117,6 +117,35 @@ data: [DONE]
 `,
 			expected: `{"id":"test","choices":[{"finish_reason":"length","index":0,"message":{"content":"","role":"assistant"}}],"created":123,"model":"test","object":"chat.completion.chunk","usage":{"completion_tokens":100,"prompt_tokens":5,"total_tokens":105}}`,
 		},
+		{
+			// Azure OpenAI / AI Foundry sends a leading content-filter
+			// prologue chunk with an empty model; the model must come from
+			// the first chunk that actually carries one.
+			name: "model from first non-empty chunk (Azure content-filter prologue)",
+			input: `data: {"id":"","object":"","created":0,"model":"","choices":[]}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":123,"model":"gpt-5.4-nano-2026-03-17","choices":[{"delta":{"role":"assistant","content":"Hi"}}]}
+
+data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":123,"model":"gpt-5.4-nano-2026-03-17","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}
+
+data: [DONE]
+`,
+			expected: `{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hi","role":"assistant"}}],"created":0,"model":"gpt-5.4-nano-2026-03-17","object":"chat.completion.chunk","usage":{"completion_tokens":1,"prompt_tokens":5,"total_tokens":6}}`,
+		},
+		{
+			// A later chunk reporting a different model (e.g. a routed
+			// fallback) must not override the first non-empty value.
+			name: "model retains first non-empty value even if a later chunk differs",
+			input: `data: {"id":"","object":"","created":0,"model":"","choices":[]}
+
+data: {"id":"chatcmpl-2","object":"chat.completion.chunk","created":123,"model":"gpt-first","choices":[{"delta":{"role":"assistant","content":"Hi"}}]}
+
+data: {"id":"chatcmpl-2","object":"chat.completion.chunk","created":123,"model":"gpt-second-should-not-win","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}
+
+data: [DONE]
+`,
+			expected: `{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hi","role":"assistant"}}],"created":0,"model":"gpt-first","object":"chat.completion.chunk","usage":{"completion_tokens":1,"prompt_tokens":5,"total_tokens":6}}`,
+		},
 	}
 
 	for _, tt := range tests {

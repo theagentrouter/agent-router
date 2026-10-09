@@ -1,0 +1,232 @@
+---
+title: Agent Router v1.2.x Release Series
+description: First release as Agent Router — MCP security hardening, bare MCP tool names, caller-supplied MCP credentials, AWS OpenAI-compatible and TypeSafe backends, and Envoy Gateway v1.9
+toc_min_heading_level: 2
+toc_max_heading_level: 4
+---
+
+import Link from '@docusaurus/Link';
+import {
+  ReleaseSeriesLayout,
+  ReleaseHeader,
+  FeatureSectionCard,
+  PatchRelease,
+  ItemList,
+  Dependencies
+} from '../../components/ReleaseNotes';
+import releaseData from '../../data/releases/v1.2.json';
+import React from 'react';
+
+export const { series, releases, navigation } = releaseData;
+export const mainRelease = releases[0];
+export const patchReleases = releases.slice(1).reverse();
+
+<ReleaseSeriesLayout
+  title={series.title}
+  subtitle={series.subtitle}
+  seriesVersion={series.version}
+  badgeText={series.badge}
+  badgeType={series.badgeType}
+  previousSeries={navigation.previous}
+>
+
+<ReleaseHeader
+  version={mainRelease.version}
+  date={mainRelease.date}
+  type={mainRelease.type}
+  tags={mainRelease.tags}
+>
+
+{mainRelease.overview}
+
+</ReleaseHeader>
+
+## ✨ New Features
+
+{mainRelease.features.map((featureSection, index) => (
+  <FeatureSectionCard key={index} section={featureSection} />
+))}
+
+## 🔗 API Updates
+
+{mainRelease.apiChanges.length > 0 && (
+  <ItemList items={mainRelease.apiChanges} />
+)}
+
+### Deprecations
+
+<ItemList items={mainRelease.deprecations} />
+
+## ⚠️ Breaking Changes
+
+<ItemList items={mainRelease.breakingChanges} />
+
+## 🐛 Bug Fixes
+
+{mainRelease.bugFixes?.length > 0 && (
+  <ItemList items={mainRelease.bugFixes} />
+)}
+
+## 📖 Upgrade Guidance
+
+Upgrading from **v1.1** needs no CRD storage migration, and every new field is optional. Several security fixes change behavior, though, so work through the steps that apply to you **before** you upgrade. Upgrade from v1.1.x, not directly from v1.0.x.
+
+### 1. Upgrade Gateway API and Envoy Gateway first
+
+Envoy Gateway v1.9 requires the Gateway API **v1.6** CRDs. If you use the standard channel, move any `TCPRoute` and `UDPRoute` manifests to `gateway.networking.k8s.io/v1` before you upgrade the CRDs. Then upgrade the CRDs and Envoy Gateway. The Agent Router values file is unchanged:
+
+```shell
+helm template eg-crds oci://docker.io/envoyproxy/gateway-crds-helm \
+  --version v1.9.2 \
+  --set crds.gatewayAPI.enabled=true \
+  --set crds.envoyGateway.enabled=true \
+  | kubectl apply --force-conflicts --server-side -f -
+
+helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm \
+  --version v1.9.2 \
+  --namespace envoy-gateway-system \
+  -f https://raw.githubusercontent.com/theagentrouter/agent-router/v1.2.0/manifests/envoy-gateway-values.yaml
+```
+
+Envoy Gateway v1.9 has its own breaking changes. Read its [v1.9.0](https://gateway.envoyproxy.io/news/releases/notes/v1.9.0/) and [v1.9.2](https://gateway.envoyproxy.io/news/releases/notes/v1.9.2/) release notes. The ones most likely to affect AI traffic:
+
+- Lua `EnvoyExtensionPolicy` is disabled by default. Enable it with `extensionApis.enableLua`.
+- `mergeType` on a `SecurityPolicy` or `BackendTrafficPolicy` is only accepted on route targets.
+- Tracing client sampling now defaults to 0%.
+- EndpointSlice indexing can increase controller memory.
+
+Do **not** enable Envoy Gateway's new `EnvoyProxy` `mergeBackends` option with Agent Router yet. It shares clusters between routes, which breaks how Agent Router resolves the backend for a request.
+
+### 2. Plan for the MCP session seed change
+
+The chart now generates a random MCP session encryption seed, so upgrading ends active MCP sessions. Pick one:
+
+- **Accept a reconnect.** Do nothing. Clients re-initialize their sessions.
+- **Keep sessions during the upgrade.** Add the old seed as a fallback in your values for this upgrade, then remove it once clients have reconnected:
+
+  ```yaml
+  controller:
+    mcp:
+      sessionEncryption:
+        fallback:
+          seed: default-insecure-seed
+  ```
+
+- **GitOps or `helm template`.** The chart can't read back a seed it generated earlier, so it generates a new one on every render. Supply your own Secret instead:
+
+  ```shell
+  kubectl create secret generic mcp-session-seed -n envoy-ai-gateway-system \
+    --from-literal=seed="$(openssl rand -hex 32)"
+  ```
+
+  Then set `controller.mcp.sessionEncryption.existingSecret: mcp-session-seed`.
+
+### 3. Check your MCPRoutes
+
+- `securityPolicy.oauth.issuer` must match your identity provider's `iss` claim exactly, including any trailing slash.
+- Any authorization or `backendSelector` CEL that references `request.auth.jwt` needs `securityPolicy.oauth` on the same route.
+- Make CEL expressions null-safe, because evaluation errors now deny. For example, use `"x-team" in request.headers && request.headers["x-team"] == "blocked"` instead of `request.headers["x-team"] == "blocked"`.
+- On routes with both `headers` and `oauth`, make sure clients send those headers during OAuth discovery.
+
+### 4. Add ReferenceGrants for cross-namespace credential Secrets
+
+If a `BackendSecurityPolicy` references a credential Secret in another namespace, create a grant in the **Secret's** namespace. This now applies to every credential type: API keys, AWS credentials files, Azure client secrets, GCP credentials files, and OIDC client secrets.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-backend-security-policy-secrets
+  namespace: credentials # the Secret's namespace
+spec:
+  from:
+    - group: aigateway.envoyproxy.io
+      kind: BackendSecurityPolicy
+      namespace: ai-backends # the BackendSecurityPolicy's namespace
+  to:
+    - group: ""
+      kind: Secret
+      name: openai-api-key # optional: limit the grant to one Secret
+```
+
+A `to` entry with `name` now authorizes only that object. Without `name`, it covers every object of that kind in the namespace. If an existing grant sets `name`, make sure it lists every Secret, `AIServiceBackend`, or `InferencePool` that other namespaces reference.
+
+### 5. Turn on metadata forwarding for `credentialOverride.fromDynamicMetadata`
+
+If you use per-request credentials from dynamic metadata, list the metadata namespace in a `GatewayConfig`, and reference that `GatewayConfig` from the Gateway with the `aigateway.envoyproxy.io/gateway-config` annotation:
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GatewayConfig
+metadata:
+  name: my-gateway-config
+  namespace: default # same namespace as the Gateway
+spec:
+  extProc:
+    metadataForwardingNamespaces:
+      - envoy.filters.http.ext_authz
+```
+
+### 6. Upgrade Agent Router
+
+```shell
+helm upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm \
+  --version v1.2.0 \
+  --namespace envoy-ai-gateway-system
+
+helm upgrade -i aieg oci://docker.io/envoyproxy/ai-gateway-helm \
+  --version v1.2.0 \
+  --namespace envoy-ai-gateway-system
+```
+
+The chart and image names keep the `ai-gateway` prefix. Only the project name changed.
+
+### 7. After the upgrade
+
+- **Dashboards:** GenAI metrics now carry a `gen_ai_backend` label. Panels that don't aggregate with `sum by (...)` will split into one series per backend.
+- **Legacy Secrets:** the controller no longer writes the old `filter-config.yaml` Secrets. You can delete them.
+- **Inference Extension:** if you use `InferencePool`, upgrade the Gateway API Inference Extension CRDs to v1.6.x and redeploy your endpoint picker.
+
+## 📦 Dependencies Versions
+
+<Dependencies dependencies={mainRelease.dependencies} />
+
+## ⏩ Patch Releases
+
+{patchReleases.map((release, index) => (
+  <PatchRelease
+    key={index}
+    version={release.version}
+    date={release.date}
+    type={release.type}
+    tags={release.tags}
+    overview={release.overview}
+    features={release.features}
+    bugFixes={release.bugFixes}
+  />
+))}
+
+## 🙏 Acknowledgements
+
+v1.2 came from 39 contributors, many of them contributing for the first time. Special thanks to:
+
+- **Ignasi Barrera**, who led the security hardening across MCP authentication, session binding, and cross-namespace references.
+- **Hritik Raj**, who built the groundwork for the 2026-07-28 MCP specification.
+- **Deepika Agrawal**, **Aishwarya Raimule**, and **Huabing (Robin) Zhao**, who added MCP prefix mode, credential injection, policy merging, and OAuth metadata URLs.
+- **Yang Haoran**, **hustxiayang**, and **Xiaolin Lin**, who added provider coverage and fixed streaming bugs.
+- **zirain**, who handled the Gateway API Inference Extension v1.6 upgrade and conformance.
+- Everyone who reported bugs, reviewed PRs, and joined the community meetings during the move to Agent Router.
+
+## 🔮 What's Next
+
+Work already in flight for upcoming releases:
+
+- **The stateless 2026-07-28 MCP specification**, switched on end to end.
+- **OAuth token exchange for MCP backends**, so the gateway can swap a client token for a backend-scoped one.
+- **A dedicated `MCPBackend` CRD**, decoupling backend configuration from `MCPRoute`.
+- **Longer quota windows** (weekly, monthly, and yearly) and **quota-aware routing**.
+- **Agent-to-agent (A2A) traffic**, building on the A2A preview guide.
+
+The roadmap is community-driven. [Join us](https://github.com/theagentrouter/agent-router) and help shape it.
+
+</ReleaseSeriesLayout>

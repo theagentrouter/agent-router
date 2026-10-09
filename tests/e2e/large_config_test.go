@@ -7,9 +7,7 @@ package e2e
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -20,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
+	"github.com/envoyproxy/ai-gateway/internal/controller"
 	"github.com/envoyproxy/ai-gateway/tests/internal/e2elib"
 )
 
@@ -53,8 +52,7 @@ func TestLargeConfigIsSharded(t *testing.T) {
 	fwd := e2elib.RequireNewHTTPPortForwarder(t, e2elib.EnvoyGatewayNamespace, egSelector, e2elib.EnvoyGatewayDefaultServicePort)
 	defer fwd.Kill()
 
-	baseLegacyName := fmt.Sprintf("%s-%s", gatewayName, namespace)
-	indexSecretName := fmt.Sprintf("%s-%s", baseLegacyName, shortStableHash(fmt.Sprintf("%s/%s", namespace, gatewayName)))
+	indexSecretName := controller.FilterConfigBundleIndexSecretName(gatewayName, namespace)
 	require.Eventually(t, func() bool {
 		partCount, err := readIndexPartCount(t.Context(), indexSecretName)
 		if err != nil {
@@ -75,14 +73,6 @@ func TestLargeConfigIsSharded(t *testing.T) {
 		t.Logf("config bundle successfully split into %d secrets", partCount)
 		return true
 	}, 90*time.Second, 2*time.Second, "bundle did not split into multiple secrets")
-
-	require.Eventually(t, func() bool {
-		if err := requireSecretExists(t.Context(), baseLegacyName); err != nil {
-			t.Logf("legacy secret %s missing: %v", baseLegacyName, err)
-			return false
-		}
-		return true
-	}, 90*time.Second, 2*time.Second, "legacy filter config secret was not created")
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "large-config-mcp-client", Version: "0.1.0"}, nil)
 	testMCPRouteTools(
@@ -237,11 +227,6 @@ spec:
 	}
 
 	return strings.TrimSpace(b.String())
-}
-
-func shortStableHash(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:6])
 }
 
 func readIndexPartCount(ctx context.Context, secretName string) (int, error) {

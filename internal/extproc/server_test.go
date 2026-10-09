@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"testing"
 	"time"
 
@@ -415,6 +416,56 @@ func TestResolveRouteName(t *testing.T) {
 	require.Empty(t, actual)
 }
 
+func TestSetAWSSigningAttributes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		seed       map[string]string // headers already present (e.g. spoofed by a downstream client)
+		attributes *structpb.Struct
+		wantHost   string
+	}{
+		{
+			name: "host from metadata",
+			attributes: &structpb.Struct{Fields: map[string]*structpb.Value{
+				internalapi.XDSUpstreamHostMetadataUpstreamHostPath: structpb.NewStringValue("vpce-123.bedrock-runtime.us-east-1.vpce.amazonaws.com"),
+			}},
+			wantHost: "vpce-123.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+		},
+		{
+			name:       "missing metadata",
+			attributes: &structpb.Struct{Fields: map[string]*structpb.Value{}},
+		},
+		{
+			name: "nil metadata",
+		},
+		{
+			// Client-spoofed header must not survive when xDS supplies no metadata.
+			name:       "client-supplied host is cleared when no xDS metadata",
+			seed:       map[string]string{internalapi.UpstreamHostHeader: "attacker.example.com"},
+			attributes: &structpb.Struct{Fields: map[string]*structpb.Value{}},
+		},
+		{
+			// Trusted xDS metadata must overwrite any client-supplied value.
+			name: "xDS metadata overrides client-supplied host",
+			seed: map[string]string{internalapi.UpstreamHostHeader: "attacker.example.com"},
+			attributes: &structpb.Struct{Fields: map[string]*structpb.Value{
+				internalapi.XDSUpstreamHostMetadataUpstreamHostPath: structpb.NewStringValue("vpce-123.bedrock-runtime.us-east-1.vpce.amazonaws.com"),
+			}},
+			wantHost: "vpce-123.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			headers := map[string]string{}
+			maps.Copy(headers, tc.seed)
+			setUpstreamHostAttributes(headers, tc.attributes)
+			if tc.wantHost == "" {
+				require.NotContains(t, headers, internalapi.UpstreamHostHeader)
+			} else {
+				require.Equal(t, tc.wantHost, headers[internalapi.UpstreamHostHeader])
+			}
+		})
+	}
+}
+
 func TestServer_ProcessorSelection(t *testing.T) {
 	s, err := NewServer(slog.Default(), false)
 	require.NoError(t, err)
@@ -521,6 +572,33 @@ func Test_filterSensitiveHeadersForLogging(t *testing.T) {
 	require.Contains(t, hm.Headers, &corev3.HeaderValue{Key: "authorization", Value: "sensitive"})
 }
 
+func Test_isSensitiveHeader(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		want bool
+	}{
+		{"authorization", true},
+		{"Authorization", true},
+		{"x-api-key", true},
+		// x-aigw- headers carry per-request credential overrides.
+		{"x-aigw-api-key", true},
+		{"x-aigw-aws-secret-access-key", true},
+		// The prefix is configurable, so keeping an existing injector's names must not lose
+		// redaction. Match on the credential-part suffix.
+		{"x-aws-secret-access-key", true},
+		{"x-aws-access-key-id", true},
+		{"x-aws-session-token", true},
+		{"X-Tenant-AWS-Secret-Access-Key", true},
+		{"content-type", false},
+		{"x-request-id", false},
+		{"user-agent", false},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			require.Equal(t, tc.want, isSensitiveHeader(tc.key, sensitiveHeaderKeys))
+		})
+	}
+}
+
 func Test_filterRequestBodyResponseHeaders(t *testing.T) {
 	buf := internaltesting.CaptureOutput("test")[0]
 	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
@@ -571,6 +649,142 @@ func Test_filterRequestBodyResponseHeaders(t *testing.T) {
 		require.NotNil(t, filtered)
 		require.Equal(t, &extprocv3.ProcessingResponse_RequestBody{}, filtered)
 	})
+}
+
+func Test_redactProcessingResponseRequestHeaders(t *testing.T) {
+	buf := internaltesting.CaptureOutput("test")[0]
+	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+	resp := &extprocv3.ProcessingResponse{
+		Response: &extprocv3.ProcessingResponse_RequestHeaders{
+			RequestHeaders: &extprocv3.HeadersResponse{
+				Response: &extprocv3.CommonResponse{
+					HeaderMutation: &extprocv3.HeaderMutation{
+						SetHeaders: []*corev3.HeaderValueOption{
+							{Header: &corev3.HeaderValue{
+								Key:      ":path",
+								RawValue: []byte("/v1/chat/completions"),
+							}},
+							{Header: &corev3.HeaderValue{
+								Key:      "Authorization",
+								RawValue: []byte("Bearer secret-backend-key"),
+							}},
+						},
+						RemoveHeaders: []string{"x-envoy-original-path"},
+					},
+					BodyMutation: &extprocv3.BodyMutation{
+						Mutation: &extprocv3.BodyMutation_Body{
+							Body: []byte(`{"prompt":"secret prompt"}`),
+						},
+					},
+					ClearRouteCache: true,
+				},
+			},
+		},
+	}
+	rh := resp.Response.(*extprocv3.ProcessingResponse_RequestHeaders)
+
+	t.Run("redactBody=false redacts headers only", func(t *testing.T) {
+		filtered := redactProcessingResponseRequestHeaders(rh, logger, []string{"authorization"}, false)
+		require.NotNil(t, filtered)
+		filteredMutation := filtered.RequestHeaders.Response.GetHeaderMutation()
+		require.Equal(t, []string{"x-envoy-original-path"}, filteredMutation.GetRemoveHeaders())
+		// The injected backend credential must be redacted even with redactBody off.
+		require.Equal(t, []*corev3.HeaderValueOption{
+			{Header: &corev3.HeaderValue{Key: ":path", RawValue: []byte("/v1/chat/completions")}},
+			{Header: &corev3.HeaderValue{Key: "Authorization", RawValue: []byte("[REDACTED]")}},
+		}, filteredMutation.GetSetHeaders())
+		require.NotContains(t, buf.String(), "secret-backend-key")
+
+		// Body stays raw when redactBody is false.
+		require.JSONEq(t, `{"prompt":"secret prompt"}`, string(filtered.RequestHeaders.Response.GetBodyMutation().GetBody()))
+		// ClearRouteCache is preserved.
+		require.True(t, filtered.RequestHeaders.Response.GetClearRouteCache())
+
+		// Original response is not modified.
+		originalMutation := rh.RequestHeaders.Response.GetHeaderMutation()
+		require.Equal(t, []*corev3.HeaderValueOption{
+			{Header: &corev3.HeaderValue{Key: ":path", RawValue: []byte("/v1/chat/completions")}},
+			{Header: &corev3.HeaderValue{Key: "Authorization", RawValue: []byte("Bearer secret-backend-key")}},
+		}, originalMutation.GetSetHeaders())
+	})
+
+	t.Run("redactBody=true redacts headers and body", func(t *testing.T) {
+		filtered := redactProcessingResponseRequestHeaders(rh, logger, []string{"authorization"}, true)
+		require.NotNil(t, filtered)
+		filteredMutation := filtered.RequestHeaders.Response.GetHeaderMutation()
+		require.Equal(t, []*corev3.HeaderValueOption{
+			{Header: &corev3.HeaderValue{Key: ":path", RawValue: []byte("/v1/chat/completions")}},
+			{Header: &corev3.HeaderValue{Key: "Authorization", RawValue: []byte("[REDACTED]")}},
+		}, filteredMutation.GetSetHeaders())
+
+		bodyStr := string(filtered.RequestHeaders.Response.GetBodyMutation().GetBody())
+		require.Contains(t, bodyStr, "[REDACTED LENGTH=")
+		require.NotContains(t, bodyStr, "secret prompt")
+
+		// Original body still unmodified.
+		require.JSONEq(t, `{"prompt":"secret prompt"}`, string(rh.RequestHeaders.Response.GetBodyMutation().GetBody()))
+	})
+
+	t.Run("handle nil response", func(t *testing.T) {
+		filtered := redactProcessingResponseRequestHeaders(nil, logger, []string{"authorization"}, false)
+		require.NotNil(t, filtered)
+		require.Equal(t, &extprocv3.ProcessingResponse_RequestHeaders{}, filtered)
+	})
+}
+
+// TestServer_processMsg_RedactsCredentialMutation asserts that a backend
+// credential injected via the request-headers header mutation is redacted in the
+// "request headers processed" debug log even when enableRedaction is false —
+// header/credential redaction must be independent of the body-content redaction
+// flag.
+func TestServer_processMsg_RedactsCredentialMutation(t *testing.T) {
+	buf := internaltesting.CaptureOutput("test")[0]
+	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+	s, err := NewServer(logger, false) // enableRedaction=false, debug on
+	require.NoError(t, err)
+	s.config = &filterapi.RuntimeConfig{}
+	m := newMockProcessor(s.config, s.logger).(*mockProcessor)
+	s.Register("/", func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
+		return m, nil
+	})
+
+	hm := &corev3.HeaderMap{Headers: []*corev3.HeaderValue{{Key: "foo", Value: "bar"}}}
+	expResponse := &extprocv3.ProcessingResponse{
+		Response: &extprocv3.ProcessingResponse_RequestHeaders{
+			RequestHeaders: &extprocv3.HeadersResponse{
+				Response: &extprocv3.CommonResponse{
+					HeaderMutation: &extprocv3.HeaderMutation{
+						SetHeaders: []*corev3.HeaderValueOption{{
+							Header: &corev3.HeaderValue{Key: "Authorization", RawValue: []byte("Bearer secret-backend-key")},
+						}},
+					},
+				},
+			},
+		},
+	}
+	m.t = t
+	m.expHeaderMap = hm
+	m.retProcessingResponse = expResponse
+
+	ctx := context.WithValue(t.Context(), loggerContextKey, logger)
+	req := &extprocv3.ProcessingRequest{
+		Request: &extprocv3.ProcessingRequest_RequestHeaders{RequestHeaders: &extprocv3.HttpHeaders{Headers: hm}},
+	}
+	// Upstream filter path is where the backend Authorization is injected.
+	resp, err := s.processMsg(ctx, m, req, "test-req-id", true)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	// The actual response sent to Envoy is unchanged.
+	require.Equal(t, []byte("Bearer secret-backend-key"),
+		resp.GetRequestHeaders().GetResponse().GetHeaderMutation().GetSetHeaders()[0].Header.RawValue)
+	// But the debug log must not leak the credential.
+	require.Contains(t, buf.String(), "[REDACTED]")
+	require.NotContains(t, buf.String(), "secret-backend-key")
 }
 
 func Test_redactRequestBodyResponseFull(t *testing.T) {

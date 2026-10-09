@@ -7,14 +7,20 @@ package translator
 
 import (
 	"bytes"
+	"fmt"
+	"io"
+	"net/http"
 	"testing"
 
+	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/packages/ssestream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
 // sseEvent holds parsed Anthropic SSE event data.
@@ -44,6 +50,23 @@ func parseSSEEventsFromBytes(output []byte) []sseEvent {
 		}
 	}
 	return events
+}
+
+// accumulateAnthropicMessage runs emitted Anthropic SSE bytes through anthropic-sdk-go's
+// Message.Accumulate, the same logic a real Anthropic client uses to build usage from a stream.
+func accumulateAnthropicMessage(t *testing.T, sse []byte) anthropicsdk.Message {
+	t.Helper()
+	resp := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:   io.NopCloser(bytes.NewReader(sse)),
+	}
+	stream := ssestream.NewStream[anthropicsdk.MessageStreamEventUnion](ssestream.NewDecoder(resp), nil)
+	var msg anthropicsdk.Message
+	for stream.Next() {
+		require.NoError(t, msg.Accumulate(stream.Current()))
+	}
+	require.NoError(t, stream.Err())
+	return msg
 }
 
 func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
@@ -169,10 +192,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 				{Tool: &anthropic.Tool{
 					Name:        "get_weather",
 					Description: "Retrieve current weather information",
-					InputSchema: anthropic.ToolInputSchema{
-						Type:     "object",
-						Required: []string{"location"},
-					},
+					InputSchema: json.RawMessage(`{"type":"object","required":["location"]}`),
 				}},
 			},
 		}
@@ -200,7 +220,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 		body := &anthropic.MessagesRequest{
 			Model:      "claude-3",
 			Messages:   []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
-			Tools:      []anthropic.ToolUnion{{Tool: &anthropic.Tool{Name: "search", InputSchema: anthropic.ToolInputSchema{Type: "object"}}}},
+			Tools:      []anthropic.ToolUnion{{Tool: &anthropic.Tool{Name: "search", InputSchema: json.RawMessage(`{"type":"object"}`)}}},
 			ToolChoice: ptr.To(anthropic.ToolChoice{Auto: &anthropic.ToolChoiceAuto{Type: "auto"}}),
 		}
 		req := buildOpenAIChatCompletionRequest(body, "")
@@ -302,11 +322,7 @@ func TestAnthropicToolsToOpenAI(t *testing.T) {
 			{Tool: &anthropic.Tool{
 				Name:        "search",
 				Description: "Search the web",
-				InputSchema: anthropic.ToolInputSchema{
-					Type:       "object",
-					Properties: map[string]any{"query": map[string]any{"type": "string"}},
-					Required:   []string{"query"},
-				},
+				InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`),
 			}},
 		}
 		result := anthropicToolsToOpenAI(tools)
@@ -319,13 +335,25 @@ func TestAnthropicToolsToOpenAI(t *testing.T) {
 
 	t.Run("multiple tools all converted", func(t *testing.T) {
 		tools := []anthropic.ToolUnion{
-			{Tool: &anthropic.Tool{Name: "tool1", InputSchema: anthropic.ToolInputSchema{Type: "object"}}},
-			{Tool: &anthropic.Tool{Name: "tool2", InputSchema: anthropic.ToolInputSchema{Type: "object"}}},
+			{Tool: &anthropic.Tool{Name: "tool1", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+			{Tool: &anthropic.Tool{Name: "tool2", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 		}
 		result := anthropicToolsToOpenAI(tools)
 		require.Len(t, result, 2)
 		assert.Equal(t, "tool1", result[0].Function.Name)
 		assert.Equal(t, "tool2", result[1].Function.Name)
+	})
+
+	t.Run("schema reaches the backend as sent", func(t *testing.T) {
+		const inputSchema = `{"type":"object","properties":{},"additionalProperties":false,"$defs":{"unit":{"enum":["c","f"]}}}`
+		var tool anthropic.ToolUnion
+		require.NoError(t, json.Unmarshal([]byte(`{"name":"get_time","input_schema":`+inputSchema+`}`), &tool))
+
+		result := anthropicToolsToOpenAI([]anthropic.ToolUnion{tool})
+		require.Len(t, result, 1)
+		parameters, err := json.Marshal(result[0].Function.Parameters)
+		require.NoError(t, err)
+		require.JSONEq(t, inputSchema, string(parameters))
 	})
 }
 
@@ -612,10 +640,53 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_TextStreaming(t *testing.T) 
 	require.JSONEq(t, `{"type":"content_block_stop","index":0}`, events[4].data)
 
 	assert.Equal(t, "message_delta", events[5].eventType)
-	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}`, events[5].data)
+	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":10,"output_tokens":5}}`, events[5].data)
 
 	assert.Equal(t, "message_stop", events[6].eventType)
 	require.JSONEq(t, `{"type":"message_stop"}`, events[6].data)
+}
+
+// TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens is a regression test guarding
+// against double-counting OpenAI's cached_tokens/cache_write_tokens (a breakdown
+// within prompt_tokens) as if they were additive, Anthropic-native cache usage fields.
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens(t *testing.T) {
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "claude-3",
+	}
+
+	const (
+		promptTokens        = 190_000
+		cachedTokens        = 185_000
+		cacheCreationTokens = 3_000
+		completionTokens    = 800
+	)
+
+	input := fmt.Sprintf(
+		"data: {\"id\":\"chatcmpl-cache\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}],\"model\":\"gpt-4o\"}\n\n"+
+			"data: {\"id\":\"chatcmpl-cache\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
+			"data: {\"id\":\"chatcmpl-cache\",\"choices\":[],\"usage\":{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"prompt_tokens_details\":{\"cached_tokens\":%d,\"cache_write_tokens\":%d}}}\n\n"+
+			"data: [DONE]\n\n",
+		promptTokens, completionTokens, cachedTokens, cacheCreationTokens,
+	)
+
+	state.buffer.WriteString(input)
+
+	var out []byte
+	err := state.processBuffer(&out, true)
+	require.NoError(t, err)
+
+	msg := accumulateAnthropicMessage(t, out)
+
+	totalReportedInputTokens := msg.Usage.InputTokens + msg.Usage.CacheReadInputTokens + msg.Usage.CacheCreationInputTokens
+	assert.Equal(t, int64(promptTokens), totalReportedInputTokens,
+		"total input tokens must equal the real prompt_tokens, not be inflated by double-counting the cached portion")
+	assert.Equal(t, int64(completionTokens), msg.Usage.OutputTokens)
+
+	total, ok := state.tokenUsage.InputTokens()
+	require.True(t, ok)
+	assert.LessOrEqual(t, total, uint32(promptTokens),
+		"internal TokenUsage must not inflate the input token count beyond the real prompt size")
 }
 
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_ToolCallStreaming(t *testing.T) {
@@ -656,7 +727,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ToolCallStreaming(t *testing
 	require.JSONEq(t, `{"type":"content_block_stop","index":0}`, events[3].data)
 
 	assert.Equal(t, "message_delta", events[4].eventType)
-	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":10}}`, events[4].data)
+	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"input_tokens":15,"output_tokens":10}}`, events[4].data)
 
 	assert.Equal(t, "message_stop", events[5].eventType)
 	require.JSONEq(t, `{"type":"message_stop"}`, events[5].data)
@@ -693,7 +764,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_EndOfStreamClosing(t *testin
 		}
 	}
 	require.NotEmpty(t, msgDeltaData)
-	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":0}}`, msgDeltaData)
+	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":0,"output_tokens":0}}`, msgDeltaData)
 }
 
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_EmptyInput(t *testing.T) {
@@ -1396,5 +1467,46 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_SignatureDelta(t *testing.T)
 			assert.Contains(t, e.data, `"sig_abc"`)
 		}
 	}
+	assert.True(t, hasSignatureDelta, "expected a signature_delta event")
+}
+
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingBlocks(t *testing.T) {
+	// Signatures now ride on delta.thinking_blocks (reasoning_content is a plain
+	// string), so a chunk carrying thinking_blocks must round-trip both the thinking
+	// text and its signature to the Anthropic protocol.
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "claude-3",
+	}
+
+	input := `data: {"id":"chatcmpl-tb","choices":[{"index":0,"delta":{"role":"assistant","thinking_blocks":[{"type":"thinking","thinking":"deep thought","signature":"sig_tb"}]}}],"model":"gpt-4o"}` + "\n\n" +
+		`data: {"id":"chatcmpl-tb","choices":[{"index":0,"delta":{"content":"Answer"}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-tb","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-tb","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	state.buffer.WriteString(input)
+
+	var out []byte
+	err := state.processBuffer(&out, true)
+	require.NoError(t, err)
+
+	events := parseSSEEventsFromBytes(out)
+
+	var hasThinkingBlock, hasThinkingDelta, hasSignatureDelta bool
+	for _, e := range events {
+		switch {
+		case e.eventType == "content_block_start" && bytes.Contains([]byte(e.data), []byte(`"thinking"`)):
+			hasThinkingBlock = true
+		case e.eventType == "content_block_delta" && bytes.Contains([]byte(e.data), []byte(`"thinking_delta"`)):
+			hasThinkingDelta = true
+			assert.Contains(t, e.data, `"deep thought"`)
+		case e.eventType == "content_block_delta" && bytes.Contains([]byte(e.data), []byte(`"signature_delta"`)):
+			hasSignatureDelta = true
+			assert.Contains(t, e.data, `"sig_tb"`)
+		}
+	}
+	assert.True(t, hasThinkingBlock, "expected a thinking content_block_start")
+	assert.True(t, hasThinkingDelta, "expected a thinking_delta event")
 	assert.True(t, hasSignatureDelta, "expected a signature_delta event")
 }
