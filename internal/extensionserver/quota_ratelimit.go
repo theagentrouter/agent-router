@@ -9,8 +9,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
-	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -358,34 +356,42 @@ type clusterRouteInfo struct {
 }
 
 // resolveClusterRule parses a cluster name and fetches the corresponding AIGatewayRoute rule.
-// Cluster name format: "httproute/{namespace}/{routeName}/rule/{ruleIndex}"
+//
+// Envoy Gateway names the cluster of a rule "httproute/{namespace}/{routeName}/rule/{ruleIndex}".
+// When it creates one cluster per backend instead, for example because a BackendTrafficPolicy with
+// zone-aware weights targets the route, the name is
+// "httproute/{namespace}/{routeName}/rule/{ruleIndex}/backend/{backendRefIndex}". The returned rule
+// then holds only the backendRef that cluster belongs to.
 func (s *Server) resolveClusterRule(ctx context.Context, clusterName string) *clusterRouteInfo {
-	parts := strings.Split(clusterName, "/")
-	if len(parts) != 5 || parts[0] != "httproute" {
-		return nil
-	}
-	namespace := parts[1]
-	routeName := parts[2]
-	ruleIndex, err := strconv.Atoi(parts[4])
-	if err != nil || ruleIndex < 0 {
+	name, err := parseAIGatewayClusterName(clusterName)
+	if err != nil {
 		return nil
 	}
 
 	var aigwRoute aigv1b1.AIGatewayRoute
 	if err := s.k8sClient.Get(ctx, client.ObjectKey{
-		Namespace: namespace,
-		Name:      routeName,
+		Namespace: name.namespace,
+		Name:      name.routeName,
 	}, &aigwRoute); err != nil {
 		return nil
 	}
 
-	if ruleIndex >= len(aigwRoute.Spec.Rules) {
+	if name.ruleIndex >= len(aigwRoute.Spec.Rules) {
 		return nil
+	}
+	rule := &aigwRoute.Spec.Rules[name.ruleIndex]
+
+	if name.backendRefIndex != noBackendRefIndex {
+		if name.backendRefIndex >= len(rule.BackendRefs) {
+			return nil
+		}
+		rule = rule.DeepCopy()
+		rule.BackendRefs = rule.BackendRefs[name.backendRefIndex : name.backendRefIndex+1]
 	}
 
 	return &clusterRouteInfo{
-		namespace: namespace,
-		rule:      &aigwRoute.Spec.Rules[ruleIndex],
+		namespace: name.namespace,
+		rule:      rule,
 	}
 }
 
