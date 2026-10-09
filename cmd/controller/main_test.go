@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/envoyproxy/ai-gateway/internal/controller"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
@@ -81,6 +82,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 		require.Equal(t, "tls.key", f.tlsKeyName)
 		require.Equal(t, 9443, f.webhookPort)
 		require.Equal(t, 4*1024*1024, f.maxRecvMsgSize)
+		require.Equal(t, controller.DefaultFilterConfigBundleMaxSlots, f.filterConfigBundleMaxSlots)
 		require.Nil(t, f.spanRequestHeaderAttributes)
 		require.Nil(t, f.logRequestHeaderAttributes)
 		require.NoError(t, err)
@@ -112,6 +114,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 					tc.dash + "logRequestHeaderAttributes=x-forwarded-proto:url.scheme",
 					tc.dash + "endpointPrefixes=openai:/v1,cohere:/cohere/v2,anthropic:/anthropic/v1",
 					tc.dash + "maxRecvMsgSize=33554432",
+					tc.dash + "filterConfigBundleMaxSlots=16",
 					tc.dash + "watchNamespaces=default,envoy-ai-gateway-system",
 					tc.dash + "cacheSyncTimeout=5m",
 					tc.dash + "mcpSessionEncryptionSeed=my-seed",
@@ -140,6 +143,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				require.Equal(t, "x-forwarded-proto:url.scheme", *f.logRequestHeaderAttributes)
 				require.Equal(t, "openai:/v1,cohere:/cohere/v2,anthropic:/anthropic/v1", f.endpointPrefixes)
 				require.Equal(t, 32*1024*1024, f.maxRecvMsgSize)
+				require.Equal(t, 16, f.filterConfigBundleMaxSlots)
 				require.Equal(t, []string{"default", "envoy-ai-gateway-system"}, f.watchNamespaces)
 				require.Equal(t, 5*time.Minute, f.cacheSyncTimeout)
 				require.Equal(t, "my-seed", f.mcpSessionEncryptionSeed)
@@ -241,6 +245,11 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				name:   "negative mcp fallback session encryption iterations",
 				flags:  []string{"--mcpFallbackSessionEncryptionSeed=fallback", "--mcpFallbackSessionEncryptionIterations=-1"},
 				expErr: "mcp fallback session encryption iterations must be positive: -1",
+			},
+			{
+				name:   "zero filterConfigBundleMaxSlots",
+				flags:  []string{"--filterConfigBundleMaxSlots=0"},
+				expErr: "filterConfigBundleMaxSlots must be at least 1, got 0",
 			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {

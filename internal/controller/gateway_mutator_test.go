@@ -103,7 +103,7 @@ func TestGatewayMutator_mutatePod(t *testing.T) {
 					}
 					foundBundle = true
 					require.NotNil(t, v.Projected)
-					require.Len(t, v.Projected.Sources, maxFilterConfigBundleSlots+1) // index + fixed slots
+					require.Len(t, v.Projected.Sources, DefaultFilterConfigBundleMaxSlots+1) // index + fixed slots
 					for j, src := range v.Projected.Sources {
 						if j == 0 {
 							require.Nil(t, src.Secret.Optional) // index secret is not optional
@@ -469,9 +469,25 @@ func TestGatewayMutator_mutatePod(t *testing.T) {
 }
 
 func TestGatewayMutator_mutatePod_BundleOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		slots     int
+		wantSlots int
+	}{
+		{name: "default", slots: 0, wantSlots: DefaultFilterConfigBundleMaxSlots},
+		{name: "raised", slots: 16, wantSlots: 16},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testGatewayMutatorMutatePodBundleOnly(t, tc.slots, tc.wantSlots)
+		})
+	}
+}
+
+func testGatewayMutatorMutatePodBundleOnly(t *testing.T, slots, wantSlots int) {
 	fakeClient := requireNewFakeClientWithIndexes(t)
 	fakeKube := fake2.NewClientset()
 	g := newTestGatewayMutator(fakeClient, fakeKube, nil, nil, nil, nil, "", "", "", false)
+	g.bundleMaxSlots = slots
 
 	const gwName, gwNamespace = "test-gateway", "test-namespace"
 	err := fakeClient.Create(t.Context(), &aigv1b1.AIGatewayRoute{
@@ -520,6 +536,20 @@ func TestGatewayMutator_mutatePod_BundleOnly(t *testing.T) {
 
 	extProcContainer := pod.Spec.Containers[1]
 	require.Contains(t, extProcContainer.Args, "-configBundlePath")
+
+	var foundBundle bool
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.Projected == nil || !strings.HasSuffix(v.Name, "-bundle") {
+			continue
+		}
+		foundBundle = true
+		require.Len(t, v.Projected.Sources, wantSlots+1) // index + configured slots
+		last := v.Projected.Sources[wantSlots].Secret
+		require.Equal(t, filterConfigBundlePartSecretName(gwName, gwNamespace, wantSlots-1), last.Name)
+		require.True(t, *last.Optional)
+	}
+	require.True(t, foundBundle)
 }
 
 func strPtr(value string) *string {
