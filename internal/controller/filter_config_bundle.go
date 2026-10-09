@@ -23,9 +23,10 @@ const (
 
 	// Keep each part comfortably below Kubernetes object size limits.
 	filterConfigBundlePartSizeBytes = 700 * 1024
-	// Fixed number of bundle slots mounted in the pod so shard count changes never require remounting.
-	// We can make this configurable in the future if needed.
-	maxFilterConfigBundleSlots = 8
+	// DefaultFilterConfigBundleMaxSlots is the number of bundle slots mounted in the pod when
+	// Options.FilterConfigBundleMaxSlots is unset. The slot count is fixed per pod so shard count
+	// changes never require remounting.
+	DefaultFilterConfigBundleMaxSlots = 8
 )
 
 func splitBytes(raw []byte, chunkSize int) [][]byte {
@@ -46,8 +47,9 @@ func splitBytes(raw []byte, chunkSize int) [][]byte {
 func (c *GatewayController) writeFilterConfigBundle(ctx context.Context, gatewayName, gatewayNamespace, configSecretNamespace string, payload []byte, uuid string) error {
 	indexSecretName := FilterConfigBundleIndexSecretName(gatewayName, gatewayNamespace)
 	chunks := splitBytes(payload, filterConfigBundlePartSizeBytes)
-	if len(chunks) > maxFilterConfigBundleSlots {
-		return fmt.Errorf("filter config requires %d shards, exceeds max supported slots %d", len(chunks), maxFilterConfigBundleSlots)
+	maxSlots := c.filterConfigBundleMaxSlots()
+	if len(chunks) > maxSlots {
+		return fmt.Errorf("filter config requires %d shards, exceeds max supported slots %d", len(chunks), maxSlots)
 	}
 	index := &filterapi.ConfigBundleIndex{
 		Version:  version.Parse(),
@@ -57,7 +59,7 @@ func (c *GatewayController) writeFilterConfigBundle(ctx context.Context, gateway
 	}
 
 	// Create parts Secrets
-	for i := range maxFilterConfigBundleSlots {
+	for i := range maxSlots {
 		partName := filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, i)
 
 		// Delete outdated parts from the previous configBundle

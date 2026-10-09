@@ -97,6 +97,10 @@ type Options struct {
 	ExtProcImagePullSecrets string
 	// ExtProcMaxRecvMsgSize is the maximum message size in bytes that the gRPC server can receive for extProc.
 	ExtProcMaxRecvMsgSize int
+	// FilterConfigBundleMaxSlots is the number of part Secrets the filter config bundle may be split into, and the
+	// number of optional part slots the webhook projects into every gateway pod.
+	// A change rolls the gateway pods, since a pod's slots are fixed at creation.
+	FilterConfigBundleMaxSlots int
 	// MCPSessionEncryptionSeed is the seed used to derive the encryption key for MCP session encryption.
 	MCPSessionEncryptionSeed string
 	// MCPSessionEncryptionIterations is the number of iterations to use for PBKDF2 key derivation for MCP session encryption.

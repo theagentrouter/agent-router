@@ -71,6 +71,7 @@ func newExtProcBuilder(options *Options, extProcAsSideCar bool, logger logr.Logg
 		imagePullSecrets:                       parsedImagePullSecrets,
 		maxRecvMsgSize:                         options.ExtProcMaxRecvMsgSize,
 		extProcAsSideCar:                       extProcAsSideCar,
+		bundleMaxSlots:                         options.FilterConfigBundleMaxSlots,
 		mcpSessionEncryptionSeed:               options.MCPSessionEncryptionSeed,
 		mcpSessionEncryptionIterations:         options.MCPSessionEncryptionIterations,
 		mcpFallbackSessionEncryptionSeed:       options.MCPFallbackSessionEncryptionSeed,
@@ -100,11 +101,33 @@ type extProcBuilder struct {
 	imagePullSecrets []corev1.LocalObjectReference
 	maxRecvMsgSize   int
 	extProcAsSideCar bool
+	// bundleMaxSlots is shared by the bundle writer and the webhook so the
+	// number of parts written can never exceed the slots a pod projects.
+	bundleMaxSlots int
 
 	mcpSessionEncryptionSeed               string
 	mcpSessionEncryptionIterations         int
 	mcpFallbackSessionEncryptionSeed       string
 	mcpFallbackSessionEncryptionIterations int
+}
+
+// filterConfigBundleMaxSlots returns the configured number of bundle part
+// slots, falling back to DefaultFilterConfigBundleMaxSlots when unset.
+func (b *extProcBuilder) filterConfigBundleMaxSlots() int {
+	if b == nil || b.bundleMaxSlots <= 0 {
+		return DefaultFilterConfigBundleMaxSlots
+	}
+	return b.bundleMaxSlots
+}
+
+// nonDefaultBundleMaxSlots returns the slot count for the config digest, or 0
+// when it is the default so the digest is unchanged for deployments that never
+// set it.
+func (b *extProcBuilder) nonDefaultBundleMaxSlots() int {
+	if n := b.filterConfigBundleMaxSlots(); n != DefaultFilterConfigBundleMaxSlots {
+		return n
+	}
+	return 0
 }
 
 // extProcContainerInput is the per-gateway input for extproc injection.
@@ -229,6 +252,10 @@ type extProcConfigDigest struct {
 	MCPFallbackSessionEncryptionIterations int
 	NeedMCP                                bool
 	GatewayConfigExtProc                   *aigv1b1.GatewayConfigExtProc
+	// BundleMaxSlots is the number of bundle part slots the webhook projects. A pod's slots are
+	// fixed at creation, so a change must roll the pods or writes beyond the old count are
+	// invisible to them. Omitted at the default so existing deployments keep their hash.
+	BundleMaxSlots int `json:",omitempty"`
 }
 
 // extProcContainerHash returns a stable hash of the extproc injection inputs.
@@ -256,6 +283,7 @@ func (b *extProcBuilder) extProcContainerHash(input extProcContainerInput) strin
 		MCPFallbackSessionEncryptionIterations: b.mcpFallbackSessionEncryptionIterations,
 		NeedMCP:                                input.needMCP,
 		GatewayConfigExtProc:                   extProcSpecFromInput(input),
+		BundleMaxSlots:                         b.nonDefaultBundleMaxSlots(),
 	}
 	marshaled, _ := stdjson.Marshal(digest)
 	sum := sha256.Sum256(marshaled)

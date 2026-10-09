@@ -3597,7 +3597,7 @@ func TestGatewayController_writeFilterConfigBundleShards(t *testing.T) {
 	}
 	require.Equal(t, payload, reassembled.Bytes())
 	_, err = kube.CoreV1().Secrets(namespace).Get(t.Context(),
-		filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, maxFilterConfigBundleSlots-1), metav1.GetOptions{})
+		filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, DefaultFilterConfigBundleMaxSlots-1), metav1.GetOptions{})
 	require.True(t, apierrors.IsNotFound(err))
 }
 
@@ -3608,9 +3608,30 @@ func TestGatewayController_writeFilterConfigBundleShards_Overflow(t *testing.T) 
 	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
 		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
 
-	payload := []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*(maxFilterConfigBundleSlots+1)))
+	payload := []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*(DefaultFilterConfigBundleMaxSlots+1)))
 	err := c.writeFilterConfigBundle(t.Context(), "cfg-gw", "cfg-ns", "ns", payload, "uuid-1")
 	require.ErrorContains(t, err, "exceeds max supported slots")
+}
+
+func TestGatewayController_writeFilterConfigBundleShards_ConfiguredMaxSlots(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	kube := fake2.NewClientset()
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+	c.bundleMaxSlots = DefaultFilterConfigBundleMaxSlots + 4
+
+	// One part more than the default allows fits under the raised limit.
+	parts := DefaultFilterConfigBundleMaxSlots + 1
+	payload := []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*parts))
+	require.NoError(t, c.writeFilterConfigBundle(t.Context(), "cfg-gw", "cfg-ns", "ns", payload, "uuid-1"))
+	_, err := kube.CoreV1().Secrets("ns").Get(t.Context(),
+		filterConfigBundlePartSecretName("cfg-gw", "cfg-ns", parts-1), metav1.GetOptions{})
+	require.NoError(t, err)
+
+	// Past the raised limit it still refuses rather than writing a partial bundle.
+	payload = []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*(c.bundleMaxSlots+1)))
+	err = c.writeFilterConfigBundle(t.Context(), "cfg-gw", "cfg-ns", "ns", payload, "uuid-2")
+	require.ErrorContains(t, err, fmt.Sprintf("exceeds max supported slots %d", c.bundleMaxSlots))
 }
 
 func Test_mcpConfig_ToolSelectorExclude(t *testing.T) {

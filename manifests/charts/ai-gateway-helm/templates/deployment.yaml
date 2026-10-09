@@ -111,6 +111,9 @@ spec:
             {{- if ne .Values.controller.maxRecvMsgSize nil }}
             - --maxRecvMsgSize={{ .Values.controller.maxRecvMsgSize }}
             {{- end }}
+            {{- if ne .Values.controller.filterConfigBundleMaxSlots nil }}
+            - --filterConfigBundleMaxSlots={{ .Values.controller.filterConfigBundleMaxSlots }}
+            {{- end }}
             - --cacheSyncTimeout={{ .Values.controller.watch.cacheSyncTimeout }}
             - --watchNamespaces={{ join "," .Values.controller.watch.namespaces }}
             - --quotaRateLimitServiceAddr={{ .Values.controller.quotaRateLimitServiceAddr }}
