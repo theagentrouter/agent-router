@@ -99,6 +99,82 @@ spec:
                 - all-access
           # No target means all targets are allowed.
 ---
+# Identical to mcp-route-authorization-default-deny above except that
+# protectedResourceMetadata.resource is omitted, so the gateway derives the identifier from
+# each request. The 403 insufficient_scope challenge is the surface only this suite covers:
+# unlike the 401, it is built by the MCP proxy rather than by Envoy. The two routes serve
+# different paths, so their well-known endpoints do not collide.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-route-authorization-derived
+  namespace: default
+spec:
+  path: "/mcp-authorization-derived"
+  parentRefs:
+    - name: mcp-gateway-authorization
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-backend-authorization
+      port: 1063
+  securityPolicy:
+    oauth:
+      issuer: "https://auth-server.example.com"
+      jwks:
+        localJWKS:
+          type: ValueRef
+          valueRef:
+            group: ""
+            kind: ConfigMap
+            name: jwks-configmap
+      protectedResourceMetadata:
+        resourceName: "example-resource-derived"
+        scopesSupported:
+          - "echo"
+          - "sum"
+          - "countdown"
+    authorization:
+      rules:
+        - source:
+            jwt:
+              scopes:
+                - echo
+          target:
+            tools:
+              - backend: mcp-backend-authorization
+                tool: echo
+          cel: request.mcp.params.arguments.text.matches("^Hello, .*!$") && request.headers["x-tenant-id"] == "t-123"
+        - source:
+            jwt:
+              scopes:
+                - sum
+              claims:
+                - name: tenant
+                  valueType: String
+                  values:
+                    - acme
+                    - globex
+                - name: org.departments
+                  valueType: StringArray
+                  values:
+                    - engineering
+                    - development
+          target:
+            tools:
+              - backend: mcp-backend-authorization
+                tool: sum
+        - target:
+            tools:
+              - backend: mcp-backend-authorization
+                tool: countdown
+          # No source means all sources are allowed.
+        - source:
+            jwt:
+              scopes:
+                - all-access
+          # No target means all targets are allowed.
+---
 # https://www.scottbrady.io/tools/jwt
 apiVersion: v1
 kind: ConfigMap
