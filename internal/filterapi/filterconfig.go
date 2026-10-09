@@ -207,6 +207,34 @@ type Backend struct {
 	// HeaderValueFilters filter individual values out of multi-valued request headers before sending
 	// the request to the backend. Optional.
 	HeaderValueFilters []HTTPHeaderValueFilter `json:"headerValueFilters,omitempty"`
+
+	// TranslationHints provides optional model-specific hints to guide request and response
+	// translation for this model-backend pairing. When nil (or a given field is nil), translators
+	// fall back to their built-in model-name heuristics. Optional.
+	TranslationHints *ModelTranslationHints `json:"translationHints,omitempty"`
+}
+
+// ModelTranslationHints provides model-specific hints to guide request and response translation
+// for a model-backend pairing. When set, translators use these values instead of model-name
+// heuristics. All fields are optional; a nil field falls back to the built-in heuristic for
+// backward compatibility.
+//
+// This mirrors the aigv1b1.ModelTranslationHints CRD type and is serialized into the filter
+// config so translators can read it at runtime without Kubernetes access.
+type ModelTranslationHints struct {
+	// MaxOutputTokens is the maximum number of tokens the model can produce in a single response.
+	// When set, translators use this as the default max_tokens value for APIs that require it
+	// (e.g., the Anthropic Messages API) when the client request omits max_tokens.
+	MaxOutputTokens *int64 `json:"maxOutputTokens,omitempty"`
+	// SupportsResponseJSONSchema indicates whether the model accepts a JSON Schema object in
+	// response_format (as opposed to only {"type": "json_object"}).
+	SupportsResponseJSONSchema *bool `json:"supportsResponseJsonSchema,omitempty"`
+	// SupportsReasoningEffort indicates whether the model accepts a reasoning effort parameter
+	// (Gemini thinking level / Anthropic output_config.effort).
+	SupportsReasoningEffort *bool `json:"supportsReasoningEffort,omitempty"`
+	// SupportsOutputConfig indicates whether the model accepts an Anthropic-style output_config
+	// field for structured output (e.g., Claude Opus/Sonnet 4.5 and later).
+	SupportsOutputConfig *bool `json:"supportsOutputConfig,omitempty"`
 }
 
 // BackendAuth corresponds partially to BackendSecurityPolicy in api/v1alpha1/api.go.

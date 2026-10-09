@@ -760,7 +760,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	}
 	u.parent = rp // Set parent before GetTranslator so it can access rp.eh
 
-	u.translator, err = u.parent.eh.GetTranslator(backend.Backend.Schema, u.modelNameOverride)
+	u.translator, err = u.parent.eh.GetTranslator(backend.Backend)
 	if err != nil {
 		if userFacingErr := internalapi.GetUserFacingError(err); userFacingErr != nil {
 			// The endpoint is not supported for this backend's API schema. That is a mismatch between the

@@ -198,7 +198,8 @@ func collectPartsFromMessages(messages []openai.ChatCompletionMessageParamUnion,
 		if msg.OfUser == nil {
 			continue
 		}
-		msgParts, err := userMsgToGeminiParts(*msg.OfUser, requestModel)
+		// Embeddings do not carry translation hints; pass nil to use the model-name heuristic.
+		msgParts, err := userMsgToGeminiParts(*msg.OfUser, requestModel, nil)
 		if err != nil {
 			return nil, err
 		}
