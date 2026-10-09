@@ -6,6 +6,7 @@
 package translator
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -352,16 +353,32 @@ func TestOpenAIToOpenAITranslatorV1CompletionResponseError(t *testing.T) {
 		require.Nil(t, headerMutation)
 	})
 
-	t.Run("non_json_error", func(t *testing.T) {
-		respHeaders := map[string]string{
-			statusHeaderName:      "503",
-			contentTypeHeaderName: "text/plain",
-		}
-		errorBody := "Service Unavailable"
-
-		headerMutation, bodyMutation, err := translator.ResponseError(respHeaders, strings.NewReader(errorBody))
-		require.NoError(t, err)
-		require.Nil(t, headerMutation)
-		require.Nil(t, bodyMutation)
-	})
+	for _, tc := range []struct {
+		name        string
+		status      string
+		contentType string
+		body        string
+	}{
+		{"plain_text_error", "503", "text/plain", "Service Unavailable"},
+		{"missing_content_type", "504", "", "upstream request timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			respHeaders := map[string]string{statusHeaderName: tc.status}
+			if tc.contentType != "" {
+				respHeaders[contentTypeHeaderName] = tc.contentType
+			}
+			headerMutation, bodyMutation, err := translator.ResponseError(respHeaders, strings.NewReader(tc.body))
+			require.NoError(t, err)
+			var response openai.Error
+			require.NoError(t, json.Unmarshal(bodyMutation, &response))
+			require.Equal(t, "error", response.Type)
+			require.Equal(t, openAIBackendError, response.Error.Type)
+			require.Equal(t, tc.body, response.Error.Message)
+			require.Equal(t, &tc.status, response.Error.Code)
+			require.Equal(t, []internalapi.Header{
+				{contentTypeHeaderName, jsonContentType},
+				{contentLengthHeaderName, strconv.Itoa(len(bodyMutation))},
+			}, headerMutation)
+		})
+	}
 }

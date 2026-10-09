@@ -196,8 +196,8 @@ func (o *openAIToOpenAITranslatorV1Completion) extractUsageFromBufferEvent(span 
 }
 
 // ResponseError implements [OpenAICompletionTranslator.ResponseError].
-func (o *openAIToOpenAITranslatorV1Completion) ResponseError(map[string]string, io.Reader) (
+func (o *openAIToOpenAITranslatorV1Completion) ResponseError(headers map[string]string, body io.Reader) (
 	newHeaders []internalapi.Header, newBody []byte, err error,
 ) {
-	return
+	return convertErrorOpenAIToOpenAIError(headers, body)
 }
