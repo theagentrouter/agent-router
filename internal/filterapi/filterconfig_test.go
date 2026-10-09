@@ -113,6 +113,14 @@ func TestAzureAuthLogValue(t *testing.T) {
 	require.Equal(t, "[REDACTED]", attrs["accessToken"])
 }
 
+func TestOpenAIAuthLogValue(t *testing.T) {
+	a := filterapi.OpenAIAuth{AccessToken: "my-access-token", Organization: "org-123", Project: "proj_456"}
+	attrs := logAttrs(a.LogValue())
+	require.Equal(t, "[REDACTED]", attrs["accessToken"])
+	require.Equal(t, "org-123", attrs["organization"])
+	require.Equal(t, "proj_456", attrs["project"])
+}
+
 func TestGCPAuthLogValue(t *testing.T) {
 	g := filterapi.GCPAuth{AccessToken: "gcp-token", Region: "us-central1", ProjectName: "my-project"}
 	attrs := logAttrs(g.LogValue())

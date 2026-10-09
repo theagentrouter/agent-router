@@ -3157,8 +3157,12 @@ MCPRouteList contains a list of MCPRoute.
 - [BackendSecurityPolicyCredentialOverride](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicycredentialoverride)
 - [BackendSecurityPolicyGCPCredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicygcpcredentials)
 - [BackendSecurityPolicyOIDC](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyoidc)
+- [BackendSecurityPolicyOpenAICredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyopenaicredentials)
+- [BackendSecurityPolicySPIFFEJWTSVID](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspiffejwtsvid)
 - [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspec)
 - [BackendSecurityPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicystatus)
+- [BackendSecurityPolicySubjectToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicysubjecttoken)
+- [BackendSecurityPolicyTokenExchange](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicytokenexchange)
 - [BackendSecurityPolicyType](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicytype)
 - [CredentialOverrideFromDynamicMetadata](#github-com-envoyproxy-ai-gateway-api-v1beta1-credentialoverridefromdynamicmetadata)
 - [CredentialOverrideFromRequestHeaders](#github-com-envoyproxy-ai-gateway-api-v1beta1-credentialoverridefromrequestheaders)
@@ -3848,6 +3852,7 @@ default service account credentials when running on GCP.
 **Appears in:**
 - [AWSOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-awsoidcexchangetoken)
 - [AzureOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-azureoidcexchangetoken)
+- [BackendSecurityPolicySubjectToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicysubjecttoken)
 - [GCPOIDCExchangeToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-gcpoidcexchangetoken)
 - [GCPWorkloadIdentityProvider](#github-com-envoyproxy-ai-gateway-api-v1beta1-gcpworkloadidentityprovider)
 
@@ -3872,6 +3877,63 @@ BackendSecurityPolicyOIDC specifies OIDC related fields.
   type="string"
   required="false"
   description="Aud defines the audience that this ID Token is intended for."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyopenaicredentials">BackendSecurityPolicyOpenAICredentials</a>
+
+
+
+**Appears in:**
+- [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspec)
+
+BackendSecurityPolicyOpenAICredentials contains the supported authentication mechanisms to access OpenAI.
+
+##### Fields
+
+
+
+<ApiField
+  name="organization"
+  type="string"
+  required="false"
+  description="Organization is the OpenAI organization ID. When set, it is sent in the `OpenAI-Organization` header."
+/><ApiField
+  name="project"
+  type="string"
+  required="false"
+  description="Project is the OpenAI project ID. When set, it is sent in the `OpenAI-Project` header."
+/><ApiField
+  name="tokenExchange"
+  type="[BackendSecurityPolicyTokenExchange](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicytokenexchange)"
+  required="true"
+  description="TokenExchange specifies how the controller obtains an access token via OAuth 2.0 Token Exchange."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspiffejwtsvid">BackendSecurityPolicySPIFFEJWTSVID</a>
+
+
+
+**Appears in:**
+- [BackendSecurityPolicySubjectToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicysubjecttoken)
+
+BackendSecurityPolicySPIFFEJWTSVID specifies how to obtain a JWT-SVID from the SPIFFE Workload API.
+
+##### Fields
+
+
+
+<ApiField
+  name="audience"
+  type="string"
+  required="true"
+  description="Audience is the audience (`aud` claim) of the requested JWT-SVID. The token exchange endpoint<br />validates it, so it must match the audience that endpoint expects."
+/><ApiField
+  name="socketPath"
+  type="string"
+  required="false"
+  description="SocketPath is the address of the SPIFFE Workload API, e.g. `unix:///run/spire/sockets/agent.sock`.<br />When unset, the SPIFFE_ENDPOINT_SOCKET environment variable of the controller is used."
 />
 
 
@@ -3932,6 +3994,11 @@ Only one type of BackendSecurityPolicy can be defined.
   required="false"
   description="AnthropicAPIKey is a mechanism to access Anthropic backend(s). The API key will be injected into the `x-api-key` header.<br />https://docs.claude.com/en/api/overview#authentication"
 /><ApiField
+  name="openAICredentials"
+  type="[BackendSecurityPolicyOpenAICredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyopenaicredentials)"
+  required="false"
+  description="OpenAICredentials is a mechanism to access OpenAI backend(s) without a static API key. The controller<br />exchanges a subject token for a short-lived access token, which is injected into the Authorization header."
+/><ApiField
   name="credentialOverride"
   type="[BackendSecurityPolicyCredentialOverride](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicycredentialoverride)"
   required="false"
@@ -3957,6 +4024,87 @@ BackendSecurityPolicyStatus contains the conditions by the reconciliation result
   type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
   required="true"
   description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicysubjecttoken">BackendSecurityPolicySubjectToken</a>
+
+
+
+**Appears in:**
+- [BackendSecurityPolicyTokenExchange](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicytokenexchange)
+
+BackendSecurityPolicySubjectToken specifies the source of a subject token.
+Exactly one source must be configured.
+
+##### Fields
+
+
+
+<ApiField
+  name="oidcExchangeToken"
+  type="[BackendSecurityPolicyOIDC](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyoidc)"
+  required="false"
+  description="OIDCExchangeToken obtains the subject token from an OIDC provider via the client-credentials flow."
+/><ApiField
+  name="spiffeJWTSVID"
+  type="[BackendSecurityPolicySPIFFEJWTSVID](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspiffejwtsvid)"
+  required="false"
+  description="SPIFFEJWTSVID obtains the subject token as a JWT-SVID from the SPIFFE Workload API.<br />The JWT-SVID is issued for the controller's SPIFFE ID, so every policy using this source acts as<br />the controller; only trusted cluster admins should be allowed to create such policies."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicytokenexchange">BackendSecurityPolicyTokenExchange</a>
+
+
+
+**Appears in:**
+- [BackendSecurityPolicyOpenAICredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyopenaicredentials)
+
+BackendSecurityPolicyTokenExchange specifies an OAuth 2.0 Token Exchange (RFC 8693) request.
+The controller obtains a subject token, exchanges it at TokenURL for an access token,
+and stores the access token in a secret, rotating it before it expires.
+
+TokenURL, SubjectTokenType, Audience and Scopes are parameters of the exchange request and apply
+to any subject token source.
+
+Each hop has its own audience:
+  - subjectToken.spiffeJWTSVID.audience: the "aud" claim of the JWT-SVID, i.e. the token exchange endpoint.
+  - subjectToken.oidcExchangeToken.aud: the audience requested from the OIDC provider for the subject token.
+  - audience: the service the exchanged access token is intended for, e.g. the OpenAI API.
+
+https://datatracker.ietf.org/doc/html/rfc8693
+
+##### Fields
+
+
+
+<ApiField
+  name="tokenURL"
+  type="string"
+  required="true"
+  description="TokenURL is the token exchange endpoint."
+/><ApiField
+  name="subjectTokenType"
+  type="string"
+  required="false"
+  defaultValue="urn:ietf:params:oauth:token-type:jwt"
+  description="SubjectTokenType is the RFC 8693 subject_token_type, identifying the format of the subject token.<br />Use `urn:ietf:params:oauth:token-type:access_token` when the OIDC provider returns an opaque access token."
+/><ApiField
+  name="audience"
+  type="string"
+  required="false"
+  description="Audience is the RFC 8693 audience parameter: the logical name of the service the<br />exchanged access token is intended for. It is unrelated to the audience of the subject token."
+/><ApiField
+  name="scopes"
+  type="string array"
+  required="false"
+  description="Scopes is the list of scopes requested for the exchanged access token. They are unrelated to<br />the scopes requested from the OIDC provider for the subject token."
+/><ApiField
+  name="subjectToken"
+  type="[BackendSecurityPolicySubjectToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicysubjecttoken)"
+  required="true"
+  description="SubjectToken specifies where the subject token is obtained from."
 />
 
 
@@ -4000,6 +4148,11 @@ BackendSecurityPolicyType specifies the type of auth mechanism used to access a 
   description=""
 /><ApiField
   name="GCPCredentials"
+  type="enum"
+  required="false"
+  description=""
+/><ApiField
+  name="OpenAICredentials"
   type="enum"
   required="false"
   description=""
@@ -4054,7 +4207,7 @@ CredentialOverrideFromRequestHeaders sources the per-request credential from a r
   name="header"
   type="string"
   required="false"
-  description="Header is the name of the request header that carries the credential.<br />Defaults to the x-aigw-* header for the configured auth type:<br />  APIKey          → x-aigw-api-key<br />  AnthropicAPIKey → x-aigw-anthropic-api-key<br />  AzureAPIKey     → x-aigw-azure-api-key<br />  AzureCredentials → x-aigw-azure-access-token<br />  GCPCredentials  → x-aigw-gcp-access-token<br />For AWSCredentials this is a prefix, not a single header name, since SigV4 needs three<br />inputs. Defaults to `x-aigw-aws-`, yielding:<br />  x-aigw-aws-access-key-id<br />  x-aigw-aws-secret-access-key<br />  x-aigw-aws-session-token     (optional; omit for long-lived credentials)<br />All three are stripped before the backend sees them. An access key ID without a secret<br />access key, or the reverse, fails the request instead of falling back.<br />Prefer FromDynamicMetadata for AWSCredentials. Headers are client-settable, and a secret<br />access key on the wire is a worse leak than an API key."
+  description="Header is the name of the request header that carries the credential.<br />Defaults to the x-aigw-* header for the configured auth type:<br />  APIKey          → x-aigw-api-key<br />  AnthropicAPIKey → x-aigw-anthropic-api-key<br />  AzureAPIKey     → x-aigw-azure-api-key<br />  AzureCredentials → x-aigw-azure-access-token<br />  GCPCredentials  → x-aigw-gcp-access-token<br />  OpenAICredentials → x-aigw-openai-access-token<br />For AWSCredentials this is a prefix, not a single header name, since SigV4 needs three<br />inputs. Defaults to `x-aigw-aws-`, yielding:<br />  x-aigw-aws-access-key-id<br />  x-aigw-aws-secret-access-key<br />  x-aigw-aws-session-token     (optional; omit for long-lived credentials)<br />All three are stripped before the backend sees them. An access key ID without a secret<br />access key, or the reverse, fails the request instead of falling back.<br />Prefer FromDynamicMetadata for AWSCredentials. Headers are client-settable, and a secret<br />access key on the wire is a worse leak than an API key."
 /><ApiField
   name="fallbackToConfigured"
   type="boolean"

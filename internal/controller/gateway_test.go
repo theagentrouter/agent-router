@@ -1253,6 +1253,16 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 				},
 			},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "openai-credentials", Namespace: namespace},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+				OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{
+					Organization: "org-123",
+					Project:      "proj_456",
+				},
+			},
+		},
 	} {
 		require.NoError(t, fakeClient.Create(t.Context(), bsp))
 	}
@@ -1280,6 +1290,10 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: rotators.GetBSPSecretName("gcp-wif"), Namespace: namespace},
 			StringData: map[string]string{rotators.GCPAccessTokenKey: "thisisgcpcredentials"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: rotators.GetBSPSecretName("openai-credentials"), Namespace: namespace},
+			StringData: map[string]string{rotators.OpenAIAccessTokenKey: "thisisopenaicredentials"},
 		},
 	} {
 		_, err := kube.CoreV1().Secrets(namespace).Create(t.Context(), s, metav1.CreateOptions{})
@@ -1342,6 +1356,16 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			bspName: "bsp-anthropic-apikey",
 			exp: &filterapi.BackendAuth{
 				AnthropicAPIKey: &filterapi.AnthropicAPIKeyAuth{Key: "thisisapikey"},
+			},
+		},
+		{
+			bspName: "openai-credentials",
+			exp: &filterapi.BackendAuth{
+				OpenAIAuth: &filterapi.OpenAIAuth{
+					AccessToken:  "thisisopenaicredentials",
+					Organization: "org-123",
+					Project:      "proj_456",
+				},
 			},
 		},
 	} {
@@ -1441,6 +1465,18 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 				},
 			},
 			expectedError: "failed to get secret test-namespace/missing-aws-secret",
+		},
+		{
+			name:    "openai credentials with missing generated secret",
+			bspName: "openai-bsp",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "openai-bsp", Namespace: namespace},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type:              aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+					OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{},
+				},
+			},
+			expectedError: "failed to get secret test-namespace/ai-eg-bsp-openai-bsp",
 		},
 	}
 
@@ -1667,6 +1703,19 @@ func TestResolveCredentialOverride(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, "x-aigw-gcp-access-token", result.DynamicMetadataKey)
+	})
+
+	t.Run("fromRequestHeaders default header for OpenAICredentials", func(t *testing.T) {
+		result, err := resolveCredentialOverride(
+			aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+			&aigv1b1.BackendSecurityPolicyCredentialOverride{
+				FromRequestHeaders: &aigv1b1.CredentialOverrideFromRequestHeaders{},
+			},
+			true,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "x-aigw-openai-access-token", result.HeaderName)
+		require.Equal(t, []string{"x-aigw-openai-access-token"}, result.InputHeadersToRemove)
 	})
 
 	t.Run("fromRequestHeaders for AWSCredentials derives three headers from a prefix", func(t *testing.T) {

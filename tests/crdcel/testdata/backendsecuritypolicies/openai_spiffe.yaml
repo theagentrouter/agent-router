@@ -1,0 +1,24 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: openai-spiffe-policy
+  namespace: default
+spec:
+  type: OpenAICredentials
+  openAICredentials:
+    organization: org-placeholder
+    project: proj_placeholder
+    tokenExchange:
+      tokenURL: https://auth.example.com/oauth/token
+      audience: https://api.openai.com
+      scopes:
+        - api.model.read
+      subjectToken:
+        spiffeJWTSVID:
+          audience: https://auth.example.com
+          socketPath: unix:///run/spire/sockets/agent.sock

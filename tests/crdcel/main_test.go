@@ -239,6 +239,32 @@ func TestBackendSecurityPolicies(t *testing.T) {
 		{name: "aws_credential_override.yaml"},
 		{name: "gcp_oidc.yaml"},
 		{name: "anthropic-apikey.yaml"},
+		{name: "openai_spiffe.yaml"},
+		{name: "openai_oidc.yaml"},
+		{
+			name:   "openai_missing_subject_token.yaml",
+			expErr: "Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified",
+		},
+		{
+			name:   "openai_multiple_subject_tokens.yaml",
+			expErr: "Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified",
+		},
+		{
+			name:   "openai_invalid_token_url.yaml",
+			expErr: "tokenURL must be a valid URL",
+		},
+		{
+			name:   "openai_invalid_socket_path.yaml",
+			expErr: "spec.openAICredentials.tokenExchange.subjectToken.spiffeJWTSVID.socketPath in body should match",
+		},
+		{
+			name:   "openai_with_apikey.yaml",
+			expErr: "When type is OpenAICredentials, only openAICredentials field should be set",
+		},
+		{
+			name:   "apikey_with_openai_credentials.yaml",
+			expErr: "When type is APIKey, only apiKey field should be set",
+		},
 		{name: "targetrefs_basic.yaml"},
 		{name: "targetrefs_multiple.yaml"},
 		{name: "targetrefs_inferencepool.yaml"},
@@ -268,6 +294,21 @@ func TestBackendSecurityPolicies(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBackendSecurityPolicySubjectTokenTypeDefault(t *testing.T) {
+	c, _, _ := testsinternal.NewEnvTest(t)
+	ctx := t.Context()
+
+	data, err := testdata.ReadFile("testdata/backendsecuritypolicies/openai_spiffe.yaml")
+	require.NoError(t, err)
+	bsp := &aigv1b1.BackendSecurityPolicy{}
+	require.NoError(t, yaml.UnmarshalStrict(data, bsp))
+	require.NoError(t, c.Create(ctx, bsp))
+	t.Cleanup(func() { _ = c.Delete(ctx, bsp) })
+
+	require.Equal(t, "urn:ietf:params:oauth:token-type:jwt",
+		bsp.Spec.OpenAICredentials.TokenExchange.SubjectTokenType)
 }
 
 func TestMCPRoutes(t *testing.T) {

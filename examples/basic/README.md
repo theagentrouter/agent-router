@@ -5,6 +5,7 @@ traffic for various AI providers.
 
 - `basic.yaml` - Basic configuration without any backends
 - `openai.yaml` - OpenAI integration
+- `openai-spiffe.yaml` - OpenAI integration without a static API key, using SPIFFE and OAuth 2.0 Token Exchange
 - `aws.yaml` - AWS Bedrock with static credentials
 - `aws-irsa.yaml` - AWS Bedrock with IRSA (IAM Roles for Service Accounts)
 - `aws-pod-identity.yaml` - AWS Bedrock with EKS Pod Identity

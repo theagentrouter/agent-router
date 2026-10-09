@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -862,6 +864,129 @@ func TestNewBackendSecurityPolicyController_RotateCredentialInvalidType(t *testi
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
 }
 
+func TestBackendSecurityPolicyController_RotateCredential_OpenAICredentials_OIDC(t *testing.T) {
+	var gotForm url.Values
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"issuer": %q, "token_endpoint": %q, "authorization_endpoint": "authorization_endpoint", "jwks_uri": "jwks_uri", "scopes_supported": []}`,
+			server.URL, server.URL+"/oidc/token")
+	})
+	mux.HandleFunc("/oidc/token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Add("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token": "subject-token", "token_type": "Bearer", "expires_in": 3600}`))
+	})
+	mux.HandleFunc("/exchange", func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		gotForm = r.PostForm
+		w.Header().Add("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token": "openai-access-token", "token_type": "Bearer", "expires_in": 3600}`))
+	})
+
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+	const bspNamespace = "default"
+	require.NoError(t, cl.Create(t.Context(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "oidc-client-secret", Namespace: bspNamespace},
+		Data:       map[string][]byte{"client-secret": []byte("client-secret")},
+	}))
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "openai-oidc", Namespace: bspNamespace},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+			OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{
+				TokenExchange: aigv1b1.BackendSecurityPolicyTokenExchange{
+					TokenURL:         server.URL + "/exchange",
+					SubjectTokenType: "urn:ietf:params:oauth:token-type:access_token",
+					Audience:         "https://api.openai.com",
+					Scopes:           []string{"api.model.read"},
+					SubjectToken: aigv1b1.BackendSecurityPolicySubjectToken{
+						OIDCExchangeToken: &aigv1b1.BackendSecurityPolicyOIDC{
+							OIDC: egv1a1.OIDC{
+								Provider: egv1a1.OIDCProvider{Issuer: server.URL},
+								ClientID: ptr.To("some-client-id"),
+								ClientSecret: gwapiv1.SecretObjectReference{
+									Name:      "oidc-client-secret",
+									Namespace: ptr.To(gwapiv1.Namespace(bspNamespace)),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+
+	res, err := c.rotateCredential(t.Context(), bsp)
+	require.NoError(t, err)
+	require.Greater(t, res.RequeueAfter, 50*time.Minute)
+
+	require.Equal(t, "subject-token", gotForm.Get("subject_token"))
+	require.Equal(t, "urn:ietf:params:oauth:token-type:access_token", gotForm.Get("subject_token_type"))
+	require.Equal(t, "https://api.openai.com", gotForm.Get("audience"))
+	require.Equal(t, "api.model.read", gotForm.Get("scope"))
+
+	secret, err := rotators.LookupSecret(t.Context(), cl, bspNamespace, rotators.GetBSPSecretName("openai-oidc"))
+	require.NoError(t, err)
+	require.Equal(t, "openai-access-token", string(secret.Data[rotators.OpenAIAccessTokenKey]))
+	ok, _ := ctrlutil.HasOwnerReference(secret.OwnerReferences, bsp, c.client.Scheme())
+	require.True(t, ok, "expected secret to have owner reference to BackendSecurityPolicy")
+}
+
+func TestBackendSecurityPolicyController_Reconcile_OpenAICredentials_SPIFFEUnavailable(t *testing.T) {
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := requireNewFakeClientWithIndexes(t)
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "openai-bsp", Namespace: "default"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+			OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{
+				TokenExchange: aigv1b1.BackendSecurityPolicyTokenExchange{
+					TokenURL:         "https://auth.example.com/oauth/token",
+					SubjectTokenType: "urn:ietf:params:oauth:token-type:jwt",
+					SubjectToken: aigv1b1.BackendSecurityPolicySubjectToken{
+						SPIFFEJWTSVID: &aigv1b1.BackendSecurityPolicySPIFFEJWTSVID{
+							Audience:   "https://auth.example.com",
+							SocketPath: "unix://" + filepath.Join(t.TempDir(), "missing.sock"),
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err := c.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "openai-bsp"}})
+	require.ErrorContains(t, err, "failed to fetch JWT-SVID from SPIFFE Workload API")
+
+	var updated aigv1b1.BackendSecurityPolicy
+	require.NoError(t, cl.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "openai-bsp"}, &updated))
+	require.Len(t, updated.Status.Conditions, 1)
+	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updated.Status.Conditions[0].Type)
+}
+
+func TestBackendSecurityPolicyController_RotateCredential_OpenAICredentials_NoSubjectToken(t *testing.T) {
+	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, nil, nil)
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "openai-bsp", Namespace: "default"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type:              aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+			OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{},
+		},
+	}
+	_, err := c.rotateCredential(t.Context(), bsp)
+	require.EqualError(t, err, "one of spiffeJWTSVID or oidcExchangeToken must be defined, namespace default name openai-bsp")
+}
+
 func TestNewBackendSecurityPolicyController_RotateCredentialAwsCredentialFile(t *testing.T) {
 	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
 	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()
@@ -1574,6 +1699,18 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 				},
 			},
 			expectedName: "",
+		},
+		{
+			name: "OpenAICredentials type",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "openai-bsp",
+				},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+				},
+			},
+			expectedName: "ai-eg-bsp-openai-bsp",
 		},
 	}
 
