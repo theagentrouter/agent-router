@@ -848,7 +848,7 @@ func (a *anthropicToAWSBedrockTranslator) ResponseError(respHeaders map[string]s
 	anthropicError := anthropicschema.ErrorResponse{
 		Type: "error",
 		Error: anthropicschema.ErrorResponseMessage{
-			Type:    a.httpStatusToAnthropicErrorType(statusCode),
+			Type:    httpStatusToAnthropicErrorType(statusCode),
 			Message: errorMessage,
 		},
 	}
@@ -861,25 +861,4 @@ func (a *anthropicToAWSBedrockTranslator) ResponseError(respHeaders map[string]s
 		{contentLengthHeaderName, strconv.Itoa(len(mutatedBody))},
 	}
 	return
-}
-
-func (a *anthropicToAWSBedrockTranslator) httpStatusToAnthropicErrorType(statusCode string) string {
-	switch statusCode {
-	case "400":
-		return "invalid_request_error"
-	case "401":
-		return "authentication_error"
-	case "403":
-		return "permission_error"
-	case "404":
-		return "not_found_error"
-	case "429":
-		return "rate_limit_error"
-	case "500":
-		return "internal_server_error"
-	case "503":
-		return "service_unavailable_error"
-	default:
-		return "internal_server_error"
-	}
 }
