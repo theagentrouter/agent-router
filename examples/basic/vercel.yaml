@@ -1,0 +1,88 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: envoy-ai-gateway-basic-vercel
+  namespace: default
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway-basic
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: RegularExpression
+              name: x-ai-eg-model
+              value: .*
+      backendRefs:
+        - name: envoy-ai-gateway-basic-vercel
+      timeouts:
+        request: 120s
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: envoy-ai-gateway-basic-vercel
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: envoy-ai-gateway-basic-vercel
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: envoy-ai-gateway-basic-vercel-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: envoy-ai-gateway-basic-vercel
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: envoy-ai-gateway-basic-vercel-apikey
+      namespace: default
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: envoy-ai-gateway-basic-vercel
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: ai-gateway.vercel.sh
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: envoy-ai-gateway-basic-vercel-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: "gateway.envoyproxy.io"
+      kind: Backend
+      name: envoy-ai-gateway-basic-vercel
+  validation:
+    wellKnownCACertificates: "System"
+    hostname: ai-gateway.vercel.sh
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: envoy-ai-gateway-basic-vercel-apikey
+  namespace: default
+type: Opaque
+stringData:
+  apiKey: VERCEL_AI_GATEWAY_API_KEY # Replace with your Vercel AI Gateway API key.

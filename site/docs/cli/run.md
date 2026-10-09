@@ -33,6 +33,8 @@ AZURE_OPENAI_ENDPOINT=https://example.openai.azure.com \
   aigw run
 # Tetrate Agent Router Service (TARS)
 OPENAI_BASE_URL=https://api.router.tetrate.ai/v1 OPENAI_API_KEY=sk-your-key aigw run
+# Vercel AI Gateway
+OPENAI_BASE_URL=https://ai-gateway.vercel.sh/v1 OPENAI_API_KEY=your-vercel-ai-gateway-key aigw run
 # Ollama running locally
 OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_API_KEY=unused aigw run
 ```
