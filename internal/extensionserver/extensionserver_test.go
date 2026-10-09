@@ -26,6 +26,8 @@ import (
 	htomv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_to_metadata/v3"
 	upstream_codecv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/upstream_codec/v3"
 	httpconnectionmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	least_requestv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/load_balancing_policies/least_request/v3"
+	override_hostv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/load_balancing_policies/override_host/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/go-logr/logr"
@@ -790,6 +792,39 @@ func createInferencePoolExtensionResourceWithAppProtocol(name, namespace, appPro
 		},
 	}
 
+	jsonBytes, _ := unstructuredObj.MarshalJSON()
+	return &egextension.ExtensionResource{
+		UnstructuredBytes: jsonBytes,
+	}
+}
+
+// createFailOpenInferencePoolExtensionResource returns an inference.networking.k8s.io/v1
+// InferencePool, with v1 selector and targetPorts, whose endpoint picker has failureMode FailOpen.
+func createFailOpenInferencePoolExtensionResource(name, namespace string, targetPorts ...int32) *egextension.ExtensionResource {
+	ports := make([]any, 0, len(targetPorts))
+	for _, p := range targetPorts {
+		ports = append(ports, map[string]any{"number": int64(p)})
+	}
+	unstructuredObj := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "inference.networking.k8s.io/v1",
+			"kind":       "InferencePool",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": namespace,
+			},
+			"spec": map[string]any{
+				"targetPorts": ports,
+				"selector": map[string]any{
+					"matchLabels": map[string]any{"app": "test-inference"},
+				},
+				"endpointPickerRef": map[string]any{
+					"name":        "test-epp",
+					"failureMode": "FailOpen",
+				},
+			},
+		},
+	}
 	jsonBytes, _ := unstructuredObj.MarshalJSON()
 	return &egextension.ExtensionResource{
 		UnstructuredBytes: jsonBytes,
@@ -1742,6 +1777,84 @@ func TestPostClusterModify(t *testing.T) {
 		explicitConfig, ok := po.UpstreamProtocolOptions.(*httpv3.HttpProtocolOptions_ExplicitHttpConfig_)
 		require.True(t, ok)
 		require.IsType(t, &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{}, explicitConfig.ExplicitHttpConfig.ProtocolConfig)
+		// An unset failureMode is FailClose.
+		require.Equal(t, gwaiev1.EndpointPickerFailClose, getInferencePoolByMetadata(cluster.Metadata).Spec.EndpointPickerRef.FailureMode)
+	})
+
+	t.Run("with FailOpen InferencePool backend", func(t *testing.T) {
+		cluster := &clusterv3.Cluster{
+			Name:             "test-cluster",
+			LbPolicy:         clusterv3.Cluster_LEAST_REQUEST,
+			EdsClusterConfig: &clusterv3.Cluster_EdsClusterConfig{ServiceName: "from-envoy-gateway"},
+		}
+		req := &egextension.PostClusterModifyRequest{
+			Cluster: cluster,
+			PostClusterContext: &egextension.PostClusterExtensionContext{
+				BackendExtensionResources: []*egextension.ExtensionResource{
+					createFailOpenInferencePoolExtensionResource("test-pool", "default", 8000, 8001),
+				},
+			},
+		}
+		resp, err := s.PostClusterModify(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, cluster, resp.Cluster)
+
+		// STRICT_DNS on the pool's fallback Service, one endpoint per target port.
+		require.Equal(t, clusterv3.Cluster_STRICT_DNS, cluster.ClusterDiscoveryType.(*clusterv3.Cluster_Type).Type)
+		require.Nil(t, cluster.LbConfig)
+		require.Nil(t, cluster.EdsClusterConfig)
+		require.Equal(t, durationpb.New(10*time.Second), cluster.ConnectTimeout)
+		require.Equal(t, "test-cluster", cluster.LoadAssignment.ClusterName)
+		require.Len(t, cluster.LoadAssignment.Endpoints, 1)
+		var addrs []string
+		for _, lbe := range cluster.LoadAssignment.Endpoints[0].LbEndpoints {
+			sa := lbe.GetEndpoint().Address.GetSocketAddress()
+			addrs = append(addrs, fmt.Sprintf("%s:%d", sa.Address, sa.GetPortValue()))
+		}
+		require.Equal(t, []string{
+			"test-pool-epp-fallback.default.svc:8000",
+			"test-pool-epp-fallback.default.svc:8001",
+		}, addrs)
+
+		// override_host takes the endpoint picker's choice from dynamic metadata only, and
+		// otherwise falls back to LeastRequest.
+		require.Len(t, cluster.LoadBalancingPolicy.Policies, 1)
+		policy := cluster.LoadBalancingPolicy.Policies[0].TypedExtensionConfig
+		require.Equal(t, "envoy.load_balancing_policies.override_host", policy.Name)
+		overrideHost := &override_hostv3.OverrideHost{}
+		require.NoError(t, policy.TypedConfig.UnmarshalTo(overrideHost))
+		require.Len(t, overrideHost.OverrideHostSources, 1)
+		source := overrideHost.OverrideHostSources[0]
+		require.Empty(t, source.Header, "a client-settable header must not select the upstream")
+		require.Equal(t, "envoy.lb", source.Metadata.Key)
+		require.Len(t, source.Metadata.Path, 1)
+		require.Equal(t, "x-gateway-destination-endpoint", source.Metadata.Path[0].GetKey())
+		require.Len(t, overrideHost.FallbackPolicy.Policies, 1)
+		fallback := overrideHost.FallbackPolicy.Policies[0].TypedExtensionConfig
+		require.Equal(t, "envoy.load_balancing_policies.least_request", fallback.Name)
+		require.NoError(t, fallback.TypedConfig.UnmarshalTo(&least_requestv3.LeastRequest{}))
+
+		// A broken endpoint is ejected for connection level failures only; an application 500 or a slow
+		// response must not eject a healthy Pod, and the pool is never fully ejected.
+		od := cluster.OutlierDetection
+		require.NotNil(t, od)
+		require.True(t, od.SplitExternalLocalOriginErrors)
+		require.Equal(t, uint32(3), od.ConsecutiveLocalOriginFailure.Value)
+		require.Equal(t, uint32(100), od.EnforcingConsecutiveLocalOriginFailure.Value)
+		require.Zero(t, od.EnforcingConsecutiveGatewayFailure.Value)
+		require.Zero(t, od.EnforcingConsecutive_5Xx.Value)
+		require.Zero(t, od.EnforcingSuccessRate.Value)
+		require.Equal(t, uint32(50), od.MaxEjectionPercent.Value)
+
+		// The Service may be created after the cluster, and Pods leave it: both must be noticed
+		// well within Envoy's default of 5 seconds.
+		require.Equal(t, time.Second, cluster.DnsRefreshRate.AsDuration())
+		require.Equal(t, time.Second, cluster.DnsFailureRefreshRate.BaseInterval.AsDuration())
+		require.Equal(t, time.Second, cluster.DnsFailureRefreshRate.MaxInterval.AsDuration())
+
+		pool := getInferencePoolByMetadata(cluster.Metadata)
+		require.NotNil(t, pool)
+		require.Equal(t, gwaiev1.EndpointPickerFailOpen, pool.Spec.EndpointPickerRef.FailureMode)
 	})
 
 	t.Run("with InferencePool backend and appProtocol kubernetes.io/h2c", func(t *testing.T) {
@@ -2511,6 +2624,27 @@ func TestBuildExtProcClusterForInferencePoolEndpointPicker(t *testing.T) {
 		require.Equal(t, clusterv3.Cluster_LEAST_REQUEST, cluster.LbPolicy)
 		require.NotNil(t, cluster.LoadAssignment)
 		require.Len(t, cluster.LoadAssignment.Endpoints, 1)
+	})
+
+	t.Run("FailClose pool has no health check", func(t *testing.T) {
+		cluster, err := buildExtProcClusterForInferencePoolEndpointPicker(pool)
+		require.NoError(t, err)
+		require.Empty(t, cluster.HealthChecks)
+		require.Nil(t, cluster.CommonLbConfig)
+	})
+
+	t.Run("FailOpen pool fails fast when the picker is down", func(t *testing.T) {
+		failOpen := pool.DeepCopy()
+		failOpen.Spec.EndpointPickerRef.FailureMode = gwaiev1.EndpointPickerFailOpen
+		cluster, err := buildExtProcClusterForInferencePoolEndpointPicker(failOpen)
+		require.NoError(t, err)
+		require.Len(t, cluster.HealthChecks, 1)
+		require.NotNil(t, cluster.HealthChecks[0].GetTcpHealthCheck())
+		require.Equal(t, uint32(1), cluster.HealthChecks[0].UnhealthyThreshold.Value)
+		require.Equal(t, time.Second, cluster.HealthChecks[0].NoTrafficInterval.AsDuration())
+		// Panic mode must be off, or Envoy sends requests to the dead picker anyway.
+		require.NotNil(t, cluster.CommonLbConfig.HealthyPanicThreshold)
+		require.Zero(t, cluster.CommonLbConfig.HealthyPanicThreshold.Value)
 	})
 
 	t.Run("nil pool panics", func(t *testing.T) {

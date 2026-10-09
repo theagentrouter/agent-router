@@ -7,12 +7,16 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,6 +40,223 @@ func requireNewFakeClientWithIndexesAndInferencePool(t *testing.T) client.Client
 	})
 	require.NoError(t, err)
 	return builder.Build()
+}
+
+func TestInferencePoolController_FallbackService(t *testing.T) {
+	newPool := func(failureMode gwaiev1.EndpointPickerFailureMode, ports ...int32) *gwaiev1.InferencePool {
+		targetPorts := make([]gwaiev1.Port, 0, len(ports))
+		for _, p := range ports {
+			targetPorts = append(targetPorts, gwaiev1.Port{Number: gwaiev1.PortNumber(p)})
+		}
+		return &gwaiev1.InferencePool{
+			ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "ns", UID: "pool-uid"},
+			Spec: gwaiev1.InferencePoolSpec{
+				Selector:          gwaiev1.LabelSelector{MatchLabels: map[gwaiev1.LabelKey]gwaiev1.LabelValue{"app": "model"}},
+				TargetPorts:       targetPorts,
+				EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "epp", FailureMode: failureMode},
+			},
+		}
+	}
+	const svcName = "pool-epp-fallback"
+
+	t.Run("FailOpen creates, updates and FailClose deletes the owned Service", func(t *testing.T) {
+		kube := kubefake.NewSimpleClientset()
+		c := NewInferencePoolController(requireNewFakeClientWithIndexesAndInferencePool(t), kube, ctrl.Log, make(chan event.GenericEvent))
+
+		require.NoError(t, c.syncFallbackService(t.Context(), newPool(gwaiev1.EndpointPickerFailOpen, 8000)))
+		svc, err := kube.CoreV1().Services("ns").Get(t.Context(), svcName, metav1.GetOptions{})
+		require.NoError(t, err)
+		require.Equal(t, corev1.ClusterIPNone, svc.Spec.ClusterIP)
+		require.Equal(t, map[string]string{"app": "model"}, svc.Spec.Selector)
+		require.Len(t, svc.Spec.Ports, 1)
+		require.Equal(t, int32(8000), svc.Spec.Ports[0].Port)
+		require.Equal(t, int32(8000), svc.Spec.Ports[0].TargetPort.IntVal)
+		require.False(t, svc.Spec.PublishNotReadyAddresses, "only ready Pods may be fallback endpoints")
+		require.True(t, metav1.IsControlledBy(svc, newPool(gwaiev1.EndpointPickerFailOpen)))
+
+		// A target port change is applied to the existing Service.
+		require.NoError(t, c.syncFallbackService(t.Context(), newPool(gwaiev1.EndpointPickerFailOpen, 8000, 8001)))
+		svc, err = kube.CoreV1().Services("ns").Get(t.Context(), svcName, metav1.GetOptions{})
+		require.NoError(t, err)
+		require.Len(t, svc.Spec.Ports, 2)
+
+		// Switching to FailClose removes the Service.
+		require.NoError(t, c.syncFallbackService(t.Context(), newPool(gwaiev1.EndpointPickerFailClose, 8000)))
+		_, err = kube.CoreV1().Services("ns").Get(t.Context(), svcName, metav1.GetOptions{})
+		require.True(t, apierrors.IsNotFound(err))
+	})
+
+	t.Run("a deleted Service is recreated on the next sync", func(t *testing.T) {
+		// The controller Owns Services, so deleting one enqueues its pool.
+		kube := kubefake.NewSimpleClientset()
+		c := NewInferencePoolController(requireNewFakeClientWithIndexesAndInferencePool(t), kube, ctrl.Log, make(chan event.GenericEvent))
+		require.NoError(t, c.syncFallbackService(t.Context(), newPool(gwaiev1.EndpointPickerFailOpen, 8000)))
+		require.NoError(t, kube.CoreV1().Services("ns").Delete(t.Context(), svcName, metav1.DeleteOptions{}))
+
+		require.NoError(t, c.syncFallbackService(t.Context(), newPool(gwaiev1.EndpointPickerFailOpen, 8000)))
+		svc, err := kube.CoreV1().Services("ns").Get(t.Context(), svcName, metav1.GetOptions{})
+		require.NoError(t, err)
+		require.True(t, metav1.IsControlledBy(svc, newPool(gwaiev1.EndpointPickerFailOpen)))
+	})
+
+	t.Run("FailClose creates nothing", func(t *testing.T) {
+		kube := kubefake.NewSimpleClientset()
+		c := NewInferencePoolController(requireNewFakeClientWithIndexesAndInferencePool(t), kube, ctrl.Log, make(chan event.GenericEvent))
+		require.NoError(t, c.syncFallbackService(t.Context(), newPool("", 8000)))
+		services, err := kube.CoreV1().Services("ns").List(t.Context(), metav1.ListOptions{})
+		require.NoError(t, err)
+		require.Empty(t, services.Items)
+	})
+
+	t.Run("a Service of the same name not owned by the pool is never modified or deleted", func(t *testing.T) {
+		foreign := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: svcName, Namespace: "ns"},
+			Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "someone-else"}},
+		}
+		kube := kubefake.NewSimpleClientset(foreign)
+		c := NewInferencePoolController(requireNewFakeClientWithIndexesAndInferencePool(t), kube, ctrl.Log, make(chan event.GenericEvent))
+
+		err := c.syncFallbackService(t.Context(), newPool(gwaiev1.EndpointPickerFailOpen, 8000))
+		require.ErrorContains(t, err, "is not owned by InferencePool pool")
+		require.NoError(t, c.syncFallbackService(t.Context(), newPool(gwaiev1.EndpointPickerFailClose, 8000)))
+
+		svc, err := kube.CoreV1().Services("ns").Get(t.Context(), svcName, metav1.GetOptions{})
+		require.NoError(t, err)
+		require.Equal(t, map[string]string{"app": "someone-else"}, svc.Spec.Selector)
+	})
+}
+
+// fallbackServicePool returns an InferencePool, with the given failureMode, whose fallback Service is
+// pool-epp-fallback in namespace ns.
+func fallbackServicePool(failureMode gwaiev1.EndpointPickerFailureMode) *gwaiev1.InferencePool {
+	return &gwaiev1.InferencePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "ns", UID: "pool-uid"},
+		Spec: gwaiev1.InferencePoolSpec{
+			Selector:          gwaiev1.LabelSelector{MatchLabels: map[gwaiev1.LabelKey]gwaiev1.LabelValue{"app": "model"}},
+			TargetPorts:       []gwaiev1.Port{{Number: 8000}},
+			EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "epp", FailureMode: failureMode},
+		},
+	}
+}
+
+// ownedFallbackService returns a fallback Service controlled by the pool of fallbackServicePool, with a
+// selector that differs from the pool's so that it needs an update.
+func ownedFallbackService() *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pool-epp-fallback", Namespace: "ns",
+			OwnerReferences: []metav1.OwnerReference{{UID: "pool-uid", Controller: ptr.To(true)}},
+		},
+		Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "old"}},
+	}
+}
+
+func TestInferencePoolController_FallbackService_APIErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		verb        string // The Service API call that fails.
+		existing    []runtime.Object
+		failureMode gwaiev1.EndpointPickerFailureMode
+		wantErr     string
+	}{
+		{
+			name:        "get",
+			verb:        "get",
+			failureMode: gwaiev1.EndpointPickerFailOpen,
+			wantErr:     "failed to get fallback Service ns/pool-epp-fallback",
+		},
+		{
+			name:        "create",
+			verb:        "create",
+			failureMode: gwaiev1.EndpointPickerFailOpen,
+			wantErr:     "failed to create fallback Service",
+		},
+		{
+			name:        "update",
+			verb:        "update",
+			existing:    []runtime.Object{ownedFallbackService()},
+			failureMode: gwaiev1.EndpointPickerFailOpen,
+			wantErr:     "failed to update fallback Service",
+		},
+		{
+			name:        "delete",
+			verb:        "delete",
+			existing:    []runtime.Object{ownedFallbackService()},
+			failureMode: gwaiev1.EndpointPickerFailClose,
+			wantErr:     "failed to delete fallback Service",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kube := kubefake.NewSimpleClientset(tc.existing...)
+			kube.PrependReactor(tc.verb, "services", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, errors.New("boom")
+			})
+			c := NewInferencePoolController(requireNewFakeClientWithIndexesAndInferencePool(t), kube, ctrl.Log, make(chan event.GenericEvent))
+			err := c.syncFallbackService(t.Context(), fallbackServicePool(tc.failureMode))
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestInferencePoolController_FallbackService_EdgeCases(t *testing.T) {
+	t.Run("delete of an already deleted Service is not an error", func(t *testing.T) {
+		kube := kubefake.NewSimpleClientset(ownedFallbackService())
+		kube.PrependReactor("delete", "services", func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewNotFound(corev1.Resource("services"), "pool-epp-fallback")
+		})
+		c := NewInferencePoolController(requireNewFakeClientWithIndexesAndInferencePool(t), kube, ctrl.Log, make(chan event.GenericEvent))
+		require.NoError(t, c.syncFallbackService(t.Context(), fallbackServicePool(gwaiev1.EndpointPickerFailClose)))
+	})
+	t.Run("owner reference", func(t *testing.T) {
+		// A client whose scheme doesn't know the InferencePool cannot set the controller reference.
+		noScheme := fake.NewClientBuilder().WithScheme(runtime.NewScheme()).Build()
+		kube := kubefake.NewSimpleClientset()
+		c := NewInferencePoolController(noScheme, kube, ctrl.Log, make(chan event.GenericEvent))
+		err := c.syncFallbackService(t.Context(), fallbackServicePool(gwaiev1.EndpointPickerFailOpen))
+		require.ErrorContains(t, err, "failed to set controller reference on fallback Service")
+		services, err := kube.CoreV1().Services("ns").List(t.Context(), metav1.ListOptions{})
+		require.NoError(t, err)
+		require.Empty(t, services.Items)
+	})
+	t.Run("an up to date Service is not updated", func(t *testing.T) {
+		kube := kubefake.NewSimpleClientset()
+		c := NewInferencePoolController(requireNewFakeClientWithIndexesAndInferencePool(t), kube, ctrl.Log, make(chan event.GenericEvent))
+		require.NoError(t, c.syncFallbackService(t.Context(), fallbackServicePool(gwaiev1.EndpointPickerFailOpen)))
+		kube.PrependReactor("update", "services", func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("boom")
+		})
+		require.NoError(t, c.syncFallbackService(t.Context(), fallbackServicePool(gwaiev1.EndpointPickerFailOpen)))
+	})
+}
+
+// A same-named Service the pool doesn't own makes the pool report an error instead of overwriting
+// the Service.
+func TestInferencePoolController_Reconcile_ForeignFallbackService(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesAndInferencePool(t)
+	foreign := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool-epp-fallback", Namespace: "default"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "someone-else"}},
+	}
+	kube := kubefake.NewSimpleClientset(foreign)
+	c := NewInferencePoolController(fakeClient, kube, ctrl.Log, make(chan event.GenericEvent))
+	require.NoError(t, fakeClient.Create(t.Context(), &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "epp", Namespace: "default"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 9002}}},
+	}))
+	require.NoError(t, fakeClient.Create(t.Context(), &gwaiev1.InferencePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default"},
+		Spec: gwaiev1.InferencePoolSpec{
+			Selector:          gwaiev1.LabelSelector{MatchLabels: map[gwaiev1.LabelKey]gwaiev1.LabelValue{"app": "model"}},
+			TargetPorts:       []gwaiev1.Port{{Number: 8000}},
+			EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "epp", FailureMode: gwaiev1.EndpointPickerFailOpen},
+		},
+	}))
+
+	_, err := c.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKey{Name: "pool", Namespace: "default"}})
+	require.ErrorContains(t, err, "is not owned by InferencePool pool")
+	svc, err := kube.CoreV1().Services("default").Get(t.Context(), "pool-epp-fallback", metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"app": "someone-else"}, svc.Spec.Selector)
 }
 
 func TestInferencePoolController_ExtensionReferenceValidation(t *testing.T) {
