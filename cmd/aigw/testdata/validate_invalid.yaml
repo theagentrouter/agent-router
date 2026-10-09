@@ -1,0 +1,52 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# AIGatewayRoute with:
+#   - wrong parentRef kind
+#   - dangling backendRef (no matching AIServiceBackend)
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: bad-route
+  namespace: default
+spec:
+  parentRefs:
+    - name: test-gateway
+      kind: HTTPRoute
+      group: gateway.networking.k8s.io
+  rules:
+    - backendRefs:
+        - name: nonexistent-backend
+---
+# AIServiceBackend with:
+#   - unknown schema name
+#   - wrong backendRef kind/group
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: bad-backend
+  namespace: default
+spec:
+  schema:
+    name: UnknownProvider
+  backendRef:
+    name: some-backend
+    kind: Service
+    group: wrong.group.io
+---
+# BackendSecurityPolicy with:
+#   - type/credential field mismatch (type=APIKey but no apiKey)
+#   - targetRef to nonexistent backend
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: bad-policy
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: nonexistent-backend
+  type: APIKey
