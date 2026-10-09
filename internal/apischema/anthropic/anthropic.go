@@ -1600,6 +1600,8 @@ const (
 // However, the documentation doesn't explicitly state that they are integers in its format,
 // so we use float64 to be able to unmarshal both 1234 and 1234.0 without errors.
 type Usage struct {
+	// CacheCreation contains the breakdown of cache creation input tokens by cache TTL.
+	CacheCreation *CacheCreation `json:"cache_creation,omitempty"`
 	// The number of input tokens used to create the cache entry.
 	CacheCreationInputTokens float64 `json:"cache_creation_input_tokens"`
 	// The number of input tokens read from the cache.
@@ -1608,6 +1610,14 @@ type Usage struct {
 	InputTokens float64 `json:"input_tokens"`
 	// The number of output tokens which were used.
 	OutputTokens float64 `json:"output_tokens"`
+}
+
+// CacheCreation contains cache creation input token counts split by cache TTL.
+type CacheCreation struct {
+	// The number of input tokens used to create a one-hour cache entry.
+	Ephemeral1hInputTokens *float64 `json:"ephemeral_1h_input_tokens,omitempty"`
+	// The number of input tokens used to create a five-minute cache entry.
+	Ephemeral5mInputTokens *float64 `json:"ephemeral_5m_input_tokens,omitempty"`
 }
 
 // MessagesStreamChunk represents a single event in the streaming response from the Anthropic Messages API.

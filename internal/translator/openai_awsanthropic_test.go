@@ -305,6 +305,18 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 		require.Contains(t, err.Error(), "failed to unmarshal body")
 	})
 
+	t.Run("cache creation usage split by TTL", func(t *testing.T) {
+		const responseBody = `{"id":"msg_cache","model":"claude-sonnet-4-5","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"type":"message","usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":2}}}`
+		translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+		_, _, usage, _, err := translator.ResponseBody(
+			map[string]string{statusHeaderName: "200"}, strings.NewReader(responseBody), true, nil,
+		)
+		require.NoError(t, err)
+		requireTokenUsageValue(t, 7, usage.CacheCreationInputTokens)
+		requireTokenUsageValue(t, 5, usage.CacheCreation5mInputTokens)
+		requireTokenUsageValue(t, 2, usage.CacheCreation1hInputTokens)
+	})
+
 	tests := []struct {
 		name                   string
 		inputResponse          *anthropic.Message
@@ -425,6 +437,10 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 				int32(tt.expectedOpenAIResponse.Usage.TotalTokens),                             // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.CompletionTokensDetails.ReasoningTokens), // nolint:gosec
 			)
+			expectedTokenUsage.SetCacheCreation5mInputTokens(
+				uint32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CacheWriteTokens), //nolint:gosec
+			)
+			expectedTokenUsage.SetCacheCreation1hInputTokens(0)
 			require.Equal(t, expectedTokenUsage, usedToken)
 
 			if diff := cmp.Diff(tt.expectedOpenAIResponse, gotResp, cmpopts.IgnoreFields(openai.ChatCompletionResponse{}, "Created")); diff != "" {

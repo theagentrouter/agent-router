@@ -470,10 +470,12 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 		mt.retUsedToken.SetInputTokens(1)
 		mt.retUsedToken.SetCachedInputTokens(1)
 		mt.retUsedToken.SetCacheCreationInputTokens(3)
+		mt.retUsedToken.SetCacheCreation5mInputTokens(2)
+		mt.retUsedToken.SetCacheCreation1hInputTokens(1)
 
 		celProgInt, err := llmcostcel.NewProgram("54321")
 		require.NoError(t, err)
-		celProgUint, err := llmcostcel.NewProgram("uint(9999)")
+		celProgUint, err := llmcostcel.NewProgram("cache_creation_5m_input_tokens * 100u + cache_creation_1h_input_tokens * 1000u")
 		require.NoError(t, err)
 		p := &chatCompletionProcessorUpstreamFilter{
 			translator: mt,
@@ -526,7 +528,7 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 			GetStructValue().Fields["cache_creation_input_token_usage"].GetNumberValue())
 		require.Equal(t, float64(54321), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
 			GetStructValue().Fields["cel_int"].GetNumberValue())
-		require.Equal(t, float64(9999), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+		require.Equal(t, float64(1200), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
 			GetStructValue().Fields["cel_uint"].GetNumberValue())
 		require.Equal(t, "ai_gateway_llm", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["model_name_override"].GetStringValue())
 		require.Equal(t, "some_backend", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["ai_service_backend_name"].GetStringValue())

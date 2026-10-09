@@ -48,6 +48,39 @@ var anthropicInputSchemaKeysToSkip = map[string]struct{}{
 	"properties": {},
 }
 
+func applyCacheCreationTTLUsageFromAnthropicSDKUsage(tokenUsage *metrics.TokenUsage, usage *anthropic.Usage) {
+	if !usage.JSON.CacheCreation.Valid() ||
+		!usage.CacheCreation.JSON.Ephemeral5mInputTokens.Valid() ||
+		!usage.CacheCreation.JSON.Ephemeral1hInputTokens.Valid() ||
+		usage.CacheCreation.Ephemeral5mInputTokens < 0 ||
+		usage.CacheCreation.Ephemeral1hInputTokens < 0 {
+		return
+	}
+	tokenUsage.SetCacheCreation5mInputTokens(uint32(usage.CacheCreation.Ephemeral5mInputTokens)) //nolint:gosec
+	tokenUsage.SetCacheCreation1hInputTokens(uint32(usage.CacheCreation.Ephemeral1hInputTokens)) //nolint:gosec
+}
+
+func openAIUsageFromTokenUsage(tokenUsage *metrics.TokenUsage) openai.Usage {
+	inputTokens, _ := tokenUsage.InputTokens()
+	outputTokens, _ := tokenUsage.OutputTokens()
+	totalTokens, _ := tokenUsage.TotalTokens()
+	cachedTokens, _ := tokenUsage.CachedInputTokens()
+	cacheCreationTokens, _ := tokenUsage.CacheCreationInputTokens()
+	reasoningTokens, _ := tokenUsage.ReasoningTokens()
+	return openai.Usage{
+		CompletionTokens: int(outputTokens),
+		PromptTokens:     int(inputTokens),
+		TotalTokens:      int(totalTokens),
+		PromptTokensDetails: &openai.PromptTokensDetails{
+			CachedTokens:     int(cachedTokens),
+			CacheWriteTokens: int(cacheCreationTokens),
+		},
+		CompletionTokensDetails: &openai.CompletionTokensDetails{
+			ReasoningTokens: int(reasoningTokens),
+		},
+	}
+}
+
 // openAIToolParamsToAnthropicInputSchema converts OpenAI function parameters to an Anthropic ToolInputSchemaParam.
 func openAIToolParamsToAnthropicInputSchema(parameters any) (anthropic.ToolInputSchemaParam, error) {
 	var schema anthropic.ToolInputSchemaParam
@@ -949,13 +982,10 @@ type messageDeltaUsageFields struct {
 }
 
 func (p *anthropicStreamParser) updateInputUsageFromMessageDelta(data []byte) error {
-	// message_delta provides cumulative (not incremental) token counts.
-	// This function handles input_tokens, cache_read_input_tokens, and cache_creation_input_tokens
-	// from message_delta. We use Set (not Add) because these are cumulative totals.
-	// This prevents double-counting when both message_start and message_delta report the same
-	// cache tokens, and also handles cases where:
-	// - Cache tokens are reported only in message_delta (not in message_start)
-	// - message_delta provides corrected/updated cache token values that override message_start
+	// Anthropic documents message_delta usage counters as cumulative. The pinned SDK
+	// exposes input, cache-read, cache-creation, and output aggregates there, but not
+	// the cache_creation TTL breakdown. Set, rather than Add, the aggregate counters
+	// and preserve any TTL-specific values previously read from message_start.
 	var event messageDeltaUsageFields
 	if err := json.Unmarshal(data, &event); err != nil {
 		return fmt.Errorf("unmarshal message_delta usage fields: %w", err)
@@ -1041,28 +1071,13 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 		inputTokens, _ := p.tokenUsage.InputTokens()
 		outputTokens, _ := p.tokenUsage.OutputTokens()
 		p.tokenUsage.SetTotalTokens(inputTokens + outputTokens)
-		totalTokens, _ := p.tokenUsage.TotalTokens()
-		cachedTokens, _ := p.tokenUsage.CachedInputTokens()
-		cacheCreationTokens, _ := p.tokenUsage.CacheCreationInputTokens()
-		reasoningTokens, _ := p.tokenUsage.ReasoningTokens()
 		finalChunk := openai.ChatCompletionResponseChunk{
 			ID:      p.activeMessageID,
 			Created: p.created,
 			Object:  "chat.completion.chunk",
 			Choices: []openai.ChatCompletionResponseChunkChoice{},
-			Usage: &openai.Usage{
-				PromptTokens:     int(inputTokens),
-				CompletionTokens: int(outputTokens),
-				TotalTokens:      int(totalTokens),
-				PromptTokensDetails: &openai.PromptTokensDetails{
-					CachedTokens:     int(cachedTokens),
-					CacheWriteTokens: int(cacheCreationTokens),
-				},
-				CompletionTokensDetails: &openai.CompletionTokensDetails{
-					ReasoningTokens: int(reasoningTokens),
-				},
-			},
-			Model: p.requestModel,
+			Usage:   ptr.To(openAIUsageFromTokenUsage(&p.tokenUsage)),
+			Model:   p.requestModel,
 		}
 
 		// Add active tool calls to the final chunk.
@@ -1142,17 +1157,8 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 			&u.CacheReadInputTokens,
 			&u.CacheCreationInputTokens,
 		)
-		// Set all input token counts (input, cache read, cache creation) from message_start.
-		// message_delta may also contain these fields but only output_tokens is used from it.
-		if input, ok := usage.InputTokens(); ok {
-			p.tokenUsage.SetInputTokens(input)
-		}
-		if cached, ok := usage.CachedInputTokens(); ok {
-			p.tokenUsage.SetCachedInputTokens(cached)
-		}
-		if cacheCreation, ok := usage.CacheCreationInputTokens(); ok {
-			p.tokenUsage.SetCacheCreationInputTokens(cacheCreation)
-		}
+		applyCacheCreationTTLUsageFromAnthropicSDKUsage(&usage, &u)
+		p.tokenUsage = usage
 
 		// reset the toolIndex for each message
 		p.toolIndex = -1
@@ -1226,9 +1232,9 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil, fmt.Errorf("unmarshal message_delta: %w", err)
 		}
-		// Update input and cache token usage from message_delta.
-		// This handles cases where cache tokens are only in message_delta,
-		// or where message_delta provides corrected totals that override message_start.
+		// Merge cumulative aggregate usage from message_delta. The pinned SDK does not
+		// model a TTL breakdown on MessageDeltaUsage, so this leaves any TTL-specific
+		// values previously captured from message_start unchanged.
 		if err := p.updateInputUsageFromMessageDelta(data); err != nil {
 			return nil, err
 		}
@@ -1377,25 +1383,9 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 		&usage.CacheReadInputTokens,
 		&usage.CacheCreationInputTokens,
 	)
+	applyCacheCreationTTLUsageFromAnthropicSDKUsage(&tokenUsage, &usage)
 	tokenUsage.SetReasoningTokens(uint32(usage.OutputTokensDetails.ThinkingTokens)) //nolint:gosec
-	inputTokens, _ := tokenUsage.InputTokens()
-	outputTokens, _ := tokenUsage.OutputTokens()
-	totalTokens, _ := tokenUsage.TotalTokens()
-	cachedTokens, _ := tokenUsage.CachedInputTokens()
-	cacheCreationTokens, _ := tokenUsage.CacheCreationInputTokens()
-	reasoningTokens, _ := tokenUsage.ReasoningTokens()
-	openAIResp.Usage = openai.Usage{
-		CompletionTokens: int(outputTokens),
-		PromptTokens:     int(inputTokens),
-		TotalTokens:      int(totalTokens),
-		PromptTokensDetails: &openai.PromptTokensDetails{
-			CachedTokens:     int(cachedTokens),
-			CacheWriteTokens: int(cacheCreationTokens),
-		},
-		CompletionTokensDetails: &openai.CompletionTokensDetails{
-			ReasoningTokens: int(reasoningTokens),
-		},
-	}
+	openAIResp.Usage = openAIUsageFromTokenUsage(&tokenUsage)
 
 	finishReason, err := anthropicToOpenAIFinishReason(anthropicResp.StopReason)
 	if err != nil {

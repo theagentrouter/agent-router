@@ -1172,6 +1172,59 @@ data: {"type":"message_stop"}
 	assert.Equal(t, uint32(4), reasoningTokens, "later no-usage message_delta must not zero out reasoning tokens")
 }
 
+func TestAnthropicStreamParserTokenUsage_CacheCreationTTLSplit(t *testing.T) {
+	parser := newAnthropicStreamParser("test-model")
+	const sseStream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"test-model","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":2},"output_tokens":0}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}
+
+event: message_stop
+data: {"type":"message_stop"}
+`
+
+	_, _, usage, _, err := parser.Process(strings.NewReader(sseStream), true, nil)
+	require.NoError(t, err)
+	requireTokenUsageValue(t, 7, usage.CacheCreationInputTokens)
+	requireTokenUsageValue(t, 5, usage.CacheCreation5mInputTokens)
+	requireTokenUsageValue(t, 2, usage.CacheCreation1hInputTokens)
+}
+
+func TestAnthropicStreamParserTokenUsage_CacheCreationTTLValidation(t *testing.T) {
+	t.Run("complete split is preserved when it differs from aggregate", func(t *testing.T) {
+		parser := newAnthropicStreamParser("test-model")
+		const sseStream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"test-model","usage":{"input_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":8,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":2},"output_tokens":0}}}
+
+event: message_stop
+data: {"type":"message_stop"}
+`
+
+		_, _, usage, _, err := parser.Process(strings.NewReader(sseStream), true, nil)
+		require.NoError(t, err)
+		requireTokenUsageValue(t, 8, usage.CacheCreationInputTokens)
+		requireTokenUsageValue(t, 5, usage.CacheCreation5mInputTokens)
+		requireTokenUsageValue(t, 2, usage.CacheCreation1hInputTokens)
+	})
+
+	t.Run("partial split remains unknown", func(t *testing.T) {
+		parser := newAnthropicStreamParser("test-model")
+		const sseStream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"test-model","usage":{"input_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":8,"cache_creation":{"ephemeral_5m_input_tokens":5},"output_tokens":0}}}
+
+event: message_stop
+data: {"type":"message_stop"}
+`
+
+		_, _, usage, _, err := parser.Process(strings.NewReader(sseStream), true, nil)
+		require.NoError(t, err)
+		requireTokenUsageValue(t, 8, usage.CacheCreationInputTokens)
+		requireTokenUsageUnset(t, usage.CacheCreation5mInputTokens)
+		requireTokenUsageUnset(t, usage.CacheCreation1hInputTokens)
+	})
+}
+
 func TestAnthropicStreamParserTokenUsage_MessageDeltaCacheWhenInputAlreadyHasCache(t *testing.T) {
 	// Test the case where message_start has cache tokens and input_tokens,
 	// and message_delta provides cache tokens but NOT input_tokens.
@@ -2060,6 +2113,69 @@ data:{"type":"message_stop"}
 	output, ok := tokenUsage.OutputTokens()
 	require.True(t, ok, "output tokens were not extracted")
 	require.Equal(t, uint32(16), output)
+}
+
+func TestAnthropicStreamParser_CacheCreationDeltaPreservesMessageStartSplit(t *testing.T) {
+	p := newAnthropicStreamParser("claude-sonnet-4-5")
+
+	const stream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"cache_read_input_tokens":0,"cache_creation_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":2},"output_tokens":0}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"cache_creation_input_tokens":8,"output_tokens":16}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+	_, _, tokenUsage, _, err := p.Process(strings.NewReader(stream), true, nil)
+	require.NoError(t, err)
+	requireTokenUsageValue(t, 8, tokenUsage.CacheCreationInputTokens)
+	requireTokenUsageValue(t, 5, tokenUsage.CacheCreation5mInputTokens)
+	requireTokenUsageValue(t, 2, tokenUsage.CacheCreation1hInputTokens)
+}
+
+func TestAnthropicStreamParser_TTLSplitOnMessageDeltaIsIgnored(t *testing.T) {
+	p := newAnthropicStreamParser("claude-sonnet-4-5")
+
+	const stream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"cache_read_input_tokens":0,"cache_creation_input_tokens":7,"output_tokens":0}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"cache_creation_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":2},"output_tokens":16}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+	_, _, tokenUsage, _, err := p.Process(strings.NewReader(stream), true, nil)
+	require.NoError(t, err)
+	requireTokenUsageValue(t, 7, tokenUsage.CacheCreationInputTokens)
+	requireTokenUsageUnset(t, tokenUsage.CacheCreation5mInputTokens)
+	requireTokenUsageUnset(t, tokenUsage.CacheCreation1hInputTokens)
+}
+
+func TestAnthropicStreamParser_PartialTTLDeltaIsIgnored(t *testing.T) {
+	p := newAnthropicStreamParser("claude-sonnet-4-5")
+
+	const stream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"cache_read_input_tokens":0,"cache_creation_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":2},"output_tokens":0}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"cache_creation_input_tokens":8,"cache_creation":{"ephemeral_1h_input_tokens":3},"output_tokens":16}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+	_, _, tokenUsage, _, err := p.Process(strings.NewReader(stream), true, nil)
+	require.NoError(t, err)
+	requireTokenUsageValue(t, 8, tokenUsage.CacheCreationInputTokens)
+	requireTokenUsageValue(t, 5, tokenUsage.CacheCreation5mInputTokens)
+	requireTokenUsageValue(t, 2, tokenUsage.CacheCreation1hInputTokens)
 }
 
 // TestAnthropicStreamParser_ThinkingDelta asserts that extended thinking
