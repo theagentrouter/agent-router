@@ -434,8 +434,6 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 		routeName := fmt.Sprintf("%s/%s", aiGatewayRoute.Namespace, aiGatewayRoute.Name)
 		hostnames := aiGatewayRoute.Spec.Hostnames
 		spec := aiGatewayRoute.Spec
-		routeBackendNamesSet := map[string]struct{}{}
-		routeBackendNames := []string{}
 		injectedQuotaCosts := make(map[string]struct{})
 		for ruleIndex := range spec.Rules {
 			rule := &spec.Rules[ruleIndex]
@@ -570,30 +568,31 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 				}
 
 				ec.Backends = append(ec.Backends, b)
-				if _, exists := routeBackendNamesSet[b.Name]; !exists {
-					routeBackendNamesSet[b.Name] = struct{}{}
-					routeBackendNames = append(routeBackendNames, b.Name)
-				}
 			}
 		}
-		if len(routeBackendNames) > 0 {
-			// Dedup per (metadataKey, routeName): last definition wins.
-			dedup := map[string]filterapi.LLMRequestCost{}
-			for _, cost := range aiGatewayRoute.Spec.LLMRequestCosts {
-				fc, convErr := aigwLLMRequestCostToFilterAPI(cost, routeName)
-				if convErr != nil {
-					return false, fmt.Errorf("failed to convert LLMRequestCosts for route %s: %w", aiGatewayRoute.Name, convErr)
-				}
-				key := fc.MetadataKey
-				dedup[key] = fc
+		// The costs below are scoped to the route, not to any one backend, so they are
+		// registered even when none of the route's backendRefs resolved on this
+		// reconcile: a backendRef whose AIServiceBackend or credential Secret shows up
+		// later must not leave the route silently uncharged in the meantime. Dropping
+		// them would strip the cost metadata keys a BackendTrafficPolicy rateLimit or a
+		// QuotaPolicy reads, and rate limits keyed on a missing key never fire.
+		//
+		// Dedup per (metadataKey, routeName): last definition wins.
+		dedup := map[string]filterapi.LLMRequestCost{}
+		for _, cost := range aiGatewayRoute.Spec.LLMRequestCosts {
+			fc, convErr := aigwLLMRequestCostToFilterAPI(cost, routeName)
+			if convErr != nil {
+				return false, fmt.Errorf("failed to convert LLMRequestCosts for route %s: %w", aiGatewayRoute.Name, convErr)
 			}
-			// Inject QuotaPolicy cost expressions as LLMRequestCost entries so ext_proc
-			// computes and stores them in metadata for the HitsAddend to read.
-			c.injectQuotaPolicyCostExpressions(ctx, aiGatewayRoute, ec, injectedQuotaCosts, routeName)
+			key := fc.MetadataKey
+			dedup[key] = fc
+		}
+		// Inject QuotaPolicy cost expressions as LLMRequestCost entries so ext_proc
+		// computes and stores them in metadata for the HitsAddend to read.
+		c.injectQuotaPolicyCostExpressions(ctx, aiGatewayRoute, ec, injectedQuotaCosts, routeName)
 
-			for _, fc := range dedup {
-				ec.LLMRequestCosts = append(ec.LLMRequestCosts, fc)
-			}
+		for _, fc := range dedup {
+			ec.LLMRequestCosts = append(ec.LLMRequestCosts, fc)
 		}
 	}
 

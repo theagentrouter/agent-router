@@ -106,6 +106,31 @@ spec:
         - retriable-status-codes
 ```
 
+## Troubleshooting
+
+### The fallback backend is never reached
+
+Priority failover happens through retries, so a retry policy that does not fire leaves every request on the primary backend. Check, in order:
+
+1. **`retryOn.triggers` includes `retriable-status-codes`.** This is the most common cause. `retryOn.httpStatusCodes` only names _which_ status codes are retriable — it does not by itself make status codes a retry condition. Without the `retriable-status-codes` trigger, the list is inert and a `500` from the primary is returned to the client as-is:
+
+   ```yaml
+   retryOn:
+     httpStatusCodes:
+       - 500
+     triggers:
+       - connect-failure
+       - retriable-status-codes # Required for httpStatusCodes to take effect.
+   ```
+
+2. **`numRetries` is large enough to leave the primary's priority.** With `numAttemptsPerPriority: 1`, reaching the backend at priority 1 costs one retry, so `numRetries` must be at least 1 — budget one attempt per priority you want to traverse.
+
+3. **`targetRefs` points at the generated `HTTPRoute`.** The `BackendTrafficPolicy` attaches to the `HTTPRoute` that the `AIGatewayRoute` generates, which carries the same name as the `AIGatewayRoute`. A `targetRefs` entry naming something else — an `AIGatewayRoute` kind, or a `Backend` — configures no retry policy on this route.
+
+4. **Priorities start at `0` and are contiguous.** A rule whose lowest priority is not `0`, or that skips a level, is not a valid priority set.
+
+5. **The failure is one the retry policy can see.** A response the primary produced successfully — including a `4xx` such as `401` from a bad API key — is not a connection or `5xx` failure, so it is not retried and does not fall back. Simulate the failure with a `5xx` or an unreachable endpoint instead.
+
 ## References
 
 - [Provider Fallback Example](https://github.com/theagentrouter/agent-router/tree/main/examples/provider_fallback)
