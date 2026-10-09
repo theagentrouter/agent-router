@@ -307,6 +307,13 @@ jobs:
       - run: make test-e2e-inference-extension
         env:
           EG_VERSION: v1.9.2
+      - name: Upload conformance test report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: inference-extension-conformance-test-report
+          path: tests/e2e-inference-extension/inference-extension-conformance-test-report.yaml
+          if-no-files-found: warn
 
   test_e2e_namespaced:
     needs: changes
