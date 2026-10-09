@@ -82,7 +82,7 @@ func (r *ImageGenerationRecorder) RecordResponse(span trace.Span, resp *openai.I
 
 // RecordResponseOnError implements the same method as defined in tracingapi.ImageGenerationRecorder.
 func (r *ImageGenerationRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
 
 // buildImageGenerationRequestAttributes builds OpenInference attributes from the image generation request.

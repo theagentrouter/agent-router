@@ -467,3 +467,36 @@ data: [DONE]`
 	// Model name should still be present.
 	require.Equal(t, openai.ModelGPT5Nano, attrs[openinference.LLMModelName].AsString())
 }
+
+func TestChatCompletionRecorder_WithConfig_ErrorBodyRedaction(t *testing.T) {
+	const secret = "SENSITIVE-PROMPT-TEXT"
+
+	tests := []struct {
+		name             string
+		config           *openinference.TraceConfig
+		expectedContains bool
+	}{
+		{name: "default config records the body", config: openinference.NewTraceConfig(), expectedContains: true},
+		{name: "hide inputs redacts the body", config: &openinference.TraceConfig{HideInputs: true}},
+		{name: "hide outputs redacts the body", config: &openinference.TraceConfig{HideOutputs: true}},
+		{name: "hide inputs and outputs redacts the body", config: &openinference.TraceConfig{HideInputs: true, HideOutputs: true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := NewChatCompletionRecorder(tt.config)
+
+			actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+				recorder.RecordResponseOnError(span, 400, []byte(`{"error":"`+secret+`"}`))
+				return false
+			})
+
+			require.Contains(t, actualSpan.Status.Description, "Error code: 400")
+			if tt.expectedContains {
+				require.Contains(t, actualSpan.Status.Description, secret)
+			} else {
+				require.NotContains(t, actualSpan.Status.Description, secret)
+			}
+		})
+	}
+}
