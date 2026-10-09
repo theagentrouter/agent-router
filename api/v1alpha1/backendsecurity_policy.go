@@ -182,23 +182,6 @@ type GCPOIDCExchangeToken struct {
 	BackendSecurityPolicyOIDC `json:",inline"`
 }
 
-// GCPWorkloadIdentityProvider specifies the external identity provider to be used to authenticate against GCP.
-// The external identity provider can be AWS, Microsoft, etc but must be pre-registered in the GCP project
-//
-// https://cloud.google.com/iam/docs/workload-identity-federation
-type GCPWorkloadIdentityProvider struct {
-	// Name of the external identity provider as registered on Google Cloud Platform.
-	//
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// OIDCProvider is the generic OIDCProvider fields.
-	//
-	// +kubebuilder:validation:Required
-	OIDCProvider BackendSecurityPolicyOIDC `json:"OIDCProvider"`
-}
-
 type GCPServiceAccountImpersonationConfig struct {
 	// ServiceAccountName is the name of the service account to impersonate.
 	//
