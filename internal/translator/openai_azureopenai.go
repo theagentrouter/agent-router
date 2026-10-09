@@ -49,6 +49,9 @@ type openAIToAzureOpenAITranslatorV1ChatCompletion struct {
 func (o *openAIToAzureOpenAITranslatorV1ChatCompletion) RequestBody(raw []byte, req *openai.ChatCompletionRequest, forceBodyMutation bool) (
 	newHeaders []internalapi.Header, newBody []byte, err error,
 ) {
+	if err = rejectPerMessageOutputConfig(req.Messages, "Azure OpenAI"); err != nil {
+		return
+	}
 	modelName := req.Model
 	if o.modelNameOverride != "" {
 		// If modelName is set we override the model to be used for the request.

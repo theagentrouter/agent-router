@@ -47,10 +47,29 @@ type openAIToGCPAnthropicTranslatorV1ChatCompletion struct {
 	modelNameOverride internalapi.ModelNameOverride
 	streamParser      *anthropicStreamParser
 	requestModel      internalapi.RequestModel
+	anthropicBetas    []string
+	betaFilterMode    string
+	betaFilterValues  []string
 	// Redaction configuration for debug logging
 	debugLogEnabled bool
 	enableRedaction bool
 	logger          *slog.Logger
+}
+
+// SetRequestHeaders captures existing Anthropic beta values so required
+// translator-added betas can be merged without discarding client values.
+func (o *openAIToGCPAnthropicTranslatorV1ChatCompletion) SetRequestHeaders(headers map[string]string) {
+	o.anthropicBetas = parseCommaSeparatedHeader(headers, anthropicBetaHeaderName)
+}
+
+// SetHeaderValueFilter applies backend policy to the Anthropic beta header
+// values this translator may add or rewrite.
+func (o *openAIToGCPAnthropicTranslatorV1ChatCompletion) SetHeaderValueFilter(name, mode string, values []string) {
+	if !strings.EqualFold(name, anthropicBetaHeaderName) {
+		return
+	}
+	o.betaFilterMode = mode
+	o.betaFilterValues = values
 }
 
 // RequestBody implements [OpenAIChatCompletionTranslator.RequestBody] for GCP.
@@ -97,6 +116,14 @@ func (o *openAIToGCPAnthropicTranslatorV1ChatCompletion) RequestBody(_ []byte, o
 	}
 	newBody = body
 	newHeaders = []internalapi.Header{{pathHeaderName, path}, {contentLengthHeaderName, strconv.Itoa(len(newBody))}}
+	betas, betaErr := applyPerMessageBetaPolicy(o.anthropicBetas, hasPerMessageOutputConfig(openAIReq.Messages), o.betaFilterMode, o.betaFilterValues)
+	if betaErr != nil {
+		err = betaErr
+		return
+	}
+	if strings.Join(betas, ",") != strings.Join(o.anthropicBetas, ",") {
+		newHeaders = append(newHeaders, internalapi.Header{anthropicBetaHeaderName, strings.Join(betas, ",")})
+	}
 	return
 }
 

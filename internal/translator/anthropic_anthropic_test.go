@@ -118,6 +118,21 @@ func TestAnthropicToAnthropic_RequestBody(t *testing.T) {
 	}
 }
 
+func TestAnthropicToAnthropic_RequestBody_PerMessageEffort(t *testing.T) {
+	raw := []byte(`{"model":"claude-sonnet-5-5","max_tokens":1024,"messages":[{"role":"system","content":[],"output_config":{"effort":"low"}},{"role":"user","content":"Summarize it."}]}`)
+	var req anthropicschema.MessagesRequest
+	require.NoError(t, json.Unmarshal(raw, &req))
+
+	tr := NewAnthropicToAnthropicTranslator("v1", "")
+	headerMutation, bodyMutation, err := tr.RequestBody(raw, &req, true)
+	require.NoError(t, err)
+	require.Equal(t, raw, bodyMutation)
+	require.Equal(t, []internalapi.Header{
+		{pathHeaderName, "/v1/messages"},
+		{contentLengthHeaderName, strconv.Itoa(len(raw))},
+	}, headerMutation)
+}
+
 func TestAnthropicToAnthropic_ResponseHeaders(t *testing.T) {
 	translator := NewAnthropicToAnthropicTranslator("", "")
 	require.NotNil(t, translator)

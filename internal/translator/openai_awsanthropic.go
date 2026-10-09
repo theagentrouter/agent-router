@@ -49,6 +49,22 @@ type openAIToAWSAnthropicTranslatorV1ChatCompletion struct {
 	streamParser      *anthropicStreamParser
 	requestModel      internalapi.RequestModel
 	bufferedBody      []byte
+	anthropicBetas    []string
+	originalBetas     []string
+	betaFilterMode    string
+	betaFilterValues  []string
+}
+
+func (o *openAIToAWSAnthropicTranslatorV1ChatCompletion) SetRequestHeaders(headers map[string]string) {
+	o.originalBetas = parseCommaSeparatedHeader(headers, anthropicBetaHeaderName)
+	o.anthropicBetas = normalizeAWSBedrockBetas(o.originalBetas)
+}
+
+func (o *openAIToAWSAnthropicTranslatorV1ChatCompletion) SetHeaderValueFilter(name, mode string, values []string) {
+	if strings.EqualFold(name, anthropicBetaHeaderName) {
+		o.betaFilterMode = mode
+		o.betaFilterValues = values
+	}
 }
 
 // RequestBody implements [OpenAIChatCompletionTranslator.RequestBody] for AWS Anthropic.
@@ -91,11 +107,24 @@ func (o *openAIToAWSAnthropicTranslatorV1ChatCompletion) RequestBody(_ []byte, o
 	if err != nil {
 		return
 	}
+	betas, betaErr := applyPerMessageBetaPolicy(o.anthropicBetas, hasPerMessageOutputConfig(openAIReq.Messages), o.betaFilterMode, o.betaFilterValues)
+	if betaErr != nil {
+		return nil, nil, betaErr
+	}
+	if len(betas) > 0 {
+		body, err = sjson.SetBytes(body, "anthropic_beta", betas)
+		if err != nil {
+			return
+		}
+	}
 	newBody = body
 
 	newHeaders = []internalapi.Header{
 		{pathHeaderName, fmt.Sprintf(pathTemplate, encodedModelName)},
 		{contentLengthHeaderName, strconv.Itoa(len(newBody))},
+	}
+	if strings.Join(betas, ",") != strings.Join(o.originalBetas, ",") {
+		newHeaders = append(newHeaders, internalapi.Header{anthropicBetaHeaderName, strings.Join(betas, ",")})
 	}
 	return
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/ptr"
 
+	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -1318,6 +1319,81 @@ func TestEffortAvailable(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := effortAvailable(tt.model)
 			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestPerMessageEffortAvailable(t *testing.T) {
+	tests := []struct {
+		name      string
+		apiSchema filterapi.APISchemaName
+		model     string
+		expected  bool
+	}{
+		{name: "GCP Fable 5.1", apiSchema: filterapi.APISchemaGCPAnthropic, model: "claude-fable-5-1", expected: true},
+		{name: "GCP Mythos 5.1", apiSchema: filterapi.APISchemaGCPAnthropic, model: "claude-mythos-5-1", expected: true},
+		{name: "GCP Opus 5.5", apiSchema: filterapi.APISchemaGCPAnthropic, model: "claude-opus-5-5", expected: true},
+		{name: "GCP Opus 5", apiSchema: filterapi.APISchemaGCPAnthropic, model: "claude-opus-5", expected: true},
+		{name: "GCP Sonnet 5.5", apiSchema: filterapi.APISchemaGCPAnthropic, model: "claude-sonnet-5-5", expected: true},
+		{name: "GCP Haiku 5.5", apiSchema: filterapi.APISchemaGCPAnthropic, model: "claude-haiku-5-5", expected: true},
+		{name: "GCP Fable 5 unsupported", apiSchema: filterapi.APISchemaGCPAnthropic, model: "claude-fable-5", expected: false},
+		{name: "GCP Sonnet 5 unsupported", apiSchema: filterapi.APISchemaGCPAnthropic, model: "claude-sonnet-5", expected: false},
+		{name: "GCP Opus 5.6 unsupported", apiSchema: filterapi.APISchemaGCPAnthropic, model: "claude-opus-5-6", expected: false},
+		{name: "AWS InvokeModel Fable 5.1", apiSchema: filterapi.APISchemaAWSAnthropic, model: "anthropic.claude-fable-5-1-v1:0", expected: true},
+		{name: "AWS InvokeModel Opus 5.5", apiSchema: filterapi.APISchemaAWSAnthropic, model: "anthropic.claude-opus-5-5-v1:0", expected: true},
+		{name: "AWS InvokeModel Sonnet 5.5 unsupported", apiSchema: filterapi.APISchemaAWSAnthropic, model: "anthropic.claude-sonnet-5-5-v1:0", expected: false},
+		{name: "AWS Converse unsupported", apiSchema: filterapi.APISchemaAWSBedrock, model: "anthropic.claude-opus-5-5-v1:0", expected: false},
+		{name: "GCP repeated identifier uses valid occurrence", apiSchema: filterapi.APISchemaGCPAnthropic, model: "opus-5-6/claude-opus-5@20261001", expected: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, perMessageEffortAvailable(tt.apiSchema, tt.model))
+		})
+	}
+}
+
+func TestUnsupportedTranslatorsRejectPerMessageOutputConfig(t *testing.T) {
+	chatReq := &openai.ChatCompletionRequest{
+		Model: "claude-sonnet-5-5",
+		Messages: []openai.ChatCompletionMessageParamUnion{{OfSystem: &openai.ChatCompletionSystemMessageParam{
+			Role:         openai.ChatMessageRoleSystem,
+			Content:      openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{}},
+			OutputConfig: &openai.ChatCompletionSystemMessageOutputConfig{Effort: openai.ReasoningEffortLow},
+		}}},
+	}
+	chatTranslators := map[string]OpenAIChatCompletionTranslator{
+		"OpenAI":           NewChatCompletionOpenAIToOpenAITranslator("v1", ""),
+		"AWS OpenAI":       NewChatCompletionOpenAIToAWSOpenAITranslator("v1", ""),
+		"Azure OpenAI":     NewChatCompletionOpenAIToAzureOpenAITranslator("2026-01-01", ""),
+		"Bedrock Converse": NewChatCompletionOpenAIToAWSBedrockTranslator(""),
+		"Gemini":           NewChatCompletionOpenAIToGCPVertexAITranslator(""),
+	}
+	for name, tr := range chatTranslators {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := tr.RequestBody([]byte(`{}`), chatReq, false)
+			require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+			require.ErrorContains(t, err, "per-message output_config is not supported")
+		})
+	}
+
+	nativeReq := &anthropicschema.MessagesRequest{
+		Model: "claude-sonnet-5-5",
+		Messages: []anthropicschema.MessageParam{{
+			Role:         anthropicschema.MessageRoleSystem,
+			Content:      anthropicschema.MessageContent{Array: []anthropicschema.ContentBlockParam{}},
+			OutputConfig: &anthropicschema.MessageOutputConfig{Effort: anthropicschema.MessageOutputConfigEffortLow},
+		}},
+	}
+	nativeTranslators := map[string]AnthropicMessagesTranslator{
+		"Bedrock Converse": NewAnthropicToAWSBedrockTranslator(""),
+		"OpenAI":           NewAnthropicToChatCompletionOpenAITranslator("v1", ""),
+	}
+	for name, tr := range nativeTranslators {
+		t.Run("native "+name, func(t *testing.T) {
+			_, _, err := tr.RequestBody([]byte(`{}`), nativeReq, false)
+			require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+			require.ErrorContains(t, err, "per-message output_config is not supported")
 		})
 	}
 }

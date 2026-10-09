@@ -21,6 +21,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -103,6 +104,9 @@ func getCachePoint(fields *openai.AnthropicContentFields) *awsbedrock.CachePoint
 func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) RequestBody(_ []byte, openAIReq *openai.ChatCompletionRequest, _ bool) (
 	newHeaders []internalapi.Header, newBody []byte, err error,
 ) {
+	if err = rejectPerMessageOutputConfig(openAIReq.Messages, string(filterapi.APISchemaAWSBedrock)); err != nil {
+		return
+	}
 	var pathTemplate string
 	if openAIReq.Stream {
 		o.stream = true

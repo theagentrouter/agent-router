@@ -561,6 +561,14 @@ type ChatCompletionSystemMessageParam struct {
 	// An optional name for the participant. Provides the model information to
 	// differentiate between participants of the same role.
 	Name string `json:"name,omitempty"`
+	// OutputConfig changes the Anthropic output configuration for subsequent turns.
+	OutputConfig *ChatCompletionSystemMessageOutputConfig `json:"output_config,omitempty"`
+}
+
+// ChatCompletionSystemMessageOutputConfig is the Anthropic per-message output
+// configuration extension for effort-only system messages.
+type ChatCompletionSystemMessageOutputConfig struct {
+	Effort ReasoningEffort `json:"effort"`
 }
 
 // ChatCompletionDeveloperMessageParam represents a developer message.

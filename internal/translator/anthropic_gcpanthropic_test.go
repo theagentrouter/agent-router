@@ -182,6 +182,53 @@ func TestAnthropicToGCPAnthropicTranslator_ComprehensiveMarshalling(t *testing.T
 	require.Equal(t, expectedPath, pathHeader.Value())
 }
 
+func TestAnthropicToGCPAnthropicTranslator_PerMessageEffort(t *testing.T) {
+	const beta = "mid-conversation-output-config-2026-07-01"
+	raw := []byte(`{
+		"model":"claude-sonnet-5-5",
+		"max_tokens":4096,
+		"output_config":{"effort":"high"},
+		"messages":[
+			{"role":"user","content":"Plan a migration."},
+			{"role":"assistant","content":"Export, migrate, and verify."},
+			{"role":"system","content":[],"output_config":{"effort":"low"}},
+			{"role":"user","content":"Summarize it."}
+		]
+	}`)
+
+	var req anthropic.MessagesRequest
+	require.NoError(t, json.Unmarshal(raw, &req))
+	require.Len(t, req.Messages, 4)
+	effortMessage := req.Messages[2]
+	require.Equal(t, anthropic.MessageRoleSystem, effortMessage.Role)
+	require.NotNil(t, effortMessage.Content.Array)
+	require.Empty(t, effortMessage.Content.Array)
+	require.NotNil(t, effortMessage.OutputConfig)
+	require.Equal(t, anthropic.MessageOutputConfigEffortLow, effortMessage.OutputConfig.Effort)
+
+	tr := NewAnthropicToGCPAnthropicTranslator("2023-06-01", "")
+	tr.(RequestHeadersSetter).SetRequestHeaders(map[string]string{anthropicBetaHeaderName: beta})
+	headerMutation, bodyMutation, err := tr.RequestBody(raw, &req, false)
+	require.NoError(t, err)
+
+	var output map[string]any
+	require.NoError(t, json.Unmarshal(bodyMutation, &output))
+	require.NotContains(t, output, "model")
+	require.Equal(t, "2023-06-01", output["anthropic_version"])
+	messages := output["messages"].([]any)
+	effortMessageJSON, err := json.Marshal(messages[2])
+	require.NoError(t, err)
+	require.JSONEq(t,
+		`{"role":"system","content":[],"output_config":{"effort":"low"}}`,
+		string(effortMessageJSON),
+	)
+
+	// With no configured filter, the translator emits no anthropic-beta mutation.
+	for _, header := range headerMutation {
+		require.NotEqual(t, anthropicBetaHeaderName, header.Key())
+	}
+}
+
 func TestAnthropicToGCPAnthropicTranslator_BackendVersionHandling(t *testing.T) {
 	tests := []struct {
 		name            string

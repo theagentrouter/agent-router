@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,8 +38,104 @@ const (
 	anthropicVersionKey   = "anthropic_version"
 	tempNotSupportedError = "temperature %.2f is not supported by Anthropic (must be between 0.0 and 1.0)"
 
-	anthropicBetaHeaderName = "anthropic-beta"
+	anthropicBetaHeaderName    = "anthropic-beta"
+	perMessageOutputConfigBeta = "mid-conversation-output-config-2026-07-01"
 )
+
+func hasPerMessageOutputConfig(messages []openai.ChatCompletionMessageParamUnion) bool {
+	for i := range messages {
+		if messages[i].OfSystem != nil && messages[i].OfSystem.OutputConfig != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func rejectPerMessageOutputConfig(messages []openai.ChatCompletionMessageParamUnion, backend string) error {
+	if !hasPerMessageOutputConfig(messages) {
+		return nil
+	}
+	return fmt.Errorf("%w: per-message output_config is not supported by backend %s", internalapi.ErrInvalidRequestBody, backend)
+}
+
+func hasAnthropicPerMessageOutputConfig(messages []anthropicschema.MessageParam) bool {
+	for i := range messages {
+		if messages[i].OutputConfig != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func rejectAnthropicPerMessageOutputConfig(messages []anthropicschema.MessageParam, backend string) error {
+	if !hasAnthropicPerMessageOutputConfig(messages) {
+		return nil
+	}
+	return fmt.Errorf("%w: per-message output_config is not supported by backend %s", internalapi.ErrInvalidRequestBody, backend)
+}
+
+func applyPerMessageBetaPolicy(existing []string, required bool, mode string, values []string) ([]string, error) {
+	betas := append([]string(nil), existing...)
+	if required && !slices.Contains(betas, perMessageOutputConfigBeta) {
+		betas = append(betas, perMessageOutputConfigBeta)
+	}
+	betas, _ = filterHeaderValues(betas, mode, values)
+	if required && !slices.Contains(betas, perMessageOutputConfigBeta) {
+		return nil, fmt.Errorf("%w: anthropic-beta filter removes required value %q for per-message output_config", internalapi.ErrInvalidRequestBody, perMessageOutputConfigBeta)
+	}
+	return betas, nil
+}
+
+// Per-message effort has a narrower backend and model support matrix than
+// top-level output_config.effort.
+var (
+	gcpPerMessageEffortModels = []string{
+		"fable-5-1",
+		"mythos-5-1",
+		"opus-5-5",
+		"opus-5",
+		"sonnet-5-5",
+		"haiku-5-5",
+	}
+	awsInvokePerMessageEffortModels = []string{
+		"fable-5-1",
+		"opus-5-5",
+	}
+)
+
+func perMessageEffortAvailable(apiSchema filterapi.APISchemaName, model internalapi.RequestModel) bool {
+	switch apiSchema {
+	case filterapi.APISchemaGCPAnthropic:
+		return modelMatchesAnyVersion(model, gcpPerMessageEffortModels)
+	case filterapi.APISchemaAWSAnthropic:
+		return modelMatchesAnyVersion(model, awsInvokePerMessageEffortModels)
+	default:
+		return false
+	}
+}
+
+// modelMatchesAnyVersion matches a model family while allowing known provider
+// suffixes: Vertex dates use @ or -20..., and Bedrock revisions use -v....
+// This prevents an identifier such as opus-5 from matching a different family
+// such as opus-5-6.
+func modelMatchesAnyVersion(model internalapi.RequestModel, identifiers []string) bool {
+	modelLower := strings.ToLower(model)
+	for _, identifier := range identifiers {
+		for searchFrom := 0; searchFrom < len(modelLower); {
+			relativeStart := strings.Index(modelLower[searchFrom:], identifier)
+			if relativeStart < 0 {
+				break
+			}
+			start := searchFrom + relativeStart
+			suffix := modelLower[start+len(identifier):]
+			if suffix == "" || strings.HasPrefix(suffix, "@") || strings.HasPrefix(suffix, "-20") || strings.HasPrefix(suffix, "-v") {
+				return true
+			}
+			searchFrom = start + len(identifier)
+		}
+	}
+	return false
+}
 
 // anthropicInputSchemaKeysToSkip defines the keys from an OpenAI function parameter map
 // that are handled explicitly and should not go into the ExtraFields map.
@@ -482,6 +579,16 @@ func openAIToAnthropicMessages(openAIMsgs []openai.ChatCompletionMessageParamUni
 		msg := &openAIMsgs[i]
 		switch {
 		case msg.OfSystem != nil:
+			if msg.OfSystem.OutputConfig != nil {
+				var effortMessage anthropic.MessageParam
+				effortMessage, err = openAISystemEffortMessageToAnthropic(msg.OfSystem)
+				if err != nil {
+					return
+				}
+				anthropicMessages = append(anthropicMessages, effortMessage)
+				i++
+				continue
+			}
 			devParam := systemMsgToDeveloperMsg(*msg.OfSystem)
 			systemText, cacheControl := extractSystemPromptFromDeveloperMsg(devParam)
 			systemBlock := anthropic.TextBlockParam{Text: systemText}
@@ -596,6 +703,33 @@ func openAIToAnthropicMessages(openAIMsgs []openai.ChatCompletionMessageParamUni
 		}
 	}
 	return
+}
+
+// openAISystemEffortMessageToAnthropic converts the Anthropic-specific chat
+// completion extension into an effort-only system message. The Anthropic SDK
+// does not yet model message-level output_config, so an extra field is used
+// only for that field while role and content remain SDK-typed.
+func openAISystemEffortMessageToAnthropic(msg *openai.ChatCompletionSystemMessageParam) (anthropic.MessageParam, error) {
+	content, ok := msg.Content.Value.([]openai.ChatCompletionContentPartTextParam)
+	if !ok || len(content) != 0 {
+		return anthropic.MessageParam{}, fmt.Errorf("%w: per-message output_config requires an empty system message content array", internalapi.ErrInvalidRequestBody)
+	}
+
+	effort, err := mapReasoningEffortToOutputConfigEffort(msg.OutputConfig.Effort)
+	if err != nil {
+		return anthropic.MessageParam{}, err
+	}
+
+	result := anthropic.MessageParam{
+		Role:    anthropic.MessageParamRoleSystem,
+		Content: []anthropic.ContentBlockParamUnion{},
+	}
+	result.SetExtraFields(map[string]any{
+		"output_config": map[string]any{
+			"effort": effort,
+		},
+	})
+	return result, nil
 }
 
 // NewThinkingConfigParamUnion converts a ThinkingUnion into a ThinkingConfigParamUnion.
@@ -744,6 +878,14 @@ func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema fil
 		maxTokensVal = *maxTokens
 	}
 
+	featureCheckModel := openAIReq.Model
+	if modelNameOverride != "" {
+		featureCheckModel = modelNameOverride
+	}
+	if hasPerMessageOutputConfig(openAIReq.Messages) && !perMessageEffortAvailable(apiSchema, featureCheckModel) {
+		return nil, fmt.Errorf("%w: per-message effort is not supported for model %q on backend %s", internalapi.ErrInvalidRequestBody, featureCheckModel, apiSchema)
+	}
+
 	// Translate openAI contents to anthropic params.
 	// 2. Translate messages and system prompts.
 	messages, systemBlocks, err := openAIToAnthropicMessages(openAIReq.Messages)
@@ -771,10 +913,6 @@ func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema fil
 	// Structured output is generally available on both AWS Bedrock and GCP Vertex AI.
 	// Use modelNameOverride for feature checks when available, as it is more
 	// reliable than the user-provided model name which may be arbitrarily set.
-	featureCheckModel := openAIReq.Model
-	if modelNameOverride != "" {
-		featureCheckModel = modelNameOverride
-	}
 	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil && outputConfigAvailable(apiSchema, featureCheckModel) {
 		// Validate that the OpenAI JSON schema is an object while retaining its
 		// original bytes. Anthropic's SDK sorts map keys when marshaling, which

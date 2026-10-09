@@ -91,11 +91,15 @@ type MessagesRequest struct {
 // MessageParam represents a single message in the Anthropic Messages API.
 // https://platform.claude.com/docs/en/api/messages#message_param
 type MessageParam struct {
-	// Role is the role of the message. "user" or "assistant".
+	// Role is the role of the message. "user", "assistant", or "system".
 	Role MessageRole `json:"role"`
 
 	// Content is the content of the message.
 	Content MessageContent `json:"content"`
+
+	// OutputConfig changes the output configuration for subsequent turns.
+	// It is only valid on system messages when the per-message output config beta is enabled.
+	OutputConfig *MessageOutputConfig `json:"output_config,omitempty"`
 }
 
 // MessageRole represents the role of a message in the Anthropic Messages API.
@@ -105,13 +109,31 @@ type MessageRole string
 const (
 	MessageRoleUser      MessageRole = "user"
 	MessageRoleAssistant MessageRole = "assistant"
+	MessageRoleSystem    MessageRole = "system"
+)
+
+// MessageOutputConfig represents output configuration attached to a system message.
+// https://platform.claude.com/docs/en/build-with-claude/effort
+type MessageOutputConfig struct {
+	Effort MessageOutputConfigEffort `json:"effort"`
+}
+
+// MessageOutputConfigEffort controls how much effort the model uses for subsequent turns.
+type MessageOutputConfigEffort string
+
+const (
+	MessageOutputConfigEffortLow    MessageOutputConfigEffort = "low"
+	MessageOutputConfigEffortMedium MessageOutputConfigEffort = "medium"
+	MessageOutputConfigEffortHigh   MessageOutputConfigEffort = "high"
+	MessageOutputConfigEffortXhigh  MessageOutputConfigEffort = "xhigh"
+	MessageOutputConfigEffortMax    MessageOutputConfigEffort = "max"
 )
 
 // MessageContent represents the content of a message in the Anthropic Messages API.
 // https://docs.claude.com/en/api/messages#body-messages-content
 type MessageContent struct {
 	Text  string              // Non-empty if this is not array content.
-	Array []ContentBlockParam // Non-empty if this is array content.
+	Array []ContentBlockParam // Non-nil if this is array content; it may be empty.
 }
 
 func (m *MessageContent) UnmarshalJSON(data []byte) error {
@@ -135,7 +157,9 @@ func (m *MessageContent) MarshalJSON() ([]byte, error) {
 	if m.Text != "" {
 		return json.Marshal(m.Text)
 	}
-	if len(m.Array) > 0 {
+	// An empty array is valid for effort-only system messages. Check nil rather than
+	// length so that an explicitly supplied [] round-trips as [].
+	if m.Array != nil {
 		return json.Marshal(m.Array)
 	}
 	return nil, fmt.Errorf("message content must have either text or array")
