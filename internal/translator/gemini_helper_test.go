@@ -1391,6 +1391,33 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 			requestModel:         "gemini-2.5-flash",
 		},
 		{
+			name: "json schema with references",
+			input: &openai.ChatCompletionRequest{
+				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
+					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+						Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
+						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+							Schema: json.RawMessage(`{"type":"object","properties":{"result":{"$ref":"#/$defs/result"}},"$defs":{"result":{"type":"string"}}}`),
+						},
+					},
+				},
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ResponseMIMEType: "application/json",
+				ResponseJsonSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"result": map[string]any{"$ref": "#/$defs/result"},
+					},
+					"$defs": map[string]any{
+						"result": map[string]any{"type": "string"},
+					},
+				},
+			},
+			expectedResponseMode: responseModeJSON,
+			requestModel:         "gemini-2.5-flash",
+		},
+		{
 			name: "json schema (string)",
 			input: &openai.ChatCompletionRequest{
 				Model: "gemini-2.5",
@@ -1616,27 +1643,28 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 		},
 		"required": []any{"a", "b"},
 	}
+	refParams := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"location": map[string]any{"$ref": "#/$defs/location"},
+		},
+		"$defs": map[string]any{
+			"location": map[string]any{"type": "string"},
+		},
+	}
 	tests := []struct {
-		name                          string
-		openaiTools                   []openai.Tool
-		parametersJSONSchemaAvailable bool
-		expected                      []genai.Tool
-		expectedError                 string
+		name          string
+		openaiTools   []openai.Tool
+		expected      []genai.Tool
+		expectedError string
 	}{
 		{
-			name:                          "empty tools with parametersJSONSchemaAvailable=false",
-			openaiTools:                   nil,
-			parametersJSONSchemaAvailable: false,
-			expected:                      nil,
+			name:        "empty tools",
+			openaiTools: nil,
+			expected:    nil,
 		},
 		{
-			name:                          "empty tools with parametersJSONSchemaAvailable=true",
-			openaiTools:                   nil,
-			parametersJSONSchemaAvailable: true,
-			expected:                      nil,
-		},
-		{
-			name: "single function tool with parameters - parametersJSONSchemaAvailable=false",
+			name: "single function tool with parameters",
 			openaiTools: []openai.Tool{
 				{
 					Type: openai.ToolTypeFunction,
@@ -1647,39 +1675,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					},
 				},
 			},
-			parametersJSONSchemaAvailable: false,
-			expected: []genai.Tool{
-				{
-					FunctionDeclarations: []*genai.FunctionDeclaration{
-						{
-							Name:        "add",
-							Description: "Add two numbers",
-							Parameters: &genai.Schema{
-								Type: "object",
-								Properties: map[string]*genai.Schema{
-									"a": {Type: "integer"},
-									"b": {Type: "integer"},
-								},
-								Required: []string{"a", "b"},
-							},
-						},
-					},
-				},
-			},
-		},
-		{
-			name: "single function tool with parameters - parametersJSONSchemaAvailable=true",
-			openaiTools: []openai.Tool{
-				{
-					Type: openai.ToolTypeFunction,
-					Function: &openai.FunctionDefinition{
-						Name:        "add",
-						Description: "Add two numbers",
-						Parameters:  funcParams,
-					},
-				},
-			},
-			parametersJSONSchemaAvailable: true,
 			expected: []genai.Tool{
 				{
 					FunctionDeclarations: []*genai.FunctionDeclaration{
@@ -1693,45 +1688,29 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 			},
 		},
 		{
-			name: "multiple function tools with nil/empty parameters - parametersJSONSchemaAvailable=false",
+			name: "function tool preserves JSON Schema references",
 			openaiTools: []openai.Tool{
 				{
 					Type: openai.ToolTypeFunction,
 					Function: &openai.FunctionDefinition{
-						Name:        "foo",
-						Description: "Foo function",
-						Parameters:  map[string]any{}, // empty parameters
-					},
-				},
-				{
-					Type: openai.ToolTypeFunction,
-					Function: &openai.FunctionDefinition{
-						Name:        "bar",
-						Description: "Bar function",
-						Parameters:  nil, // nil parameters
+						Name:       "get_weather",
+						Parameters: refParams,
 					},
 				},
 			},
-			parametersJSONSchemaAvailable: false,
 			expected: []genai.Tool{
 				{
 					FunctionDeclarations: []*genai.FunctionDeclaration{
 						{
-							Name:        "foo",
-							Description: "Foo function",
-							Parameters:  nil,
-						},
-						{
-							Name:        "bar",
-							Description: "Bar function",
-							Parameters:  nil,
+							Name:                 "get_weather",
+							ParametersJsonSchema: refParams,
 						},
 					},
 				},
 			},
 		},
 		{
-			name: "multiple function tools with nil/empty parameters - parametersJSONSchemaAvailable=true",
+			name: "multiple function tools with nil/empty parameters",
 			openaiTools: []openai.Tool{
 				{
 					Type: openai.ToolTypeFunction,
@@ -1748,7 +1727,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					},
 				},
 			},
-			parametersJSONSchemaAvailable: true,
 			expected: []genai.Tool{
 				{
 					FunctionDeclarations: []*genai.FunctionDeclaration{
@@ -1767,7 +1745,7 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 			},
 		},
 		{
-			name: "tool with invalid parameters schema - parametersJSONSchemaAvailable=false",
+			name: "tool with invalid parameters schema",
 			openaiTools: []openai.Tool{
 				{
 					Type: openai.ToolTypeFunction,
@@ -1778,41 +1756,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					},
 				},
 			},
-			parametersJSONSchemaAvailable: false,
-			expectedError:                 "tool bad parameters must be a JSON object",
-		},
-		{
-			name: "tool with unresolvable $ref in parameters - parametersJSONSchemaAvailable=false",
-			openaiTools: []openai.Tool{
-				{
-					Type: openai.ToolTypeFunction,
-					Function: &openai.FunctionDefinition{
-						Name: "bad_ref",
-						Parameters: map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"a": map[string]any{"$ref": "#/nonexistent/path"},
-							},
-						},
-					},
-				},
-			},
-			parametersJSONSchemaAvailable: false,
-			expectedError:                 "invalid JSON schema for parameters in tool bad_ref",
-		},
-		{
-			name: "tool with invalid parameters schema - parametersJSONSchemaAvailable=true",
-			openaiTools: []openai.Tool{
-				{
-					Type: openai.ToolTypeFunction,
-					Function: &openai.FunctionDefinition{
-						Name:        "bad",
-						Description: "Bad function",
-						Parameters:  "invalid-json",
-					},
-				},
-			},
-			parametersJSONSchemaAvailable: true,
 			expected: []genai.Tool{
 				{
 					FunctionDeclarations: []*genai.FunctionDeclaration{
@@ -1827,88 +1770,16 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 			},
 		},
 		{
-			name: "complex nested schema - parametersJSONSchemaAvailable=false",
-			openaiTools: []openai.Tool{
-				{
-					Type: openai.ToolTypeFunction,
-					Function: &openai.FunctionDefinition{
-						Name:        "complex_tool",
-						Description: "Complex tool with nested parameters",
-						Parameters: map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"user": map[string]any{
-									"type": "object",
-									"properties": map[string]any{
-										"name": map[string]any{"type": "string"},
-										"age":  map[string]any{"type": "integer"},
-									},
-									"required": []any{"name"},
-								},
-								"items": map[string]any{
-									"type": "array",
-									"items": map[string]any{
-										"type": "object",
-										"properties": map[string]any{
-											"id":   map[string]any{"type": "integer"},
-											"name": map[string]any{"type": "string"},
-										},
-									},
-								},
-							},
-							"required": []any{"user"},
-						},
-					},
-				},
-			},
-			parametersJSONSchemaAvailable: false,
-			expected: []genai.Tool{
-				{
-					FunctionDeclarations: []*genai.FunctionDeclaration{
-						{
-							Name:        "complex_tool",
-							Description: "Complex tool with nested parameters",
-							Parameters: &genai.Schema{
-								Type: "object",
-								Properties: map[string]*genai.Schema{
-									"user": {
-										Type: "object",
-										Properties: map[string]*genai.Schema{
-											"name": {Type: "string"},
-											"age":  {Type: "integer"},
-										},
-										Required: []string{"name"},
-									},
-									"items": {
-										Type: "array",
-										Items: &genai.Schema{
-											Type: "object",
-											Properties: map[string]*genai.Schema{
-												"id":   {Type: "integer"},
-												"name": {Type: "string"},
-											},
-										},
-									},
-								},
-								Required: []string{"user"},
-							},
-						},
-					},
-				},
-			},
-		},
-		{
 			name: "non-function tool is ignored - both modes",
 			openaiTools: []openai.Tool{
 				{
 					Type: "retrieval",
 				},
 			},
-			parametersJSONSchemaAvailable: false,
-			expectedError:                 "unsupported tool type: retrieval",
+			expectedError: "unsupported tool type: retrieval",
 		},
 		{
-			name: "mixed valid and invalid tools - parametersJSONSchemaAvailable=false",
+			name: "mixed valid and invalid tools",
 			openaiTools: []openai.Tool{
 				{
 					Type: "retrieval", // Should be ignored
@@ -1927,8 +1798,7 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					},
 				},
 			},
-			parametersJSONSchemaAvailable: false,
-			expectedError:                 "unsupported tool type: retrieval",
+			expectedError: "unsupported tool type: retrieval",
 		},
 		{
 			name: "tool with nil function - should not panic",
@@ -1938,8 +1808,7 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					Function: nil,
 				},
 			},
-			parametersJSONSchemaAvailable: false,
-			expected:                      nil,
+			expected: nil,
 		},
 		{
 			name: "enterprise search tool only",
@@ -1948,7 +1817,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					Type: openai.ToolTypeEnterpriseWebSearch,
 				},
 			},
-			parametersJSONSchemaAvailable: false,
 			expected: []genai.Tool{
 				{
 					EnterpriseWebSearch: &genai.EnterpriseWebSearch{},
@@ -1970,7 +1838,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					Type: openai.ToolTypeEnterpriseWebSearch,
 				},
 			},
-			parametersJSONSchemaAvailable: false,
 			expected: []genai.Tool{
 				{
 					EnterpriseWebSearch: &genai.EnterpriseWebSearch{},
@@ -1978,16 +1845,9 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 				{
 					FunctionDeclarations: []*genai.FunctionDeclaration{
 						{
-							Name:        "get_weather",
-							Description: "Get current weather",
-							Parameters: &genai.Schema{
-								Type: "object",
-								Properties: map[string]*genai.Schema{
-									"a": {Type: "integer"},
-									"b": {Type: "integer"},
-								},
-								Required: []string{"a", "b"},
-							},
+							Name:                 "get_weather",
+							Description:          "Get current weather",
+							ParametersJsonSchema: funcParams,
 						},
 					},
 				},
@@ -2000,7 +1860,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					Type: openai.ToolTypeGoogleSearch,
 				},
 			},
-			parametersJSONSchemaAvailable: false,
 			expected: []genai.Tool{
 				{
 					GoogleSearch: &genai.GoogleSearch{},
@@ -2017,7 +1876,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					},
 				},
 			},
-			parametersJSONSchemaAvailable: false,
 			expected: []genai.Tool{
 				{
 					GoogleSearch: &genai.GoogleSearch{
@@ -2037,7 +1895,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					},
 				},
 			},
-			parametersJSONSchemaAvailable: false,
 			expected: []genai.Tool{
 				{
 					GoogleSearch: &genai.GoogleSearch{
@@ -2060,7 +1917,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					},
 				},
 			},
-			parametersJSONSchemaAvailable: false,
 			expected: []genai.Tool{
 				{
 					GoogleSearch: &genai.GoogleSearch{
@@ -2090,7 +1946,6 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 					},
 				},
 			},
-			parametersJSONSchemaAvailable: false,
 			expected: []genai.Tool{
 				{
 					GoogleSearch: &genai.GoogleSearch{
@@ -2100,16 +1955,9 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 				{
 					FunctionDeclarations: []*genai.FunctionDeclaration{
 						{
-							Name:        "search_products",
-							Description: "Search for products",
-							Parameters: &genai.Schema{
-								Type: "object",
-								Properties: map[string]*genai.Schema{
-									"a": {Type: "integer"},
-									"b": {Type: "integer"},
-								},
-								Required: []string{"a", "b"},
-							},
+							Name:                 "search_products",
+							Description:          "Search for products",
+							ParametersJsonSchema: funcParams,
 						},
 					},
 				},
@@ -2119,7 +1967,7 @@ func TestOpenAIToolsToGeminiTools(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := openAIToolsToGeminiTools(tc.openaiTools, tc.parametersJSONSchemaAvailable)
+			result, err := openAIToolsToGeminiTools(tc.openaiTools)
 			if tc.expectedError != "" {
 				require.ErrorContains(t, err, tc.expectedError)
 				require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
@@ -3012,344 +2860,6 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 
 			if d := cmp.Diff(tc.want, got); d != "" {
 				t.Errorf("geminiCandidatesToOpenAIChoices() mismatch (-want +got):\n%s", d)
-			}
-		})
-	}
-}
-
-func TestOpenAIReqToGeminiGenerationConfigWithJsonSchemaToGemini(t *testing.T) {
-	tests := []struct {
-		name                     string
-		input                    *openai.ChatCompletionRequest
-		requestModel             internalapi.RequestModel
-		expectedGenerationConfig *genai.GenerationConfig
-		expectedResponseMode     geminiResponseMode
-		expectedErrMsg           string
-	}{
-		{
-			name: "json schema for older gemini model (uses jsonSchemaToGemini)",
-			input: &openai.ChatCompletionRequest{
-				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
-					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
-						Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
-						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
-							Schema: json.RawMessage(`{
-								"type": "object",
-								"properties": {
-									"name": {"type": "string"},
-									"age": {"type": "number"}
-								},
-								"required": ["name", "age"]
-							}`),
-						},
-					},
-				},
-			},
-			requestModel: "gemini-2.0-flash", // older model that doesn't support native JSON schema
-			expectedGenerationConfig: &genai.GenerationConfig{
-				ResponseMIMEType: "application/json",
-				ResponseSchema: &genai.Schema{
-					Type: "object",
-					Properties: map[string]*genai.Schema{
-						"name": {Type: "string"},
-						"age":  {Type: "number"},
-					},
-					Required: []string{"name", "age"},
-				},
-			},
-			expectedResponseMode: responseModeJSON,
-		},
-		{
-			name: "complex json schema with nested objects (uses jsonSchemaToGemini)",
-			input: &openai.ChatCompletionRequest{
-				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
-					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
-						Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
-						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
-							Schema: json.RawMessage(`{
-								"type": "object",
-								"properties": {
-									"user": {
-										"type": "object",
-										"properties": {
-											"name": {"type": "string"},
-											"contact": {
-												"type": "object",
-												"properties": {
-													"email": {"type": "string"},
-													"phone": {"type": "string"}
-												}
-											}
-										}
-									},
-									"items": {
-										"type": "array",
-										"items": {
-											"type": "object",
-											"properties": {
-												"id": {"type": "number"},
-												"description": {"type": "string"}
-											}
-										}
-									}
-								},
-								"required": ["user", "items"]
-							}`),
-						},
-					},
-				},
-			},
-			requestModel: "gemini-2.0-flash", // older model
-			expectedGenerationConfig: &genai.GenerationConfig{
-				ResponseMIMEType: "application/json",
-				ResponseSchema: &genai.Schema{
-					Type: "object",
-					Properties: map[string]*genai.Schema{
-						"user": {
-							Type: "object",
-							Properties: map[string]*genai.Schema{
-								"name": {Type: "string"},
-								"contact": {
-									Type: "object",
-									Properties: map[string]*genai.Schema{
-										"email": {Type: "string"},
-										"phone": {Type: "string"},
-									},
-								},
-							},
-						},
-						"items": {
-							Type: "array",
-							Items: &genai.Schema{
-								Type: "object",
-								Properties: map[string]*genai.Schema{
-									"id":          {Type: "number"},
-									"description": {Type: "string"},
-								},
-							},
-						},
-					},
-					Required: []string{"user", "items"},
-				},
-			},
-			expectedResponseMode: responseModeJSON,
-		},
-		{
-			name: "json schema with anyOf (uses jsonSchemaToGemini)",
-			input: &openai.ChatCompletionRequest{
-				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
-					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
-						Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
-						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
-							Schema: json.RawMessage(`{
-								"type": "object",
-								"properties": {
-									"value": {
-										"anyOf": [
-											{"type": "string"},
-											{"type": "number"}
-										]
-									}
-								}
-							}`),
-						},
-					},
-				},
-			},
-			requestModel: "gemini-2.0-flash",
-			expectedGenerationConfig: &genai.GenerationConfig{
-				ResponseMIMEType: "application/json",
-				ResponseSchema: &genai.Schema{
-					Type: "object",
-					Properties: map[string]*genai.Schema{
-						"value": {
-							AnyOf: []*genai.Schema{
-								{Type: "string"},
-								{Type: "number"},
-							},
-						},
-					},
-				},
-			},
-			expectedResponseMode: responseModeJSON,
-		},
-		{
-			name: "json schema with nullable type (uses jsonSchemaToGemini)",
-			input: &openai.ChatCompletionRequest{
-				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
-					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
-						Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
-						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
-							Schema: json.RawMessage(`{
-								"type": "object",
-								"properties": {
-									"optional_field": {
-										"anyOf": [
-											{"type": "string"},
-											{"type": "null"}
-										]
-									}
-								}
-							}`),
-						},
-					},
-				},
-			},
-			requestModel: "gemini-2.0-flash",
-			expectedGenerationConfig: &genai.GenerationConfig{
-				ResponseMIMEType: "application/json",
-				ResponseSchema: &genai.Schema{
-					Type: "object",
-					Properties: map[string]*genai.Schema{
-						"optional_field": {
-							AnyOf: []*genai.Schema{
-								{Type: "string"},
-							},
-							Nullable: ptr.To(true),
-						},
-					},
-				},
-			},
-			expectedResponseMode: responseModeJSON,
-		},
-		{
-			name: "json schema with $ref (uses jsonSchemaToGemini)",
-			input: &openai.ChatCompletionRequest{
-				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
-					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
-						Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
-						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
-							Schema: json.RawMessage(`{
-								"type": "object",
-								"properties": {
-									"user": {"$ref": "#/$defs/User"}
-								},
-								"$defs": {
-									"User": {
-										"type": "object",
-										"properties": {
-											"name": {"type": "string"},
-											"age": {"type": "number"}
-										}
-									}
-								}
-							}`),
-						},
-					},
-				},
-			},
-			requestModel: "gemini-2.0-flash",
-			expectedGenerationConfig: &genai.GenerationConfig{
-				ResponseMIMEType: "application/json",
-				ResponseSchema: &genai.Schema{
-					Type: "object",
-					Properties: map[string]*genai.Schema{
-						"user": {
-							Type: "object",
-							Properties: map[string]*genai.Schema{
-								"name": {Type: "string"},
-								"age":  {Type: "number"},
-							},
-						},
-					},
-				},
-			},
-			expectedResponseMode: responseModeJSON,
-		},
-		{
-			name: "invalid json schema causes jsonSchemaToGemini error",
-			input: &openai.ChatCompletionRequest{
-				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
-					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
-						Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
-						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
-							Schema: json.RawMessage(`{
-								"type": "object",
-								"properties": {
-									"invalid_ref": {"$ref": "#/nonexistent/path"}
-								}
-							}`),
-						},
-					},
-				},
-			},
-			requestModel:   "gemini-2.0-flash",
-			expectedErrMsg: "invalid JSON schema",
-		},
-		{
-			name: "complex nested schema with arrays and refs (uses jsonSchemaToGemini)",
-			input: &openai.ChatCompletionRequest{
-				ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
-					OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
-						Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
-						JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
-							Schema: json.RawMessage(`{
-								"type": "object",
-								"properties": {
-									"steps": {
-										"type": "array",
-										"items": {"$ref": "#/$defs/Step"}
-									},
-									"final_answer": {"type": "string"}
-								},
-								"required": ["steps", "final_answer"],
-								"$defs": {
-									"Step": {
-										"type": "object",
-										"properties": {
-											"explanation": {"type": "string"},
-											"output": {"type": "string"}
-										},
-										"required": ["explanation", "output"]
-									}
-								}
-							}`),
-						},
-					},
-				},
-			},
-			requestModel: "gemini-2.0-flash",
-			expectedGenerationConfig: &genai.GenerationConfig{
-				ResponseMIMEType: "application/json",
-				ResponseSchema: &genai.Schema{
-					Type: "object",
-					Properties: map[string]*genai.Schema{
-						"steps": {
-							Type: "array",
-							Items: &genai.Schema{
-								Type: "object",
-								Properties: map[string]*genai.Schema{
-									"explanation": {Type: "string"},
-									"output":      {Type: "string"},
-								},
-								Required: []string{"explanation", "output"},
-							},
-						},
-						"final_answer": {Type: "string"},
-					},
-					Required: []string{"steps", "final_answer"},
-				},
-			},
-			expectedResponseMode: responseModeJSON,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, responseMode, err := openAIReqToGeminiGenerationConfig(tc.input, tc.requestModel)
-			if tc.expectedErrMsg != "" {
-				require.ErrorContains(t, err, tc.expectedErrMsg)
-				require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
-			} else {
-				require.NoError(t, err)
-
-				if diff := cmp.Diff(tc.expectedGenerationConfig, got, cmpopts.IgnoreUnexported(genai.GenerationConfig{}, genai.Schema{})); diff != "" {
-					t.Errorf("GenerationConfig mismatch (-want +got):\n%s", diff)
-				}
-
-				if responseMode != tc.expectedResponseMode {
-					t.Errorf("geminiResponseMode mismatch: got %v, want %v", responseMode, tc.expectedResponseMode)
-				}
 			}
 		})
 	}

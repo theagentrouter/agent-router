@@ -47,10 +47,8 @@ func (o *ToGCPVertexAIV1Tokenize) tokenizeToGeminiCountToken(tokenizeChatReq *to
 		return nil, fmt.Errorf("messages must produce at least one content entry")
 	}
 
-	// Some models support only partialJSONSchema.
-	parametersJSONSchemaAvailable := responseJSONSchemaAvailable(requestModel)
 	// Convert OpenAI tools to Gemini tools.
-	tools, err := openAIToolsToGeminiTools(tokenizeChatReq.Tools, parametersJSONSchemaAvailable)
+	tools, err := openAIToolsToGeminiTools(tokenizeChatReq.Tools)
 	if err != nil {
 		return nil, fmt.Errorf("error converting tools: %w", err)
 	}
