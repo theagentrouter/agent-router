@@ -862,6 +862,37 @@ func TestNewBackendSecurityPolicyController_RotateCredentialInvalidType(t *testi
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
 }
 
+func TestBackendSecurityPolicyController_Reconcile_OpenAICredentialsNotYetSupported(t *testing.T) {
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := requireNewFakeClientWithIndexes(t)
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil)
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "openai-bsp", Namespace: "default"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+			OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{
+				TokenExchange: aigv1b1.BackendSecurityPolicyTokenExchange{
+					TokenURL: "https://auth.example.com/oauth/token",
+					SubjectToken: aigv1b1.BackendSecurityPolicySubjectToken{
+						SPIFFEJWTSVID: &aigv1b1.BackendSecurityPolicySPIFFEJWTSVID{Audience: "https://auth.example.com"},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+
+	_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "openai-bsp"}})
+	require.EqualError(t, err, "backend security type OpenAICredentials is not yet supported")
+
+	var updated aigv1b1.BackendSecurityPolicy
+	require.NoError(t, cl.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: "openai-bsp"}, &updated))
+	require.Len(t, updated.Status.Conditions, 1)
+	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updated.Status.Conditions[0].Type)
+	require.Equal(t, "backend security type OpenAICredentials is not yet supported", updated.Status.Conditions[0].Message)
+}
+
 func TestNewBackendSecurityPolicyController_RotateCredentialAwsCredentialFile(t *testing.T) {
 	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
 	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()
@@ -1571,6 +1602,18 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 				},
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+				},
+			},
+			expectedName: "",
+		},
+		{
+			name: "OpenAICredentials type",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "openai-bsp",
+				},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
 				},
 			},
 			expectedName: "",

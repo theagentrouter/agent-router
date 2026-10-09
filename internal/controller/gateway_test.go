@@ -1442,6 +1442,18 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 			},
 			expectedError: "failed to get secret test-namespace/missing-aws-secret",
 		},
+		{
+			name:    "openai credentials not yet supported",
+			bspName: "openai-bsp",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "openai-bsp", Namespace: namespace},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type:              aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+					OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{},
+				},
+			},
+			expectedError: "backend security type OpenAICredentials is not yet supported for policy openai-bsp",
+		},
 	}
 
 	for _, tt := range tests {

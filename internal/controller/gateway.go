@@ -999,6 +999,8 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 			}
 			hasStaticCred = true
 		}
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		return nil, fmt.Errorf("backend security type %s is not yet supported for policy %s", spec.Type, backendSecurityPolicy.Name)
 	default:
 		return nil, fmt.Errorf("invalid backend security type %s for policy %s", spec.Type, backendSecurityPolicy.Name)
 	}

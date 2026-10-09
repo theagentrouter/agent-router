@@ -1,0 +1,25 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: openai-multiple-subject-tokens-policy
+  namespace: default
+spec:
+  type: OpenAICredentials
+  openAICredentials:
+    tokenExchange:
+      tokenURL: https://auth.example.com/oauth/token
+      subjectToken:
+        spiffeJWTSVID:
+          audience: https://auth.example.com
+        oidcExchangeToken:
+          oidc:
+            provider:
+              issuer: https://placeholder
+            clientID: placeholder
+            clientSecret:
+              name: placeholder

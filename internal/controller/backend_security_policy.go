@@ -274,6 +274,8 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 			return ctrl.Result{}, nil
 		}
 
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		return ctrl.Result{}, fmt.Errorf("backend security type %s is not yet supported", bsp.Spec.Type)
 	default:
 		err = fmt.Errorf("backend security type %s does not support OIDC token exchange", bsp.Spec.Type)
 		c.logger.Error(err, "unsupported backend security type", "namespace", bsp.Namespace, "name", bsp.Name)
@@ -469,6 +471,8 @@ func getBSPGeneratedSecretName(bsp *aigv1b1.BackendSecurityPolicy) string {
 		aigv1b1.BackendSecurityPolicyTypeAzureAPIKey,
 		aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
 		return "" // APIKey does not require rotation.
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		return "" // Not yet supported, so no secret is generated.
 	default:
 		panic("BUG: unsupported backend security policy type: " + string(bsp.Spec.Type))
 	}
