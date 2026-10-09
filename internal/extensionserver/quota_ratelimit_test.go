@@ -1792,6 +1792,30 @@ func TestBackendKeysForCluster(t *testing.T) {
 		require.Equal(t, []string{"default/backend-c"}, keys)
 	})
 
+	t.Run("per-backend cluster name returns that backend's key", func(t *testing.T) {
+		keys := s.backendKeysForCluster(context.Background(), "httproute/default/myroute/rule/0/backend/0")
+		require.Equal(t, []string{"default/backend-a"}, keys)
+		keys = s.backendKeysForCluster(context.Background(), "httproute/default/myroute/rule/0/backend/1")
+		require.Equal(t, []string{"default/backend-b"}, keys)
+		keys = s.backendKeysForCluster(context.Background(), "httproute/default/myroute/rule/1/backend/0")
+		require.Equal(t, []string{"default/backend-c"}, keys)
+	})
+
+	t.Run("per-backend cluster name with backend index out of bounds returns nil", func(t *testing.T) {
+		keys := s.backendKeysForCluster(context.Background(), "httproute/default/myroute/rule/1/backend/1")
+		require.Nil(t, keys)
+	})
+
+	t.Run("per-backend cluster name with non-numeric backend index returns nil", func(t *testing.T) {
+		keys := s.backendKeysForCluster(context.Background(), "httproute/default/myroute/rule/0/backend/abc")
+		require.Nil(t, keys)
+	})
+
+	t.Run("per-backend cluster name with a wrong segment returns nil", func(t *testing.T) {
+		keys := s.backendKeysForCluster(context.Background(), "httproute/default/myroute/rule/0/other/0")
+		require.Nil(t, keys)
+	})
+
 	t.Run("wrong number of parts returns nil", func(t *testing.T) {
 		keys := s.backendKeysForCluster(context.Background(), "too/few/parts")
 		require.Nil(t, keys)
@@ -1843,6 +1867,16 @@ func TestClusterHasQuotaBackend(t *testing.T) {
 		require.True(t, result)
 	})
 
+	t.Run("per-backend cluster of the backend with a policy returns true", func(t *testing.T) {
+		result := s.clusterHasQuotaBackend(context.Background(), "httproute/default/myroute/rule/0/backend/0", quotaBackendPolicies)
+		require.True(t, result)
+	})
+
+	t.Run("per-backend cluster of a backend without a policy returns false", func(t *testing.T) {
+		result := s.clusterHasQuotaBackend(context.Background(), "httproute/default/myroute/rule/0/backend/1", quotaBackendPolicies)
+		require.False(t, result)
+	})
+
 	t.Run("cluster with no matching backend returns false", func(t *testing.T) {
 		noMatchPolicies := map[string][]aigv1a1.QuotaPolicy{
 			"default/backend-x": {{Spec: aigv1a1.QuotaPolicySpec{}}},
@@ -1880,6 +1914,7 @@ func TestRouteHasQuotaBackend(t *testing.T) {
 				{
 					BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
 						{Name: "backend-a"},
+						{Name: "backend-b"},
 					},
 				},
 			},
@@ -1939,6 +1974,52 @@ func TestRouteHasQuotaBackend(t *testing.T) {
 								{Name: "httproute/default/myroute/rule/0"},
 							},
 						},
+					},
+				},
+			},
+		}
+		result := s.routeHasQuotaBackend(context.Background(), route, quotaBackendPolicies)
+		require.True(t, result)
+	})
+
+	// Envoy Gateway creates one cluster per backend, for example when a BackendTrafficPolicy with
+	// zone-aware load balancing targets the route. The route then points at the per-backend clusters.
+	perBackendRoute := func(backendIndexes ...int) *routev3.Route {
+		var clusters []*routev3.WeightedCluster_ClusterWeight
+		for _, i := range backendIndexes {
+			clusters = append(clusters, &routev3.WeightedCluster_ClusterWeight{
+				Name: fmt.Sprintf("httproute/default/myroute/rule/0/backend/%d", i),
+			})
+		}
+		return &routev3.Route{
+			Name: "test",
+			Action: &routev3.Route_Route{
+				Route: &routev3.RouteAction{
+					ClusterSpecifier: &routev3.RouteAction_WeightedClusters{
+						WeightedClusters: &routev3.WeightedCluster{Clusters: clusters},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("per-backend clusters with one quota backend returns true", func(t *testing.T) {
+		result := s.routeHasQuotaBackend(context.Background(), perBackendRoute(0, 1), quotaBackendPolicies)
+		require.True(t, result)
+	})
+
+	t.Run("per-backend cluster of a backend without quota returns false", func(t *testing.T) {
+		result := s.routeHasQuotaBackend(context.Background(), perBackendRoute(1), quotaBackendPolicies)
+		require.False(t, result)
+	})
+
+	t.Run("single per-backend cluster with quota backend returns true", func(t *testing.T) {
+		route := &routev3.Route{
+			Name: "test",
+			Action: &routev3.Route_Route{
+				Route: &routev3.RouteAction{
+					ClusterSpecifier: &routev3.RouteAction_Cluster{
+						Cluster: "httproute/default/myroute/rule/0/backend/0",
 					},
 				},
 			},
@@ -2092,6 +2173,7 @@ func TestPatchRoutesWithQuotaRateLimits(t *testing.T) {
 				{
 					BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
 						{Name: "backend-a", ModelNameOverride: "gpt-4-turbo"},
+						{Name: "backend-b", ModelNameOverride: "gpt-4-turbo"},
 					},
 				},
 			},
@@ -2146,6 +2228,59 @@ func TestPatchRoutesWithQuotaRateLimits(t *testing.T) {
 		route := routeConfig.VirtualHosts[0].Routes[0]
 		require.NotNil(t, route.TypedPerFilterConfig)
 		require.Contains(t, route.TypedPerFilterConfig, quotaRateLimitFilterName)
+	})
+
+	// Regression test: when Envoy Gateway creates one cluster per backend, the route points at
+	// "httproute/{namespace}/{routeName}/rule/{ruleIndex}/backend/{backendRefIndex}" clusters, and the
+	// QuotaPolicy must still be applied to it.
+	perBackendRouteConfig := func(backendIndexes ...int) *routev3.RouteConfiguration {
+		var clusters []*routev3.WeightedCluster_ClusterWeight
+		for _, i := range backendIndexes {
+			clusters = append(clusters, &routev3.WeightedCluster_ClusterWeight{
+				Name: fmt.Sprintf("httproute/default/gpt-4/rule/0/backend/%d", i),
+			})
+		}
+		return &routev3.RouteConfiguration{
+			VirtualHosts: []*routev3.VirtualHost{
+				{
+					Routes: []*routev3.Route{
+						{
+							Name:     "per-backend-route",
+							Metadata: aiGatewayRouteMetadata(t),
+							Action: &routev3.Route_Route{
+								Route: &routev3.RouteAction{
+									ClusterSpecifier: &routev3.RouteAction_WeightedClusters{
+										WeightedClusters: &routev3.WeightedCluster{Clusters: clusters},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("patches route with per-backend clusters", func(t *testing.T) {
+		routeConfig := perBackendRouteConfig(0, 1)
+
+		s.patchRoutesWithQuotaRateLimits(context.Background(), routeConfig, quotaBackendPolicies)
+
+		route := routeConfig.VirtualHosts[0].Routes[0]
+		require.Contains(t, route.TypedPerFilterConfig, quotaRateLimitFilterName)
+
+		perRoute := &ratelimitfilterv3.RateLimitPerRoute{}
+		require.NoError(t, route.TypedPerFilterConfig[quotaRateLimitFilterName].UnmarshalTo(perRoute))
+		require.NotEmpty(t, perRoute.RateLimits)
+	})
+
+	t.Run("skips route whose only per-backend cluster has no quota backend", func(t *testing.T) {
+		routeConfig := perBackendRouteConfig(1)
+
+		s.patchRoutesWithQuotaRateLimits(context.Background(), routeConfig, quotaBackendPolicies)
+
+		route := routeConfig.VirtualHosts[0].Routes[0]
+		require.Nil(t, route.TypedPerFilterConfig)
 	})
 
 	t.Run("skips route without AI gateway annotation", func(t *testing.T) {
