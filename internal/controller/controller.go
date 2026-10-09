@@ -166,14 +166,11 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	aiServiceBackendEventChan := make(chan event.GenericEvent, 100)
 	backendC := NewAIServiceBackendController(c, kubernetes.NewForConfigOrDie(config), logger.
 		WithName("ai-service-backend"), aiGatewayRouteEventChan)
-	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.AIServiceBackend{}).
+	aiServiceBackendBuilder := TypedControllerBuilderForCRD(mgr, &aigv1b1.AIServiceBackend{}).
 		WatchesRawSource(source.Channel(
 			aiServiceBackendEventChan,
 			&handler.EnqueueRequestForObject{},
-		)).
-		Complete(backendC); err != nil {
-		return fmt.Errorf("failed to create controller for AIServiceBackend: %w", err)
-	}
+		))
 
 	backendSecurityPolicyEventChan := make(chan event.GenericEvent, 100)
 	inferencePoolEventChan := make(chan event.GenericEvent, 100)
@@ -217,6 +214,14 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 			Complete(inferencePoolC); err != nil {
 			return fmt.Errorf("failed to create controller for InferencePool: %w", err)
 		}
+		// When the InferencePool CRD is present, watch InferencePool events so that
+		// AIServiceBackend objects whose backendRef targets an InferencePool are re-reconciled
+		// whenever the pool changes (e.g., existence check needs to be re-evaluated).
+		aiServiceBackendBuilder = aiServiceBackendBuilder.
+			Watches(&gwaiev1.InferencePool{}, handler.EnqueueRequestsFromMapFunc(backendC.inferencePoolEventHandler))
+	}
+	if err = aiServiceBackendBuilder.Complete(backendC); err != nil {
+		return fmt.Errorf("failed to create controller for AIServiceBackend: %w", err)
 	}
 	mcpRouteEventChan := make(chan event.GenericEvent, 100)
 	secretC := NewSecretController(c, kubernetes.NewForConfigOrDie(config), logger.
