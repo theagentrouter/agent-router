@@ -31,6 +31,7 @@ tool (
 	sigs.k8s.io/controller-runtime/tools/setup-envtest
 	sigs.k8s.io/controller-tools/cmd/controller-gen
 	sigs.k8s.io/kind
+	sigs.k8s.io/kube-api-linter/cmd/golangci-lint-kube-api-linter
 )
 
 require github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00
@@ -395,6 +396,7 @@ require (
 	sigs.k8s.io/controller-tools v0.20.0 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/kind v0.33.0 // indirect
+	sigs.k8s.io/kube-api-linter v0.0.0-20260716143926-092fe0c72997 // indirect
 	sigs.k8s.io/kustomize/api v0.20.1 // indirect
 	sigs.k8s.io/kustomize/kyaml v0.20.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect

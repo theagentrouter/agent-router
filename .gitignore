@@ -54,3 +54,4 @@ inference-extension-conformance-test-report.yaml
 site/.cursorrules
 /.cursor
 .worktrees/
+tools/tmp/
