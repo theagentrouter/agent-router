@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	fake2 "k8s.io/client-go/kubernetes/fake"
@@ -111,4 +112,46 @@ func TestAIServiceBackendController_Reconcile_error_with_multiple_bsps(t *testin
 	require.NoError(t, err)
 	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: backendName}})
 	require.ErrorContains(t, err, `multiple BackendSecurityPolicies found for AIServiceBackend mybackend: [bsp-0 bsp-1 bsp-2 bsp-3 bsp-4]`)
+}
+
+func TestAIServiceBackendController_deleteNotifiesRoutesDespiteMultipleBSPs(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	eventChan := internaltesting.NewControllerEventChan[*aigv1b1.AIGatewayRoute]()
+	c := NewAIServiceBackendController(fakeClient, fake2.NewClientset(), ctrl.Log, eventChan.Ch)
+
+	const backendName, namespace = "mybackend", "default"
+	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: namespace},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			ParentRefs: []gwapiv1a2.ParentReference{
+				{Name: "gtw", Kind: ptr.To(gwapiv1a2.Kind("Gateway")), Group: ptr.To(gwapiv1a2.Group("gateway.networking.k8s.io"))},
+			},
+			Rules: []aigv1b1.AIGatewayRouteRule{
+				{Matches: []aigv1b1.AIGatewayRouteRuleMatch{{}}, BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: backendName}}},
+			},
+		},
+	}))
+	for i := range 2 {
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("bsp-%d", i), Namespace: namespace},
+			Spec:       aigv1b1.BackendSecurityPolicySpec{TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: gwapiv1.ObjectName(backendName)}}},
+		}))
+	}
+	backend := &aigv1b1.AIServiceBackend{ObjectMeta: metav1.ObjectMeta{Name: backendName, Namespace: namespace}}
+	require.NoError(t, fakeClient.Create(t.Context(), backend))
+	_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: backendName}})
+	require.ErrorContains(t, err, "multiple BackendSecurityPolicies")
+
+	require.NoError(t, fakeClient.Delete(t.Context(), backend))
+	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: backendName}})
+	require.NoError(t, err, "uniqueness check must not run on the delete path")
+	got := eventChan.RequireItemsEventually(t, 1)
+	require.Equal(t, "myroute", got[0].Name)
+
+	var deleting aigv1b1.AIServiceBackend
+	err = fakeClient.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: backendName}, &deleting)
+	if !apierrors.IsNotFound(err) {
+		require.NoError(t, err)
+		require.NotContains(t, deleting.Finalizers, aiGatewayControllerFinalizer)
+	}
 }
