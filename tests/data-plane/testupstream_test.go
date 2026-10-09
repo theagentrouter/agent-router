@@ -1263,6 +1263,38 @@ data: {"type":"message_stop","amazon-bedrock-invocationMetrics":{"inputTokenCoun
 			expResponseBody: `{"id":"bedrock-msg-123","type":"message","role":"assistant","content":[{"type":"text","text":"Hello from AWS Bedrock!"}],"model":"anthropic.claude-3-sonnet-20240229-v1:0","stop_reason":"end_turn","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":10,"output_tokens":20}}`,
 		},
 		{
+			name:            "aws-bedrock - /v1/responses",
+			backend:         "aws-bedrock",
+			path:            "/v1/responses",
+			method:          http.MethodPost,
+			requestBody:     `{"model":"anthropic.claude-3-sonnet-20240229-v1:0","input":"Hello from Bedrock responses!"}`,
+			expRequestBody:  `{"inferenceConfig":{},"messages":[{"content":[{"text":"Hello from Bedrock responses!"}],"role":"user"}]}`,
+			expPath:         "/model/anthropic.claude-3-sonnet-20240229-v1:0/converse",
+			responseStatus:  strconv.Itoa(http.StatusOK),
+			responseHeaders: "x-amzn-requestid:bedrock-resp-123",
+			responseBody:    `{"output":{"message":{"content":[{"text":"Hello from Bedrock!"}],"role":"assistant"}},"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":20,"totalTokens":30}}`,
+			expStatus:       http.StatusOK,
+			expResponseBodyFunc: func(t require.TestingT, body []byte) {
+				var resp openai.Response
+				require.NoError(t, json.Unmarshal(body, &resp))
+				require.Equal(t, "response", resp.Object)
+				require.Equal(t, "completed", resp.Status)
+				require.Equal(t, "anthropic.claude-3-sonnet-20240229-v1:0", resp.Model)
+				require.Equal(t, "bedrock-resp-123", resp.ID)
+				require.Len(t, resp.Output, 1)
+				require.NotNil(t, resp.Output[0].OfOutputMessage)
+				require.Equal(t, "assistant", resp.Output[0].OfOutputMessage.Role)
+				require.NotNil(t, resp.Output[0].OfOutputMessage.Content.OfContentArray)
+				require.Len(t, resp.Output[0].OfOutputMessage.Content.OfContentArray, 1)
+				require.NotNil(t, resp.Output[0].OfOutputMessage.Content.OfContentArray[0].OfOutputText)
+				require.Equal(t, "Hello from Bedrock!", resp.Output[0].OfOutputMessage.Content.OfContentArray[0].OfOutputText.Text)
+				require.NotNil(t, resp.Usage)
+				require.Equal(t, int64(10), resp.Usage.InputTokens)
+				require.Equal(t, int64(20), resp.Usage.OutputTokens)
+				require.Equal(t, int64(30), resp.Usage.TotalTokens)
+			},
+		},
+		{
 			name:            "body-mutation - /v1/chat/completions - OpenAI backend with route-level body mutations",
 			backend:         "body-mutation",
 			path:            "/v1/chat/completions",
