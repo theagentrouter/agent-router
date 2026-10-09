@@ -111,6 +111,9 @@ type Options struct {
 	RateLimitRunner *runner.Runner
 	// EnvoyGatewayNamespace is the namespace where Envoy Gateway is deployed.
 	EnvoyGatewayNamespace string
+	// ExtensionServerInvoked reports whether Envoy Gateway has invoked the AI Gateway extension server.
+	// When nil, the extension server wiring check is not started.
+	ExtensionServerInvoked func() bool
 }
 
 // StartControllers starts the controllers for the AI Gateway.
@@ -263,6 +266,17 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1b1.ReferenceGrant{}).
 		Complete(referenceGrantC); err != nil {
 		return fmt.Errorf("failed to create controller for ReferenceGrant: %w", err)
+	}
+
+	if options.ExtensionServerInvoked != nil {
+		if err = mgr.Add(&extensionServerCheck{
+			client:   c,
+			logger:   logger.WithName("extension-server-check"),
+			interval: defaultExtensionServerCheckInterval,
+			invoked:  options.ExtensionServerInvoked,
+		}); err != nil {
+			return fmt.Errorf("failed to add the extension server check: %w", err)
+		}
 	}
 
 	if !options.DisableMutatingWebhook {
