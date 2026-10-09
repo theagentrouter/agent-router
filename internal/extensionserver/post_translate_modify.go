@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"slices"
 	"strconv"
@@ -52,6 +53,19 @@ const (
 	envoyGatewayMetadataNamespace    = "envoy-gateway"
 	envoyGatewayMetadataResourcesKey = "resources"
 )
+
+// maxExtProcCircuitBreakers returns circuit breaker thresholds set to math.MaxInt32.
+// Envoy defaults these to 1024, which overflows when many concurrent requests each open
+// an ext_proc gRPC stream. Downstream/upstream limits should apply instead of this hop.
+func maxExtProcCircuitBreakers() *clusterv3.CircuitBreakers {
+	maxInt32 := wrapperspb.UInt32(uint32(math.MaxInt32))
+	return &clusterv3.CircuitBreakers{
+		Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
+			MaxConnections: maxInt32,
+			MaxRequests:    maxInt32,
+		}},
+	}
+}
 
 type aiGatewayClusterName struct {
 	namespace       string
@@ -166,7 +180,7 @@ func (s *Server) PostTranslateModify(ctx context.Context, req *egextension.PostT
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal HttpProtocolOptions to Any: %w", err)
 		}
-		req.Clusters = append(req.Clusters, &clusterv3.Cluster{
+		cluster := &clusterv3.Cluster{
 			Name:                 extProcUDSClusterName,
 			ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC},
 			// https://github.com/envoyproxy/gateway/blob/932b8b155fa562ae917da19b497a4370733478f1/api/v1alpha1/timeout_types.go#L25
@@ -179,6 +193,10 @@ func (s *Server) PostTranslateModify(ctx context.Context, req *egextension.PostT
 			//
 			// So, we set it to 50MBi.
 			PerConnectionBufferLimitBytes: wrapperspb.UInt32(52428800),
+			// Default max_connections and max_requests of 1024 can cause gRPC overflow
+			// under concurrency. Use MaxInt32 so limits are applied on downstream/upstream
+			// config instead.
+			CircuitBreakers: maxExtProcCircuitBreakers(),
 			LoadAssignment: &endpointv3.ClusterLoadAssignment{
 				ClusterName: extProcUDSClusterName,
 				Endpoints: []*endpointv3.LocalityLbEndpoints{
@@ -201,7 +219,8 @@ func (s *Server) PostTranslateModify(ctx context.Context, req *egextension.PostT
 					},
 				},
 			},
-		})
+		}
+		req.Clusters = append(req.Clusters, cluster)
 		s.log.Info("Added extproc-uds cluster to the list of clusters")
 	}
 
