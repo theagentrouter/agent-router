@@ -101,6 +101,16 @@ func mutationsFromTranslationResult(newHeaders []internalapi.Header, newBody []b
 ) {
 	header = &extprocv3.HeaderMutation{}
 	for _, h := range newHeaders {
+		if h.Value() == "" {
+			// An empty value means "remove this header". A translator emits this when a
+			// header the client sent has no valid value left for the selected backend
+			// (e.g. an allowlist filter strips every anthropic-beta flag, so
+			// filterHeaderValues returns changed==true with an empty result). Setting the
+			// header to the empty string would forward a present-but-empty header instead
+			// of removing it, which is not what the translator asked for.
+			header.RemoveHeaders = append(header.RemoveHeaders, h.Key())
+			continue
+		}
 		header.SetHeaders = append(header.SetHeaders, &corev3.HeaderValueOption{
 			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 			Header: &corev3.HeaderValue{
