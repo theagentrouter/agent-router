@@ -191,8 +191,6 @@ spec:
           ports:
             - containerPort: 8081
               name: grpc
-          args:
-            - --quotaRateLimitServiceAddr=envoy-ai-gateway-ratelimit.envoy-gateway-system
           env:
             - name: LOG_LEVEL
               value: debug
