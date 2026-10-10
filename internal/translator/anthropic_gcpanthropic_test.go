@@ -659,7 +659,21 @@ func TestAnthropicToGCPAnthropicTranslator_ResponseBody_StreamingEdgeCases(t *te
 	}
 }
 
-func tokenUsageFrom(in, cachedInput, cacheCreationInput, out, total, reasoning int32) metrics.TokenUsage {
+type cacheTTLWindow int
+
+const (
+	cacheTTL5m cacheTTLWindow = iota
+	cacheTTL1h
+)
+
+// cacheTTLTokens expresses "the response reported this many tokens for this
+// TTL", which is distinct from the field being absent.
+type cacheTTLTokens struct {
+	window cacheTTLWindow
+	tokens uint32
+}
+
+func tokenUsageFrom(in, cachedInput, cacheCreationInput, out, total, reasoning int32, cacheCreationByTTL ...cacheTTLTokens) metrics.TokenUsage {
 	var usage metrics.TokenUsage
 	if in >= 0 {
 		usage.SetInputTokens(uint32(in))
@@ -669,6 +683,14 @@ func tokenUsageFrom(in, cachedInput, cacheCreationInput, out, total, reasoning i
 	}
 	if cacheCreationInput >= 0 {
 		usage.SetCacheCreationInputTokens(uint32(cacheCreationInput))
+	}
+	for _, ttl := range cacheCreationByTTL {
+		switch ttl.window {
+		case cacheTTL5m:
+			usage.SetCacheCreation5mInputTokens(ttl.tokens)
+		case cacheTTL1h:
+			usage.SetCacheCreation1hInputTokens(ttl.tokens)
+		}
 	}
 	if out >= 0 {
 		usage.SetOutputTokens(uint32(out))
