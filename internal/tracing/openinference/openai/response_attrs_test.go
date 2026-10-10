@@ -1345,8 +1345,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1372,8 +1372,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 50,
 					TotalTokens:  150,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        25,
-						CacheCreationTokens: 10,
+						CachedTokens:     25,
+						CacheWriteTokens: 10,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1401,8 +1401,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 200,
 					TotalTokens:  250,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 100,
@@ -1429,8 +1429,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1457,8 +1457,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 10,
 					TotalTokens:  15,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1496,8 +1496,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 0,
 					TotalTokens:  0,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1520,8 +1520,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1564,8 +1564,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1611,8 +1611,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 20,
 					TotalTokens:  30,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        0,
-						CacheCreationTokens: 0,
+						CachedTokens:     0,
+						CacheWriteTokens: 0,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 0,
@@ -1671,8 +1671,8 @@ func TestBuildResponsesResponseAttributes(t *testing.T) {
 					OutputTokens: 200,
 					TotalTokens:  300,
 					InputTokensDetails: openai.ResponseUsageInputTokensDetails{
-						CachedTokens:        30,
-						CacheCreationTokens: 20,
+						CachedTokens:     30,
+						CacheWriteTokens: 20,
 					},
 					OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{
 						ReasoningTokens: 50,

@@ -354,6 +354,43 @@ func TestBuildQuotaBackendPolicies(t *testing.T) {
 		require.Contains(t, result, "default/backend-a")
 		require.Len(t, result["default/backend-a"], 2)
 	})
+
+	t.Run("terminating policy is skipped", func(t *testing.T) {
+		deleting := metav1.Now()
+		policies := []aigv1a1.QuotaPolicy{
+			{
+				// Terminating policy: must be excluded so no descriptors are produced for it.
+				ObjectMeta: metav1.ObjectMeta{Namespace: "default", DeletionTimestamp: &deleting, Finalizers: []string{"keep"}},
+				Spec: aigv1a1.QuotaPolicySpec{
+					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "backend-a"}},
+				},
+			},
+			{
+				// Live policy targeting a different backend: must still be included.
+				ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
+				Spec: aigv1a1.QuotaPolicySpec{
+					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "backend-b"}},
+				},
+			},
+		}
+		result := buildQuotaBackendPolicies(policies)
+		require.Len(t, result, 1)
+		require.NotContains(t, result, "default/backend-a", "terminating policy must not produce descriptors")
+		require.Contains(t, result, "default/backend-b")
+	})
+
+	t.Run("only terminating policies yields empty map", func(t *testing.T) {
+		deleting := metav1.Now()
+		policies := []aigv1a1.QuotaPolicy{
+			{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "default", DeletionTimestamp: &deleting, Finalizers: []string{"keep"}},
+				Spec: aigv1a1.QuotaPolicySpec{
+					TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{{Name: "backend-a"}},
+				},
+			},
+		}
+		require.Empty(t, buildQuotaBackendPolicies(policies))
+	})
 }
 
 // verifyMetadataAction is a helper that asserts a rate limit action is a MetaData action
@@ -1609,6 +1646,75 @@ func TestBuildHeaderMatchAction(t *testing.T) {
 		require.Equal(t, "rule-3-h1|v-match-2", hvm.DescriptorKey)
 		require.Equal(t, "rule-3-h1|v-match-2", hvm.DescriptorValue)
 	})
+}
+
+func TestBuildStreamDoneHeaderMatchAction(t *testing.T) {
+	t.Run("distinct match reads the header value so each tenant keeps its own bucket", func(t *testing.T) {
+		header := egv1a1.HeaderMatch{Name: "x-tenant-id", Type: ptr.To(egv1a1.HeaderMatchDistinct)}
+
+		action := buildStreamDoneHeaderMatchAction(0, 0, header)
+
+		rh := action.GetRequestHeaders()
+		require.NotNil(t, rh, "a GenericKey here pools every tenant's cost into one bucket")
+		require.Equal(t, "x-tenant-id", rh.HeaderName)
+		require.Equal(t, translator.BucketRuleDescriptorKey(0, 0, "x-tenant-id", ""), rh.DescriptorKey)
+	})
+
+	t.Run("exact match keeps HeaderValueMatch with ExpectMatch true", func(t *testing.T) {
+		header := egv1a1.HeaderMatch{
+			Name:   "x-api-key",
+			Type:   ptr.To(egv1a1.HeaderMatchExact),
+			Value:  ptr.To("premium"),
+			Invert: ptr.To(true),
+		}
+
+		action := buildStreamDoneHeaderMatchAction(0, 0, header)
+
+		hvm := action.GetHeaderValueMatch()
+		require.NotNil(t, hvm)
+		require.True(t, hvm.ExpectMatch.Value, "an inverted match must still report the cost it incurred")
+		require.Equal(t, translator.BucketRuleDescriptorKey(0, 0, "x-api-key", "premium"), hvm.DescriptorKey)
+	})
+}
+
+// A stream-done descriptor that doesn't match its request-time counterpart
+// settles the real token cost against a different bucket than the one the
+// pre-flight check reserved against.
+func TestStreamDoneDescriptorsMatchRequestTime(t *testing.T) {
+	headers := []egv1a1.HeaderMatch{
+		{Name: "x-tenant-id", Type: ptr.To(egv1a1.HeaderMatchDistinct)},
+		{Name: "x-tier", Type: ptr.To(egv1a1.HeaderMatchExact), Value: ptr.To("free")},
+	}
+	for _, h := range headers {
+		t.Run(h.Name, func(t *testing.T) {
+			reqTime := buildHeaderMatchAction(1, 2, h)
+			streamDone := buildStreamDoneHeaderMatchAction(1, 2, h)
+
+			reqKind, reqKey := descriptorOf(t, reqTime)
+			doneKind, doneKey := descriptorOf(t, streamDone)
+			require.Equal(t, reqKind, doneKind, "both phases must derive the bucket the same way")
+			require.Equal(t, reqKey, doneKey)
+		})
+	}
+}
+
+// descriptorOf returns how an action derives its descriptor and the key it
+// contributes. The kind matters as much as the key: a GenericKey emits a
+// constant where RequestHeaders emits the caller's own header value, so two
+// actions sharing a key can still resolve to different buckets.
+func descriptorOf(t *testing.T, action *routev3.RateLimit_Action) (kind, key string) {
+	t.Helper()
+	switch {
+	case action.GetRequestHeaders() != nil:
+		return "RequestHeaders", action.GetRequestHeaders().DescriptorKey
+	case action.GetHeaderValueMatch() != nil:
+		return "HeaderValueMatch", action.GetHeaderValueMatch().DescriptorKey
+	case action.GetGenericKey() != nil:
+		return "GenericKey", action.GetGenericKey().DescriptorKey
+	default:
+		t.Fatalf("action carries no recognized descriptor: %v", action)
+		return "", ""
+	}
 }
 
 func TestBaseDescriptorActions(t *testing.T) {

@@ -31,13 +31,33 @@ var (
 )
 
 type fakeSpan struct {
-	backends []string
-	errType  string
-	err      error
+	backends        []string
+	clientSessionID string
+	events          []string
+	listResults     []any
+	toolCallResult  []byte
+	errType         string
+	err             error
 }
 
 func (f *fakeSpan) RecordRouteToBackend(backend string, _ string, _ bool) {
 	f.backends = append(f.backends, backend)
+}
+
+func (f *fakeSpan) RecordClientSession(sessionID string) {
+	f.clientSessionID = sessionID
+}
+
+func (f *fakeSpan) AddEvent(name string) {
+	f.events = append(f.events, name)
+}
+
+func (f *fakeSpan) RecordListResult(result any) {
+	f.listResults = append(f.listResults, result)
+}
+
+func (f *fakeSpan) RecordToolCallResult(resultJSON []byte) {
+	f.toolCallResult = resultJSON
 }
 
 func (f *fakeSpan) EndSpan() {}
@@ -48,10 +68,12 @@ func (f *fakeSpan) EndSpanOnError(errType string, err error) {
 }
 
 type fakeTracer struct {
-	span *fakeSpan
+	span   *fakeSpan
+	starts int
 }
 
 func (f *fakeTracer) StartSpanAndInjectMeta(context.Context, *jsonrpc.Request, mcp.Params, http.Header) tracingapi.MCPSpan {
+	f.starts++
 	if f.span == nil {
 		f.span = &fakeSpan{}
 	}
@@ -336,7 +358,7 @@ func TestSessionFromID_ValidID(t *testing.T) {
 	// Create a valid session ID.
 	sessionID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("test-session")))
 	eventID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("_1")))
-	session, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID))
+	session, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID), "")
 
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -348,10 +370,33 @@ func TestSessionFromID_InvalidID(t *testing.T) {
 
 	// Create an invalid session ID.
 	sessionID := secureID(t, proxy, "invalid-session-id")
-	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "")
+	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", "")
 
 	require.Error(t, err)
 	require.Nil(t, s)
+}
+
+func TestSessionFromID_SubjectMismatch(t *testing.T) {
+	proxy := newTestMCPProxy()
+
+	// Session ID was minted for "user-a".
+	sessionID := secureID(t, proxy, "route@user-a@backend1:"+base64.StdEncoding.EncodeToString([]byte("test-session")))
+
+	// Resuming it as a different (or anonymous) authenticated subject must be rejected: this is
+	// the anti-hijacking check documented at
+	// https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices#session-hijacking
+	for _, currentSubject := range []string{"user-b", "", "user-a "} {
+		t.Run(currentSubject, func(t *testing.T) {
+			s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", currentSubject)
+			require.ErrorIs(t, err, errSessionSubjectMismatch)
+			require.Nil(t, s)
+		})
+	}
+
+	// Resuming with the matching subject succeeds.
+	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", "user-a")
+	require.NoError(t, err)
+	require.NotNil(t, s)
 }
 
 func TestInitializeSession_Success(t *testing.T) {

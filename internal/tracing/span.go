@@ -12,6 +12,7 @@ import (
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
@@ -29,6 +30,14 @@ func (s *span[RespT, ChunkT]) RecordResponseChunk(resp *ChunkT) {
 // RecordResponse implements [tracingapi.Span.RecordResponse]
 func (s *span[RespT, ChunkT]) RecordResponse(resp *RespT) {
 	s.recorder.RecordResponse(s.span, resp)
+}
+
+// RecordBackend implements [tracingapi.BackendSpan]. It is a no-op unless the
+// recorder's semantic convention records backend attributes.
+func (s *span[RespT, ChunkT]) RecordBackend(backend tracingapi.Backend) {
+	if r, ok := s.recorder.(tracingapi.BackendRecorder); ok {
+		r.RecordBackend(s.span, backend)
+	}
 }
 
 // EndSpan implements [tracingapi.Span.EndSpan]
@@ -52,11 +61,14 @@ type (
 	embeddingsSpan           = span[openai.EmbeddingResponse, struct{}]
 	imageGenerationSpan      = span[openai.ImageGenerationResponse, struct{}]
 	responsesSpan            = span[openai.Response, openai.ResponseStreamEventUnion]
+	decisionsSpan            = span[openai.DecisionResponse, struct{}]
 	speechSpan               = span[[]byte, openai.SpeechStreamChunk]
 	transcriptionSpan        = span[openai.TranscriptionResponse, openai.TranscriptionStreamEvent]
 	translationSpan          = span[openai.TranslationResponse, struct{}]
 	rerankSpan               = span[cohereschema.RerankV2Response, struct{}]
+	systemOneSpan            = span[typesafeschema.SystemOneResponse, struct{}]
 	messageSpan              = span[anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	tokenizeSpan             = span[tokenize.Response, struct{}]
 	responsesInputTokensSpan = span[openai.ResponsesInputTokensResponse, struct{}]
+	countTokensSpan          = span[anthropicschema.CountTokensResponse, struct{}]
 )

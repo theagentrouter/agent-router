@@ -739,7 +739,7 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 	if len(chunk.Choices) == 0 && chunk.Usage != nil {
 		s.inputTokens = chunk.Usage.PromptTokens
 		s.outputTokens = chunk.Usage.CompletionTokens
-		// OpenAI's cached_tokens/cache_creation_input_tokens are a breakdown within
+		// OpenAI's cached_tokens/cache_write_tokens are a breakdown within
 		// prompt_tokens, not additive like Anthropic's native cache fields, so we don't
 		// forward them here to avoid double-counting.
 		s.tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
@@ -770,6 +770,15 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 		// Handle reasoning/thinking content (must come before text).
 		if delta.ReasoningContent != nil {
 			if err := s.handleReasoningDelta(delta.ReasoningContent, out); err != nil {
+				return err
+			}
+		}
+		// Signatures ride on thinking_blocks (reasoning_content is a plain string).
+		for i := range delta.ThinkingBlocks {
+			tb := &delta.ThinkingBlocks[i]
+			if err := s.handleReasoningDelta(&openai.StreamReasoningContent{
+				Text: tb.Thinking, Signature: tb.Signature,
+			}, out); err != nil {
 				return err
 			}
 		}

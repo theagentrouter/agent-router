@@ -1,318 +1,41 @@
-.adoptersSection {
-  padding: 4rem 0;
-  background-color: #ffffff;
-}
-
-.sectionHeader {
-  text-align: center;
-  margin-bottom: 3rem;
-}
-
-.sectionTitle {
-  font-size: 2.5rem;
-  font-weight: 700;
-  margin-bottom: 1rem;
-}
-
-.titleUnderline {
-  width: 60px;
-  height: 4px;
-  background-color: var(--ifm-color-primary);
-  margin: 0 auto;
-  border-radius: 2px;
-}
-
-.sectionDescription {
-  max-width: 600px;
-  margin: 2rem auto 0;
-  font-size: 1.1rem;
-  line-height: 1.6;
-  color: var(--ifm-color-emphasis-700);
+.section {
+  background: var(--ar-velvet-100);
+  padding: 88px 0;
   text-align: center;
 }
+:global([data-theme='dark']) .section { background: var(--ar-ink-900); }
 
-.addYoursLink {
-  color: var(--ifm-color-primary);
-  text-decoration: none;
-  font-weight: 600;
-  border-bottom: 1px solid transparent;
-  transition: all 0.2s ease;
-}
-
-.addYoursLink:hover {
-  color: var(--ifm-color-primary-dark);
-  border-bottom-color: var(--ifm-color-primary-dark);
-  text-decoration: none;
-}
-
-.adoptersGrid {
+.strip {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
-  gap: 2rem;
-  max-width: 1200px;
-  margin: 0 auto;
-  margin-bottom: 3rem;
-}
-
-.adopterCol {
-  flex: 0 0 auto;
-  min-width: 260px;
-  max-width: 280px;
-}
-
-.adopterLink {
-  text-decoration: none;
-  color: inherit;
-}
-
-.adopterLink:hover {
-  text-decoration: none;
-  color: inherit;
-}
-
-.adopterCard {
-  background: white;
-  border-radius: 12px;
-  padding: 0 0 1.5rem 0;
-  text-align: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  transition: all 0.3s ease;
-  border: 1px solid #e9ecef;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: center;
-  position: relative;
-  overflow: visible;
-}
-
-.adopterCard:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 25px rgba(108, 24, 153, 0.12);
-  border-color: var(--ifm-color-primary-light);
-}
-
-.logoContainer {
-  width: 160px;
-  height: 100px;
-  display: flex;
   align-items: center;
   justify-content: center;
-  margin: 1.5rem 0 0.5rem 0;
+  gap: 36px 48px;
+  margin-bottom: 28px;
 }
 
-.adopterLogo {
-  max-width: 100%;
-  max-height: 100%;
+.logoLink { display: inline-flex; }
+
+.logo {
+  height: 30px;
+  width: auto;
+  max-width: 160px;
   object-fit: contain;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+  filter: grayscale(1) contrast(0.85);
+  opacity: 0.72;
+  transition: filter 0.2s, opacity 0.2s;
 }
+.logo:hover { filter: none; opacity: 1; }
+:global([data-theme='dark']) .logo { filter: grayscale(1) invert(1) contrast(0.7); opacity: 0.6; }
+:global([data-theme='dark']) .logo:hover { opacity: 0.9; }
 
-.adopterName {
-  font-size: 0.8rem;
-  font-weight: 300;
-  color: var(--ifm-color-emphasis-600);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  width: 100%;
-  padding: 1rem 1.5rem;
+.ctaLine {
+  font-size: var(--ar-text-sm);
+  color: var(--ar-fg-muted);
   margin: 0;
-  border-bottom: 1px solid #e9ecef;
-  background-color: #fafbfc;
-  border-radius: 12px 12px 0 0;
 }
-
-.adopterDescription {
-  font-size: 0.85rem;
-  color: var(--ifm-color-emphasis-600);
-  font-style: italic;
-  line-height: 1.4;
-  padding: 0 1.5rem 0 1.5rem;
-  margin-top: 0.5rem;
-}
-
-.adopterTooltip {
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%) translateY(-8px);
-  background-color: rgba(0, 0, 0, 0.9);
-  color: white;
-  padding: 0.75rem 1rem;
-  border-radius: 6px;
-  font-size: 0.875rem;
-  line-height: 1.4;
-  max-width: 280px;
-  width: max-content;
-  text-align: left;
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.2s ease, visibility 0.2s ease, transform 0.2s ease;
-  z-index: 1000;
-  pointer-events: none;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.adopterTooltip::after {
-  content: '';
-  position: absolute;
-  top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 6px solid transparent;
-  border-top-color: rgba(0, 0, 0, 0.9);
-}
-
-.adopterCard:hover .adopterTooltip {
-  opacity: 1;
-  visibility: visible;
-  transform: translateX(-50%) translateY(-12px);
-}
-
-.ctaSection {
-  text-align: center;
-  padding-top: 2rem;
-  border-top: 1px solid #e9ecef;
-}
-
-.ctaText {
-  font-size: 1.1rem;
-  color: var(--ifm-color-emphasis-700);
-  margin-bottom: 1.5rem;
-}
-
-/* Responsive Design */
-@media screen and (max-width: 996px) {
-  .adoptersSection {
-    padding: 3rem 0;
-  }
-
-  .sectionTitle {
-    font-size: 2rem;
-  }
-
-  .adoptersGrid {
-    gap: 1.5rem;
-  }
-
-  .adopterCol {
-    min-width: 220px;
-    max-width: 240px;
-  }
-
-  .adopterCard {
-    padding: 0 0 1.25rem 0;
-  }
-
-  .adopterName {
-    padding: 0.75rem 1rem;
-  }
-
-  .logoContainer {
-    width: 140px;
-    height: 90px;
-    margin: 1.25rem 0 0.5rem 0;
-  }
-
-  .adopterDescription {
-    padding: 0 1rem 0 1rem;
-  }
-
-  .adopterTooltip {
-    max-width: 240px;
-    font-size: 0.8rem;
-    padding: 0.65rem 0.85rem;
-  }
-}
-
-@media screen and (max-width: 768px) {
-  .adoptersSection {
-    padding: 2rem 0;
-  }
-
-  .sectionTitle {
-    font-size: 1.8rem;
-  }
-
-  .adoptersGrid {
-    gap: 1rem;
-  }
-
-  .adopterCol {
-    min-width: 200px;
-    max-width: 220px;
-  }
-
-  .adopterCard {
-    padding: 0 0 1rem 0;
-  }
-
-  .adopterName {
-    padding: 0.75rem;
-    font-size: 0.75rem;
-  }
-
-  .logoContainer {
-    width: 120px;
-    height: 80px;
-    margin: 1rem 0 0.5rem 0;
-  }
-
-  .adopterDescription {
-    font-size: 0.8rem;
-    padding: 0 0.75rem 0 0.75rem;
-  }
-
-  .adopterTooltip {
-    max-width: 200px;
-    font-size: 0.75rem;
-    padding: 0.6rem 0.75rem;
-  }
-}
-
-@media screen and (max-width: 576px) {
-  .adoptersGrid {
-    justify-content: center;
-  }
-
-  .adopterCol {
-    min-width: 180px;
-    max-width: 200px;
-  }
-
-  .adopterCard {
-    padding: 0 0 0.75rem 0;
-  }
-
-  .adopterName {
-    padding: 0.5rem;
-    font-size: 0.7rem;
-  }
-
-  .logoContainer {
-    width: 100px;
-    height: 65px;
-    margin: 0.75rem 0 0.5rem 0;
-  }
-
-  .adopterDescription {
-    font-size: 0.75rem;
-    padding: 0 0.5rem 0 0.5rem;
-  }
-
-  .ctaText {
-    font-size: 1rem;
-  }
-
-  .adopterTooltip {
-    max-width: 180px;
-    font-size: 0.7rem;
-    padding: 0.5rem 0.65rem;
-  }
-
-  .adopterTooltip::after {
-    border-width: 5px;
-  }
+.ctaLine a {
+  color: var(--ar-brand-text);
+  font-weight: 600;
+  text-decoration: none;
 }

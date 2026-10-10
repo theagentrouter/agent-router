@@ -11,7 +11,7 @@ jobs:
   retest:
     if: ${{
       github.event.issue.pull_request
-      && github.repository == 'envoyproxy/ai-gateway'
+      && github.repository == 'theagentrouter/agent-router'
       && github.actor != 'repokitteh-read-only[bot]'
       && github.actor != 'dependabot[bot]'
       }}

@@ -138,6 +138,14 @@ func buildQuotaBackendPolicies(policies []aigv1a1.QuotaPolicy) map[string][]aigv
 	backends := make(map[string][]aigv1a1.QuotaPolicy)
 	for i := range policies {
 		policy := &policies[i]
+		// Skip QuotaPolicies that are being deleted. A terminating policy (non-zero DeletionTimestamp)
+		// is still returned by the cached List until its deletion fully propagates; injecting its
+		// descriptors here would re-add the deleted policy's rate_limits actions during the very
+		// re-translation that the controller's quota-policy-hash change triggers on deletion. Treating
+		// it as already absent keeps the data plane consistent with the control plane.
+		if !policy.DeletionTimestamp.IsZero() {
+			continue
+		}
 		for _, ref := range policy.Spec.TargetRefs {
 			key := policy.Namespace + "/" + string(ref.Name)
 			backends[key] = append(backends[key], *policy)
@@ -826,8 +834,7 @@ func buildClientSelectorActions(
 }
 
 // buildClientSelectorStreamDoneActions is like buildClientSelectorActions but
-// always uses ExpectMatch=true on HeaderValueMatch actions. Distinct headers fall
-// back to GenericKey because per-value bucketing is not applicable at stream-done time.
+// always uses ExpectMatch=true on HeaderValueMatch actions.
 func buildClientSelectorStreamDoneActions(
 	ruleIndex int, selectors []egv1a1.RateLimitSelectCondition,
 ) []*routev3.RateLimit_Action {
@@ -869,18 +876,21 @@ func flattenAndSortClientSelectorHeaders(selectors []egv1a1.RateLimitSelectCondi
 }
 
 // buildStreamDoneHeaderMatchAction is like buildHeaderMatchAction but always uses
-// ExpectMatch=true. Distinct headers are treated as GenericKey.
+// ExpectMatch=true, so an inverted match still reports the cost it incurred.
 func buildStreamDoneHeaderMatchAction(
 	ruleIndex, matchIndex int, header egv1a1.HeaderMatch,
 ) *routev3.RateLimit_Action {
 	descriptorKey := translator.BucketRuleDescriptorKey(ruleIndex, matchIndex, header.Name, headerMatchKeyValue(header))
 
+	// Must mirror buildHeaderMatchAction: a descriptor that doesn't match the
+	// request-time one lands the real cost in a different bucket from the
+	// pre-flight reservation it is meant to settle.
 	if header.Type != nil && *header.Type == egv1a1.HeaderMatchDistinct {
 		return &routev3.RateLimit_Action{
-			ActionSpecifier: &routev3.RateLimit_Action_GenericKey_{
-				GenericKey: &routev3.RateLimit_Action_GenericKey{
-					DescriptorKey:   descriptorKey,
-					DescriptorValue: descriptorKey,
+			ActionSpecifier: &routev3.RateLimit_Action_RequestHeaders_{
+				RequestHeaders: &routev3.RateLimit_Action_RequestHeaders{
+					HeaderName:    header.Name,
+					DescriptorKey: descriptorKey,
 				},
 			},
 		}

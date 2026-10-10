@@ -58,6 +58,7 @@ func newExtProcBuilder(options *Options, extProcAsSideCar bool, logger logr.Logg
 		image:                                  options.ExtProcImage,
 		imagePullPolicy:                        options.ExtProcImagePullPolicy,
 		logLevel:                               options.ExtProcLogLevel,
+		logFormat:                              options.ExtProcLogFormat,
 		enableRedaction:                        options.ExtProcEnableRedaction,
 		udsPath:                                options.UDSPath,
 		requestHeaderAttributes:                options.RequestHeaderAttributes,
@@ -83,6 +84,7 @@ type extProcBuilder struct {
 	image           string
 	imagePullPolicy corev1.PullPolicy
 	logLevel        string
+	logFormat       string
 	enableRedaction bool
 	udsPath         string
 
@@ -203,9 +205,12 @@ func (b *extProcBuilder) buildExtProcContainer(input extProcContainerInput) core
 // extProcConfigDigest contains the config inputs that affect extproc injection.
 // It intentionally avoids hashing the full Kubernetes Container API object.
 type extProcConfigDigest struct {
-	Image                                  string
-	ImagePullPolicy                        corev1.PullPolicy
-	LogLevel                               string
+	Image           string
+	ImagePullPolicy corev1.PullPolicy
+	LogLevel        string
+	// LogFormat is omitted when it is the default, so deployments that never asked for JSON keep
+	// the same hash as before this field existed and are not rolled on upgrade.
+	LogFormat                              string `json:",omitempty"`
 	EnableRedaction                        bool
 	UDSPath                                string
 	RequestHeaderAttributes                *string
@@ -232,6 +237,7 @@ func (b *extProcBuilder) extProcContainerHash(input extProcContainerInput) strin
 		Image:                                  b.extProcImage(input),
 		ImagePullPolicy:                        b.imagePullPolicy,
 		LogLevel:                               b.logLevel,
+		LogFormat:                              b.nonDefaultLogFormat(),
 		EnableRedaction:                        b.enableRedaction,
 		UDSPath:                                b.udsPath,
 		RequestHeaderAttributes:                b.requestHeaderAttributes,
@@ -267,8 +273,18 @@ func (b *extProcBuilder) extProcImage(input extProcContainerInput) string {
 	return b.resolveExtProcImage(extProcSpecFromInput(input))
 }
 
+// nonDefaultLogFormat returns the configured log format only when it differs from the extproc
+// default. The extproc already emits text without being told to, so passing it explicitly would
+// change the container args and hash of every existing deployment for no behavioral difference.
+func (b *extProcBuilder) nonDefaultLogFormat() string {
+	if b.logFormat == internalapi.LogFormatText {
+		return ""
+	}
+	return b.logFormat
+}
+
 // buildExtProcBaseArgs builds the command line arguments for the extproc
-// container excluding the secret-presence-driven -configPath / -configBundlePath
+// container excluding the secret-presence-driven -configBundlePath
 // flags. The mutating webhook prepends those based on which filter-config
 // secrets exist; they are intentionally kept out of the drift hash.
 func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {
@@ -278,6 +294,9 @@ func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {
 		"-adminPort", fmt.Sprintf("%d", extProcAdminPort),
 		"-rootPrefix", b.rootPrefix,
 		"-maxRecvMsgSize", fmt.Sprintf("%d", b.maxRecvMsgSize),
+	}
+	if f := b.nonDefaultLogFormat(); f != "" {
+		args = append(args, "-logFormat", f)
 	}
 	if needMCP {
 		args = append(args,

@@ -7,6 +7,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -78,7 +79,9 @@ func (r *Runner) Start(ctx context.Context) error {
 	}()
 
 	r.logger.Info("starting rate limit xDS config server", "address", addr)
-	if err := r.grpcServer.Serve(lis); err != nil {
+	// GracefulStop above races with this Serve call, and when it wins Serve returns
+	// ErrServerStopped. Only that goroutine stops this server, so it is a clean stop.
+	if err := r.grpcServer.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		return fmt.Errorf("failed to serve rate limit xDS config: %w", err)
 	}
 	return nil

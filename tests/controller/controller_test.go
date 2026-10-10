@@ -269,11 +269,15 @@ func TestAIGatewayRouteController(t *testing.T) {
 	c, cfg, k := testsinternal.NewEnvTest(t)
 
 	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
-	rc := controller.NewAIGatewayRouteController(c, k, defaultLogger(), eventCh.Ch, "/foobar/")
 
 	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: ptr.To(true)}}
 	mgr, err := ctrl.NewManager(cfg, opt)
 	require.NoError(t, err)
+	require.NoError(t, controller.ApplyIndexing(t.Context(), mgr.GetFieldIndexer().IndexField))
+
+	// Use the manager's cached client so field-selector (index) lookups work, mirroring production
+	// (StartControllers) where the AIGatewayRoute controller reconcile lists QuotaPolicies by index.
+	rc := controller.NewAIGatewayRouteController(mgr.GetClient(), k, defaultLogger(), eventCh.Ch, "/foobar/")
 
 	err = controller.TypedControllerBuilderForCRD(mgr, &aigv1b1.AIGatewayRoute{}).Complete(rc)
 	require.NoError(t, err)

@@ -81,7 +81,7 @@ func (c *secretController) syncSecret(ctx context.Context, namespace, name strin
 	var mcpRoutes aigv1b1.MCPRouteList
 	err = c.client.List(ctx, &mcpRoutes,
 		client.MatchingFields{
-			k8sClientIndexSecretToReferencingMCPRoute: fmt.Sprintf("%s.%s", name, namespace),
+			k8sClientIndexSecretToReferencingMCPRoute: namespacedNameIndexKey(name, namespace),
 		},
 	)
 	if err != nil {

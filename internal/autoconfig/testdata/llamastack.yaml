@@ -171,7 +171,7 @@ spec:
     request: 3m
   schema:
     name: OpenAI
-    version: "v1/openai/v1"
+    prefix: "v1/openai/v1"
   backendRef:
     name: openai
     kind: Backend

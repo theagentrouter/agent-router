@@ -17,6 +17,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 )
 
 type (
@@ -33,6 +34,8 @@ type (
 		EmbeddingsTracer() EmbeddingsTracer
 		// ResponsesTracer creates spans for OpenAI responses requests on /v1/responses endpoint.
 		ResponsesTracer() ResponsesTracer
+		// DecisionsTracer creates spans for OpenAI Decisions requests on /v1/decisions.
+		DecisionsTracer() DecisionsTracer
 		// SpeechTracer creates spans for OpenAI speech synthesis requests on /v1/audio/speech endpoint.
 		SpeechTracer() SpeechTracer
 		// TranscriptionTracer creates spans for OpenAI audio transcription requests on /v1/audio/transcriptions endpoint.
@@ -41,12 +44,16 @@ type (
 		TranslationTracer() TranslationTracer
 		// RerankTracer creates spans for rerank requests.
 		RerankTracer() RerankTracer
+		// SystemOneTracer creates spans for TypeSafe System One requests.
+		SystemOneTracer() SystemOneTracer
 		// MessageTracer creates spans for Anthropic messages requests.
 		MessageTracer() MessageTracer
 		// TokenizeTracer creates spans for tokenize requests.
 		TokenizeTracer() TokenizeTracer
 		// ResponsesInputTokensTracer creates spans for OpenAI /v1/responses/input_tokens requests.
 		ResponsesInputTokensTracer() ResponsesInputTokensTracer
+		// CountTokensTracer creates spans for Anthropic count tokens requests.
+		CountTokensTracer() CountTokensTracer
 		// MCPTracer creates spans for MCP requests.
 		MCPTracer() MCPTracer
 		// Shutdown shuts down the tracer, flushing any buffered spans.
@@ -76,6 +83,8 @@ type (
 	ImageGenerationTracer = RequestTracer[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}]
 	// ResponsesTracer creates spans for OpenAI responses requests.
 	ResponsesTracer = RequestTracer[openai.ResponseRequest, openai.Response, openai.ResponseStreamEventUnion]
+	// DecisionsTracer creates spans for OpenAI Decisions requests.
+	DecisionsTracer = RequestTracer[openai.DecisionRequest, openai.DecisionResponse, struct{}]
 	// SpeechTracer creates spans for OpenAI speech synthesis requests.
 	SpeechTracer = RequestTracer[openai.SpeechRequest, []byte, openai.SpeechStreamChunk]
 	// TranscriptionTracer creates spans for OpenAI audio transcription requests.
@@ -89,12 +98,16 @@ type (
 	TranslationTracer = RequestTracer[openai.TranslationRequest, openai.TranslationResponse, struct{}]
 	// RerankTracer creates spans for rerank requests.
 	RerankTracer = RequestTracer[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
+	// SystemOneTracer creates spans for TypeSafe System One requests.
+	SystemOneTracer = RequestTracer[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
 	// MessageTracer creates spans for Anthropic messages requests.
 	MessageTracer = RequestTracer[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeTracer creates spans for tokenize requests.
 	TokenizeTracer = RequestTracer[tokenize.RequestUnion, tokenize.Response, struct{}]
 	// ResponsesInputTokensTracer creates spans for OpenAI /v1/responses/input_tokens requests.
 	ResponsesInputTokensTracer = RequestTracer[openai.ResponseRequest, openai.ResponsesInputTokensResponse, struct{}]
+	// CountTokensTracer creates spans for Anthropic count tokens requests.
+	CountTokensTracer = RequestTracer[anthropicschema.CountTokensRequest, anthropicschema.CountTokensResponse, struct{}]
 )
 
 type (
@@ -120,6 +133,8 @@ type (
 	ImageGenerationSpan = Span[openai.ImageGenerationResponse, struct{}]
 	// ResponsesSpan represents an OpenAI responses request span.
 	ResponsesSpan = Span[openai.Response, openai.ResponseStreamEventUnion]
+	// DecisionsSpan represents an OpenAI Decisions request span.
+	DecisionsSpan = Span[openai.DecisionResponse, struct{}]
 	// SpeechSpan represents an OpenAI speech synthesis request span.
 	SpeechSpan = Span[[]byte, openai.SpeechStreamChunk]
 	// TranscriptionSpan represents an OpenAI audio transcription request span.
@@ -128,12 +143,16 @@ type (
 	TranslationSpan = Span[openai.TranslationResponse, struct{}]
 	// RerankSpan represents a rerank request span.
 	RerankSpan = Span[cohere.RerankV2Response, struct{}]
+	// SystemOneSpan represents a TypeSafe System One request span. The chunk type is unused and therefore set to struct{}.
+	SystemOneSpan = Span[typesafe.SystemOneResponse, struct{}]
 	// MessageSpan represents an Anthropic messages request span.
 	MessageSpan = Span[anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeSpan represents a tokenize request span. The chunk type is unused and therefore set to struct{}.
 	TokenizeSpan = Span[tokenize.Response, struct{}]
 	// ResponsesInputTokensSpan represents an OpenAI /v1/responses/input_tokens request span.
 	ResponsesInputTokensSpan = Span[openai.ResponsesInputTokensResponse, struct{}]
+	// CountTokensSpan represents an Anthropic count tokens request span.
+	CountTokensSpan = Span[anthropicschema.CountTokensResponse, struct{}]
 )
 
 type (
@@ -173,6 +192,8 @@ type (
 	EmbeddingsRecorder = SpanRecorder[openai.EmbeddingRequest, openai.EmbeddingResponse, struct{}]
 	// ResponsesRecorder records attributes to a span according to a semantic convention.
 	ResponsesRecorder = SpanRecorder[openai.ResponseRequest, openai.Response, openai.ResponseStreamEventUnion]
+	// DecisionsRecorder records attributes to a span according to a semantic convention.
+	DecisionsRecorder = SpanRecorder[openai.DecisionRequest, openai.DecisionResponse, struct{}]
 	// SpeechRecorder records attributes to a span according to a semantic convention.
 	SpeechRecorder = SpanRecorder[openai.SpeechRequest, []byte, openai.SpeechStreamChunk]
 	// TranscriptionRecorder records attributes to a span according to a semantic convention.
@@ -181,13 +202,45 @@ type (
 	TranslationRecorder = SpanRecorder[openai.TranslationRequest, openai.TranslationResponse, struct{}]
 	// RerankRecorder records attributes to a span according to a semantic convention.
 	RerankRecorder = SpanRecorder[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
+	// SystemOneRecorder records attributes to a span according to a semantic convention.
+	SystemOneRecorder = SpanRecorder[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
 	// MessageRecorder records attributes to a span according to a semantic convention.
 	MessageRecorder = SpanRecorder[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeRecorder records attributes to a span according to a semantic convention.
 	TokenizeRecorder = SpanRecorder[tokenize.RequestUnion, tokenize.Response, struct{}]
 	// ResponsesInputTokensRecorder records attributes to a span according to a semantic convention.
 	ResponsesInputTokensRecorder = SpanRecorder[openai.ResponseRequest, openai.ResponsesInputTokensResponse, struct{}]
+	// CountTokensRecorder records attributes to a span according to a semantic convention.
+	CountTokensRecorder = SpanRecorder[anthropicschema.CountTokensRequest, anthropicschema.CountTokensResponse, struct{}]
 )
+
+// Backend describes the upstream a request was routed to. It is deliberately a
+// small value type rather than filterapi.Backend so this package stays free of
+// heavier dependencies.
+type Backend struct {
+	// Schema is the backend's API schema name, e.g. "OpenAI" or "AWSBedrock".
+	Schema string
+	// Name is the configured backend name, used when Schema has no well-known
+	// mapping.
+	Name string
+}
+
+// BackendSpan is implemented by spans that can record the resolved backend.
+//
+// It is an optional interface rather than part of Span because the backend is
+// only known after routing, long after the span starts, and because only some
+// semantic conventions record it. Callers must type-assert.
+type BackendSpan interface {
+	// RecordBackend records the resolved upstream backend on the span.
+	RecordBackend(backend Backend)
+}
+
+// BackendRecorder is implemented by span recorders whose semantic convention
+// records the resolved backend. Recorders that do not simply omit it.
+type BackendRecorder interface {
+	// RecordBackend records backend attributes to the span.
+	RecordBackend(span trace.Span, backend Backend)
+}
 
 // NoopChunkRecorder provides a no-op RecordResponseChunks implementation for recorders that don't emit streaming chunks.
 type NoopChunkRecorder[ChunkT any] struct{}
@@ -227,6 +280,11 @@ func (NoopTracing) ResponsesTracer() ResponsesTracer {
 	return NoopResponsesTracer{}
 }
 
+// DecisionsTracer implements Tracing.DecisionsTracer.
+func (NoopTracing) DecisionsTracer() DecisionsTracer {
+	return NoopDecisionsTracer{}
+}
+
 // SpeechTracer implements Tracing.SpeechTracer.
 func (NoopTracing) SpeechTracer() SpeechTracer {
 	return NoopSpeechTracer{}
@@ -247,6 +305,11 @@ func (NoopTracing) RerankTracer() RerankTracer {
 	return NoopRerankTracer{}
 }
 
+// SystemOneTracer implements Tracing.SystemOneTracer.
+func (NoopTracing) SystemOneTracer() SystemOneTracer {
+	return NoopSystemOneTracer{}
+}
+
 func (NoopTracing) MessageTracer() MessageTracer {
 	return NoopMessageTracer{}
 }
@@ -259,6 +322,11 @@ func (NoopTracing) TokenizeTracer() TokenizeTracer {
 // ResponsesInputTokensTracer implements Tracing.ResponsesInputTokensTracer.
 func (NoopTracing) ResponsesInputTokensTracer() ResponsesInputTokensTracer {
 	return NoopResponsesInputTokensTracer{}
+}
+
+// CountTokensTracer implements Tracing.CountTokensTracer.
+func (NoopTracing) CountTokensTracer() CountTokensTracer {
+	return NoopCountTokensTracer{}
 }
 
 // Shutdown implements Tracing.Shutdown.
@@ -279,6 +347,8 @@ type (
 	NoopImageGenerationTracer = NoopTracer[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}]
 	// NoopResponsesTracer implements ResponsesTracer.
 	NoopResponsesTracer = NoopTracer[openai.ResponseRequest, openai.Response, openai.ResponseStreamEventUnion]
+	// NoopDecisionsTracer implements DecisionsTracer.
+	NoopDecisionsTracer = NoopTracer[openai.DecisionRequest, openai.DecisionResponse, struct{}]
 	// NoopSpeechTracer implements SpeechTracer.
 	NoopSpeechTracer = NoopTracer[openai.SpeechRequest, []byte, openai.SpeechStreamChunk]
 	// NoopTranscriptionTracer implements TranscriptionTracer.
@@ -287,12 +357,16 @@ type (
 	NoopTranslationTracer = NoopTracer[openai.TranslationRequest, openai.TranslationResponse, struct{}]
 	// NoopRerankTracer implements RerankTracer.
 	NoopRerankTracer = NoopTracer[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
+	// NoopSystemOneTracer implements SystemOneTracer.
+	NoopSystemOneTracer = NoopTracer[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
 	// NoopMessageTracer implements MessageTracer.
 	NoopMessageTracer = NoopTracer[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// NoopTokenizeTracer implements TokenizeTracer.
 	NoopTokenizeTracer = NoopTracer[tokenize.RequestUnion, tokenize.Response, struct{}]
 	// NoopResponsesInputTokensTracer implements ResponsesInputTokensTracer.
 	NoopResponsesInputTokensTracer = NoopTracer[openai.ResponseRequest, openai.ResponsesInputTokensResponse, struct{}]
+	// NoopCountTokensTracer implements CountTokensTracer.
+	NoopCountTokensTracer = NoopTracer[anthropicschema.CountTokensRequest, anthropicschema.CountTokensResponse, struct{}]
 )
 
 // StartSpanAndInjectHeaders implements RequestTracer.StartSpanAndInjectHeaders.
