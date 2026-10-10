@@ -40,9 +40,10 @@ Your manifests from yesterday apply tomorrow.
 
 ## Quick start
 
-Run Agent Router as a standalone, OpenAI-compatible router on your laptop with one command:
+Install the `aigw` CLI and run Agent Router as a standalone, OpenAI-compatible router on your laptop:
 
 ```shell
+curl -fsSL https://raw.githubusercontent.com/theagentrouter/agent-router/main/install.sh | sh
 OPENAI_API_KEY=sk-your-key aigw run
 ```
 

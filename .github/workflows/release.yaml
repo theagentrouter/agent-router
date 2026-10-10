@@ -44,13 +44,19 @@ jobs:
           # which in turn is used by EG's standalone mode used by aigw, so we skip it
           make build.aigw GOOS_LIST="darwin" GOARCH_LIST="arm64"
 
+      - name: Generate checksums for CLI release binaries
+        # Bare file names (no ./out/ prefix) so `sha256sum -c` and install.sh can match on the asset name.
+        run: |
+          cd ./out && sha256sum aigw-* | tee checksums.txt
+
       - name: Create a release candidate
         if: ${{ contains(github.ref, '-rc') }}
         run: |
           gh release create $TAG --prerelease --title $TAG --notes "Release candidate" \
             ./out/ai-gateway-crds-helm-${TAG}.tgz \
             ./out/ai-gateway-helm-${TAG}.tgz \
-            ./out/aigw-*
+            ./out/aigw-* \
+            ./out/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -60,6 +66,7 @@ jobs:
           gh release create $TAG --draft --title $TAG --notes "To be written by the release manager" \
             ./out/ai-gateway-crds-helm-${TAG}.tgz \
             ./out/ai-gateway-helm-${TAG}.tgz \
-            ./out/aigw-*
+            ./out/aigw-* \
+            ./out/checksums.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
