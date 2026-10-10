@@ -29,6 +29,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/metrics"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
@@ -404,9 +405,16 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 		}
 		s.reqCtx.l.Debug("sending MCP request", args...)
 	}
+	// Only the legacy GET notification stream records stream metrics; other methods leave this nil.
+	var streamRec *notificationStreamRecorder
+	if httpMethod == http.MethodGet {
+		streamRec = &notificationStreamRecorder{metrics: s.reqCtx.metrics.WithBackend(backend.Name)}
+		streamRec.attempt(ctx)
+	}
 	startAt := time.Now()
 	httpResp, err := s.reqCtx.client.Do(req)
 	if err != nil {
+		streamRec.failedToOpen(ctx, err)
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -425,6 +433,12 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 	case "gzip":
 		gr, gzErr := gzip.NewReader(httpResp.Body)
 		if gzErr != nil {
+			// A known non-200 status (e.g. 204 with an empty gzip body) keeps its status outcome.
+			if outcome, ok := notificationStreamStatusOutcome(httpResp.StatusCode); ok {
+				streamRec.outcome(ctx, outcome)
+			} else {
+				streamRec.failedToOpen(ctx, gzErr)
+			}
 			return fmt.Errorf("failed to create gzip decompressor: %w", gzErr)
 		}
 		defer gr.Close()
@@ -436,9 +450,12 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 	switch httpResp.StatusCode {
 	case http.StatusNoContent, http.StatusMethodNotAllowed, http.StatusAccepted:
 		// No notifications.
+		streamRec.outcome(ctx, metrics.MCPNotificationStreamOutcomeUnsupported)
 		return nil
 	case http.StatusOK:
 	default:
+		outcome, _ := notificationStreamStatusOutcome(httpResp.StatusCode)
+		streamRec.outcome(ctx, outcome)
 		body, _ := io.ReadAll(bodyReader)
 		return fmt.Errorf("MCP GET request failed with status code %d, body=%s", httpResp.StatusCode, string(body))
 	}
@@ -448,10 +465,13 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 		var respBody []byte
 		respBody, err = io.ReadAll(bodyReader)
 		if err != nil {
+			streamRec.failedToOpen(ctx, err)
 			return fmt.Errorf("failed to read MCP response body: %w", err)
 		}
 		msg, ok := tryDecodeJSONRPCMessage(respBody)
 		if ok {
+			// A single JSON-RPC message answers the GET without opening a stream.
+			streamRec.outcome(ctx, metrics.MCPNotificationStreamOutcomeUnsupported)
 			eventChan <- &backendEvent{
 				sseEvent: &sseEvent{
 					backend:  backend.Name,
@@ -472,6 +492,7 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 	// io.Copy won't flush until the end, which doesn't happen for streaming responses.
 	// So we need to read the body in chunks and flush after each chunk.
 	parser := newSSEEventParser(bodyReader, backend.Name)
+	streamRec.opened(ctx)
 	for {
 		var event *sseEvent
 		event, err = parser.next()
@@ -491,13 +512,102 @@ func (s *session) sendRequestPerBackend(ctx context.Context, eventChan chan<- *b
 				// or the upstream closes the connection. Either way, the error is not recoverable or not worth
 				// the logging.
 				errors.Is(err, io.ErrUnexpectedEOF) {
+				streamRec.ended(ctx, err)
 				break
 			}
+			streamRec.ended(ctx, err)
 			_ = httpResp.Body.Close()
 			return fmt.Errorf("failed to read MCP GET response body: %w", err)
 		}
 	}
 	return nil
+}
+
+// notificationStreamRecorder records the lifecycle of a legacy GET notification stream to a single backend.
+// All methods are no-ops on a nil receiver so that non-GET requests record nothing.
+type notificationStreamRecorder struct {
+	metrics  metrics.MCPMetrics
+	openedAt time.Time
+}
+
+func (r *notificationStreamRecorder) attempt(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	r.metrics.RecordNotificationStreamOpenAttempt(ctx)
+}
+
+func (r *notificationStreamRecorder) outcome(ctx context.Context, outcome metrics.MCPNotificationStreamOutcome) {
+	if r == nil {
+		return
+	}
+	r.metrics.RecordNotificationStreamOpenOutcome(ctx, outcome)
+}
+
+// failedToOpen records the outcome of an error that happened before the stream opened.
+func (r *notificationStreamRecorder) failedToOpen(ctx context.Context, err error) {
+	if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		r.outcome(ctx, metrics.MCPNotificationStreamOutcomeCancelled)
+		return
+	}
+	r.outcome(ctx, metrics.MCPNotificationStreamOutcomeTransportError)
+}
+
+func (r *notificationStreamRecorder) opened(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	r.openedAt = time.Now()
+	r.metrics.RecordNotificationStreamOpenOutcome(ctx, metrics.MCPNotificationStreamOutcomeOpened)
+}
+
+// ended records the end of an opened stream given the error that terminated the read loop.
+func (r *notificationStreamRecorder) ended(ctx context.Context, err error) {
+	if r == nil {
+		return
+	}
+	reason := metrics.MCPNotificationStreamEndReasonError
+	switch {
+	case errors.Is(err, context.Canceled) || ctx.Err() != nil:
+		reason = metrics.MCPNotificationStreamEndReasonCancelled
+	case isCleanEOF(err):
+		reason = metrics.MCPNotificationStreamEndReasonEOF
+	}
+	r.metrics.RecordNotificationStreamEnd(ctx, r.openedAt, reason)
+}
+
+// isCleanEOF reports whether err is io.EOF, possibly wrapped, without any other error joined to it.
+// The SSE parser joins io.EOF with the parse error of a malformed trailing event, which is not a normal close.
+func isCleanEOF(err error) bool {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, e := range joined.Unwrap() {
+			if !isCleanEOF(e) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped := errors.Unwrap(err); wrapped != nil {
+		return isCleanEOF(wrapped)
+	}
+	return err == io.EOF //nolint:errorlint // wrappers are unwrapped above.
+}
+
+// notificationStreamStatusOutcome maps the HTTP status code of a notification stream request to its outcome.
+// It returns false for 200 OK, whose outcome depends on the response body.
+func notificationStreamStatusOutcome(statusCode int) (metrics.MCPNotificationStreamOutcome, bool) {
+	switch {
+	case statusCode == http.StatusOK:
+		return "", false
+	case statusCode == http.StatusNoContent, statusCode == http.StatusMethodNotAllowed, statusCode == http.StatusAccepted:
+		return metrics.MCPNotificationStreamOutcomeUnsupported, true
+	case statusCode >= 400 && statusCode < 500:
+		return metrics.MCPNotificationStreamOutcomeHTTP4xx, true
+	case statusCode >= 500 && statusCode < 600:
+		return metrics.MCPNotificationStreamOutcomeHTTP5xx, true
+	default:
+		return metrics.MCPNotificationStreamOutcomeHTTPOther, true
+	}
 }
 
 type (
