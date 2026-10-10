@@ -217,6 +217,8 @@ func (ChatCompletionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISc
 		return translator.NewChatCompletionOpenAIToGCPVertexAITranslator(modelNameOverride), nil
 	case filterapi.APISchemaGCPAnthropic:
 		return translator.NewChatCompletionOpenAIToGCPAnthropicTranslator(schema.Version, modelNameOverride), nil
+	case filterapi.APISchemaAnthropic:
+		return translator.NewChatCompletionOpenAIToAnthropicTranslator(schema.AnthropicPrefix(), modelNameOverride), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
