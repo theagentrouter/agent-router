@@ -1416,9 +1416,12 @@ func (c *GatewayController) getObjectsForGateway(ctx context.Context, gw *gwapiv
 		"%s=%s,%s=%s", egOwningGatewayNameLabel, gw.Name, egOwningGatewayNamespaceLabel, gw.Namespace,
 	)}
 
+	// The Envoy Gateway namespace is only a candidate when it is distinct from the Gateway's namespace.
+	// An empty one is skipped as well since listing the empty namespace lists every namespace, which
+	// returns the Gateway's own objects a second time and trips the consistency check below.
 	candidateNamespaces := make([]string, 1, 2)
 	candidateNamespaces[0] = gw.Namespace
-	if c.envoyGatewayNamespace != gw.Namespace {
+	if c.envoyGatewayNamespace != "" && c.envoyGatewayNamespace != gw.Namespace {
 		candidateNamespaces = append(candidateNamespaces, c.envoyGatewayNamespace)
 	}
 

@@ -4624,3 +4624,28 @@ func TestGatewayController_warnUndeclaredMetadataNamespaces(t *testing.T) {
 	c.warnUndeclaredMetadataNamespaces(ec, []string{"declared.ns", "missing.ns", "other-missing.ns"}, "gw", "ns")
 	require.Empty(t, logged)
 }
+
+func TestGatewayController_getObjectsForGatewayEmptyEnvoyGatewayNamespace(t *testing.T) {
+	const gwName, ns = "gw", "ns"
+	labels := map[string]string{
+		egOwningGatewayNameLabel:      gwName,
+		egOwningGatewayNamespaceLabel: ns,
+	}
+	gw := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: ns}}
+
+	kube := fake2.NewClientset()
+	// An empty Envoy Gateway namespace must not be listed: listing the empty namespace means
+	// listing across all namespaces, which returns the Gateway's own objects a second time.
+	c := newTestGatewayController(requireNewFakeClientWithIndexes(t), kube, ctrl.Log, "",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	_, err := kube.CoreV1().Pods(ns).Create(t.Context(), &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-1", Namespace: ns, Labels: labels},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	namespace, pods, _, _, err := c.getObjectsForGateway(t.Context(), gw)
+	require.NoError(t, err)
+	require.Equal(t, ns, namespace)
+	require.Len(t, pods, 1)
+}
