@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
 // newTestBuilder returns an extProcBuilder with the standard test defaults. It is
@@ -78,7 +79,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	input := extProcContainerInput{}
 	baseHash := base.extProcContainerHash(input)
 	require.NotEmpty(t, baseHash)
-	require.Equal(t, 19, reflect.TypeOf(extProcBuilder{}).NumField(),
+	require.Equal(t, 20, reflect.TypeOf(extProcBuilder{}).NumField(),
 		"update drift coverage when extProcBuilder fields change")
 
 	// Helper: mutate a copy of the builder, recompute, expect a different hash.
@@ -133,6 +134,11 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	assertDrifts("logLevel", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.logLevel = "debug"
+		return b
+	}())
+	assertDrifts("logFormat", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.logFormat = internalapi.LogFormatJSON
 		return b
 	}())
 	assertDrifts("requestHeaderAttributes", func() *extProcBuilder {
@@ -227,7 +233,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 }
 
 // TestExtProcContainerHash_ExcludesConfigRoutingArgs ensures the secret-
-// presence-driven -configPath / -configBundlePath args are NOT part of the hash
+// presence-driven -configBundlePath args are NOT part of the hash
 // (they are added by the webhook after buildExtProcContainer returns). The base
 // container's Args must contain neither flag, so secret-existence transitions
 // do not spuriously trigger rollouts.
@@ -239,11 +245,35 @@ func TestExtProcContainerHash_ExcludesConfigRoutingArgs(t *testing.T) {
 
 	container := b.buildExtProcContainer(input)
 	for _, a := range container.Args {
-		require.NotEqual(t, "-configPath", a)
 		require.NotEqual(t, "-configBundlePath", a)
 	}
 	require.Equal(t, baseHash, b.extProcContainerHash(input),
 		"secret-presence-driven config routing must not affect the workload template hash")
+}
+
+// TestBuildExtProcBaseArgs_LogFormat asserts that -logFormat reaches the extproc container only
+// when it differs from the extproc default, so existing deployments keep the args they already have.
+func TestBuildExtProcBaseArgs_LogFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		logFormat string
+	}{
+		{name: "unset", logFormat: ""},
+		{name: "explicit default", logFormat: internalapi.LogFormatText},
+	} {
+		t.Run("not passed when "+tc.name, func(t *testing.T) {
+			b := newTestBuilder()
+			b.logFormat = tc.logFormat
+			require.NotContains(t, b.buildExtProcBaseArgs(false), "-logFormat")
+		})
+	}
+
+	t.Run("passed when json", func(t *testing.T) {
+		b := newTestBuilder()
+		b.logFormat = internalapi.LogFormatJSON
+		args := b.buildExtProcBaseArgs(false)
+		require.Equal(t, []string{"-logFormat", internalapi.LogFormatJSON}, args[len(args)-2:])
+	})
 }
 
 // TestNewExtProcBuilder_MalformedInput covers the defensive parse-error log

@@ -3,11 +3,11 @@ slug: openinference-for-ai-observability
 title: Enhancing AI Gateway Observability - OpenTelemetry Tracing Arrives in Envoy AI Gateway
 authors: [missberg, codefromthecrypt]
 tags: [features]
-image: /img/blog/openinference-feature.png
+image: /img/og/blog/openinference-for-ai-observability.png
 description: Envoy AI Gateway v0.3 introduces OpenTelemetry tracing with OpenInference conventions, providing complete visibility into LLM application behavior beyond metrics.Understand not just what happened, but why.
 ---
 
-![Hero feature image of title.](/img/blog/openinference-feature.png)
+![Hero feature image of title.](/img/og/blog/openinference-for-ai-observability.png)
 
 Aggregated metrics like latency, error rates, and throughput on their own won't reveal the source of _why_ a system's output was wrong, slow, or expensive.
 

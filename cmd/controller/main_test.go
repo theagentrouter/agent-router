@@ -6,24 +6,70 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/test/bufconn"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/json"
 )
+
+func TestExtensionServerRunnable(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
+	runnable := extensionServerRunnable{server: grpcServer, listener: listener}
+	require.False(t, runnable.NeedLeaderElection())
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- runnable.Start(ctx)
+	}()
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	checkCtx, checkCancel := context.WithTimeout(t.Context(), time.Second)
+	check, err := grpc_health_v1.NewHealthClient(conn).Check(checkCtx, &grpc_health_v1.HealthCheckRequest{}, grpc.WaitForReady(true))
+	checkCancel()
+	require.NoError(t, err)
+	require.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, check.Status)
+	require.NoError(t, conn.Close())
+
+	cancel()
+	require.NoError(t, <-done)
+}
 
 func Test_parseAndValidateFlags(t *testing.T) {
 	t.Run("no flags", func(t *testing.T) {
 		f, err := parseAndValidateFlags([]string{})
 		require.Equal(t, "envoy-gateway-system", f.envoyGatewayNamespace)
 		require.Equal(t, "info", f.extProcLogLevel)
+		require.Equal(t, "text", f.extProcLogFormat)
+		require.Equal(t, "text", f.logFormat)
 		require.False(t, f.extProcEnableRedaction)
 		require.Equal(t, "docker.io/envoyproxy/ai-gateway-extproc:latest", f.extProcImage)
 		require.Equal(t, corev1.PullIfNotPresent, f.extProcImagePullPolicy)
@@ -51,6 +97,8 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				args := []string{
 					tc.dash + "envoyGatewayNamespace=eg-system",
 					tc.dash + "extProcLogLevel=debug",
+					tc.dash + "extProcLogFormat=json",
+					tc.dash + "logFormat=json",
 					tc.dash + "extProcEnableRedaction=true",
 					tc.dash + "extProcImage=example.com/extproc:latest",
 					tc.dash + "extProcImagePullPolicy=Always",
@@ -74,6 +122,8 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				f, err := parseAndValidateFlags(args)
 				require.Equal(t, "eg-system", f.envoyGatewayNamespace)
 				require.Equal(t, "debug", f.extProcLogLevel)
+				require.Equal(t, "json", f.extProcLogFormat)
+				require.Equal(t, "json", f.logFormat)
 				require.True(t, f.extProcEnableRedaction)
 				require.Equal(t, "example.com/extproc:latest", f.extProcImage)
 				require.Equal(t, corev1.PullAlways, f.extProcImagePullPolicy)
@@ -163,6 +213,16 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				expErr: "invalid endpoint prefixes",
 			},
 			{
+				name:   "invalid log format",
+				flags:  []string{"--logFormat=yaml"},
+				expErr: `invalid log format: "yaml", must be "text" or "json"`,
+			},
+			{
+				name:   "invalid extproc log format",
+				flags:  []string{"--extProcLogFormat=yaml"},
+				expErr: `external processor: invalid log format: "yaml", must be "text" or "json"`,
+			},
+			{
 				name:   "invalid mcp session encryption iterations",
 				flags:  []string{"--mcpSessionEncryptionIterations=invalid"},
 				expErr: `invalid value "invalid" for flag -mcpSessionEncryptionIterations: parse error`,
@@ -187,6 +247,45 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				_, err := parseAndValidateFlags(tc.flags)
 				require.ErrorContains(t, err, tc.expErr)
 			})
+		}
+	})
+}
+
+func Test_newZapOpts(t *testing.T) {
+	logTo := func(t *testing.T, logFormat string) string {
+		t.Helper()
+		var buf bytes.Buffer
+		opts := append(newZapOpts(logFormat, zapcore.InfoLevel), zap.WriteTo(&buf))
+		zap.New(opts...).Info("starting controller", "address", ":1063")
+		return buf.String()
+	}
+
+	t.Run("json emits parseable records", func(t *testing.T) {
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(logTo(t, internalapi.LogFormatJSON)), &record))
+		require.Equal(t, "starting controller", record["msg"])
+		require.Equal(t, ":1063", record["address"])
+		require.Equal(t, "info", record["level"])
+	})
+
+	t.Run("json timestamps stay RFC3339", func(t *testing.T) {
+		// zap.JSONEncoder builds the encoder eagerly, which drops controller-runtime's default time
+		// encoder unless it is passed explicitly. Without that the ts field is an epoch float, which
+		// disagrees with what the console format prints.
+		var record map[string]any
+		require.NoError(t, json.Unmarshal([]byte(logTo(t, internalapi.LogFormatJSON)), &record))
+		ts, ok := record["ts"].(string)
+		require.True(t, ok, "ts must be a string, got %T", record["ts"])
+		_, err := time.Parse(time.RFC3339, ts)
+		require.NoError(t, err)
+	})
+
+	t.Run("text stays console and is the fallback", func(t *testing.T) {
+		for _, format := range []string{internalapi.LogFormatText, ""} {
+			out := logTo(t, format)
+			require.Contains(t, out, "starting controller")
+			var record map[string]any
+			require.Error(t, json.Unmarshal([]byte(strings.TrimSpace(out)), &record), "console output must not be JSON")
 		}
 	})
 }

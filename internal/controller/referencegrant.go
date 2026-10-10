@@ -16,6 +16,12 @@ import (
 const (
 	// aiGatewayRouteKind is the kind for AIGatewayRoute.
 	aiGatewayRouteKind = "AIGatewayRoute"
+	// backendSecurityPolicyKind is the kind for BackendSecurityPolicy.
+	backendSecurityPolicyKind = "BackendSecurityPolicy"
+	// secretGroup is the API group for the core Secret resource (the core group is the empty string).
+	secretGroup = ""
+	// secretKind is the kind for the core Secret resource.
+	secretKind = "Secret"
 )
 
 // ReferenceGrantValidator validates cross-namespace references using ReferenceGrant resources.
@@ -45,7 +51,9 @@ func (v *referenceGrantValidator) validateAIServiceBackendReference(
 	backendNamespace string,
 	backendName string,
 ) error {
-	return v.validateReference(ctx, routeNamespace, backendNamespace, backendName, aiServiceBackendGroup, aiServiceBackendKind)
+	return v.validateReference(ctx,
+		aiServiceBackendGroup, aiGatewayRouteKind, routeNamespace,
+		aiServiceBackendGroup, aiServiceBackendKind, backendNamespace, backendName)
 }
 
 // validateInferencePoolReference validates that an AIGatewayRoute can reference an InferencePool
@@ -65,21 +73,53 @@ func (v *referenceGrantValidator) validateInferencePoolReference(
 	poolNamespace string,
 	poolName string,
 ) error {
-	return v.validateReference(ctx, routeNamespace, poolNamespace, poolName, inferencePoolGroup, inferencePoolKind)
+	return v.validateReference(ctx,
+		aiServiceBackendGroup, aiGatewayRouteKind, routeNamespace,
+		inferencePoolGroup, inferencePoolKind, poolNamespace, poolName)
 }
 
-// validateReference validates that an AIGatewayRoute can reference a target resource (identified by
-// targetGroup/targetKind) in a different namespace by checking for a valid ReferenceGrant.
+// validateSecretReference validates that a BackendSecurityPolicy can reference a core Secret in a
+// different namespace by checking for a valid ReferenceGrant allowing BackendSecurityPolicy from
+// bspNamespace to reference Secret in secretNamespace.
+//
+// This is a thin BackendSecurityPolicy-specific entry point over the generic validateReference;
+// other resource types needing a similar check should add their own equally small wrapper instead
+// of growing this one.
+//
+// Parameters:
+//   - ctx: context for the operation
+//   - bspNamespace: namespace of the BackendSecurityPolicy
+//   - secretNamespace: namespace of the referenced Secret
+//   - secretName: name of the Secret (optional, for the error message)
+//
+// Returns:
+//   - error: nil if the reference is valid (same namespace or valid ReferenceGrant exists), error otherwise
+func (v *referenceGrantValidator) validateSecretReference(
+	ctx context.Context,
+	bspNamespace string,
+	secretNamespace string,
+	secretName string,
+) error {
+	return v.validateReference(ctx,
+		aiServiceBackendGroup, backendSecurityPolicyKind, bspNamespace,
+		secretGroup, secretKind, secretNamespace, secretName)
+}
+
+// validateReference validates that a resource identified by fromGroup/fromKind in fromNamespace can
+// reference a target resource identified by targetGroup/targetKind in targetNamespace, by checking
+// for a valid ReferenceGrant. Same-namespace references are always allowed without a ReferenceGrant.
 func (v *referenceGrantValidator) validateReference(
 	ctx context.Context,
-	routeNamespace string,
-	targetNamespace string,
-	targetName string,
+	fromGroup gwapiv1b1.Group,
+	fromKind gwapiv1b1.Kind,
+	fromNamespace string,
 	targetGroup gwapiv1b1.Group,
 	targetKind gwapiv1b1.Kind,
+	targetNamespace string,
+	targetName string,
 ) error {
-	// Same namespace references don't need ReferenceGrant.
-	if routeNamespace == targetNamespace {
+	// Same namespace references don't need a ReferenceGrant.
+	if fromNamespace == targetNamespace {
 		return nil
 	}
 
@@ -95,31 +135,40 @@ func (v *referenceGrantValidator) validateReference(
 	// Check if any ReferenceGrant allows this cross-namespace reference.
 	for i := range referenceGrants.Items {
 		grant := &referenceGrants.Items[i]
-		if v.isReferenceGrantValid(grant, routeNamespace, targetGroup, targetKind) {
+		if v.isReferenceGrantValid(grant, fromGroup, fromKind, fromNamespace, targetGroup, targetKind, targetName) {
 			return nil
 		}
 	}
 
 	return fmt.Errorf(
-		"cross-namespace reference from AIGatewayRoute in namespace %s to %s %s in namespace %s is not permitted: "+
+		"cross-namespace reference from %s in namespace %s to %s %s in namespace %s is not permitted: "+
 			"no valid ReferenceGrant found in namespace %s. "+
-			"A ReferenceGrant must allow AIGatewayRoute from namespace %s to reference %s in namespace %s",
-		routeNamespace, targetKind, targetName, targetNamespace, targetNamespace, routeNamespace, targetKind, targetNamespace,
+			"A ReferenceGrant must allow %s from namespace %s to reference %s in namespace %s",
+		fromKind, fromNamespace, targetKind, targetName, targetNamespace, targetNamespace, fromKind, fromNamespace, targetKind, targetNamespace,
 	)
 }
 
-// isReferenceGrantValid checks if a ReferenceGrant allows an AIGatewayRoute to reference the
-// target resource identified by targetGroup/targetKind.
+// isReferenceGrantValid checks if a ReferenceGrant allows a resource identified by fromGroup/fromKind
+// in fromNamespace to reference the target resource identified by targetGroup/targetKind/targetName.
 func (v *referenceGrantValidator) isReferenceGrantValid(
 	grant *gwapiv1b1.ReferenceGrant,
+	fromGroup gwapiv1b1.Group,
+	fromKind gwapiv1b1.Kind,
 	fromNamespace string,
 	targetGroup gwapiv1b1.Group,
 	targetKind gwapiv1b1.Kind,
+	targetName string,
 ) bool {
-	// Check if the grant allows references from the route's namespace.
+	// A ReferenceGrant that is being deleted no longer authorizes anything. Its finalizer keeps it
+	// in the cache while the reconciles it triggers run, and those must see the access as revoked.
+	if !grant.DeletionTimestamp.IsZero() {
+		return false
+	}
+
+	// Check if the grant allows references from fromGroup/fromKind in fromNamespace.
 	fromAllowed := false
 	for _, from := range grant.Spec.From {
-		if v.matchesFrom(&from, fromNamespace) {
+		if v.matchesFrom(&from, fromGroup, fromKind, fromNamespace) {
 			fromAllowed = true
 			break
 		}
@@ -131,7 +180,7 @@ func (v *referenceGrantValidator) isReferenceGrantValid(
 
 	// Check if the grant allows references to the target resource.
 	for _, to := range grant.Spec.To {
-		if v.matchesTo(&to, targetGroup, targetKind) {
+		if v.matchesTo(&to, targetGroup, targetKind, targetName) {
 			return true
 		}
 	}
@@ -139,19 +188,24 @@ func (v *referenceGrantValidator) isReferenceGrantValid(
 	return false
 }
 
-// matchesFrom checks if a ReferenceGrantFrom matches the AIGatewayRoute reference.
-func (v *referenceGrantValidator) matchesFrom(from *gwapiv1b1.ReferenceGrantFrom, fromNamespace string) bool {
-	// Check group. AIGatewayRoute belongs to the aigateway.envoyproxy.io group.
-	if from.Group != aiServiceBackendGroup {
+// matchesFrom checks if a ReferenceGrantFrom matches a reference from fromGroup/fromKind in fromNamespace.
+func (v *referenceGrantValidator) matchesFrom(
+	from *gwapiv1b1.ReferenceGrantFrom,
+	fromGroup gwapiv1b1.Group,
+	fromKind gwapiv1b1.Kind,
+	fromNamespace string,
+) bool {
+	// Check group.
+	if from.Group != fromGroup {
 		return false
 	}
 
-	// Check kind
-	if from.Kind != aiGatewayRouteKind {
+	// Check kind.
+	if from.Kind != fromKind {
 		return false
 	}
 
-	// Check namespace
+	// Check namespace.
 	if from.Namespace != gwapiv1b1.Namespace(fromNamespace) {
 		return false
 	}
@@ -159,8 +213,14 @@ func (v *referenceGrantValidator) matchesFrom(from *gwapiv1b1.ReferenceGrantFrom
 	return true
 }
 
-// matchesTo checks if a ReferenceGrantTo matches the target resource identified by targetGroup/targetKind.
-func (v *referenceGrantValidator) matchesTo(to *gwapiv1b1.ReferenceGrantTo, targetGroup gwapiv1b1.Group, targetKind gwapiv1b1.Kind) bool {
+// matchesTo checks if a ReferenceGrantTo matches the target resource identified by
+// targetGroup/targetKind/targetName.
+func (v *referenceGrantValidator) matchesTo(
+	to *gwapiv1b1.ReferenceGrantTo,
+	targetGroup gwapiv1b1.Group,
+	targetKind gwapiv1b1.Kind,
+	targetName string,
+) bool {
 	// Check group
 	if to.Group != targetGroup {
 		return false
@@ -171,10 +231,11 @@ func (v *referenceGrantValidator) matchesTo(to *gwapiv1b1.ReferenceGrantTo, targ
 		return false
 	}
 
-	// If a specific name is specified, we would need to check it here,
-	// but ReferenceGrant typically doesn't specify individual resource names
-	// (that's handled by the Name field which is optional in the spec)
-	// For now, we only check group and kind as per Gateway API spec
+	// When a name is set, the grant only applies to that object. When omitted, it applies to all
+	// objects of that group and kind in the namespace.
+	if to.Name != nil && string(*to.Name) != targetName {
+		return false
+	}
 
 	return true
 }

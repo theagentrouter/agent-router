@@ -1227,6 +1227,24 @@ func TestChatCompletionRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "Anthropic web search tool",
+			jsonStr: `{
+				"model": "claude-sonnet-4-6",
+				"messages": [{"role": "user", "content": "Search for the weather"}],
+				"tools": [{"type": "web_search_20260209", "name": "web_search"}]
+			}`,
+			expected: &ChatCompletionRequest{
+				Model: "claude-sonnet-4-6",
+				Messages: []ChatCompletionMessageParamUnion{{
+					OfUser: &ChatCompletionUserMessageParam{
+						Role:    ChatMessageRoleUser,
+						Content: StringOrUserRoleContentUnion{Value: "Search for the weather"},
+					},
+				}},
+				Tools: []Tool{{Type: ToolTypeAnthropicWebSearch, Name: "web_search"}},
+			},
+		},
+		{
 			name: "enterprise search tool",
 			jsonStr: `{
 				"model": "gemini-1.5-pro",
@@ -1882,12 +1900,14 @@ func TestPromptTokensDetails(t *testing.T) {
 				TextTokens:          15,
 				AudioTokens:         8,
 				CachedTokens:        384,
+				CacheWriteTokens:    10,
 				CacheCreationTokens: 10,
 			},
 			expected: `{
 				"text_tokens": 15,
 				"audio_tokens": 8,
 				"cached_tokens": 384,
+				"cache_write_tokens": 10,
 				"cache_creation_input_tokens": 10
 			}`,
 		},
@@ -1897,11 +1917,13 @@ func TestPromptTokensDetails(t *testing.T) {
 				TextTokens:          0,
 				AudioTokens:         8,
 				CachedTokens:        384,
+				CacheWriteTokens:    10,
 				CacheCreationTokens: 10,
 			},
 			expected: `{
 				"audio_tokens": 8,
 				"cached_tokens": 384,
+				"cache_write_tokens": 10,
 				"cache_creation_input_tokens": 10
 			}`,
 		},
@@ -1919,6 +1941,55 @@ func TestPromptTokensDetails(t *testing.T) {
 			require.Equal(t, tc.details, decoded)
 		})
 	}
+}
+
+func TestCacheWriteTokensBackwardCompatibility(t *testing.T) {
+	t.Run("prompt token details accept legacy field", func(t *testing.T) {
+		var details PromptTokensDetails
+		err := json.Unmarshal([]byte(`{"cache_creation_input_tokens":10}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, 10, details.CacheCreationTokens)
+		require.Equal(t, 10, details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cache_write_tokens":10,"cache_creation_input_tokens":10}`, string(encoded))
+	})
+
+	t.Run("official field takes precedence", func(t *testing.T) {
+		var details PromptTokensDetails
+		err := json.Unmarshal([]byte(`{"cache_creation_input_tokens":10,"cache_write_tokens":12}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, 12, details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cache_write_tokens":12,"cache_creation_input_tokens":12}`, string(encoded))
+	})
+
+	t.Run("responses usage accepts legacy field", func(t *testing.T) {
+		var details ResponseUsageInputTokensDetails
+		err := json.Unmarshal([]byte(`{"cached_tokens":3,"cache_creation_input_tokens":10}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, int64(10), details.CacheCreationTokens)
+		require.Equal(t, int64(10), details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cached_tokens":3,"cache_write_tokens":10,"cache_creation_input_tokens":10}`, string(encoded))
+	})
+
+	t.Run("response token details accept legacy field", func(t *testing.T) {
+		var details ResponseTokensDetails
+		err := json.Unmarshal([]byte(`{"cache_creation_input_tokens":10}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, int64(10), details.CacheCreationTokens)
+		require.Equal(t, int64(10), details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cache_write_tokens":10,"cache_creation_input_tokens":10}`, string(encoded))
+	})
 }
 
 func TestChatCompletionResponseUsage(t *testing.T) {
@@ -1961,6 +2032,7 @@ func TestChatCompletionResponseUsage(t *testing.T) {
 				PromptTokensDetails: &PromptTokensDetails{
 					AudioTokens:         8,
 					CachedTokens:        384,
+					CacheWriteTokens:    13,
 					CacheCreationTokens: 13,
 				},
 			},
@@ -1975,6 +2047,7 @@ func TestChatCompletionResponseUsage(t *testing.T) {
 				"prompt_tokens_details": {
 					"audio_tokens": 8,
 					"cached_tokens": 384,
+					"cache_write_tokens": 13,
 					"cache_creation_input_tokens": 13
 				}
 			}`,
@@ -1996,6 +2069,7 @@ func TestChatCompletionResponseUsage(t *testing.T) {
 					TextTokens:          15,
 					AudioTokens:         8,
 					CachedTokens:        384,
+					CacheWriteTokens:    21,
 					CacheCreationTokens: 21,
 				},
 			},
@@ -2012,6 +2086,7 @@ func TestChatCompletionResponseUsage(t *testing.T) {
 					"text_tokens": 15,
 					"audio_tokens": 8,
 					"cached_tokens": 384,
+					"cache_write_tokens": 21,
 					"cache_creation_input_tokens": 21
 				}
 			}`,
@@ -3009,6 +3084,13 @@ func TestResponseToolUnionMarshalJSON(t *testing.T) {
 			expRes: `{"type": "apply_patch"}`,
 		},
 		{
+			name: "marshal unknown type is emitted verbatim",
+			input: ResponseToolUnion{
+				OfUnknown: json.RawMessage(`{"type":"unknown_tool","execution":"client"}`),
+			},
+			expRes: `{"type":"unknown_tool","execution":"client"}`,
+		},
+		{
 			name:   "marshal no field set",
 			input:  ResponseToolUnion{},
 			expErr: "no tool to marshal",
@@ -3241,9 +3323,11 @@ func TestResponseToolUnionUnmarshalJSON(t *testing.T) {
 			},
 		},
 		{
-			name:   "unmarshal unknown type",
-			input:  []byte(`{"type":"unknown_tool"}`),
-			expErr: "unknown tool type",
+			name:  "unmarshal unknown type is preserved",
+			input: []byte(`{"type":"unknown_tool","execution":"client"}`),
+			expRes: ResponseToolUnion{
+				OfUnknown: json.RawMessage(`{"type":"unknown_tool","execution":"client"}`),
+			},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4658,12 +4742,13 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 				OfFunctionCall: &ResponseFunctionToolCall{
 					Type:      "function_call",
 					Name:      "test_function",
+					Namespace: "billing",
 					CallID:    "call-789",
 					ID:        "rs-123",
 					Arguments: `{"arg1": "value"}`,
 				},
 			},
-			expRes: []byte(`{"type": "function_call", "name": "test_function", "call_id": "call-789", "id": "rs-123", "arguments": "{\"arg1\": \"value\"}"}`),
+			expRes: []byte(`{"type": "function_call", "name": "test_function", "namespace": "billing", "call_id": "call-789", "id": "rs-123", "arguments": "{\"arg1\": \"value\"}"}`),
 		},
 		{
 			name: "marshal function_call_output",
@@ -4678,6 +4763,52 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 				},
 			},
 			expRes: []byte(`{"type": "function_call_output", "call_id": "call-789", "id": "rs-123", "output": "output"}`),
+		},
+		{
+			name: "marshal tool_search_call",
+			input: ResponseInputItemUnionParam{
+				OfToolSearchCall: &ResponseToolSearchCall{
+					Type:      "tool_search_call",
+					ID:        "tsc-123",
+					Status:    "completed",
+					Arguments: map[string]any{"paths": []string{"billing"}},
+					CallID:    nil,
+					Execution: "server",
+				},
+			},
+			expRes: []byte(`{"type":"tool_search_call","id":"tsc-123","status":"completed","arguments":{"paths":["billing"]},"call_id":null,"execution":"server"}`),
+		},
+		{
+			name: "marshal tool_search_output",
+			input: ResponseInputItemUnionParam{
+				OfToolSearchOutput: &ResponseToolSearchOutput{
+					Type:      "tool_search_output",
+					ID:        "tso-123",
+					Status:    "completed",
+					CallID:    nil,
+					Execution: "server",
+					Tools: []ResponseToolUnion{
+						{
+							OfNamespace: &NamespaceToolParam{
+								Type:        "namespace",
+								Name:        "billing",
+								Description: "Billing tools.",
+								Tools: []NamespaceToolToolUnionParam{
+									{
+										OfFunction: &NamespaceToolToolFunctionParam{
+											Type:         "function",
+											Name:         "get_invoice",
+											Description:  "Get invoice details by invoice ID.",
+											DeferLoading: ptr.To(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expRes: []byte(`{"type":"tool_search_output","id":"tso-123","status":"completed","call_id":null,"execution":"server","tools":[{"type":"namespace","name":"billing","description":"Billing tools.","tools":[{"type":"function","name":"get_invoice","description":"Get invoice details by invoice ID.","defer_loading":true}]}]}`),
 		},
 		{
 			name: "marshal reasoning",
@@ -4912,6 +5043,15 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 				},
 			},
 			expRes: []byte(`{"type": "custom_tool_call", "id": "id-123", "name": "test", "call_id": "call-123", "input": "some input"}`),
+		},
+		{
+			name: "marshal compaction_trigger",
+			input: ResponseInputItemUnionParam{
+				OfCompactionTrigger: &ResponseInputItemCompactionTriggerParam{
+					Type: "compaction_trigger",
+				},
+			},
+			expRes: []byte(`{"type":"compaction_trigger"}`),
 		},
 		{
 			name: "marshal item_reference",
@@ -5149,12 +5289,13 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 				OfFunctionCall: &ResponseFunctionToolCall{
 					Type:      "function_call",
 					Name:      "test_function",
+					Namespace: "billing",
 					CallID:    "call-789",
 					ID:        "rs-123",
 					Arguments: `{"arg1": "value"}`,
 				},
 			},
-			input: []byte(`{"type": "function_call", "name": "test_function", "call_id": "call-789", "id": "rs-123", "arguments": "{\"arg1\": \"value\"}"}`),
+			input: []byte(`{"type": "function_call", "name": "test_function", "namespace": "billing", "call_id": "call-789", "id": "rs-123", "arguments": "{\"arg1\": \"value\"}"}`),
 		},
 		{
 			name: "unmarshal function_call_output",
@@ -5169,6 +5310,52 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 				},
 			},
 			input: []byte(`{"type": "function_call_output", "call_id": "call-789", "id": "rs-123", "output": "output"}`),
+		},
+		{
+			name: "unmarshal tool_search_call",
+			expRes: ResponseInputItemUnionParam{
+				OfToolSearchCall: &ResponseToolSearchCall{
+					Type:      "tool_search_call",
+					ID:        "tsc-123",
+					Status:    "completed",
+					Arguments: map[string]any{"paths": []any{"billing"}},
+					CallID:    nil,
+					Execution: "server",
+				},
+			},
+			input: []byte(`{"type":"tool_search_call","id":"tsc-123","status":"completed","arguments":{"paths":["billing"]},"call_id":null,"execution":"server"}`),
+		},
+		{
+			name: "unmarshal tool_search_output",
+			expRes: ResponseInputItemUnionParam{
+				OfToolSearchOutput: &ResponseToolSearchOutput{
+					Type:      "tool_search_output",
+					ID:        "tso-123",
+					Status:    "completed",
+					CallID:    nil,
+					Execution: "server",
+					Tools: []ResponseToolUnion{
+						{
+							OfNamespace: &NamespaceToolParam{
+								Type:        "namespace",
+								Name:        "billing",
+								Description: "Billing tools.",
+								Tools: []NamespaceToolToolUnionParam{
+									{
+										OfFunction: &NamespaceToolToolFunctionParam{
+											Type:         "function",
+											Name:         "get_invoice",
+											Description:  "Get invoice details by invoice ID.",
+											DeferLoading: ptr.To(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			input: []byte(`{"type":"tool_search_output","id":"tso-123","status":"completed","call_id":null,"execution":"server","tools":[{"type":"namespace","name":"billing","description":"Billing tools.","tools":[{"type":"function","name":"get_invoice","description":"Get invoice details by invoice ID.","defer_loading":true}]}]}`),
 		},
 		{
 			name: "unmarshal reasoning",
@@ -5403,6 +5590,15 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 				},
 			},
 			input: []byte(`{"type": "custom_tool_call", "id": "id-123", "name": "test", "call_id": "call-123", "input": "some input"}`),
+		},
+		{
+			name: "unmarshal compaction_trigger",
+			expRes: ResponseInputItemUnionParam{
+				OfCompactionTrigger: &ResponseInputItemCompactionTriggerParam{
+					Type: "compaction_trigger",
+				},
+			},
+			input: []byte(`{"type":"compaction_trigger"}`),
 		},
 		{
 			name: "unmarshal item_reference",
@@ -9449,12 +9645,13 @@ func TestResponseOutputItemUnionMarshalJSON(t *testing.T) {
 		},
 		{
 			name:   "function call",
-			expect: []byte(`{"type":"function_call","id":"func_123","call_id": "call-789","name":"get_weather","arguments": "{\"arg1\": \"value\"}"}`),
+			expect: []byte(`{"type":"function_call","id":"func_123","call_id": "call-789","name":"get_weather","namespace":"weather","arguments": "{\"arg1\": \"value\"}"}`),
 			input: ResponseOutputItemUnion{
 				OfFunctionCall: &ResponseFunctionToolCall{
 					Type:      "function_call",
 					ID:        "func_123",
 					Name:      "get_weather",
+					Namespace: "weather",
 					CallID:    "call-789",
 					Arguments: `{"arg1": "value"}`,
 				},
@@ -9514,6 +9711,22 @@ func TestResponseOutputItemUnionMarshalJSON(t *testing.T) {
 			expect: []byte(`{"type": "computer_call", "call_id": "call-456", "id": "rs-123", "action": {"type": "click", "button": "left", "x": 100, "y": 200}}`),
 		},
 		{
+			name: "computer_call_output",
+			input: ResponseOutputItemUnion{
+				OfComputerCallOutput: &ResponseComputerToolCallOutputItem{
+					Type:   "computer_call_output",
+					ID:     "rs-123",
+					CallID: "call-456",
+					Status: "completed",
+					Output: ResponseComputerToolCallOutputScreenshotParam{
+						Type:     "computer_screenshot",
+						ImageURL: "data:image/png;base64,screenshot_base64",
+					},
+				},
+			},
+			expect: []byte(`{"type": "computer_call_output", "id": "rs-123", "call_id": "call-456", "status": "completed", "output": {"type": "computer_screenshot", "image_url": "data:image/png;base64,screenshot_base64"}}`),
+		},
+		{
 			name:   "file search call",
 			expect: []byte(`{"type":"file_search_call","id":"search_123","queries": ["What is deep research?"], "results": [{"file_id": "file-2d", "filename": "deep_research_blog.pdf"}]}`),
 			input: ResponseOutputItemUnion{
@@ -9540,6 +9753,70 @@ func TestResponseOutputItemUnionMarshalJSON(t *testing.T) {
 							Query: "What is deep research?",
 							Sources: []ResponseFunctionWebSearchActionSearchSourceParam{
 								{Type: "url", URL: "https://example.com"},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:   "tool search call",
+			expect: []byte(`{"type":"tool_search_call","id":"tsc-123","status":"completed","arguments":{"paths":["billing"]},"call_id":null,"execution":"server"}`),
+			input: ResponseOutputItemUnion{
+				OfToolSearchCall: &ResponseToolSearchCall{
+					Type:      "tool_search_call",
+					ID:        "tsc-123",
+					Status:    "completed",
+					Arguments: map[string]any{"paths": []string{"billing"}},
+					CallID:    nil,
+					Execution: "server",
+				},
+			},
+		},
+		{
+			name:   "tool search output",
+			expect: []byte(`{"type":"tool_search_output","id":"tso-123","status":"completed","call_id":null,"execution":"server","tools":[{"type":"namespace","name":"billing","description":"Billing tools.","tools":[{"type":"function","name":"get_invoice","description":"Get invoice details by invoice ID.","defer_loading":true}]}]}`),
+			input: ResponseOutputItemUnion{
+				OfToolSearchOutput: &ResponseToolSearchOutput{
+					Type:      "tool_search_output",
+					ID:        "tso-123",
+					Status:    "completed",
+					CallID:    nil,
+					Execution: "server",
+					Tools: []ResponseToolUnion{
+						{
+							OfNamespace: &NamespaceToolParam{
+								Type:        "namespace",
+								Name:        "billing",
+								Description: "Billing tools.",
+								Tools: []NamespaceToolToolUnionParam{
+									{
+										OfFunction: &NamespaceToolToolFunctionParam{
+											Type:         "function",
+											Name:         "get_invoice",
+											Description:  "Get invoice details by invoice ID.",
+											DeferLoading: ptr.To(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:   "additional tools",
+			expect: []byte(`{"type":"additional_tools","id":"at-123","role":"developer","tools":[{"type":"tool_search","parameters":null}]}`),
+			input: ResponseOutputItemUnion{
+				OfAdditionalTools: &ResponseAdditionalTools{
+					Type: "additional_tools",
+					ID:   "at-123",
+					Role: "developer",
+					Tools: []ResponseToolUnion{
+						{
+							OfToolSearch: &ToolSearchToolParam{
+								Type: "tool_search",
 							},
 						},
 					},
@@ -9686,6 +9963,19 @@ func TestResponseOutputItemUnionMarshalJSON(t *testing.T) {
 			expect: []byte(`{"type": "mcp_approval_request", "id": "id-123", "server_label": "test-server", "name": "test", "arguments": "{\"arg1\": \"val\"}"}`),
 		},
 		{
+			name: "mcp_approval_response",
+			input: ResponseOutputItemUnion{
+				OfMcpApprovalResponse: &ResponseInputItemMcpApprovalResponseParam{
+					Type:              "mcp_approval_response",
+					ID:                "resp-123",
+					Approve:           true,
+					ApprovalRequestID: "req-123",
+					Reason:            "approved",
+				},
+			},
+			expect: []byte(`{"type": "mcp_approval_response", "id": "resp-123", "approve": true, "approval_request_id": "req-123", "reason": "approved"}`),
+		},
+		{
 			name:   "mcp call",
 			expect: []byte(`{"type":"mcp_call","id":"mcp_123","server_label": "test-server", "name": "test", "arguments": "{\"arg1\": \"val\"}", "approval_request_id": "req-123"}`),
 			input: ResponseOutputItemUnion{
@@ -9709,6 +9999,21 @@ func TestResponseOutputItemUnionMarshalJSON(t *testing.T) {
 					CallID: "call-123",
 					Input:  "some input",
 					Name:   "test",
+				},
+			},
+		},
+		{
+			name:   "custom tool call output",
+			expect: []byte(`{"type":"custom_tool_call_output","id":"custom-output-123","call_id":"call-123","status":"completed","output":"some output"}`),
+			input: ResponseOutputItemUnion{
+				OfCustomToolCallOutput: &ResponseCustomToolCallOutputItem{
+					Type:   "custom_tool_call_output",
+					ID:     "custom-output-123",
+					CallID: "call-123",
+					Status: "completed",
+					Output: ResponseCustomToolCallOutputOutputUnionParam{
+						OfString: ptr.To("some output"),
+					},
 				},
 			},
 		},
@@ -9775,12 +10080,13 @@ func TestResponseOutputItemUnionUnmarshalJSON(t *testing.T) {
 		},
 		{
 			name:  "function call",
-			input: []byte(`{"type":"function_call","id":"func_123","call_id": "call-789","name":"get_weather","arguments": "{\"arg1\": \"value\"}"}`),
+			input: []byte(`{"type":"function_call","id":"func_123","call_id": "call-789","name":"get_weather","namespace":"weather","arguments": "{\"arg1\": \"value\"}"}`),
 			expect: ResponseOutputItemUnion{
 				OfFunctionCall: &ResponseFunctionToolCall{
 					Type:      "function_call",
 					ID:        "func_123",
 					Name:      "get_weather",
+					Namespace: "weather",
 					CallID:    "call-789",
 					Arguments: `{"arg1": "value"}`,
 				},
@@ -9840,6 +10146,22 @@ func TestResponseOutputItemUnionUnmarshalJSON(t *testing.T) {
 			input: []byte(`{"type": "computer_call", "call_id": "call-456", "id": "rs-123", "action": {"type": "click", "button": "left", "x": 100, "y": 200}}`),
 		},
 		{
+			name: "computer_call_output",
+			expect: ResponseOutputItemUnion{
+				OfComputerCallOutput: &ResponseComputerToolCallOutputItem{
+					Type:   "computer_call_output",
+					ID:     "rs-123",
+					CallID: "call-456",
+					Status: "completed",
+					Output: ResponseComputerToolCallOutputScreenshotParam{
+						Type:     "computer_screenshot",
+						ImageURL: "data:image/png;base64,screenshot_base64",
+					},
+				},
+			},
+			input: []byte(`{"type": "computer_call_output", "id": "rs-123", "call_id": "call-456", "status": "completed", "output": {"type": "computer_screenshot", "image_url": "data:image/png;base64,screenshot_base64"}}`),
+		},
+		{
 			name:  "file search call",
 			input: []byte(`{"type":"file_search_call","id":"search_123","queries": ["What is deep research?"], "results": [{"file_id": "file-2d", "filename": "deep_research_blog.pdf"}]}`),
 			expect: ResponseOutputItemUnion{
@@ -9866,6 +10188,70 @@ func TestResponseOutputItemUnionUnmarshalJSON(t *testing.T) {
 							Query: "What is deep research?",
 							Sources: []ResponseFunctionWebSearchActionSearchSourceParam{
 								{Type: "url", URL: "https://example.com"},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "tool search call",
+			input: []byte(`{"type":"tool_search_call","id":"tsc-123","status":"completed","arguments":{"paths":["billing"]},"call_id":null,"execution":"server"}`),
+			expect: ResponseOutputItemUnion{
+				OfToolSearchCall: &ResponseToolSearchCall{
+					Type:      "tool_search_call",
+					ID:        "tsc-123",
+					Status:    "completed",
+					Arguments: map[string]any{"paths": []any{"billing"}},
+					CallID:    nil,
+					Execution: "server",
+				},
+			},
+		},
+		{
+			name:  "tool search output",
+			input: []byte(`{"type":"tool_search_output","id":"tso-123","status":"completed","call_id":null,"execution":"server","tools":[{"type":"namespace","name":"billing","description":"Billing tools.","tools":[{"type":"function","name":"get_invoice","description":"Get invoice details by invoice ID.","defer_loading":true}]}]}`),
+			expect: ResponseOutputItemUnion{
+				OfToolSearchOutput: &ResponseToolSearchOutput{
+					Type:      "tool_search_output",
+					ID:        "tso-123",
+					Status:    "completed",
+					CallID:    nil,
+					Execution: "server",
+					Tools: []ResponseToolUnion{
+						{
+							OfNamespace: &NamespaceToolParam{
+								Type:        "namespace",
+								Name:        "billing",
+								Description: "Billing tools.",
+								Tools: []NamespaceToolToolUnionParam{
+									{
+										OfFunction: &NamespaceToolToolFunctionParam{
+											Type:         "function",
+											Name:         "get_invoice",
+											Description:  "Get invoice details by invoice ID.",
+											DeferLoading: ptr.To(true),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "additional tools",
+			input: []byte(`{"type":"additional_tools","id":"at-123","role":"developer","tools":[{"type":"tool_search","parameters":null}]}`),
+			expect: ResponseOutputItemUnion{
+				OfAdditionalTools: &ResponseAdditionalTools{
+					Type: "additional_tools",
+					ID:   "at-123",
+					Role: "developer",
+					Tools: []ResponseToolUnion{
+						{
+							OfToolSearch: &ToolSearchToolParam{
+								Type: "tool_search",
 							},
 						},
 					},
@@ -10012,6 +10398,19 @@ func TestResponseOutputItemUnionUnmarshalJSON(t *testing.T) {
 			input: []byte(`{"type": "mcp_approval_request", "id": "id-123", "server_label": "test-server", "name": "test", "arguments": "{\"arg1\": \"val\"}"}`),
 		},
 		{
+			name: "mcp_approval_response",
+			expect: ResponseOutputItemUnion{
+				OfMcpApprovalResponse: &ResponseInputItemMcpApprovalResponseParam{
+					Type:              "mcp_approval_response",
+					ID:                "resp-123",
+					Approve:           true,
+					ApprovalRequestID: "req-123",
+					Reason:            "approved",
+				},
+			},
+			input: []byte(`{"type": "mcp_approval_response", "id": "resp-123", "approve": true, "approval_request_id": "req-123", "reason": "approved"}`),
+		},
+		{
 			name:  "mcp call",
 			input: []byte(`{"type":"mcp_call","id":"mcp_123","server_label": "test-server", "name": "test", "arguments": "{\"arg1\": \"val\"}", "approval_request_id": "req-123"}`),
 			expect: ResponseOutputItemUnion{
@@ -10035,6 +10434,21 @@ func TestResponseOutputItemUnionUnmarshalJSON(t *testing.T) {
 					CallID: "call-123",
 					Input:  "some input",
 					Name:   "test",
+				},
+			},
+		},
+		{
+			name:  "custom tool call output",
+			input: []byte(`{"type":"custom_tool_call_output","id":"custom-output-123","call_id":"call-123","status":"completed","output":"some output"}`),
+			expect: ResponseOutputItemUnion{
+				OfCustomToolCallOutput: &ResponseCustomToolCallOutputItem{
+					Type:   "custom_tool_call_output",
+					ID:     "custom-output-123",
+					CallID: "call-123",
+					Status: "completed",
+					Output: ResponseCustomToolCallOutputOutputUnionParam{
+						OfString: ptr.To("some output"),
+					},
 				},
 			},
 		},

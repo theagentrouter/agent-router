@@ -41,6 +41,7 @@ services:
     volumes:
       - extproc-target:/app
       - ./extproc.yaml:/etc/extproc/config.yaml:ro
+      - ./extproc-index.yaml:/etc/extproc/index.yaml:ro
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317
       - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
@@ -50,7 +51,7 @@ services:
     # - 1063: gRPC service
     # - 1064: admin server (/metrics and /health endpoints)
     working_dir: /app
-    command: ["./extproc", "-configPath", "/etc/extproc/config.yaml"]
+    command: ["./extproc", "-configBundlePath", "/etc/extproc"]
 
   ollama-pull:
     image: alpine/ollama

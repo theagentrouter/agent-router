@@ -15,6 +15,7 @@ import (
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
@@ -30,6 +31,11 @@ const (
 	eventStreamContentType  = "text/event-stream"
 	openAIBackendError      = "OpenAIBackendError"
 	awsBedrockBackendError  = "AWSBedrockBackendError"
+
+	// Count-tokens route paths per backend.
+	anthropicCountTokensPath        = "/v1/messages/count_tokens" // #nosec G101 -- Native Anthropic Messages count_tokens path, not a credential.
+	awsBedrockCountTokensPathFormat = "/model/%s/count-tokens"    // #nosec G101 -- AWS Bedrock CountTokens path format (modelId placeholder), not a credential.
+	gcpCountTokensModel             = "count-tokens"              // GCP Vertex AI virtual model for count-tokens.
 )
 
 // Translator translates the request and response messages between the client
@@ -76,6 +82,27 @@ type Translator[ReqT any, SpanT any] interface {
 	)
 }
 
+// StreamOverloadedError signals that the upstream reported an overload in the
+// middle of a streaming response. When returning it, ResponseBody must also
+// return a non-empty body containing the translated error event. The response
+// processor sends that body downstream and discards any later upstream chunks.
+type StreamOverloadedError struct {
+	Err error
+}
+
+// Error implements error.
+func (e *StreamOverloadedError) Error() string {
+	if e.Err == nil {
+		return "upstream overloaded mid-stream"
+	}
+	return "upstream overloaded mid-stream: " + e.Err.Error()
+}
+
+// Unwrap returns the translator-specific cause.
+func (e *StreamOverloadedError) Unwrap() error {
+	return e.Err
+}
+
 // ContentTypeSetter is an optional interface that translators can implement
 // to receive the original request Content-Type header. This is needed for
 // multipart/form-data endpoints where the translator needs the boundary
@@ -88,6 +115,16 @@ type ContentTypeSetter interface {
 // request headers to translate provider-specific request fields.
 type RequestHeadersSetter interface {
 	SetRequestHeaders(headers map[string]string)
+}
+
+// HeaderValueFilterSetter is an optional interface for translators that can filter individual
+// values out of a multi-valued request header before forwarding upstream.
+//
+// It is called once per configured filter, so implementations must ignore headers they do not
+// handle. mode is either "Denylist" (drop the listed values) or "Allowlist" (keep only the listed
+// values); an unrecognized mode or an empty value list disables the filter.
+type HeaderValueFilterSetter interface {
+	SetHeaderValueFilter(name, mode string, values []string)
 }
 
 // ResponseRedactor is an optional interface that translators can implement
@@ -121,12 +158,16 @@ type (
 	OpenAICompletionTranslator = Translator[openai.CompletionRequest, tracingapi.CompletionSpan]
 	// CohereRerankTranslator translates the Cohere's /v2/rerank endpoint.
 	CohereRerankTranslator = Translator[cohereschema.RerankV2Request, tracingapi.RerankSpan]
+	// TypeSafeSystemOneTranslator translates the TypeSafe's /v1/systemone endpoint.
+	TypeSafeSystemOneTranslator = Translator[typesafeschema.SystemOneRequest, tracingapi.SystemOneSpan]
 	// AnthropicMessagesTranslator translates the Anthropic's /messages endpoint.
 	AnthropicMessagesTranslator = Translator[anthropicschema.MessagesRequest, tracingapi.MessageSpan]
 	// OpenAIImageGenerationTranslator translates the OpenAI's /images/generations endpoint.
 	OpenAIImageGenerationTranslator = Translator[openai.ImageGenerationRequest, tracingapi.ImageGenerationSpan]
 	// OpenAIResponsesTranslator translates the OpenAI's /responses endpoint.
 	OpenAIResponsesTranslator = Translator[openai.ResponseRequest, tracingapi.ResponsesSpan]
+	// OpenAIDecisionsTranslator translates the OpenAI /v1/decisions endpoint.
+	OpenAIDecisionsTranslator = Translator[openai.DecisionRequest, tracingapi.DecisionsSpan]
 	// OpenAISpeechTranslator translates the OpenAI's /v1/audio/speech endpoint.
 	OpenAISpeechTranslator = Translator[openai.SpeechRequest, tracingapi.SpeechSpan]
 	// OpenAIAudioTranscriptionTranslator translates the OpenAI's /v1/audio/transcriptions endpoint.
@@ -137,6 +178,8 @@ type (
 	TokenizeTranslator = Translator[tokenize.RequestUnion, tracingapi.TokenizeSpan]
 	// OpenAIResponsesInputTokensTranslator translates the OpenAI's /v1/responses/input_tokens endpoint.
 	OpenAIResponsesInputTokensTranslator = Translator[openai.ResponseRequest, tracingapi.ResponsesInputTokensSpan]
+	// AnthropicCountTokensTranslator translates the Anthropic's /v1/messages/count_tokens endpoint.
+	AnthropicCountTokensTranslator = Translator[anthropicschema.CountTokensRequest, tracingapi.CountTokensSpan]
 )
 
 var (

@@ -7,6 +7,7 @@ package metrics
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -32,6 +33,7 @@ func (f *metricsImplFactory) NewMetrics() Metrics {
 		requestModel:                  "unknown",
 		responseModel:                 "unknown",
 		backend:                       "unknown",
+		aiServiceBackend:              "unknown",
 		requestHeaderAttributeMapping: f.requestHeaderAttributeMapping,
 	}
 }
@@ -50,6 +52,7 @@ type metricsImpl struct {
 	// responseModel is the model that ultimately generated the response (may differ due to backend override).
 	responseModel                 string
 	backend                       string
+	aiServiceBackend              string
 	requestHeaderAttributeMapping map[string]string // maps HTTP headers to metric attribute names.
 
 	// Fields for streaming token latency calculation, not used for non-streaming requests.
@@ -68,17 +71,21 @@ func (b *metricsImpl) StartRequest(_ map[string]string) {
 // SetOriginalModel sets the original model from the incoming request body before any virtualization applies.
 // This is usually called after parsing the request body. e.g. gpt-5
 func (b *metricsImpl) SetOriginalModel(originalModel internalapi.OriginalModel) {
-	b.originalModel = originalModel
+	// Model strings decoded by sonic alias the whole request body, and attribute sets are retained by
+	// cumulative aggregations for the process lifetime, so keep an independent copy.
+	b.originalModel = strings.Clone(originalModel)
 }
 
 // SetRequestModel sets the model the request. This is usually called after parsing the request body. e.g. gpt-5-nano
 func (b *metricsImpl) SetRequestModel(requestModel internalapi.RequestModel) {
-	b.requestModel = requestModel
+	b.requestModel = strings.Clone(requestModel)
 }
 
 // SetResponseModel is the model that ultimately generated the response. e.g. gpt-5-nano-2025-08-07
 func (b *metricsImpl) SetResponseModel(responseModel internalapi.ResponseModel) {
-	b.responseModel = responseModel
+	if responseModel != b.responseModel {
+		b.responseModel = strings.Clone(responseModel)
+	}
 }
 
 // SetBackend sets the name of the backend to be reported in the metrics according to:
@@ -101,9 +108,12 @@ func (b *metricsImpl) SetBackend(backend *filterapi.Backend) {
 		b.backend = genaiProviderAnthropic
 	case filterapi.APISchemaCohere:
 		b.backend = genaiProviderCohere
+	case filterapi.APISchemaTypeSafe:
+		b.backend = genaiProviderTypeSafe
 	default:
 		b.backend = backend.Name
 	}
+	b.aiServiceBackend = internalapi.AIServiceBackendName(backend.Name)
 }
 
 // buildBaseAttributes creates the base attributes for metrics recording.
@@ -113,12 +123,13 @@ func (b *metricsImpl) buildBaseAttributes(headers map[string]string) attribute.S
 	origModel := attribute.Key(genaiAttributeOriginalModel).String(b.originalModel)
 	reqModel := attribute.Key(genaiAttributeRequestModel).String(b.requestModel)
 	respModel := attribute.Key(genaiAttributeResponseModel).String(b.responseModel)
+	backend := attribute.Key(genaiAttributeBackend).String(b.aiServiceBackend)
 	if len(b.requestHeaderAttributeMapping) == 0 {
-		return attribute.NewSet(opt, provider, origModel, reqModel, respModel)
+		return attribute.NewSet(opt, provider, origModel, reqModel, respModel, backend)
 	}
 
 	// Add header values as attributes based on the header mapping if headers are provided.
-	attrs := []attribute.KeyValue{opt, provider, origModel, reqModel, respModel}
+	attrs := []attribute.KeyValue{opt, provider, origModel, reqModel, respModel, backend}
 	for headerName, labelName := range b.requestHeaderAttributeMapping {
 		if headerValue, exists := headers[headerName]; exists {
 			attrs = append(attrs, attribute.Key(labelName).String(headerValue))

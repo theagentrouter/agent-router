@@ -49,7 +49,6 @@ spec:
   apiKey:
     secretRef:
       name: envoy-ai-gateway-basic-openai-apikey
-      namespace: default
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend
@@ -62,7 +61,7 @@ spec:
         hostname: api.openai.com
         port: 443
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: envoy-ai-gateway-basic-openai-tls

@@ -12,6 +12,7 @@ traffic for various AI providers.
 - `gcp_vertex.yaml` - GCP Vertex AI integration
 - `tars.yaml` - TARS integration
 - `cohere.yaml` - Cohere integration
+- `typesafe.yaml` - TypeSafe AI (Jev) integration
 
 For AWS Bedrock, we recommend using either `aws-pod-identity.yaml` (EKS 1.24+) or
 `aws-irsa.yaml` (all EKS versions) for production deployments instead of static credentials. [Docs](https://docs.aws.amazon.com/eks/latest/best-practices/identity-and-access-management.html#_identities_and_credentials_for_eks_pods)

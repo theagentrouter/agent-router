@@ -15,7 +15,6 @@ import (
 // NewHandler returns a new implementation of [filterapi.BackendAuthHandler] based on the configuration.
 // When config.CredentialOverride is set, the returned handler sources the upstream credential
 // per-request and falls back to the static credential (or returns 401) as configured.
-// AWS is not supported with CredentialOverride (SigV4 requires three inputs, not one).
 func NewHandler(ctx context.Context, config *filterapi.BackendAuth) (filterapi.BackendAuthHandler, error) {
 	var (
 		inner   filterapi.BackendAuthHandler
@@ -25,8 +24,15 @@ func NewHandler(ctx context.Context, config *filterapi.BackendAuth) (filterapi.B
 
 	switch {
 	case config.AWSAuth != nil:
-		// AWS uses SigV4 signing; CredentialOverride is not supported.
-		return newAWSHandler(ctx, config.AWSAuth)
+		// AWS has its own handler: SigV4 takes three values, not one, so applyCredentialFn does not fit.
+		awsInner, awsErr := newAWSHandler(ctx, config.AWSAuth)
+		if awsErr != nil {
+			return nil, awsErr
+		}
+		if config.CredentialOverride == nil {
+			return awsInner, nil
+		}
+		return &awsCredentialOverrideHandler{inner: awsInner, config: config.CredentialOverride}, nil
 	case config.APIKey != nil:
 		inner, err = newAPIKeyHandler(config.APIKey)
 		applyFn = applyBearerCredential
