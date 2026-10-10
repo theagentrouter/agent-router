@@ -441,6 +441,9 @@ func TestEnableQuotaRateLimitOnRoute_DescriptorChain(t *testing.T) {
 	require.Equal(t, "default/test-backend", reqTime.Actions[0].GetGenericKey().DescriptorValue)
 	require.Equal(t, translator.ModelNameDescriptorKey, reqTime.Actions[1].GetGenericKey().DescriptorKey)
 	require.Equal(t, "gpt-4", reqTime.Actions[1].GetGenericKey().DescriptorValue)
+	require.NotNil(t, reqTime.HitsAddend)
+	require.EqualValues(t, 0, reqTime.HitsAddend.Number.Value)
+	require.False(t, reqTime.ApplyOnStreamDone)
 
 	// Stream-done entry (appended at end): Metadata(backend_name) + Metadata(model_name).
 	streamDone := perRoute.RateLimits[1]
@@ -456,6 +459,13 @@ func TestQuotaHitsAddend(t *testing.T) {
 	require.NotNil(t, ha)
 	expectedFormat := fmt.Sprintf("%%DYNAMIC_METADATA(%s:%s)%%", aigv1b1.AIGatewayFilterMetadataNamespace, quotaCostMetadataKey)
 	require.Equal(t, expectedFormat, ha.Format)
+}
+
+func TestZeroQuotaHitsAddend(t *testing.T) {
+	ha := zeroQuotaHitsAddend()
+	require.NotNil(t, ha)
+	require.EqualValues(t, 0, ha.Number.Value)
+	require.Empty(t, ha.Format)
 }
 
 func TestEnableQuotaRateLimitOnRoute_HitsAddend(t *testing.T) {
@@ -496,10 +506,12 @@ func TestEnableQuotaRateLimitOnRoute_HitsAddend(t *testing.T) {
 
 		// 1 bucket req-time + 1 default req-time + 2 stream-done at end = 4 entries.
 		require.Len(t, perRoute.RateLimits, 4)
-		// First 2 entries are request-time without HitsAddend.
+		// First 2 entries are request-time entries with an explicit zero
+		// HitsAddend so the rate-limit service does not charge the default hit.
 		for i := 0; i < 2; i++ {
 			rl := perRoute.RateLimits[i]
-			require.Nil(t, rl.HitsAddend, "RateLimit entry %d should not have HitsAddend", i)
+			require.NotNil(t, rl.HitsAddend, "RateLimit entry %d should have HitsAddend", i)
+			require.EqualValues(t, 0, rl.HitsAddend.Number.Value, "RateLimit entry %d should have zero HitsAddend", i)
 			require.False(t, rl.ApplyOnStreamDone, "RateLimit entry %d should not have ApplyOnStreamDone", i)
 		}
 		// Last 2 entries are stream-done with HitsAddend.
@@ -1272,7 +1284,8 @@ func TestBuildBucketRuleLimitEntries(t *testing.T) {
 		require.Len(t, entries[0].Actions, 3)
 		gk := entries[0].Actions[2].GetGenericKey()
 		require.NotNil(t, gk)
-		require.Nil(t, entries[0].HitsAddend)
+		require.NotNil(t, entries[0].HitsAddend)
+		require.EqualValues(t, 0, entries[0].HitsAddend.Number.Value)
 		require.False(t, entries[0].ApplyOnStreamDone)
 	})
 
@@ -1293,6 +1306,9 @@ func TestBuildBucketRuleLimitEntries(t *testing.T) {
 		require.NotNil(t, gk)
 		require.Equal(t, translator.DefaultBucketDescriptorKey(1), gk.DescriptorKey)
 		require.Equal(t, translator.DefaultBucketDescriptorKey(1), gk.DescriptorValue)
+		require.NotNil(t, defaultEntry.HitsAddend)
+		require.EqualValues(t, 0, defaultEntry.HitsAddend.Number.Value)
+		require.False(t, defaultEntry.ApplyOnStreamDone)
 	})
 
 	t.Run("zero limit default bucket is not added", func(t *testing.T) {
@@ -1327,6 +1343,8 @@ func TestBuildBucketRuleLimitEntries(t *testing.T) {
 		require.Len(t, entries[0].Actions, 3)
 		hvm := entries[0].Actions[2].GetHeaderValueMatch()
 		require.NotNil(t, hvm)
+		require.NotNil(t, entries[0].HitsAddend)
+		require.EqualValues(t, 0, entries[0].HitsAddend.Number.Value)
 	})
 
 	t.Run("request-time entries use GenericKey", func(t *testing.T) {
@@ -1344,6 +1362,8 @@ func TestBuildBucketRuleLimitEntries(t *testing.T) {
 		require.Equal(t, "default/test-backend", reqTime.Actions[0].GetGenericKey().DescriptorValue)
 		require.Equal(t, translator.ModelNameDescriptorKey, reqTime.Actions[1].GetGenericKey().DescriptorKey)
 		require.Equal(t, "gpt-4", reqTime.Actions[1].GetGenericKey().DescriptorValue)
+		require.NotNil(t, reqTime.HitsAddend)
+		require.EqualValues(t, 0, reqTime.HitsAddend.Number.Value)
 	})
 }
 

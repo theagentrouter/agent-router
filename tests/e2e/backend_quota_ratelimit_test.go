@@ -89,9 +89,13 @@ func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
 	// The QuotaPolicy sets a quota of 10 total tokens per hour for "quota-test-model".
 	t.Run("per-model quota", func(t *testing.T) {
 		makeRequest("quota-test-model", 20, http.StatusOK)
-		requireQuotaUsage(t, "quota-test-model", 21)
+		// Request-time quota checks use a zero cost. The completed response charges
+		// only the reported token usage.
+		requireQuotaUsage(t, "quota-test-model", 20)
 		makeRequest("quota-test-model", 5, http.StatusTooManyRequests)
-		requireQuotaUsage(t, "quota-test-model", 22)
+		// The rejected request is never completed, so it does not add response
+		// token usage to the quota counter.
+		requireQuotaUsage(t, "quota-test-model", 20)
 	})
 
 	// The AI Gateway controller stamps a hash of the applicable QuotaPolicies onto the generated HTTPRoute
