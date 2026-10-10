@@ -48,6 +48,9 @@ func (m mockProcessor) SetBackend(context.Context, *filterapi.RuntimeBackend, st
 	return nil
 }
 
+// Close implements [Processor.Close].
+func (m mockProcessor) Close(context.Context) {}
+
 // ProcessRequestHeaders implements [Processor.ProcessRequestHeaders].
 func (m mockProcessor) ProcessRequestHeaders(_ context.Context, headerMap *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {
 	require.Equal(m.t, m.expHeaderMap, headerMap)
@@ -184,10 +187,12 @@ type mockMetrics struct {
 	outputTokenCount             int
 	// streamingOutputTokens tracks the cumulative output tokens recorded via RecordTokenLatency.
 	streamingOutputTokens int
-	timeToFirstToken      float64
-	interTokenLatency     float64
-	timeToFirstTokenMs    float64
-	interTokenLatencyMs   float64
+	// closedCount tracks calls to the OnClose methods; RequireClosed asserts on it.
+	closedCount         int
+	timeToFirstToken    float64
+	interTokenLatency   float64
+	timeToFirstTokenMs  float64
+	interTokenLatencyMs float64
 }
 
 // StartRequest implements [metrics.Metrics].
@@ -262,6 +267,31 @@ func (m *mockMetrics) RecordRequestCompletion(_ context.Context, success bool, _
 	} else {
 		m.requestErrorCount++
 	}
+}
+
+// RecordRequestCompletionOnClose implements [metrics.Metrics]. It mirrors the real
+// implementation's semantics for test assertions: it only counts when the request already
+// started, and never double-counts an already-recorded completion.
+func (m *mockMetrics) RecordRequestCompletionOnClose(_ context.Context, _ map[string]string) {
+	if m.requestStart.IsZero() || m.requestSuccessCount > 0 || m.requestErrorCount > 0 {
+		return
+	}
+	m.requestErrorCount++
+	m.closedCount++
+}
+
+// RecordTokenUsageOnClose implements [metrics.Metrics].
+func (m *mockMetrics) RecordTokenUsageOnClose(ctx context.Context, usage metrics.TokenUsage, headers map[string]string) {
+	if m.requestStart.IsZero() || m.outputTokenCount > 0 || m.inputTokenCount > 0 {
+		return
+	}
+	m.RecordTokenUsage(ctx, usage, headers)
+	m.closedCount++
+}
+
+// RequireClosed asserts the OnClose path emitted metrics for an abandoned stream.
+func (m *mockMetrics) RequireClosed(t *testing.T) {
+	require.Equal(t, 2, m.closedCount) // token usage + completion
 }
 
 // RequireSelectedModel asserts the models set on the metrics.

@@ -146,6 +146,15 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 	// Seed the context with the server-level logger as a fallback so that loggerFromContext never returns nil in processMsg.
 	ctx = context.WithValue(ctx, loggerContextKey, s.logger)
 	defer func() {
+		// The gRPC stream ends without a terminal message when Envoy tears it down early,
+		// e.g. because the downstream client disconnected mid-response. Give the processor
+		// a chance to emit the metrics it accumulated (partial token usage, a failed
+		// completion) instead of silently dropping them. Implementations are idempotent
+		// and no-op for requests that never started or already completed. The processor is
+		// nil when path resolution failed before one was instantiated.
+		if p != nil {
+			p.Close(ctx)
+		}
 		if !isUpstreamFilter {
 			s.routerProcessorsPerReqIDMutex.Lock()
 			defer s.routerProcessorsPerReqIDMutex.Unlock()

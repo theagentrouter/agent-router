@@ -37,6 +37,12 @@ type Processor interface {
 	// routerProcessor is the processor that is the "parent" which was used to determine the route at the
 	// router level. It holds the additional state that can be used to determine the backend to use.
 	SetBackend(ctx context.Context, backend *filterapi.RuntimeBackend, routeName string, routerProcessor Processor) error
+	// Close is called when the ext_proc gRPC stream is torn down before the request completed
+	// normally, most commonly because the downstream client disconnected mid-response. It lets
+	// the processor emit the metrics it has accumulated so far (partial token usage, a failed
+	// completion record) instead of silently dropping them. Implementations must be idempotent
+	// and must not emit anything if the request never started processing.
+	Close(ctx context.Context)
 }
 
 // passThroughProcessor implements the Processor interface.
@@ -66,3 +72,6 @@ func (p passThroughProcessor) ProcessResponseBody(context.Context, *extprocv3.Ht
 func (p passThroughProcessor) SetBackend(context.Context, *filterapi.RuntimeBackend, string, Processor) error {
 	return nil
 }
+
+// Close implements [Processor.Close]. A pass-through stream accumulated no state to emit.
+func (p passThroughProcessor) Close(context.Context) {}

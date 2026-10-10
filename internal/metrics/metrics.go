@@ -124,6 +124,17 @@ type Metrics interface {
 	GetInterTokenLatencyMs() float64
 	// RecordTokenLatency records latency metrics for token generation.
 	RecordTokenLatency(ctx context.Context, accumulatedOutputToken uint32, endOfStream bool, requestHeaders map[string]string)
+
+	// Close-specific methods, used when the ext_proc stream is torn down before the request
+	// completed normally (e.g. downstream client disconnected mid-response).
+
+	// RecordRequestCompletionOnClose records a failure completion for an abandoned stream,
+	// idempotently: it emits nothing if the completion was already recorded or the request
+	// never started.
+	RecordRequestCompletionOnClose(ctx context.Context, requestHeaders map[string]string)
+	// RecordTokenUsageOnClose records the token usage accumulated so far for an abandoned
+	// stream, idempotently against the normal end-of-stream record.
+	RecordTokenUsageOnClose(ctx context.Context, usage TokenUsage, requestHeaders map[string]string)
 }
 
 // Factory is a closure that creates a new Metrics instance for a given operation.
