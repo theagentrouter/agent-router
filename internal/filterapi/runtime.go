@@ -8,6 +8,7 @@ package filterapi
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/google/cel-go/cel"
 
@@ -24,6 +25,20 @@ type BackendAuthHandler interface {
 
 // NewBackendAuthHandlerFunc is a function type that creates a new BackendAuthHandler for a given BackendAuth configuration.
 type NewBackendAuthHandlerFunc func(ctx context.Context, auth *BackendAuth) (BackendAuthHandler, error)
+
+// GuardrailEvaluator evaluates a request or response payload using a configured provider.
+type GuardrailEvaluator interface {
+	Evaluate(ctx context.Context, body []byte, phase GuardrailPhase) (GuardrailEvaluationResult, error)
+}
+
+// GuardrailEvaluationResult is the provider-neutral outcome for one text fragment.
+type GuardrailEvaluationResult struct {
+	Matched     bool
+	Replacement []byte
+}
+
+// NewGuardrailEvaluatorFunc creates an evaluator for an external guardrail provider.
+type NewGuardrailEvaluatorFunc func(ctx context.Context, provider *GuardrailProvider) (GuardrailEvaluator, error)
 
 // RuntimeConfig is the runtime filter configuration that is derived from the filterapi.Config.
 type RuntimeConfig struct {
@@ -45,6 +60,8 @@ type RuntimeConfig struct {
 	UnscopedModels []Model
 	// Backends is the map of backends by name.
 	Backends map[string]*RuntimeBackend
+	// Guardrails is the list of compiled runtime guardrails.
+	Guardrails []RuntimeGuardrail
 }
 
 // RuntimeBackend is a filter backend with its auth handler that is derived from the filterapi.Backend configuration.
@@ -69,8 +86,23 @@ type RuntimeRequestCost struct {
 	CELProg cel.Program
 }
 
+// RuntimeGuardrail is a compiled guardrail rule for runtime evaluation.
+type RuntimeGuardrail struct {
+	Name            string
+	Phase           GuardrailPhase
+	Provider        GuardrailProvider
+	Backends        []string
+	MaxPayloadBytes int64
+	Matcher         *regexp.Regexp
+	Evaluator       GuardrailEvaluator
+}
+
 // NewRuntimeConfig creates a new runtime filter configuration from the given filterapi.Config and a function to create backend auth handlers.
-func NewRuntimeConfig(ctx context.Context, config *Config, fn NewBackendAuthHandlerFunc) (*RuntimeConfig, error) {
+func NewRuntimeConfig(ctx context.Context, config *Config, fn NewBackendAuthHandlerFunc, guardrailEvaluatorFactories ...NewGuardrailEvaluatorFunc) (*RuntimeConfig, error) {
+	var newGuardrailEvaluator NewGuardrailEvaluatorFunc
+	if len(guardrailEvaluatorFactories) > 0 {
+		newGuardrailEvaluator = guardrailEvaluatorFactories[0]
+	}
 	backends := make(map[string]*RuntimeBackend, len(config.Backends))
 	for i := range config.Backends {
 		b := &config.Backends[i]
@@ -123,6 +155,44 @@ func NewRuntimeConfig(ctx context.Context, config *Config, fn NewBackendAuthHand
 		costs = append(costs, RuntimeRequestCost{LLMRequestCost: c, CELProg: prog})
 	}
 
+	guardrails := make([]RuntimeGuardrail, 0, len(config.Guardrails))
+	for i := range config.Guardrails {
+		g := &config.Guardrails[i]
+		if g.Provider.Type == GuardrailProviderTypeRegex {
+			if g.Provider.Pattern == "" {
+				return nil, fmt.Errorf("guardrail %q uses regex provider without a pattern", g.Name)
+			}
+			re, err := regexp.Compile(g.Provider.Pattern)
+			if err != nil {
+				return nil, fmt.Errorf("guardrail %q has an invalid regex pattern: %w", g.Name, err)
+			}
+			guardrails = append(guardrails, RuntimeGuardrail{
+				Name:            g.Name,
+				Phase:           g.Phase,
+				Provider:        g.Provider,
+				Backends:        g.Backends,
+				MaxPayloadBytes: guardrailMaxPayloadBytes(g.MaxPayloadBytes),
+				Matcher:         re,
+			})
+			continue
+		}
+		if newGuardrailEvaluator == nil {
+			return nil, fmt.Errorf("guardrail %q uses provider %q but no evaluator factory is configured", g.Name, g.Provider.Type)
+		}
+		evaluator, err := newGuardrailEvaluator(ctx, &g.Provider)
+		if err != nil {
+			return nil, fmt.Errorf("cannot create evaluator for guardrail %q: %w", g.Name, err)
+		}
+		guardrails = append(guardrails, RuntimeGuardrail{
+			Name:            g.Name,
+			Phase:           g.Phase,
+			Provider:        g.Provider,
+			Backends:        g.Backends,
+			MaxPayloadBytes: guardrailMaxPayloadBytes(g.MaxPayloadBytes),
+			Evaluator:       evaluator,
+		})
+	}
+
 	return &RuntimeConfig{
 		UUID:               config.UUID,
 		Backends:           backends,
@@ -131,5 +201,15 @@ func NewRuntimeConfig(ctx context.Context, config *Config, fn NewBackendAuthHand
 		DeclaredModels:     config.Models,
 		ModelsByHost:       config.ModelsByHost,
 		UnscopedModels:     config.UnscopedModels,
+		Guardrails:         guardrails,
 	}, nil
+}
+
+const defaultGuardrailMaxPayloadBytes int64 = 10 * 1024 * 1024
+
+func guardrailMaxPayloadBytes(configured int64) int64 {
+	if configured <= 0 {
+		return defaultGuardrailMaxPayloadBytes
+	}
+	return configured
 }

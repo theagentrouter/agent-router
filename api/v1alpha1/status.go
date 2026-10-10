@@ -52,6 +52,15 @@ type MCPRouteStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// GuardrailPolicyStatus contains the conditions by the reconciliation result.
+type GuardrailPolicyStatus struct {
+	// Conditions is the list of conditions by the reconciliation result.
+	// Currently, at most one condition is set.
+	//
+	// Known .status.conditions.type are: "Accepted", "NotAccepted".
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
 // QuotaPolicyStatus contains the conditions by the reconciliation result.
 type QuotaPolicyStatus struct {
 	// Conditions is the list of conditions by the reconciliation result.
