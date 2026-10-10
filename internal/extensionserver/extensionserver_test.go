@@ -68,6 +68,17 @@ func newFakeClient() client.Client {
 		WithStatusSubresource(&aigv1b1.AIGatewayRoute{}).
 		WithStatusSubresource(&aigv1b1.AIServiceBackend{}).
 		WithStatusSubresource(&aigv1b1.BackendSecurityPolicy{})
+	if err := controller.ApplyIndexing(context.Background(), func(
+		_ context.Context,
+		obj client.Object,
+		field string,
+		extractValue client.IndexerFunc,
+	) error {
+		builder = builder.WithIndex(obj, field, extractValue)
+		return nil
+	}); err != nil {
+		panic(err)
+	}
 	return builder.Build()
 }
 

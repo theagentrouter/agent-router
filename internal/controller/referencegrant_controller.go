@@ -16,7 +16,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/quotapolicy"
 )
 
 // ReferenceGrantController implements [reconcile.TypedReconciler] for ReferenceGrant.
@@ -30,6 +32,7 @@ type ReferenceGrantController struct {
 	logger                    logr.Logger
 	aiGatewayRouteChan        chan event.GenericEvent
 	backendSecurityPolicyChan chan event.GenericEvent
+	quotaPolicyChan           chan event.GenericEvent
 }
 
 // NewReferenceGrantController creates a new [reconcile.TypedReconciler] for ReferenceGrant.
@@ -38,12 +41,14 @@ func NewReferenceGrantController(
 	logger logr.Logger,
 	aiGatewayRouteChan chan event.GenericEvent,
 	backendSecurityPolicyChan chan event.GenericEvent,
+	quotaPolicyChan chan event.GenericEvent,
 ) *ReferenceGrantController {
 	return &ReferenceGrantController{
 		client:                    c,
 		logger:                    logger,
 		aiGatewayRouteChan:        aiGatewayRouteChan,
 		backendSecurityPolicyChan: backendSecurityPolicyChan,
+		quotaPolicyChan:           quotaPolicyChan,
 	}
 }
 
@@ -77,13 +82,12 @@ func (c *ReferenceGrantController) Reconcile(ctx context.Context, req reconcile.
 	return ctrl.Result{}, nil
 }
 
-// triggerAffectedReconciles triggers reconciliation of every AIGatewayRoute and BackendSecurityPolicy
-// that a ReferenceGrant in grantNamespace may affect, whether it was just created, updated, or is
-// about to be deleted.
+// triggerAffectedReconciles triggers reconciliation of every AIGatewayRoute, BackendSecurityPolicy and QuotaPolicy
+// that a ReferenceGrant in grantNamespace may affect, whether it was just created, updated, or is about to be deleted.
 //
-// The set of affected resources is derived from the grant's namespace rather than its current spec:
-// when a grant is narrowed (e.g. a "from" entry is removed), the resources that just lost access are
-// no longer described by the new spec, but they still need to be reconciled to drop that access.
+// The set of affected resources is derived from the grant's namespace rather than its current spec: when a grant is narrowed
+// (e.g. a "from" entry is removed), the resources that just lost access are no longer described by the new spec, but they still
+// need to be reconciled to drop that access.
 func (c *ReferenceGrantController) triggerAffectedReconciles(ctx context.Context, grantNamespace string) error {
 	// Get all AIGatewayRoutes that might be affected by this ReferenceGrant
 	affectedRoutes, err := c.getAffectedAIGatewayRoutes(ctx, grantNamespace)
@@ -114,7 +118,52 @@ func (c *ReferenceGrantController) triggerAffectedReconciles(ctx context.Context
 		c.backendSecurityPolicyChan <- event.GenericEvent{Object: bsp}
 	}
 
+	if c.quotaPolicyChan != nil {
+		affectedQuotaPolicies, err := c.getAffectedQuotaPolicies(ctx, grantNamespace)
+		if err != nil {
+			c.logger.Error(err, "failed to get affected QuotaPolicies")
+			return err
+		}
+		for _, policy := range affectedQuotaPolicies {
+			c.quotaPolicyChan <- event.GenericEvent{Object: policy}
+		}
+	}
+
 	return nil
+}
+
+// getAffectedQuotaPolicies returns QuotaPolicies with a cross-namespace
+// AIServiceBackend target in grantNamespace. The namespace index intentionally
+// returns a superset so grant narrowing and broadening reconcile policies that
+// were affected by the previous grant state as well as the current state.
+func (c *ReferenceGrantController) getAffectedQuotaPolicies(
+	ctx context.Context,
+	grantNamespace string,
+) ([]*aigv1a1.QuotaPolicy, error) {
+	var policies aigv1a1.QuotaPolicyList
+	if err := c.client.List(ctx, &policies,
+		client.MatchingFields{k8sClientIndexQuotaPolicyTargetNamespace: grantNamespace}); err != nil {
+		return nil, fmt.Errorf("failed to list QuotaPolicies: %w", err)
+	}
+
+	affected := make([]*aigv1a1.QuotaPolicy, 0, len(policies.Items))
+	for i := range policies.Items {
+		policy := &policies.Items[i]
+		if policy.Namespace == grantNamespace {
+			continue
+		}
+		for _, ref := range policy.Spec.TargetRefs {
+			if quotapolicy.TargetNamespace(ref, policy.Namespace) != grantNamespace {
+				continue
+			}
+			if (ref.Group == "" || ref.Group == aiServiceBackendGroup) &&
+				(ref.Kind == "" || ref.Kind == aiServiceBackendKind) {
+				affected = append(affected, policy)
+				break
+			}
+		}
+	}
+	return affected, nil
 }
 
 // getAffectedAIGatewayRoutes returns all AIGatewayRoutes in a namespace other than grantNamespace that

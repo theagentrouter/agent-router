@@ -38,6 +38,7 @@ import (
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/controller/rotators"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -58,6 +59,63 @@ func requireLLMRequestCostsEqual(t *testing.T, want, got []filterapi.LLMRequestC
 	if diff := cmp.Diff(want, got, cmpopts.SortSlices(less)); diff != "" {
 		t.Fatalf("LLMRequestCosts not equal (-want +got):\n%s", diff)
 	}
+}
+
+func TestInjectQuotaPolicyCostExpressions(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	controller := &GatewayController{
+		client:                  fakeClient,
+		logger:                  ctrl.Log,
+		referenceGrantValidator: newReferenceGrantValidator(fakeClient),
+	}
+	model := "model-a"
+	expression := "input_tokens + output_tokens"
+	policy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "route-ns"},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+				Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "backend",
+			}},
+			PerModelQuotas: []aigv1a1.PerModelQuota{{
+				ModelName: &model,
+				Quota:     aigv1a1.QuotaDefinition{CostExpression: &expression},
+			}},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), policy))
+	unrelatedModel := "unrelated-model"
+	unrelatedPolicy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "unrelated-policy", Namespace: "other-ns"},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+				Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "other-backend",
+			}},
+			PerModelQuotas: []aigv1a1.PerModelQuota{{
+				ModelName: &unrelatedModel,
+				Quota:     aigv1a1.QuotaDefinition{CostExpression: &expression},
+			}},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), unrelatedPolicy))
+	var policies aigv1a1.QuotaPolicyList
+	require.NoError(t, fakeClient.List(t.Context(), &policies))
+	require.Len(t, policies.Items, 2)
+	require.Equal(t, string(aiServiceBackendGroup), string(policies.Items[0].Spec.TargetRefs[0].Group))
+	require.Equal(t, string(aiServiceBackendKind), string(policies.Items[0].Spec.TargetRefs[0].Kind))
+	require.Len(t, policies.Items[0].Spec.PerModelQuotas, 1)
+
+	config := &filterapi.Config{
+		Backends: []filterapi.Backend{{AIServiceBackendName: "route-ns/backend"}},
+	}
+	injected := make(map[string]struct{})
+	controller.injectQuotaPolicyCostExpressions(t.Context(), config, injected, "route")
+	require.Len(t, config.LLMRequestCosts, 1)
+	require.Equal(t, expression, config.LLMRequestCosts[0].CEL)
+	require.Equal(t, "route-ns/backend", config.LLMRequestCosts[0].Backend)
+	require.Equal(t, model, config.LLMRequestCosts[0].Model)
+
+	controller.injectQuotaPolicyCostExpressions(t.Context(), config, injected, "route")
+	require.Len(t, config.LLMRequestCosts, 1)
 }
 
 // newTestGatewayController builds a GatewayController for tests, deriving the

@@ -34,6 +34,8 @@ import (
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/controller"
+	"github.com/envoyproxy/ai-gateway/internal/quotapolicy"
 	"github.com/envoyproxy/ai-gateway/internal/ratelimit/translator"
 )
 
@@ -69,6 +71,13 @@ func (s *Server) maybeInjectQuotaRateLimiting(
 			return clusters, nil
 		}
 		return clusters, fmt.Errorf("failed to list QuotaPolicies: %w", err)
+	}
+	if len(quotaPolicies) == 0 {
+		return clusters, nil
+	}
+	quotaPolicies, err = s.authorizedQuotaPolicies(ctx, quotaPolicies)
+	if err != nil {
+		return clusters, err
 	}
 	if len(quotaPolicies) == 0 {
 		return clusters, nil
@@ -130,6 +139,38 @@ func (s *Server) listQuotaPolicies(ctx context.Context) ([]aigv1a1.QuotaPolicy, 
 	return list.Items, nil
 }
 
+// authorizedQuotaPolicies returns policy copies containing only targetRefs
+// currently authorized by ReferenceGrant. Authorization is performed before
+// any downstream quota action or descriptor generation.
+func (s *Server) authorizedQuotaPolicies(
+	ctx context.Context,
+	policies []aigv1a1.QuotaPolicy,
+) ([]aigv1a1.QuotaPolicy, error) {
+	authorized := make([]aigv1a1.QuotaPolicy, 0, len(policies))
+	for i := range policies {
+		policy := policies[i]
+		targets := make([]gwapiv1a2.NamespacedPolicyTargetReference, 0, len(policy.Spec.TargetRefs))
+		for _, ref := range policy.Spec.TargetRefs {
+			if (ref.Group != "" && ref.Group != controller.AIServiceBackendGroup) ||
+				(ref.Kind != "" && ref.Kind != controller.AIServiceBackendKind) {
+				continue
+			}
+			targetNamespace := quotapolicy.TargetNamespace(ref, policy.Namespace)
+			if err := controller.ValidateQuotaPolicyAIServiceBackendReference(
+				ctx, s.k8sClient, policy.Namespace, targetNamespace, string(ref.Name)); err != nil {
+				continue
+			}
+			targets = append(targets, ref)
+		}
+		if len(targets) == 0 {
+			continue
+		}
+		policy.Spec.TargetRefs = targets
+		authorized = append(authorized, policy)
+	}
+	return authorized, nil
+}
+
 // buildQuotaBackendPolicies builds a map from "namespace/backendName" keys to the
 // QuotaPolicies that target each backend. This preserves the full QuotaPolicy data
 // (including PerModelQuotas, BucketRules, and ClientSelectors) so that downstream
@@ -147,7 +188,7 @@ func buildQuotaBackendPolicies(policies []aigv1a1.QuotaPolicy) map[string][]aigv
 			continue
 		}
 		for _, ref := range policy.Spec.TargetRefs {
-			key := policy.Namespace + "/" + string(ref.Name)
+			key := quotapolicy.TargetNamespace(ref, policy.Namespace) + "/" + string(ref.Name)
 			backends[key] = append(backends[key], *policy)
 		}
 	}
@@ -398,7 +439,7 @@ func (s *Server) clusterHasQuotaBackend(ctx context.Context, clusterName string,
 	}
 
 	for _, backendRef := range info.rule.BackendRefs {
-		key := info.namespace + "/" + backendRef.Name
+		key := backendRef.GetNamespace(info.namespace) + "/" + backendRef.Name
 		if _, ok := quotaBackendPolicies[key]; ok {
 			return true
 		}
@@ -459,7 +500,7 @@ func (s *Server) backendKeysForCluster(ctx context.Context, clusterName string) 
 
 	var keys []string
 	for _, backendRef := range info.rule.BackendRefs {
-		keys = append(keys, info.namespace+"/"+backendRef.Name)
+		keys = append(keys, backendRef.GetNamespace(info.namespace)+"/"+backendRef.Name)
 	}
 	return keys
 }
@@ -494,12 +535,13 @@ func (s *Server) resolveRouteModelInfo(ctx context.Context, route *routev3.Route
 
 		for _, br := range resolved.rule.BackendRefs {
 			if br.ModelNameOverride != "" {
-				if seen[br.Name] == nil {
-					seen[br.Name] = make(map[string]bool)
+				key := br.GetNamespace(resolved.namespace) + "/" + br.Name
+				if seen[key] == nil {
+					seen[key] = make(map[string]bool)
 				}
-				if !seen[br.Name][br.ModelNameOverride] {
-					seen[br.Name][br.ModelNameOverride] = true
-					info.backendModels[br.Name] = append(info.backendModels[br.Name], br.ModelNameOverride)
+				if !seen[key][br.ModelNameOverride] {
+					seen[key][br.ModelNameOverride] = true
+					info.backendModels[key] = append(info.backendModels[key], br.ModelNameOverride)
 				}
 			}
 		}
@@ -553,7 +595,7 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 			if modelInfo != nil {
 				matched := false
 				for _, target := range policy.Spec.TargetRefs {
-					targetName := string(target.Name)
+					targetName := quotapolicy.TargetNamespace(target, policy.Namespace) + "/" + string(target.Name)
 					if overrides, ok := modelInfo.backendModels[targetName]; ok {
 						for _, override := range overrides {
 							if override == modelName {
@@ -703,14 +745,15 @@ func baseDescriptorActions() []*routev3.RateLimit_Action {
 // buildSimpleModelEntries creates RateLimit entries for a model with no bucket rules.
 // Produces 2-level descriptors (backend_name, model_name_override) matching the
 // translator's simple case where rate_limit is directly on the model descriptor.
-func buildSimpleModelEntries(modelName, policyNamespace string, targets []gwapiv1a2.LocalPolicyTargetReference, routeModelNames map[string][]string) []*routev3.RateLimit {
+func buildSimpleModelEntries(modelName, policyNamespace string, targets []gwapiv1a2.NamespacedPolicyTargetReference, routeModelNames map[string][]string) []*routev3.RateLimit {
 	var entries []*routev3.RateLimit
 
 	// Request-time entries only. Stream-done is added once per model in enableQuotaRateLimitOnRoute.
 	for _, target := range targets {
-		resolvedModel := resolveModelName(string(target.Name), modelName, routeModelNames)
+		targetKey := quotapolicy.TargetNamespace(target, policyNamespace) + "/" + string(target.Name)
+		resolvedModel := resolveModelName(targetKey, modelName, routeModelNames)
 		entries = append(entries, &routev3.RateLimit{
-			Actions: requestTimeBaseActions(policyNamespace, string(target.Name), resolvedModel),
+			Actions: requestTimeBaseActions(quotapolicy.TargetNamespace(target, policyNamespace), string(target.Name), resolvedModel),
 		})
 	}
 
@@ -733,15 +776,17 @@ func quotaHitsAddend() *routev3.RateLimit_HitsAddend {
 //
 // Action order matches the translator's service config tree:
 // backend_name (Level 0) → model_name_override (Level 1) → bucket_rule_key (Level 2)
-func buildBucketRuleLimitEntries(modelName, policyNamespace string, quota *aigv1a1.QuotaDefinition, targets []gwapiv1a2.LocalPolicyTargetReference, routeModelNames map[string][]string) []*routev3.RateLimit {
+func buildBucketRuleLimitEntries(modelName, policyNamespace string, quota *aigv1a1.QuotaDefinition, targets []gwapiv1a2.NamespacedPolicyTargetReference, routeModelNames map[string][]string) []*routev3.RateLimit {
 	var entries []*routev3.RateLimit
 
 	for _, target := range targets {
-		resolvedModel := resolveModelName(string(target.Name), modelName, routeModelNames)
+		targetKey := quotapolicy.TargetNamespace(target, policyNamespace) + "/" + string(target.Name)
+		targetNamespace := quotapolicy.TargetNamespace(target, policyNamespace)
+		resolvedModel := resolveModelName(targetKey, modelName, routeModelNames)
 
 		for rIdx, rule := range quota.BucketRules {
 			clientActions := buildClientSelectorActions(rIdx, rule.ClientSelectors)
-			actions := requestTimeBaseActions(policyNamespace, string(target.Name), resolvedModel)
+			actions := requestTimeBaseActions(targetNamespace, string(target.Name), resolvedModel)
 			actions = append(actions, clientActions...)
 			entries = append(entries, &routev3.RateLimit{Actions: actions})
 		}
@@ -756,7 +801,7 @@ func buildBucketRuleLimitEntries(modelName, policyNamespace string, quota *aigv1
 					},
 				},
 			}
-			actions := requestTimeBaseActions(policyNamespace, string(target.Name), resolvedModel)
+			actions := requestTimeBaseActions(targetNamespace, string(target.Name), resolvedModel)
 			actions = append(actions, defaultAction)
 			entries = append(entries, &routev3.RateLimit{Actions: actions})
 		}
@@ -773,6 +818,15 @@ func resolveModelName(backendName, fallback string, routeModelNames map[string][
 		for _, m := range models {
 			if m == fallback {
 				return m
+			}
+		}
+	}
+	if slash := strings.LastIndexByte(backendName, '/'); slash >= 0 {
+		if models, ok := routeModelNames[backendName[slash+1:]]; ok {
+			for _, m := range models {
+				if m == fallback {
+					return m
+				}
 			}
 		}
 	}

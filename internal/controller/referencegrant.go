@@ -14,10 +14,16 @@ import (
 )
 
 const (
+	// AIServiceBackendGroup is the API group for AIServiceBackend resources.
+	AIServiceBackendGroup = aiServiceBackendGroup
+	// AIServiceBackendKind is the kind for AIServiceBackend resources.
+	AIServiceBackendKind = aiServiceBackendKind
 	// aiGatewayRouteKind is the kind for AIGatewayRoute.
 	aiGatewayRouteKind = "AIGatewayRoute"
 	// backendSecurityPolicyKind is the kind for BackendSecurityPolicy.
 	backendSecurityPolicyKind = "BackendSecurityPolicy"
+	// quotaPolicyKind is the kind for QuotaPolicy.
+	quotaPolicyKind = "QuotaPolicy"
 	// secretGroup is the API group for the core Secret resource (the core group is the empty string).
 	secretGroup = ""
 	// secretKind is the kind for the core Secret resource.
@@ -27,6 +33,36 @@ const (
 // ReferenceGrantValidator validates cross-namespace references using ReferenceGrant resources.
 type referenceGrantValidator struct {
 	client client.Client
+}
+
+// ReferenceNotPermittedError indicates that a cross-namespace reference was
+// denied because no applicable ReferenceGrant authorized it.
+type ReferenceNotPermittedError struct {
+	FromGroup       string
+	FromKind        string
+	FromNamespace   string
+	TargetGroup     string
+	TargetKind      string
+	TargetNamespace string
+	TargetName      string
+}
+
+func (e *ReferenceNotPermittedError) Error() string {
+	return fmt.Sprintf(
+		"cross-namespace reference from %s in namespace %s to %s %s in namespace %s is not permitted: "+
+			"no valid ReferenceGrant found in namespace %s. "+
+			"A ReferenceGrant must allow %s from namespace %s to reference %s in namespace %s",
+		e.FromKind,
+		e.FromNamespace,
+		e.TargetKind,
+		e.TargetName,
+		e.TargetNamespace,
+		e.TargetNamespace,
+		e.FromKind,
+		e.FromNamespace,
+		e.TargetKind,
+		e.TargetNamespace,
+	)
 }
 
 // NewReferenceGrantValidator creates a new ReferenceGrantValidator.
@@ -54,6 +90,34 @@ func (v *referenceGrantValidator) validateAIServiceBackendReference(
 	return v.validateReference(ctx,
 		aiServiceBackendGroup, aiGatewayRouteKind, routeNamespace,
 		aiServiceBackendGroup, aiServiceBackendKind, backendNamespace, backendName)
+}
+
+// validateQuotaPolicyAIServiceBackendReference validates that a QuotaPolicy can
+// reference an AIServiceBackend in another namespace.
+func (v *referenceGrantValidator) validateQuotaPolicyAIServiceBackendReference(
+	ctx context.Context,
+	policyNamespace string,
+	backendNamespace string,
+	backendName string,
+) error {
+	return v.validateReference(ctx,
+		aiServiceBackendGroup, quotaPolicyKind, policyNamespace,
+		aiServiceBackendGroup, aiServiceBackendKind, backendNamespace, backendName)
+}
+
+// ValidateQuotaPolicyAIServiceBackendReference validates a QuotaPolicy to
+// AIServiceBackend reference using the repository's shared ReferenceGrant
+// implementation. It is exported for consumers outside the controller package
+// that independently materialize quota configuration.
+func ValidateQuotaPolicyAIServiceBackendReference(
+	ctx context.Context,
+	c client.Client,
+	policyNamespace string,
+	backendNamespace string,
+	backendName string,
+) error {
+	return newReferenceGrantValidator(c).validateQuotaPolicyAIServiceBackendReference(
+		ctx, policyNamespace, backendNamespace, backendName)
 }
 
 // validateInferencePoolReference validates that an AIGatewayRoute can reference an InferencePool
@@ -140,12 +204,15 @@ func (v *referenceGrantValidator) validateReference(
 		}
 	}
 
-	return fmt.Errorf(
-		"cross-namespace reference from %s in namespace %s to %s %s in namespace %s is not permitted: "+
-			"no valid ReferenceGrant found in namespace %s. "+
-			"A ReferenceGrant must allow %s from namespace %s to reference %s in namespace %s",
-		fromKind, fromNamespace, targetKind, targetName, targetNamespace, targetNamespace, fromKind, fromNamespace, targetKind, targetNamespace,
-	)
+	return &ReferenceNotPermittedError{
+		FromGroup:       string(fromGroup),
+		FromKind:        string(fromKind),
+		FromNamespace:   fromNamespace,
+		TargetGroup:     string(targetGroup),
+		TargetKind:      string(targetKind),
+		TargetNamespace: targetNamespace,
+		TargetName:      targetName,
+	}
 }
 
 // isReferenceGrantValid checks if a ReferenceGrant allows a resource identified by fromGroup/fromKind

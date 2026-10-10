@@ -61,6 +61,53 @@ metadata, separate limits for input and output tokens, or a monthly or yearly wi
    bucket rule).
 4. When all related quota buckets for that model are exceeded, subsequent matching requests receive `429 Too Many Requests`.
 
+### Cross-Namespace Backends
+
+`targetRefs[].namespace` is optional. If it is omitted, the backend is looked up in the
+`QuotaPolicy` namespace. Set it explicitly when the policy and backend are in different namespaces:
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: shared-provider-budget
+  namespace: platform
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: provider
+      namespace: providers
+```
+
+Same-namespace QuotaPolicy references do not require a `ReferenceGrant`. A cross-namespace
+QuotaPolicy reference must be authorized by a `ReferenceGrant` in the AIServiceBackend namespace.
+The grant must allow `QuotaPolicy` from the policy namespace to reference `AIServiceBackend`; a
+`to.name` restricts the grant to one backend, while an omitted `to.name` allows all AIServiceBackends
+in that namespace:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-platform-quota
+  namespace: providers
+spec:
+  from:
+    - group: aigateway.envoyproxy.io
+      kind: QuotaPolicy
+      namespace: platform
+  to:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: provider # omit name to allow every AIServiceBackend in providers
+```
+
+The QuotaPolicy and route relationships are independent. A route that references this backend from
+another namespace still requires its own route-to-backend `ReferenceGrant`. Grant only the
+controller service account the cross-namespace `get/list/watch` permissions it needs; a QuotaPolicy
+grant does not authorize routing traffic.
+
 :::tip Prerequisites
 Quota enforcement requires two components that are not deployed by the AI Gateway Helm chart today:
 
@@ -79,6 +126,10 @@ required for a QuotaPolicy-only deployment, although both services can use the s
 By default, `controller.quotaRateLimitFailureModeDeny` is `false`. If the dedicated service is absent
 or unreachable, quota checks fail open and requests continue without enforcement. Set it to `true`
 if unavailable quota enforcement should reject requests instead.
+
+For a deployment example, including the rate-limit service, Redis, xDS, service discovery, and
+verification, see the
+[quota E2E manifest](https://github.com/theagentrouter/agent-router/blob/main/tests/e2e/testdata/backend_quota_ratelimit.yaml).
 :::
 
 ## Configuration

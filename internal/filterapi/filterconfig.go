@@ -194,8 +194,11 @@ type RouteRuleName string
 // besides that this abstracts the concept of a backend at Envoy Gateway level to a simple name.
 type Backend struct {
 	// Name of the backend including the route name as well as the route rule index.
-	Name              string                        `json:"name"`
-	ModelNameOverride internalapi.ModelNameOverride `json:"modelNameOverride"`
+	Name string `json:"name"`
+	// AIServiceBackendName is the canonical namespace/name identity of the
+	// referenced AIServiceBackend. Name remains route-specific for routing.
+	AIServiceBackendName string                        `json:"aiServiceBackendName,omitempty"`
+	ModelNameOverride    internalapi.ModelNameOverride `json:"modelNameOverride"`
 	// Schema specifies the API schema of the output format of requests from.
 	Schema VersionedAPISchema `json:"schema"`
 	// Auth is the authn/z configuration for the backend. Optional.

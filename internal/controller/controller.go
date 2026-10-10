@@ -41,6 +41,7 @@ import (
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/quotapolicy"
 	"github.com/envoyproxy/ai-gateway/internal/ratelimit/runner"
 )
 
@@ -248,18 +249,25 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 		return fmt.Errorf("failed to create controller for GatewayConfig: %w", err)
 	}
 
+	var quotaPolicyEventChan chan event.GenericEvent
 	// QuotaPolicy controller for backend quota rate limiting.
 	if options.RateLimitRunner != nil {
+		quotaPolicyEventChan = make(chan event.GenericEvent, 100)
 		quotaPolicyC := NewQuotaPolicyController(c, kube, logger.WithName("quota-policy"), options.RateLimitRunner, aiGatewayRouteEventChan)
 		if err = TypedControllerBuilderForCRD(mgr, &aigv1a1.QuotaPolicy{}).
 			Watches(&aigv1b1.AIServiceBackend{}, handler.EnqueueRequestsFromMapFunc(quotaPolicyC.BackendToQuotaPolicy)).
+			WatchesRawSource(source.Channel(
+				quotaPolicyEventChan,
+				&handler.EnqueueRequestForObject{},
+			)).
 			Complete(quotaPolicyC); err != nil {
 			return fmt.Errorf("failed to create controller for QuotaPolicy: %w", err)
 		}
 	}
 
-	// ReferenceGrant controller for cross-namespace access validation
-	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan)
+	// ReferenceGrant changes can authorize or revoke AIGatewayRoute,
+	// BackendSecurityPolicy, and QuotaPolicy references.
+	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan, quotaPolicyEventChan)
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1b1.ReferenceGrant{}).
 		Complete(referenceGrantC); err != nil {
 		return fmt.Errorf("failed to create controller for ReferenceGrant: %w", err)
@@ -312,6 +320,9 @@ const (
 	// k8sClientIndexAIServiceBackendToTargetingQuotaPolicy is the index name that maps from an AIServiceBackend
 	// to the QuotaPolicy whose targetRefs contains the AIServiceBackend.
 	k8sClientIndexAIServiceBackendToTargetingQuotaPolicy = "AIServiceBackendToTargetingQuotaPolicy"
+	// k8sClientIndexQuotaPolicyTargetNamespace maps a target namespace to
+	// QuotaPolicies that contain a targetRef resolved to that namespace.
+	k8sClientIndexQuotaPolicyTargetNamespace = "QuotaPolicyTargetNamespace"
 	// k8sClientIndexGatewayToGatewayConfig maps from a GatewayConfig name to Gateways referencing it.
 	k8sClientIndexGatewayToGatewayConfig = "GatewayToGatewayConfig"
 
@@ -359,6 +370,11 @@ func ApplyIndexing(ctx context.Context, indexer func(ctx context.Context, obj cl
 		k8sClientIndexAIServiceBackendToTargetingQuotaPolicy, quotaPolicyTargetRefsIndexFunc)
 	if err != nil {
 		return fmt.Errorf("failed to index field for QuotaPolicy targetRefs: %w", err)
+	}
+	err = indexer(ctx, &aigv1a1.QuotaPolicy{},
+		k8sClientIndexQuotaPolicyTargetNamespace, quotaPolicyTargetNamespaceIndexFunc)
+	if err != nil {
+		return fmt.Errorf("failed to index QuotaPolicy target namespaces: %w", err)
 	}
 
 	err = indexer(ctx, &gwapiv1.Gateway{},
@@ -545,9 +561,24 @@ func quotaPolicyTargetRefsIndexFunc(o client.Object) []string {
 	quotaPolicy := o.(*aigv1a1.QuotaPolicy)
 	var ret []string
 	for _, targetRef := range quotaPolicy.Spec.TargetRefs {
-		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), quotaPolicy.Namespace))
+		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), quotapolicy.TargetNamespace(targetRef, quotaPolicy.Namespace)))
 	}
 	return ret
+}
+
+func quotaPolicyTargetNamespaceIndexFunc(o client.Object) []string {
+	quotaPolicy := o.(*aigv1a1.QuotaPolicy)
+	namespaces := make([]string, 0, len(quotaPolicy.Spec.TargetRefs))
+	seen := make(map[string]struct{}, len(quotaPolicy.Spec.TargetRefs))
+	for _, targetRef := range quotaPolicy.Spec.TargetRefs {
+		namespace := quotapolicy.TargetNamespace(targetRef, quotaPolicy.Namespace)
+		if _, ok := seen[namespace]; ok {
+			continue
+		}
+		seen[namespace] = struct{}{}
+		namespaces = append(namespaces, namespace)
+	}
+	return namespaces
 }
 
 func getReferenceGrantIndexKey(namespace, kind string) string {

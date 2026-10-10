@@ -423,11 +423,12 @@ spec:
                   this QuotaPolicy is being attached to.
                 items:
                   description: |-
-                    LocalPolicyTargetReference identifies an API object to apply a direct or
-                    inherited policy to. This should be used as part of Policy resources
-                    that can target Gateway API resources. For more information on how this
-                    policy attachment model works, and a sample Policy resource, refer to
-                    the policy attachment documentation for Gateway API.
+                    NamespacedPolicyTargetReference identifies an API object to apply a direct or
+                    inherited policy to, potentially in a different namespace. This should only
+                    be used as part of Policy resources that need to be able to target resources
+                    in different namespaces. For more information on how this policy attachment
+                    model works, and a sample Policy resource, refer to the policy attachment
+                    documentation for Gateway API.
                   properties:
                     group:
                       description: Group is the group of the target resource.
@@ -444,6 +445,16 @@ spec:
                       description: Name is the name of the target resource.
                       maxLength: 253
                       minLength: 1
+                      type: string
+                    namespace:
+                      description: |-
+                        Namespace is the namespace of the referent. When unspecified, the local
+                        namespace is inferred. Even when policy targets a resource in a different
+                        namespace, it MUST only apply to traffic originating from the same
+                        namespace as the policy.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                   required:
                   - group
