@@ -61,6 +61,32 @@ type metricsImpl struct {
 	timeToFirstToken     time.Duration // Duration to first token.
 	interTokenLatencySec float64       // Average time per token after first, in seconds.
 	totalOutputTokens    uint32
+	completionRecorded   bool
+	usageRecorded        bool
+}
+
+// RecordRequestCompletionOnClose records a failure completion for a stream that never completed
+// normally, e.g. because the downstream client disconnected mid-response. It is idempotent: a
+// request whose completion was already recorded (success or failure) emits nothing, and a
+// request that never started processing emits nothing.
+func (b *metricsImpl) RecordRequestCompletionOnClose(ctx context.Context, requestHeaders map[string]string) {
+	if !b.requestStart.IsZero() && !b.completionRecorded {
+		b.completionRecorded = true
+		b.metrics.requestLatency.Record(ctx, time.Since(b.requestStart).Seconds(),
+			metric.WithAttributeSet(b.buildBaseAttributes(requestHeaders)),
+			metric.WithAttributes(attribute.Key(genaiAttributeErrorType).String(genaiErrorTypeFallback)),
+		)
+	}
+}
+
+// RecordTokenUsageOnClose records the token usage accumulated so far for a stream that never
+// completed normally. It is idempotent against the normal end-of-stream record so an aborted
+// stream cannot double-count when the terminal chunk had already been observed.
+func (b *metricsImpl) RecordTokenUsageOnClose(ctx context.Context, usage TokenUsage, requestHeaders map[string]string) {
+	if !b.requestStart.IsZero() && !b.usageRecorded {
+		b.RecordTokenUsage(ctx, usage, requestHeaders)
+		b.usageRecorded = true
+	}
 }
 
 // StartRequest initializes timing for a new request.
@@ -140,6 +166,7 @@ func (b *metricsImpl) buildBaseAttributes(headers map[string]string) attribute.S
 
 // RecordRequestCompletion records the completion of a request with success/failure status.
 func (b *metricsImpl) RecordRequestCompletion(ctx context.Context, success bool, requestHeaders map[string]string) {
+	b.completionRecorded = true
 	attrs := b.buildBaseAttributes(requestHeaders)
 
 	if success {
@@ -157,6 +184,7 @@ func (b *metricsImpl) RecordRequestCompletion(ctx context.Context, success bool,
 
 // RecordTokenUsage records token usage metrics.
 func (b *metricsImpl) RecordTokenUsage(ctx context.Context, usage TokenUsage, requestHeaders map[string]string) {
+	b.usageRecorded = true
 	attrs := b.buildBaseAttributes(requestHeaders)
 
 	if inputTokens, ok := usage.InputTokens(); ok {
