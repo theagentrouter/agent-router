@@ -45,6 +45,7 @@ var (
 	_ tracingapi.TranslationTracer          = (*translationTracer)(nil)
 	_ tracingapi.RerankTracer               = (*rerankTracer)(nil)
 	_ tracingapi.SystemOneTracer            = (*systemOneTracer)(nil)
+	_ tracingapi.EmbedTracer                = (*embedTracer)(nil)
 	_ tracingapi.ResponsesInputTokensTracer = (*responsesInputTokensTracer)(nil)
 	_ tracingapi.CountTokensTracer          = (*countTokensTracer)(nil)
 	_ tracingapi.TokenizeTracer             = (*tokenizeTracer)(nil)
@@ -62,6 +63,7 @@ type (
 	translationTracer          = requestTracerImpl[openai.TranslationRequest, openai.TranslationResponse, struct{}]
 	rerankTracer               = requestTracerImpl[cohereschema.RerankV2Request, cohereschema.RerankV2Response, struct{}]
 	systemOneTracer            = requestTracerImpl[typesafeschema.SystemOneRequest, typesafeschema.SystemOneResponse, struct{}]
+	embedTracer                = requestTracerImpl[cohereschema.EmbedV2Request, cohereschema.EmbedV2Response, struct{}]
 	responsesInputTokensTracer = requestTracerImpl[openai.ResponseRequest, openai.ResponsesInputTokensResponse, struct{}]
 	countTokensTracer          = requestTracerImpl[anthropicschema.CountTokensRequest, anthropicschema.CountTokensResponse, struct{}]
 	tokenizeTracer             = requestTracerImpl[tokenize.RequestUnion, tokenize.Response, struct{}]
@@ -249,6 +251,18 @@ func newSystemOneTracer(tracer trace.Tracer, propagator propagation.TextMapPropa
 		headerAttributes,
 		func(span trace.Span, recorder tracingapi.SystemOneRecorder) tracingapi.SystemOneSpan {
 			return &systemOneSpan{span: span, recorder: recorder}
+		},
+	)
+}
+
+func newEmbedTracer(tracer trace.Tracer, propagator propagation.TextMapPropagator, recorder tracingapi.EmbedRecorder, headerAttributes map[string]string) tracingapi.EmbedTracer {
+	return newRequestTracer(
+		tracer,
+		propagator,
+		recorder,
+		headerAttributes,
+		func(span trace.Span, recorder tracingapi.EmbedRecorder) tracingapi.EmbedSpan {
+			return &embedSpan{span: span, recorder: recorder}
 		},
 	)
 }
