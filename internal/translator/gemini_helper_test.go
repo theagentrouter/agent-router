@@ -1058,20 +1058,253 @@ func TestUserMsgToGeminiParts(t *testing.T) {
 			expectedErrMsg: "invalid image data URI",
 		},
 		{
-			name: "audio content - not supported",
+			name: "audio content WAV - inline base64",
 			msg: openai.ChatCompletionUserMessageParam{
 				Role: openai.ChatMessageRoleUser,
 				Content: openai.StringOrUserRoleContentUnion{
 					Value: []openai.ChatCompletionContentPartUserUnionParam{
 						{
 							OfInputAudio: &openai.ChatCompletionContentPartInputAudioParam{
-								Type: "audio",
+								Type: "input_audio",
+								InputAudio: openai.ChatCompletionContentPartInputAudioInputAudioParam{
+									Data:   base64.StdEncoding.EncodeToString([]byte("fake-wav-data")),
+									Format: openai.ChatCompletionContentPartInputAudioInputAudioFormatWAV,
+								},
 							},
 						},
 					},
 				},
 			},
-			expectedErrMsg: "audio content not supported",
+			expectedParts: []*genai.Part{
+				{
+					InlineData: &genai.Blob{
+						Data:     []byte("This field is ignored during testcase comparison"),
+						MIMEType: "audio/wav",
+					},
+				},
+			},
+		},
+		{
+			name: "audio content MP3 - inline base64",
+			msg: openai.ChatCompletionUserMessageParam{
+				Role: openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{
+					Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{
+							OfInputAudio: &openai.ChatCompletionContentPartInputAudioParam{
+								Type: "input_audio",
+								InputAudio: openai.ChatCompletionContentPartInputAudioInputAudioParam{
+									Data:   base64.StdEncoding.EncodeToString([]byte("fake-mp3-data")),
+									Format: openai.ChatCompletionContentPartInputAudioInputAudioFormatMP3,
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedParts: []*genai.Part{
+				{
+					InlineData: &genai.Blob{
+						Data:     []byte("This field is ignored during testcase comparison"),
+						MIMEType: "audio/mp3",
+					},
+				},
+			},
+		},
+		{
+			name: "audio content - invalid base64 data",
+			msg: openai.ChatCompletionUserMessageParam{
+				Role: openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{
+					Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{
+							OfInputAudio: &openai.ChatCompletionContentPartInputAudioParam{
+								Type: "input_audio",
+								InputAudio: openai.ChatCompletionContentPartInputAudioInputAudioParam{
+									Data:   "!!!not-valid-base64!!!",
+									Format: openai.ChatCompletionContentPartInputAudioInputAudioFormatWAV,
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedErrMsg: "invalid audio data encoding",
+		},
+		{
+			name: "audio content - unsupported format",
+			msg: openai.ChatCompletionUserMessageParam{
+				Role: openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{
+					Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{
+							OfInputAudio: &openai.ChatCompletionContentPartInputAudioParam{
+								Type: "input_audio",
+								InputAudio: openai.ChatCompletionContentPartInputAudioInputAudioParam{
+									Data:   base64.StdEncoding.EncodeToString([]byte("fake-audio")),
+									Format: "flac",
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedErrMsg: "unsupported audio format",
+		},
+		{
+			name: "file content - PDF data URI",
+			msg: openai.ChatCompletionUserMessageParam{
+				Role: openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{
+					Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{
+							OfFile: &openai.ChatCompletionContentPartFileParam{
+								Type: "file",
+								File: openai.ChatCompletionContentPartFileFileParam{
+									FileData: "data:application/pdf;base64," + base64.StdEncoding.EncodeToString([]byte("fake-pdf")),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedParts: []*genai.Part{
+				{
+					InlineData: &genai.Blob{
+						Data:     []byte("This field is ignored during testcase comparison"),
+						MIMEType: "application/pdf",
+					},
+				},
+			},
+		},
+		{
+			name: "file content - video/mp4 data URI",
+			msg: openai.ChatCompletionUserMessageParam{
+				Role: openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{
+					Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{
+							OfFile: &openai.ChatCompletionContentPartFileParam{
+								Type: "file",
+								File: openai.ChatCompletionContentPartFileFileParam{
+									FileData: "data:video/mp4;base64," + base64.StdEncoding.EncodeToString([]byte("fake-video")),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedParts: []*genai.Part{
+				{
+					InlineData: &genai.Blob{
+						Data:     []byte("This field is ignored during testcase comparison"),
+						MIMEType: "video/mp4",
+					},
+				},
+			},
+		},
+		{
+			name: "file content - FileID not supported",
+			msg: openai.ChatCompletionUserMessageParam{
+				Role: openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{
+					Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{
+							OfFile: &openai.ChatCompletionContentPartFileParam{
+								Type: "file",
+								File: openai.ChatCompletionContentPartFileFileParam{
+									FileID: "file-abc123",
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedErrMsg: "file_id is not supported yet",
+		},
+		{
+			name: "file content - empty file_data",
+			msg: openai.ChatCompletionUserMessageParam{
+				Role: openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{
+					Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{
+							OfFile: &openai.ChatCompletionContentPartFileParam{
+								Type: "file",
+								File: openai.ChatCompletionContentPartFileFileParam{},
+							},
+						},
+					},
+				},
+			},
+			expectedErrMsg: "file content must provide file_data",
+		},
+		{
+			name: "file content - invalid data URI",
+			msg: openai.ChatCompletionUserMessageParam{
+				Role: openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{
+					Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{
+							OfFile: &openai.ChatCompletionContentPartFileParam{
+								Type: "file",
+								File: openai.ChatCompletionContentPartFileFileParam{
+									FileData: "not-a-data-uri",
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedErrMsg: "invalid file data URI",
+		},
+		{
+			name: "mixed content - text, audio, and file",
+			msg: openai.ChatCompletionUserMessageParam{
+				Role: openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{
+					Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{
+							OfText: &openai.ChatCompletionContentPartTextParam{
+								Type: string(openai.ChatCompletionContentPartTextTypeText),
+								Text: "Analyze these:",
+							},
+						},
+						{
+							OfInputAudio: &openai.ChatCompletionContentPartInputAudioParam{
+								Type: "input_audio",
+								InputAudio: openai.ChatCompletionContentPartInputAudioInputAudioParam{
+									Data:   base64.StdEncoding.EncodeToString([]byte("fake-wav")),
+									Format: openai.ChatCompletionContentPartInputAudioInputAudioFormatWAV,
+								},
+							},
+						},
+						{
+							OfFile: &openai.ChatCompletionContentPartFileParam{
+								Type: "file",
+								File: openai.ChatCompletionContentPartFileFileParam{
+									FileData: "data:application/pdf;base64," + base64.StdEncoding.EncodeToString([]byte("fake-pdf")),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedParts: []*genai.Part{
+				{Text: "Analyze these:"},
+				{
+					InlineData: &genai.Blob{
+						Data:     []byte("This field is ignored during testcase comparison"),
+						MIMEType: "audio/wav",
+					},
+				},
+				{
+					InlineData: &genai.Blob{
+						Data:     []byte("This field is ignored during testcase comparison"),
+						MIMEType: "application/pdf",
+					},
+				},
+			},
 		},
 		{
 			name: "unsupported content type",
