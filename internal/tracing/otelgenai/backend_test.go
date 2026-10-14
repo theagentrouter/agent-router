@@ -134,6 +134,7 @@ func TestRecorder_RecordBackend_allEndpoints(t *testing.T) {
 		"embeddings":      NewEmbeddingsRecorder(cfg),
 		"imageGeneration": NewImageGenerationRecorder(cfg),
 		"responses":       NewResponsesRecorder(cfg),
+		"decisions":       NewDecisionsRecorder(cfg),
 		"speech":          NewSpeechRecorder(cfg),
 		"transcription":   NewTranscriptionRecorder(cfg),
 		"translation":     NewTranslationRecorder(cfg),

@@ -82,6 +82,27 @@ type Translator[ReqT any, SpanT any] interface {
 	)
 }
 
+// StreamOverloadedError signals that the upstream reported an overload in the
+// middle of a streaming response. When returning it, ResponseBody must also
+// return a non-empty body containing the translated error event. The response
+// processor sends that body downstream and discards any later upstream chunks.
+type StreamOverloadedError struct {
+	Err error
+}
+
+// Error implements error.
+func (e *StreamOverloadedError) Error() string {
+	if e.Err == nil {
+		return "upstream overloaded mid-stream"
+	}
+	return "upstream overloaded mid-stream: " + e.Err.Error()
+}
+
+// Unwrap returns the translator-specific cause.
+func (e *StreamOverloadedError) Unwrap() error {
+	return e.Err
+}
+
 // ContentTypeSetter is an optional interface that translators can implement
 // to receive the original request Content-Type header. This is needed for
 // multipart/form-data endpoints where the translator needs the boundary
@@ -145,6 +166,8 @@ type (
 	OpenAIImageGenerationTranslator = Translator[openai.ImageGenerationRequest, tracingapi.ImageGenerationSpan]
 	// OpenAIResponsesTranslator translates the OpenAI's /responses endpoint.
 	OpenAIResponsesTranslator = Translator[openai.ResponseRequest, tracingapi.ResponsesSpan]
+	// OpenAIDecisionsTranslator translates the OpenAI /v1/decisions endpoint.
+	OpenAIDecisionsTranslator = Translator[openai.DecisionRequest, tracingapi.DecisionsSpan]
 	// OpenAISpeechTranslator translates the OpenAI's /v1/audio/speech endpoint.
 	OpenAISpeechTranslator = Translator[openai.SpeechRequest, tracingapi.SpeechSpan]
 	// OpenAIAudioTranscriptionTranslator translates the OpenAI's /v1/audio/transcriptions endpoint.

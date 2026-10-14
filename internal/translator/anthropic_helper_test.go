@@ -334,6 +334,21 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 			expectErr: true,
 		},
 		{
+			name: "maps Anthropic web search tool",
+			openAIReq: &openai.ChatCompletionRequest{
+				Tools: []openai.Tool{{
+					Type: openai.ToolTypeAnthropicWebSearch,
+					Name: "web_search",
+				}},
+			},
+			expectedTools: []anthropic.ToolUnionParam{{
+				OfWebSearchTool20260209: &anthropic.WebSearchTool20260209Param{
+					Name: constant.WebSearch("web_search"),
+					Type: constant.WebSearch20260209("web_search_20260209"),
+				},
+			}},
+		},
+		{
 			name: "tool definition without type field",
 			openAIReq: &openai.ChatCompletionRequest{
 				Tools: []openai.Tool{
@@ -505,11 +520,11 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 					require.Equal(t, tt.expectedTools[0].GetName(), tools[0].GetName())
 					require.Equal(t, tt.expectedTools[0].GetType(), tools[0].GetType())
 					require.Equal(t, tt.expectedTools[0].GetDescription(), tools[0].GetDescription())
-					if tt.expectedTools[0].GetInputSchema().Properties != nil {
-						require.Equal(t, tt.expectedTools[0].GetInputSchema().Properties, tools[0].GetInputSchema().Properties)
+					if inputSchema := tt.expectedTools[0].GetInputSchema(); inputSchema != nil && inputSchema.Properties != nil {
+						require.Equal(t, inputSchema.Properties, tools[0].GetInputSchema().Properties)
 					}
-					if tt.expectedTools[0].GetInputSchema().ExtraFields != nil {
-						require.Equal(t, tt.expectedTools[0].GetInputSchema().ExtraFields, tools[0].GetInputSchema().ExtraFields)
+					if inputSchema := tt.expectedTools[0].GetInputSchema(); inputSchema != nil && inputSchema.ExtraFields != nil {
+						require.Equal(t, inputSchema.ExtraFields, tools[0].GetInputSchema().ExtraFields)
 					}
 				}
 			}
@@ -837,6 +852,30 @@ func TestOutputConfigAvailable(t *testing.T) {
 			name:      "claude-opus-5-5 not supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-opus-5-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-sonnet-5-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-sonnet-5-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-sonnet-5-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-sonnet-5-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-haiku-5-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-haiku-5-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-haiku-5-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-haiku-5-5",
 			expected:  false,
 		},
 		// Unsupported models on either backend.
@@ -1258,6 +1297,16 @@ func TestEffortAvailable(t *testing.T) {
 		{
 			name:     "claude-opus-5-5 supported",
 			model:    "claude-opus-5-5",
+			expected: true,
+		},
+		{
+			name:     "claude-sonnet-5-5 supported",
+			model:    "claude-sonnet-5-5",
+			expected: true,
+		},
+		{
+			name:     "claude-haiku-5-5 supported",
+			model:    "claude-haiku-5-5",
 			expected: true,
 		},
 		{
@@ -2103,4 +2152,103 @@ func streamedContent(t *testing.T, body []byte) []string {
 		}
 	}
 	return out
+}
+
+func TestAnthropicStreamParser_ErrorEvent(t *testing.T) {
+	const wantErrorEvent = "data: {\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"
+	tests := []struct {
+		name   string
+		stream string
+	}{
+		{
+			name: "error only",
+			stream: `event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`,
+		},
+		{
+			name: "message start followed by error",
+			stream: `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newAnthropicStreamParser("claude-sonnet-4-5")
+			_, body, _, _, err := p.Process(strings.NewReader(tt.stream), false, nil)
+
+			var streamErr *StreamOverloadedError
+			require.ErrorAs(t, err, &streamErr)
+			var anthropicErr *anthropicStreamError
+			require.ErrorAs(t, err, &anthropicErr)
+			require.Equal(t, "overloaded_error", anthropicErr.Type)
+			require.Equal(t, "Overloaded", anthropicErr.Message)
+			require.Equal(t, wantErrorEvent, string(body))
+		})
+	}
+
+	t.Run("after translated content", func(t *testing.T) {
+		p := newAnthropicStreamParser("claude-sonnet-4-5")
+		const content = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}
+
+`
+		_, body, _, _, err := p.Process(strings.NewReader(content), false, nil)
+		require.NoError(t, err)
+		require.Contains(t, string(body), `"content":"partial"`)
+
+		const overload = `event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`
+		_, body, _, _, err = p.Process(strings.NewReader(overload), false, nil)
+		var streamErr *StreamOverloadedError
+		require.ErrorAs(t, err, &streamErr)
+		require.Equal(t, wantErrorEvent, string(body))
+	})
+
+	t.Run("after translated content in the same callback", func(t *testing.T) {
+		p := newAnthropicStreamParser("claude-sonnet-4-5")
+		const stream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`
+		_, body, _, _, err := p.Process(strings.NewReader(stream), false, nil)
+		var streamErr *StreamOverloadedError
+		require.ErrorAs(t, err, &streamErr)
+		require.Contains(t, string(body), `"content":"partial"`)
+		require.True(t, strings.HasSuffix(string(body), wantErrorEvent))
+		require.NotContains(t, string(body), "[DONE]")
+	})
+
+	t.Run("non-overload error is not serialized", func(t *testing.T) {
+		p := newAnthropicStreamParser("claude-sonnet-4-5")
+		const stream = `event: error
+data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
+
+`
+		_, body, _, _, err := p.Process(strings.NewReader(stream), false, nil)
+		var streamErr *StreamOverloadedError
+		require.NotErrorAs(t, err, &streamErr)
+		var anthropicErr *anthropicStreamError
+		require.ErrorAs(t, err, &anthropicErr)
+		require.Equal(t, "api_error", anthropicErr.Type)
+		require.Empty(t, body)
+	})
 }

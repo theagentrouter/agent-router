@@ -35,3 +35,15 @@
 .strip img:hover { filter: none; opacity: 1; }
 :global([data-theme='dark']) .strip img { filter: grayscale(1) invert(1) contrast(0.7); opacity: 0.6; }
 :global([data-theme='dark']) .strip img:hover { opacity: 0.9; }
+
+/* same treatment as the Adopters cta line that follows this section */
+.ctaLine {
+  margin: 40px 0 0;
+  text-align: center;
+  font-size: var(--ar-text-sm);
+}
+.ctaLine a {
+  color: var(--ar-brand-text);
+  font-weight: 600;
+  text-decoration: none;
+}

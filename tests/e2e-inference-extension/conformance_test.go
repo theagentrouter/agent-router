@@ -9,6 +9,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +42,7 @@ func TestGatewayAPIInferenceExtension(t *testing.T) {
 		Project:      "Envoy AI Gateway",
 		URL:          "https://github.com/envoyproxy/ai-gateway",
 		Contact:      []string{"@envoy-ai-gateway/maintainers"},
-		Version:      "latest",
+		Version:      implementationVersion(t),
 	}
 	options.ConformanceProfiles = []suite.ConformanceProfileName{gie.GatewayLayerProfileName}
 	options.AllowCRDsMismatch = true
@@ -68,4 +70,16 @@ func TestGatewayAPIInferenceExtension(t *testing.T) {
 	})
 
 	gie.RunConformanceWithOptions(t, options)
+}
+
+// implementationVersion returns the git tag pointing at HEAD, or "latest" if HEAD is not tagged.
+func implementationVersion(t *testing.T) string {
+	out, err := exec.CommandContext(t.Context(), "git", "describe", "--tags", "--exact-match").Output()
+	if err != nil {
+		return "latest"
+	}
+	if tag := strings.TrimSpace(string(out)); tag != "" {
+		return tag
+	}
+	return "latest"
 }

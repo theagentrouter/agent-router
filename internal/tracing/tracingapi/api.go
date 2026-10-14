@@ -34,6 +34,8 @@ type (
 		EmbeddingsTracer() EmbeddingsTracer
 		// ResponsesTracer creates spans for OpenAI responses requests on /v1/responses endpoint.
 		ResponsesTracer() ResponsesTracer
+		// DecisionsTracer creates spans for OpenAI Decisions requests on /v1/decisions.
+		DecisionsTracer() DecisionsTracer
 		// SpeechTracer creates spans for OpenAI speech synthesis requests on /v1/audio/speech endpoint.
 		SpeechTracer() SpeechTracer
 		// TranscriptionTracer creates spans for OpenAI audio transcription requests on /v1/audio/transcriptions endpoint.
@@ -81,6 +83,8 @@ type (
 	ImageGenerationTracer = RequestTracer[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}]
 	// ResponsesTracer creates spans for OpenAI responses requests.
 	ResponsesTracer = RequestTracer[openai.ResponseRequest, openai.Response, openai.ResponseStreamEventUnion]
+	// DecisionsTracer creates spans for OpenAI Decisions requests.
+	DecisionsTracer = RequestTracer[openai.DecisionRequest, openai.DecisionResponse, struct{}]
 	// SpeechTracer creates spans for OpenAI speech synthesis requests.
 	SpeechTracer = RequestTracer[openai.SpeechRequest, []byte, openai.SpeechStreamChunk]
 	// TranscriptionTracer creates spans for OpenAI audio transcription requests.
@@ -129,6 +133,8 @@ type (
 	ImageGenerationSpan = Span[openai.ImageGenerationResponse, struct{}]
 	// ResponsesSpan represents an OpenAI responses request span.
 	ResponsesSpan = Span[openai.Response, openai.ResponseStreamEventUnion]
+	// DecisionsSpan represents an OpenAI Decisions request span.
+	DecisionsSpan = Span[openai.DecisionResponse, struct{}]
 	// SpeechSpan represents an OpenAI speech synthesis request span.
 	SpeechSpan = Span[[]byte, openai.SpeechStreamChunk]
 	// TranscriptionSpan represents an OpenAI audio transcription request span.
@@ -186,6 +192,8 @@ type (
 	EmbeddingsRecorder = SpanRecorder[openai.EmbeddingRequest, openai.EmbeddingResponse, struct{}]
 	// ResponsesRecorder records attributes to a span according to a semantic convention.
 	ResponsesRecorder = SpanRecorder[openai.ResponseRequest, openai.Response, openai.ResponseStreamEventUnion]
+	// DecisionsRecorder records attributes to a span according to a semantic convention.
+	DecisionsRecorder = SpanRecorder[openai.DecisionRequest, openai.DecisionResponse, struct{}]
 	// SpeechRecorder records attributes to a span according to a semantic convention.
 	SpeechRecorder = SpanRecorder[openai.SpeechRequest, []byte, openai.SpeechStreamChunk]
 	// TranscriptionRecorder records attributes to a span according to a semantic convention.
@@ -272,6 +280,11 @@ func (NoopTracing) ResponsesTracer() ResponsesTracer {
 	return NoopResponsesTracer{}
 }
 
+// DecisionsTracer implements Tracing.DecisionsTracer.
+func (NoopTracing) DecisionsTracer() DecisionsTracer {
+	return NoopDecisionsTracer{}
+}
+
 // SpeechTracer implements Tracing.SpeechTracer.
 func (NoopTracing) SpeechTracer() SpeechTracer {
 	return NoopSpeechTracer{}
@@ -334,6 +347,8 @@ type (
 	NoopImageGenerationTracer = NoopTracer[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}]
 	// NoopResponsesTracer implements ResponsesTracer.
 	NoopResponsesTracer = NoopTracer[openai.ResponseRequest, openai.Response, openai.ResponseStreamEventUnion]
+	// NoopDecisionsTracer implements DecisionsTracer.
+	NoopDecisionsTracer = NoopTracer[openai.DecisionRequest, openai.DecisionResponse, struct{}]
 	// NoopSpeechTracer implements SpeechTracer.
 	NoopSpeechTracer = NoopTracer[openai.SpeechRequest, []byte, openai.SpeechStreamChunk]
 	// NoopTranscriptionTracer implements TranscriptionTracer.

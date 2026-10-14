@@ -1227,6 +1227,24 @@ func TestChatCompletionRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "Anthropic web search tool",
+			jsonStr: `{
+				"model": "claude-sonnet-4-6",
+				"messages": [{"role": "user", "content": "Search for the weather"}],
+				"tools": [{"type": "web_search_20260209", "name": "web_search"}]
+			}`,
+			expected: &ChatCompletionRequest{
+				Model: "claude-sonnet-4-6",
+				Messages: []ChatCompletionMessageParamUnion{{
+					OfUser: &ChatCompletionUserMessageParam{
+						Role:    ChatMessageRoleUser,
+						Content: StringOrUserRoleContentUnion{Value: "Search for the weather"},
+					},
+				}},
+				Tools: []Tool{{Type: ToolTypeAnthropicWebSearch, Name: "web_search"}},
+			},
+		},
+		{
 			name: "enterprise search tool",
 			jsonStr: `{
 				"model": "gemini-1.5-pro",

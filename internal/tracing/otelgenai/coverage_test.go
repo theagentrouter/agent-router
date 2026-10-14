@@ -98,6 +98,13 @@ func TestEndpointCoverage(t *testing.T) {
 			expected: coverage{},
 		},
 		{
+			// Decisions is a custom operation; the response contributes the resolved
+			// model and token usage.
+			name:     "decisions",
+			actual:   coverageOf(t, NewDecisionsRecorder(cfg)),
+			expected: coverage{responseAttrs: true},
+		},
+		{
 			// The conventions define no speech attributes beyond the core set.
 			name:     "speech",
 			actual:   coverageOf(t, NewSpeechRecorder(cfg)),

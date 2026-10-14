@@ -39,6 +39,7 @@ var (
 	_ tracingapi.CompletionTracer           = (*completionTracer)(nil)
 	_ tracingapi.ImageGenerationTracer      = (*imageGenerationTracer)(nil)
 	_ tracingapi.ResponsesTracer            = (*responsesTracer)(nil)
+	_ tracingapi.DecisionsTracer            = (*decisionsTracer)(nil)
 	_ tracingapi.SpeechTracer               = (*speechTracer)(nil)
 	_ tracingapi.TranscriptionTracer        = (*transcriptionTracer)(nil)
 	_ tracingapi.TranslationTracer          = (*translationTracer)(nil)
@@ -55,6 +56,7 @@ type (
 	completionTracer           = requestTracerImpl[openai.CompletionRequest, openai.CompletionResponse, openai.CompletionResponse]
 	imageGenerationTracer      = requestTracerImpl[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}]
 	responsesTracer            = requestTracerImpl[openai.ResponseRequest, openai.Response, openai.ResponseStreamEventUnion]
+	decisionsTracer            = requestTracerImpl[openai.DecisionRequest, openai.DecisionResponse, struct{}]
 	speechTracer               = requestTracerImpl[openai.SpeechRequest, []byte, openai.SpeechStreamChunk]
 	transcriptionTracer        = requestTracerImpl[openai.TranscriptionRequest, openai.TranscriptionResponse, openai.TranscriptionStreamEvent]
 	translationTracer          = requestTracerImpl[openai.TranslationRequest, openai.TranslationResponse, struct{}]
@@ -175,6 +177,18 @@ func newResponsesTracer(tracer trace.Tracer, propagator propagation.TextMapPropa
 		headerAttributes,
 		func(span trace.Span, recorder tracingapi.ResponsesRecorder) tracingapi.ResponsesSpan {
 			return &responsesSpan{span: span, recorder: recorder}
+		},
+	)
+}
+
+func newDecisionsTracer(tracer trace.Tracer, propagator propagation.TextMapPropagator, recorder tracingapi.DecisionsRecorder, headerAttributes map[string]string) tracingapi.DecisionsTracer {
+	return newRequestTracer(
+		tracer,
+		propagator,
+		recorder,
+		headerAttributes,
+		func(span trace.Span, recorder tracingapi.DecisionsRecorder) tracingapi.DecisionsSpan {
+			return &decisionsSpan{span: span, recorder: recorder}
 		},
 	)
 }

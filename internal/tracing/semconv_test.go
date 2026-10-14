@@ -158,6 +158,7 @@ func requireAllRecordersSet(t *testing.T, r *recorderSet) {
 	require.NotNil(t, r.embeddings, "embeddings")
 	require.NotNil(t, r.imageGeneration, "imageGeneration")
 	require.NotNil(t, r.responses, "responses")
+	require.NotNil(t, r.decisions, "decisions")
 	require.NotNil(t, r.speech, "speech")
 	require.NotNil(t, r.transcription, "transcription")
 	require.NotNil(t, r.translation, "translation")

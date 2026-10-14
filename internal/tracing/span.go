@@ -61,6 +61,7 @@ type (
 	embeddingsSpan           = span[openai.EmbeddingResponse, struct{}]
 	imageGenerationSpan      = span[openai.ImageGenerationResponse, struct{}]
 	responsesSpan            = span[openai.Response, openai.ResponseStreamEventUnion]
+	decisionsSpan            = span[openai.DecisionResponse, struct{}]
 	speechSpan               = span[[]byte, openai.SpeechStreamChunk]
 	transcriptionSpan        = span[openai.TranscriptionResponse, openai.TranscriptionStreamEvent]
 	translationSpan          = span[openai.TranslationResponse, struct{}]

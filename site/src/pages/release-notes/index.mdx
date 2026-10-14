@@ -14,10 +14,12 @@ import v06Data from '../../data/releases/v0.6.json';
 import v07Data from '../../data/releases/v0.7.json';
 import v10Data from '../../data/releases/v1.0.json';
 import v11Data from '../../data/releases/v1.1.json';
+import v12Data from '../../data/releases/v1.2.json';
 import indexData from '../../data/releases/index.json';
 import styles from '../../components/ReleaseNotes/ReleaseNotes.module.css';
 
 export const allReleases = [
+  ...v12Data.releases,
   ...v11Data.releases,
   ...v10Data.releases,
   ...v07Data.releases,
@@ -46,14 +48,26 @@ Stay up-to-date with the latest improvements, features, and fixes in Agent Route
 
 <div className={styles.releaseNotesGrid}>
   <ReleaseCard
+    version="v1.2.x"
+    date="October 6, 2026 - Current"
+    summary={v12Data.series.subtitle}
+    tags={v12Data.releases[0].tags.slice(0, 10)}
+    linkTo="/release-notes/v1.2"
+    linkText="View Release Notes →"
+    badge={v12Data.series.badge}
+    featured={true}
+    versions={v12Data.releases.map(release => release.version).join(', ')}
+  />
+
+  <ReleaseCard
     version="v1.1.x"
-    date="August 21, 2026 - Current"
+    date="August 21, 2026 - October 6, 2026"
     summary={v11Data.series.subtitle}
     tags={v11Data.releases[0].tags.slice(0, 10)}
     linkTo="/release-notes/v1.1"
     linkText="View Release Notes →"
     badge={v11Data.series.badge}
-    featured={true}
+    featured={false}
     versions={v11Data.releases.map(release => release.version).join(', ')}
   />
 

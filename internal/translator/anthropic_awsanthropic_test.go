@@ -261,6 +261,31 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_AnthropicBetaHeader(t *te
 			expected: []string{"context-1m-2025-08-07", "interleaved-thinking-2025-05-14", "fine-grained-tool-streaming-2025-05-14", "token-efficient-tools-2025-02-19", "tool-search-tool-2025-10-19"},
 		},
 		{
+			name:     "afk mode flag is forwarded",
+			headers:  map[string]string{"anthropic-beta": "afk-mode-2026-01-31"},
+			expected: []string{"afk-mode-2026-01-31"},
+		},
+		{
+			name:     "dangerous tool use flag is forwarded",
+			headers:  map[string]string{"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+			expected: []string{"dangerous-tool-use-2026-09-03"},
+		},
+		{
+			name:     "thinking binding controls flag is forwarded",
+			headers:  map[string]string{"anthropic-beta": "thinking-binding-controls-2026-08-01"},
+			expected: []string{"thinking-binding-controls-2026-08-01"},
+		},
+		{
+			name:     "thinking token count flag is forwarded",
+			headers:  map[string]string{"anthropic-beta": "thinking-token-count-2026-05-13"},
+			expected: []string{"thinking-token-count-2026-05-13"},
+		},
+		{
+			name:     "newer flags combined with other supported flags",
+			headers:  map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,afk-mode-2026-01-31,dangerous-tool-use-2026-09-03,thinking-binding-controls-2026-08-01,thinking-token-count-2026-05-13"},
+			expected: []string{"interleaved-thinking-2025-05-14", "afk-mode-2026-01-31", "dangerous-tool-use-2026-09-03", "thinking-binding-controls-2026-08-01", "thinking-token-count-2026-05-13"},
+		},
+		{
 			name:     "unsupported flags are dropped",
 			headers:  map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,prompt-caching-2024-07-31,tool-search-tool-2025-10-19"},
 			expected: []string{"interleaved-thinking-2025-05-14", "tool-search-tool-2025-10-19"},
@@ -413,10 +438,10 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_HeaderValueFilter(t *test
 			// The built-in allowlist runs first, so a value it strips never reaches the operator
 			// filter: denying an already-stripped value is a no-op, not a second drop.
 			name:           "value already stripped by the built-in allowlist never reaches the filter",
-			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13"},
+			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,prompt-caching-2024-07-31"},
 			filterHeader:   "anthropic-beta",
 			filterMode:     "Denylist",
-			filterValues:   []string{"thinking-token-count-2026-05-13"},
+			filterValues:   []string{"prompt-caching-2024-07-31"},
 			wantBody:       []string{"interleaved-thinking-2025-05-14"},
 		},
 		{

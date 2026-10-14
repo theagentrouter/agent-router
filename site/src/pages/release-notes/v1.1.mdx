@@ -53,12 +53,13 @@ export const patchReleases = releases.slice(1).reverse();
   <ItemList items={mainRelease.apiChanges} />
 )}
 
-{mainRelease.deprecations?.length > 0 && (
-  <>
-    ### Deprecations
-    <ItemList items={mainRelease.deprecations} />
-  </>
-)}
+## ⚠️ Breaking Changes
+
+<ItemList items={mainRelease.breakingChanges} />
+
+## 🐛 Bug Fixes
+
+<ItemList items={mainRelease.bugFixes} />
 
 ## 📖 Upgrade Guidance
 

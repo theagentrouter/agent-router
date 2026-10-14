@@ -63,6 +63,52 @@ func TestChatCompletionRecorder_RecordRequest(t *testing.T) {
 	}, span.Attributes)
 }
 
+func TestDecisionsRecorder_CoreAttributes(t *testing.T) {
+	r := NewDecisionsRecorder(NewConfig())
+	spanName, opts := r.StartParams(&openai.DecisionRequest{Model: "gpt-6-luna"}, nil)
+	require.Equal(t, "decisions gpt-6-luna", spanName)
+	span := testotel.RecordNewSpan(t, spanName, opts...)
+	require.Equal(t, oteltrace.SpanKindClient, span.SpanKind)
+
+	span = testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+		r.RecordRequest(span, &openai.DecisionRequest{Model: "gpt-6-luna"}, nil)
+		return false
+	})
+	testotel.RequireAttributesEqual(t, []attribute.KeyValue{
+		attribute.String(OperationName, "decisions"),
+		attribute.String(RequestModel, "gpt-6-luna"),
+	}, span.Attributes)
+}
+
+func TestDecisionsRecorder_RecordResponse(t *testing.T) {
+	r := NewDecisionsRecorder(NewConfig())
+	span := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+		r.RecordResponse(span, &openai.DecisionResponse{
+			Model: "gpt-6-luna-2026-09-01",
+			Usage: &openai.ResponseUsage{
+				InputTokens:  100,
+				OutputTokens: 50,
+				InputTokensDetails: openai.ResponseUsageInputTokensDetails{
+					CachedTokens:     80,
+					CacheWriteTokens: 20,
+				},
+				OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{ReasoningTokens: 30},
+			},
+		})
+		return false
+	})
+
+	testotel.RequireAttributesEqual(t, []attribute.KeyValue{
+		attribute.String(ResponseModel, "gpt-6-luna-2026-09-01"),
+		attribute.Int(UsageInputTokens, 100),
+		attribute.Int(UsageOutputTokens, 50),
+		attribute.Int(UsageCacheReadInputTokens, 80),
+		attribute.Int(UsageCacheCreationInputTokens, 20),
+		attribute.Int(UsageReasoningOutputTokens, 30),
+	}, span.Attributes)
+	require.Equal(t, codes.Ok, span.Status.Code)
+}
+
 // TestChatCompletionRecorder_RecordRequest_noContentByDefault pins that the raw
 // request body is not copied onto the span, which is the whole point of the
 // opt-in content default.

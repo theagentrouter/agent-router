@@ -236,7 +236,7 @@ func (c *MCPRouteController) listExistingPerBackendHTTPRoutes(ctx context.Contex
 	var ownedRoutes gwapiv1.HTTPRouteList
 	if err := c.client.List(ctx, &ownedRoutes,
 		client.InNamespace(mcpRoute.Namespace),
-		client.MatchingFields{k8sClientIndexMCPRouteToOwnedHTTPRoute: fmt.Sprintf("%s.%s", mcpRoute.Name, mcpRoute.Namespace)},
+		client.MatchingFields{k8sClientIndexMCPRouteToOwnedHTTPRoute: namespacedNameIndexKey(mcpRoute.Name, mcpRoute.Namespace)},
 	); err != nil {
 		return nil, fmt.Errorf("failed to list owned HTTPRoutes: %w", err)
 	}

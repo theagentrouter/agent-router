@@ -134,6 +134,28 @@ Agent Router supports a wide range of AI providers, making it easy to integrate 
         <img src="site/static/img/providers/anthropic.svg" width="60" height="60" alt="Anthropic"/>
         <br><sub><b>Anthropic</b></sub>
       </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/bitdeer.svg" width="60" height="60" alt="BitDeer"/>
+        <br><sub><b>BitDeer</b></sub>
+      </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/eden-ai.svg" width="60" height="60" alt="Eden AI"/>
+        <br><sub><b>Eden AI</b></sub>
+      </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/lanseq.svg" width="60" height="60" alt="Lanseq"/>
+        <br><sub><b>Lanseq</b></sub>
+      </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/tencent-lke.svg" width="60" height="60" alt="Tencent LLM Knowledge Engine"/>
+        <br><sub><b>Tencent LLM Knowledge Engine</b></sub>
+      </td>
+    </tr>
+    <tr>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/typesafe-ai.svg" width="60" height="60" alt="TypeSafe AI"/>
+        <br><sub><b>TypeSafe AI</b></sub>
+      </td>
     </tr>
   </table>
 </div>

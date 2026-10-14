@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -114,8 +116,8 @@ func TestQuotaPolicyController_Reconcile_NotFound(t *testing.T) {
 	rateLimitRunner := newTestRunner(t)
 	c := NewQuotaPolicyController(fakeClient, fake2.NewClientset(), ctrl.Log, rateLimitRunner, make(chan event.GenericEvent, 100))
 
-	// Reconcile a non-existent QuotaPolicy - this triggers the deletion path
-	// (rebuilds all configs, which should succeed with no policies).
+	// Reconcile a non-existent QuotaPolicy. Deletion cleanup is handled in the finalizer callback, so
+	// the NotFound path is now a no-op that simply returns without error.
 	res, err := c.Reconcile(t.Context(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Namespace: "default", Name: "nonexistent"},
 	})
@@ -280,6 +282,232 @@ func TestQuotaPolicyController_Reconcile_Deletion(t *testing.T) {
 		NamespacedName: types.NamespacedName{Namespace: namespace, Name: "qp-delete"},
 	})
 	require.NoError(t, err)
+}
+
+// drainRouteEvents non-blockingly collects all pending "namespace/name" identifiers from the channel.
+func drainRouteEvents(ch chan event.GenericEvent) []string {
+	var got []string
+	for {
+		select {
+		case ev := <-ch:
+			got = append(got, ev.Object.GetNamespace()+"/"+ev.Object.GetName())
+		default:
+			return got
+		}
+	}
+}
+
+// TestQuotaPolicyController_Reconcile_Deletion_NotifiesRoutes verifies that deleting a QuotaPolicy
+// notifies the AIGatewayRoutes targeting its backends via the finalizer callback, including routes in
+// a different namespace that reference the backend cross-namespace. This is what forces those routes'
+// derived HTTPRoutes to be re-reconciled (re-stamping the quota-policy-hash annotation) so Envoy
+// Gateway re-translates without the deleted policy.
+func TestQuotaPolicyController_Reconcile_Deletion_NotifiesRoutes(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	rateLimitRunner := newTestRunner(t)
+	routeCh := make(chan event.GenericEvent, 100)
+	c := NewQuotaPolicyController(fakeClient, fake2.NewClientset(), ctrl.Log, rateLimitRunner, routeCh)
+
+	const nsA, nsB = "ns-a", "ns-b"
+
+	// Backend in namespace A.
+	backend := &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "backend-x", Namespace: nsA},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			BackendRef: gwapiv1.BackendObjectReference{Name: "some-service", Port: ptrTo[gwapiv1.PortNumber](8080)},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), backend))
+
+	// Route in the same namespace as the policy (namespace A).
+	routeA := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route-a", Namespace: nsA},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			Rules: []aigv1b1.AIGatewayRouteRule{
+				{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "backend-x"}}},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), routeA))
+
+	// Route in a different namespace (B) referencing the backend in namespace A cross-namespace.
+	routeB := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route-b", Namespace: nsB},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			Rules: []aigv1b1.AIGatewayRouteRule{
+				{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+					{Name: "backend-x", Namespace: ptrTo(gwapiv1.Namespace(nsA))},
+				}},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), routeB))
+
+	// QuotaPolicy in namespace A targeting the backend.
+	qp := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "qp-x", Namespace: nsA},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
+				{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: "backend-x"},
+			},
+			ServiceQuota: aigv1a1.ServiceQuotaDefinition{Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"}},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), qp))
+
+	// First reconcile adds the finalizer (and notifies routes via the create/update path).
+	_, err := c.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: nsA, Name: "qp-x"},
+	})
+	require.NoError(t, err)
+	// Discard the create/update-path notifications; we only care about the deletion path below.
+	drainRouteEvents(routeCh)
+
+	// Mark the QuotaPolicy for deletion. The finalizer keeps the object around so the finalizer
+	// callback (which still has access to Spec.TargetRefs) runs on the next reconcile.
+	require.NoError(t, fakeClient.Delete(t.Context(), qp))
+
+	// Reconcile the deletion: the finalizer callback must notify both routes via the
+	// BackendToReferencingAIGatewayRoute index.
+	_, err = c.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: nsA, Name: "qp-x"},
+	})
+	require.NoError(t, err)
+
+	notified := drainRouteEvents(routeCh)
+	require.Contains(t, notified, nsA+"/route-a", "same-namespace route should be notified on deletion")
+	require.Contains(t, notified, nsB+"/route-b", "cross-namespace route should be notified on deletion")
+}
+
+// quotaConfigCached reports whether the controller still holds a cached rate limit config for the
+// given "namespace/name" QuotaPolicy key.
+func quotaConfigCached(c *QuotaPolicyController, key string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	_, ok := c.configCache[key]
+	return ok
+}
+
+// TestQuotaPolicyController_Reconcile_Deletion_ClearedFinalizer_CleansConfig covers a QuotaPolicy that
+// disappears without the finalizer callback running (e.g. its finalizer is removed out of band). The
+// not-found reconcile path must still drop the policy's entry from the rate limit config cache,
+// otherwise its limits would linger until the controller restarts.
+func TestQuotaPolicyController_Reconcile_Deletion_ClearedFinalizer_CleansConfig(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	rateLimitRunner := newTestRunner(t)
+	c := NewQuotaPolicyController(fakeClient, fake2.NewClientset(), ctrl.Log, rateLimitRunner, make(chan event.GenericEvent, 100))
+	const namespace, name = "default", "qp-cleared"
+	cacheKey := namespace + "/" + name
+
+	backend := &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "backend-cleared", Namespace: namespace},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			BackendRef: gwapiv1.BackendObjectReference{Name: "some-service", Port: ptrTo[gwapiv1.PortNumber](8080)},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), backend))
+
+	qp := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
+				{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: gwapiv1.ObjectName(backend.Name)},
+			},
+			ServiceQuota: aigv1a1.ServiceQuotaDefinition{Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"}},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), qp))
+
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: namespace, Name: name}}
+	// First reconcile adds the finalizer and populates the config cache.
+	_, err := c.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	require.True(t, quotaConfigCached(c, cacheKey), "config cache should hold the policy after sync")
+
+	// Remove the finalizer out of band, then delete so the object is gone immediately and the
+	// finalizer callback never runs.
+	var current aigv1a1.QuotaPolicy
+	require.NoError(t, fakeClient.Get(t.Context(), req.NamespacedName, &current))
+	current.Finalizers = nil
+	require.NoError(t, fakeClient.Update(t.Context(), &current))
+	require.NoError(t, fakeClient.Delete(t.Context(), &current))
+
+	// The not-found reconcile path must clean the config cache.
+	_, err = c.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	require.False(t, quotaConfigCached(c, cacheKey),
+		"config cache entry must be removed when the policy is gone, even without the finalizer callback")
+}
+
+// TestQuotaPolicyController_Reconcile_Deletion_NotFound_NotifiesRoutes covers the not-found deletion
+// path: with Spec.TargetRefs no longer available, every AIGatewayRoute referencing a backend in the
+// policy's namespace must be notified (including cross-namespace routes), and each exactly once even
+// when it references multiple backends in that namespace.
+func TestQuotaPolicyController_Reconcile_Deletion_NotFound_NotifiesRoutes(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	routeCh := make(chan event.GenericEvent, 100)
+	c := NewQuotaPolicyController(fakeClient, fake2.NewClientset(), ctrl.Log, newTestRunner(t), routeCh)
+	const nsA, nsB = "ns-a", "ns-b"
+
+	for _, name := range []string{"backend-x", "backend-y"} {
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: nsA},
+			Spec: aigv1b1.AIServiceBackendSpec{
+				BackendRef: gwapiv1.BackendObjectReference{Name: "some-service", Port: ptrTo[gwapiv1.PortNumber](8080)},
+			},
+		}))
+	}
+
+	// route-a references BOTH backends in ns-a: deletion finds it twice, but it must be notified once.
+	routeA := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route-a", Namespace: nsA},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{
+			BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "backend-x"}, {Name: "backend-y"}},
+		}}},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), routeA))
+
+	// route-b lives in ns-b and references backend-x in ns-a cross-namespace.
+	routeB := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route-b", Namespace: nsB},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{
+			BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "backend-x", Namespace: ptrTo(gwapiv1.Namespace(nsA))}},
+		}}},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), routeB))
+
+	// The policy does not exist, so this reconcile takes the not-found deletion path.
+	_, err := c.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: nsA, Name: "qp-gone"},
+	})
+	require.NoError(t, err)
+
+	require.ElementsMatch(t, []string{nsA + "/route-a", nsB + "/route-b"}, drainRouteEvents(routeCh),
+		"both routes must be notified exactly once via the namespace-wide deletion path")
+}
+
+// TestQuotaPolicyController_Reconcile_Deletion_NotFound_ReturnsNotifyError verifies that a failed
+// lookup on the not-found deletion path propagates the error so the reconcile is requeued rather than
+// silently leaving routes un-notified.
+func TestQuotaPolicyController_Reconcile_Deletion_NotFound_ReturnsNotifyError(t *testing.T) {
+	inner, ok := requireNewFakeClientWithIndexesForQuotaPolicy(t).(client.WithWatch)
+	require.True(t, ok)
+	listErr := errors.New("informer not synced")
+	fakeClient := interceptor.NewClient(inner, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, isBackendList := list.(*aigv1b1.AIServiceBackendList); isBackendList {
+				return listErr
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+	c := NewQuotaPolicyController(fakeClient, fake2.NewClientset(), ctrl.Log, newTestRunner(t), make(chan event.GenericEvent, 100))
+
+	// The policy does not exist, so this reconcile takes the not-found deletion path.
+	_, err := c.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: "default", Name: "qp-gone"},
+	})
+	require.ErrorIs(t, err, listErr, "a failed lookup must requeue instead of leaving routes un-notified")
 }
 
 func TestQuotaPolicyController_Reconcile_MultipleBackends(t *testing.T) {

@@ -90,6 +90,7 @@ const (
 	OperationTranslation     Operation = "translation"
 	OperationRerank          Operation = "rerank"
 	OperationSystemOne       Operation = "systemone"
+	OperationDecisions       Operation = "decisions"
 	OperationTokenize        Operation = "tokenize"
 )
 

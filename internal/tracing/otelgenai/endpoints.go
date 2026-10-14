@@ -253,6 +253,30 @@ func NewResponsesRecorder(config *Config) tracingapi.ResponsesRecorder {
 	}
 }
 
+// NewDecisionsRecorder creates a recorder for the non-streaming Decisions API.
+// Decisions has no standard GenAI operation name, so it uses a custom value.
+func NewDecisionsRecorder(config *Config) tracingapi.DecisionsRecorder {
+	return &recorder[openai.DecisionRequest, openai.DecisionResponse, struct{}]{
+		operation:     OperationDecisions,
+		config:        configOrEnv(config),
+		requestModel:  func(r *openai.DecisionRequest) string { return r.Model },
+		responseAttrs: decisionsResponseAttrs,
+	}
+}
+
+func decisionsResponseAttrs(resp *openai.DecisionResponse) []attribute.KeyValue {
+	attrs := responseIdentityAttrs("", resp.Model)
+	if u := resp.Usage; u != nil {
+		attrs = append(attrs, usageAttrs(int(u.InputTokens), int(u.OutputTokens))...)
+		attrs = append(attrs, usageDetailAttrs(
+			int(u.InputTokensDetails.CachedTokens),
+			int(u.InputTokensDetails.CacheWriteTokensValue()),
+			int(u.OutputTokensDetails.ReasoningTokens),
+		)...)
+	}
+	return attrs
+}
+
 // NewSpeechRecorder creates a tracingapi.SpeechRecorder.
 func NewSpeechRecorder(config *Config) tracingapi.SpeechRecorder {
 	return &recorder[openai.SpeechRequest, []byte, openai.SpeechStreamChunk]{

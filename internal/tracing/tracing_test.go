@@ -876,6 +876,7 @@ func TestNewTracingFromEnv_everyTracerWired(t *testing.T) {
 			require.NotNil(t, tracing.EmbeddingsTracer(), "EmbeddingsTracer")
 			require.NotNil(t, tracing.ImageGenerationTracer(), "ImageGenerationTracer")
 			require.NotNil(t, tracing.ResponsesTracer(), "ResponsesTracer")
+			require.NotNil(t, tracing.DecisionsTracer(), "DecisionsTracer")
 			require.NotNil(t, tracing.SpeechTracer(), "SpeechTracer")
 			require.NotNil(t, tracing.TranscriptionTracer(), "TranscriptionTracer")
 			require.NotNil(t, tracing.TranslationTracer(), "TranslationTracer")

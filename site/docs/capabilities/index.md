@@ -53,6 +53,12 @@ Connect AI agents to external tools and data sources:
 
 - **[MCP Gateway](./mcp/)**: Server multiplexing, tool routing, OAuth authentication, and observability for MCP workloads
 
+## Agent2Agent (A2A)
+
+Route traffic between agents:
+
+- **[A2A Traffic (preview)](./a2a/)**: Route A2A agents through the gateway today using Envoy's native A2A filter, ahead of a first-class A2A route type
+
 ## Observability
 
 Monitoring and observability tools for AI workloads:

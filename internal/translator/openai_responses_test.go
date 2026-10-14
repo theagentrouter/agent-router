@@ -654,6 +654,37 @@ data: [DONE]
 		require.Equal(t, uint32(0), reasoningTokens)
 	})
 
+	t.Run("CRLF-delimited events without a space after data colon", func(t *testing.T) {
+		translator := NewResponsesOpenAIToOpenAITranslator("v1", "").(*openAIToOpenAITranslatorV1Responses)
+
+		req := &openai.ResponseRequest{
+			Model:  "gpt-4o",
+			Stream: true,
+			Input: openai.ResponseNewParamsInputUnion{
+				OfString: ptr.To("Hi"),
+			},
+		}
+		_, _, err := translator.RequestBody([]byte(`{"model":"gpt-4o","input":"Hi","stream":true}`), req, false)
+		require.NoError(t, err)
+
+		firstChunk := []byte("data:{\"type\":\"response.created\",\"response\":{\"model\":\"gpt-4o-2024-11-20\"}}\r\n\r\n")
+		secondChunk := []byte("data:{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_123\",\"object\":\"response\",\"created_at\":1741476542,\"status\":\"completed\",\"model\":\"gpt-4o-2024-11-20\",\"output\":[],\"usage\":{\"input_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":2},\"output_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":15}}}\r\n\r\n")
+
+		_, _, tokenUsage, responseModel, err := translator.ResponseBody(nil, bytes.NewReader(firstChunk), false, nil)
+		require.NoError(t, err)
+		require.Equal(t, "gpt-4o-2024-11-20", responseModel)
+		_, ok := tokenUsage.InputTokens()
+		require.False(t, ok)
+
+		_, _, tokenUsage, responseModel, err = translator.ResponseBody(nil, bytes.NewReader(secondChunk), true, nil)
+		require.NoError(t, err)
+		require.Equal(t, "gpt-4o-2024-11-20", responseModel)
+
+		inputTokens, ok := tokenUsage.InputTokens()
+		require.True(t, ok)
+		require.Equal(t, uint32(10), inputTokens)
+	})
+
 	t.Run("complete event followed by next response body call", func(t *testing.T) {
 		translator := NewResponsesOpenAIToOpenAITranslator("v1", "").(*openAIToOpenAITranslatorV1Responses)
 

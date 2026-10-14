@@ -35,6 +35,7 @@ type recorderSet struct {
 	embeddings      tracingapi.EmbeddingsRecorder
 	imageGeneration tracingapi.ImageGenerationRecorder
 	responses       tracingapi.ResponsesRecorder
+	decisions       tracingapi.DecisionsRecorder
 	speech          tracingapi.SpeechRecorder
 	transcription   tracingapi.TranscriptionRecorder
 	translation     tracingapi.TranslationRecorder
@@ -110,6 +111,7 @@ func newOpenInferenceRecorders() recorderSet {
 		embeddings:      openai.NewEmbeddingsRecorder(cfg),
 		imageGeneration: openai.NewImageGenerationRecorder(cfg),
 		responses:       openai.NewResponsesRecorder(cfg),
+		decisions:       openai.NewDecisionsRecorder(cfg),
 		speech:          openai.NewSpeechRecorder(cfg),
 		transcription:   openai.NewTranscriptionRecorder(cfg),
 		translation:     openai.NewTranslationRecorder(cfg),
@@ -139,6 +141,7 @@ func newOTelGenAIRecorders() recorderSet {
 		embeddings:      otelgenai.NewEmbeddingsRecorder(cfg),
 		imageGeneration: otelgenai.NewImageGenerationRecorder(cfg),
 		responses:       otelgenai.NewResponsesRecorder(cfg),
+		decisions:       otelgenai.NewDecisionsRecorder(cfg),
 		speech:          otelgenai.NewSpeechRecorder(cfg),
 		transcription:   otelgenai.NewTranscriptionRecorder(cfg),
 		translation:     otelgenai.NewTranslationRecorder(cfg),

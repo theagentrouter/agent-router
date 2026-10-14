@@ -1208,8 +1208,33 @@ type ChatCompletionRequest struct {
 	// GuidedJSON: The output will follow the JSON schema.
 	GuidedJSON json.RawMessage `json:"guided_json,omitzero"`
 
+	// StructuredOutputs is the vLLM v0.12.0+ replacement for the deprecated top-level
+	// guided_json/guided_regex/guided_choice fields. It is passed through unchanged to
+	// vLLM backends and translated to the equivalent Gemini response schema on the GCP path.
+	StructuredOutputs *StructuredOutputs `json:"structured_outputs,omitzero"`
+
 	// Thinking: The thinking config for reasoning models
 	Thinking *ThinkingUnion `json:"thinking,omitzero"`
+}
+
+// StructuredOutputs mirrors vLLM's StructuredOutputsParams (v0.12.0+). Only JSON, Regex,
+// and Choice are translatable to GCP/Gemini; Grammar, StructuralTag, and WhitespacePattern
+// have no Gemini equivalent and are rejected on that path.
+//
+// Following vLLM convention: https://github.com/vllm-project/vllm/blob/v0.12.0/vllm/sampling_params.py#L33
+type StructuredOutputs struct {
+	// JSON: The output will follow the JSON schema.
+	JSON json.RawMessage `json:"json,omitzero"`
+	// Regex: The output will follow the regex pattern.
+	Regex string `json:"regex,omitzero"`
+	// Choice: The output will be exactly one of the choices.
+	Choice []string `json:"choice,omitzero"`
+	// Grammar: The output will follow the given grammar (vLLM/SGLang only).
+	Grammar string `json:"grammar,omitzero"`
+	// StructuralTag: Structural tag constraint (vLLM/SGLang only).
+	StructuralTag json.RawMessage `json:"structural_tag,omitzero"`
+	// WhitespacePattern: Whitespace pattern for JSON outputs (vLLM only).
+	WhitespacePattern string `json:"whitespace_pattern,omitzero"`
 }
 
 type StreamOptions struct {
@@ -1227,6 +1252,7 @@ const (
 	ToolTypeImageGeneration     ToolType = "image_generation"
 	ToolTypeEnterpriseWebSearch ToolType = "enterprise_search"
 	ToolTypeGoogleSearch        ToolType = "google_search"
+	ToolTypeAnthropicWebSearch  ToolType = "web_search_20260209"
 )
 
 // GCPGoogleSearchConfig contains GCP-specific configuration for Google Search grounding.
@@ -1245,6 +1271,7 @@ type GCPTimeRangeFilter struct {
 
 type Tool struct {
 	Type         ToolType               `json:"type"`
+	Name         string                 `json:"name,omitempty"`
 	Function     *FunctionDefinition    `json:"function,omitempty"`
 	GoogleSearch *GCPGoogleSearchConfig `json:"google_search,omitempty"` //nolint:tagliatelle
 }

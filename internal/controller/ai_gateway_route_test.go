@@ -27,6 +27,7 @@ import (
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 )
@@ -1057,6 +1058,92 @@ func TestAIGatewayRouteController_CrossNamespaceBackend_WithoutReferenceGrant(t 
 	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updatedRoute.Status.Conditions[0].Type)
 }
 
+// TestAIGatewayRouteController_CrossNamespaceBackend_ReferenceGrantRevoked verifies that once a
+// ReferenceGrant that used to authorize a cross-namespace backend is removed, the HTTPRoute and the
+// parent Gateways are still synced to drop the now-unauthorized backend, instead of staying frozen at
+// their last-good state while only the AIGatewayRoute's own status flips to NotAccepted.
+func TestAIGatewayRouteController_CrossNamespaceBackend_ReferenceGrantRevoked(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewAIGatewayRouteController(fakeClient, fake2.NewClientset(), ctrl.Log, eventCh.Ch, "/v1")
+
+	err := fakeClient.Create(t.Context(), &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "mygateway", Namespace: "route-ns"}})
+	require.NoError(t, err)
+
+	backend := &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "cross-ns-backend", Namespace: "backend-ns"},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			APISchema: aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaOpenAI, Version: ptr.To("v1")},
+			BackendRef: gwapiv1.BackendObjectReference{
+				Group: ptr.To(gwapiv1.Group("gateway.envoyproxy.io")),
+				Kind:  ptr.To(gwapiv1.Kind("Backend")),
+				Name:  "my-backend",
+			},
+		},
+	}
+	err = fakeClient.Create(t.Context(), backend)
+	require.NoError(t, err)
+
+	grant := &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-from-route-ns", Namespace: "backend-ns"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{Group: "aigateway.envoyproxy.io", Kind: "AIGatewayRoute", Namespace: "route-ns"}},
+			To:   []gwapiv1b1.ReferenceGrantTo{{Group: "aigateway.envoyproxy.io", Kind: "AIServiceBackend"}},
+		},
+	}
+	err = fakeClient.Create(t.Context(), grant)
+	require.NoError(t, err)
+
+	route := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "cross-ns-route", Namespace: "route-ns"},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			ParentRefs: []gwapiv1a2.ParentReference{{Name: "mygateway"}},
+			Rules: []aigv1b1.AIGatewayRouteRule{
+				{
+					BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+						{Name: "cross-ns-backend", Namespace: ptr.To(gwapiv1.Namespace("backend-ns")), Weight: ptr.To[int32](1)},
+					},
+				},
+			},
+		},
+	}
+	err = fakeClient.Create(t.Context(), route)
+	require.NoError(t, err)
+
+	// First reconcile succeeds with the grant in place: the HTTPRoute has the backend and the parent
+	// Gateway is notified.
+	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "route-ns", Name: "cross-ns-route"}})
+	require.NoError(t, err)
+	eventCh.RequireItemsEventually(t, 1)
+
+	var httpRoute gwapiv1.HTTPRoute
+	err = fakeClient.Get(t.Context(), types.NamespacedName{Namespace: "route-ns", Name: "cross-ns-route"}, &httpRoute)
+	require.NoError(t, err)
+	require.Len(t, httpRoute.Spec.Rules[0].BackendRefs, 1)
+
+	// Revoke the grant.
+	err = fakeClient.Delete(t.Context(), grant)
+	require.NoError(t, err)
+
+	// Second reconcile: the AIGatewayRoute is NotAccepted, but the HTTPRoute must still be updated to
+	// drop the now-unauthorized backend, and the parent Gateway must still be notified so the
+	// filter-config Secret gets rebuilt without the stale credentials.
+	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "route-ns", Name: "cross-ns-route"}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no valid ReferenceGrant found")
+	eventCh.RequireItemsEventually(t, 1)
+
+	err = fakeClient.Get(t.Context(), types.NamespacedName{Namespace: "route-ns", Name: "cross-ns-route"}, &httpRoute)
+	require.NoError(t, err)
+	require.Empty(t, httpRoute.Spec.Rules[0].BackendRefs)
+
+	var updatedRoute aigv1b1.AIGatewayRoute
+	err = fakeClient.Get(t.Context(), types.NamespacedName{Namespace: "route-ns", Name: "cross-ns-route"}, &updatedRoute)
+	require.NoError(t, err)
+	require.Len(t, updatedRoute.Status.Conditions, 1)
+	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updatedRoute.Status.Conditions[0].Type)
+}
+
 func TestAIGatewayRouteController_SameNamespaceBackend_NoReferenceGrantNeeded(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexes(t)
 	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
@@ -1121,4 +1208,219 @@ func TestAIGatewayRouteController_SameNamespaceBackend_NoReferenceGrantNeeded(t 
 	require.NoError(t, err)
 	require.Len(t, updatedRoute.Status.Conditions, 1)
 	require.Equal(t, aigv1b1.ConditionTypeAccepted, updatedRoute.Status.Conditions[0].Type)
+}
+
+// newQuotaPolicy is a small helper to build a QuotaPolicy targeting the given AIServiceBackends.
+func newQuotaPolicy(name, namespace string, limit uint, targets ...string) *aigv1a1.QuotaPolicy {
+	refs := make([]gwapiv1a2.LocalPolicyTargetReference, 0, len(targets))
+	for _, tName := range targets {
+		refs = append(refs, gwapiv1a2.LocalPolicyTargetReference{
+			Group: "aigateway.envoyproxy.io",
+			Kind:  "AIServiceBackend",
+			Name:  gwapiv1.ObjectName(tName),
+		})
+	}
+	return &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: refs,
+			ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				Quota: aigv1a1.QuotaValue{Limit: limit, Duration: "1m"},
+			},
+		},
+	}
+}
+
+func Test_computeQuotaPolicyHash(t *testing.T) {
+	const ns = "default"
+	newController := func(client client.Client) *AIGatewayRouteController {
+		eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+		return NewAIGatewayRouteController(client, fake2.NewClientset(), logr.Discard(), eventCh.Ch, "/")
+	}
+	newRoute := func() *aigv1b1.AIGatewayRoute {
+		return &aigv1b1.AIGatewayRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: ns},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple", Weight: ptr.To[int32](1)}}},
+				},
+			},
+		}
+	}
+
+	t.Run("no policy returns empty hash", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		hash, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.Empty(t, hash)
+	})
+
+	t.Run("policy produces stable non-empty hash", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		require.NoError(t, fakeClient.Create(t.Context(), newQuotaPolicy("qp", ns, 100, "apple")))
+
+		hash1, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.NotEmpty(t, hash1)
+
+		// Deterministic: computing again yields the same hash.
+		hash2, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.Equal(t, hash1, hash2)
+	})
+
+	t.Run("value change produces different hash", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		qp := newQuotaPolicy("qp", ns, 100, "apple")
+		require.NoError(t, fakeClient.Create(t.Context(), qp))
+		before, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+
+		// Bump only the limit value (no structural change).
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(qp), qp))
+		qp.Spec.ServiceQuota.Quota.Limit = 200
+		require.NoError(t, fakeClient.Update(t.Context(), qp))
+
+		after, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.NotEqual(t, before, after, "a limit-value change must change the hash")
+	})
+
+	t.Run("structural change produces different hash", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		qp := newQuotaPolicy("qp", ns, 100, "apple")
+		require.NoError(t, fakeClient.Create(t.Context(), qp))
+		before, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+
+		// Add a per-model quota (structural change).
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(qp), qp))
+		qp.Spec.PerModelQuotas = []aigv1a1.PerModelQuota{{
+			ModelName: ptr.To("gpt-4"),
+			Quota:     aigv1a1.QuotaDefinition{DefaultBucket: aigv1a1.QuotaValue{Limit: 10, Duration: "1m"}},
+		}}
+		require.NoError(t, fakeClient.Update(t.Context(), qp))
+
+		after, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.NotEqual(t, before, after, "a structural change must change the hash")
+	})
+
+	t.Run("terminating policy is ignored", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		qp := newQuotaPolicy("qp", ns, 100, "apple")
+		// A finalizer makes the fake client keep the object (terminating) after Delete instead of
+		// removing it, mimicking the window during deletion when the policy is still listable.
+		qp.Finalizers = []string{aiGatewayControllerFinalizer}
+		require.NoError(t, fakeClient.Create(t.Context(), qp))
+
+		// While live, the policy contributes to a non-empty hash.
+		live, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.NotEmpty(t, live)
+
+		// Mark the policy for deletion; it remains listable because of the finalizer.
+		require.NoError(t, fakeClient.Delete(t.Context(), qp))
+		var terminating aigv1a1.QuotaPolicy
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(qp), &terminating))
+		require.False(t, terminating.DeletionTimestamp.IsZero(), "policy should be terminating, not removed")
+
+		// A terminating policy must be treated as already-absent, yielding an empty hash.
+		got, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.Empty(t, got, "a terminating QuotaPolicy must be excluded from the hash")
+	})
+
+	t.Run("hash is independent of policy discovery order", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		// Two policies target the same backend; the hash must be stable regardless of listing order.
+		require.NoError(t, fakeClient.Create(t.Context(), newQuotaPolicy("qp-b", ns, 200, "apple")))
+		require.NoError(t, fakeClient.Create(t.Context(), newQuotaPolicy("qp-a", ns, 100, "apple")))
+		hash1, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		hash2, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.Equal(t, hash1, hash2)
+		require.NotEmpty(t, hash1)
+	})
+
+	t.Run("InferencePool backends are ignored", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		route := &aigv1b1.AIGatewayRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "poolroute", Namespace: ns},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{
+						Name:  "mypool",
+						Group: ptr.To("inference.networking.k8s.io"),
+						Kind:  ptr.To("InferencePool"),
+					}}},
+				},
+			},
+		}
+		hash, err := c.computeQuotaPolicyHash(t.Context(), route)
+		require.NoError(t, err)
+		require.Empty(t, hash)
+	})
+}
+
+// Test_newHTTPRoute_QuotaPolicyHashAnnotation verifies that the HTTPRoute generated for an
+// AIGatewayRoute carries the QuotaPolicy hash annotation and that it changes when the QuotaPolicy
+// changes. This is the mechanism that forces Envoy Gateway to re-translate (and re-run the
+// extension server's PostTranslateModify) when a QuotaPolicy is updated.
+func Test_newHTTPRoute_QuotaPolicyHashAnnotation(t *testing.T) {
+	const ns = "default"
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewAIGatewayRouteController(fakeClient, fake2.NewClientset(), logr.Discard(), eventCh.Ch, "/")
+
+	backend := &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: ns},
+		Spec:       aigv1b1.AIServiceBackendSpec{BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend"}},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), backend))
+
+	aiGatewayRoute := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: ns},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			Rules: []aigv1b1.AIGatewayRouteRule{
+				{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple", Weight: ptr.To[int32](1)}}},
+			},
+		},
+	}
+
+	// No QuotaPolicy yet: the annotation must be absent.
+	httpRoute := &gwapiv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: ns}}
+	require.NoError(t, c.newHTTPRoute(t.Context(), httpRoute, aiGatewayRoute))
+	_, ok := httpRoute.Annotations[httpRouteQuotaPolicyHashAnnotationKey]
+	require.False(t, ok, "annotation should be absent when no QuotaPolicy applies")
+
+	// Attach a QuotaPolicy: the annotation must now be present.
+	qp := newQuotaPolicy("qp", ns, 100, "apple")
+	require.NoError(t, fakeClient.Create(t.Context(), qp))
+	require.NoError(t, c.newHTTPRoute(t.Context(), httpRoute, aiGatewayRoute))
+	hashWith := httpRoute.Annotations[httpRouteQuotaPolicyHashAnnotationKey]
+	require.NotEmpty(t, hashWith, "annotation should be set when a QuotaPolicy applies")
+
+	// Update the QuotaPolicy: the annotation value must change so the HTTPRoute is a real (non-no-op) update.
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(qp), qp))
+	qp.Spec.ServiceQuota.Quota.Limit = 999
+	require.NoError(t, fakeClient.Update(t.Context(), qp))
+	require.NoError(t, c.newHTTPRoute(t.Context(), httpRoute, aiGatewayRoute))
+	hashUpdated := httpRoute.Annotations[httpRouteQuotaPolicyHashAnnotationKey]
+	require.NotEmpty(t, hashUpdated)
+	require.NotEqual(t, hashWith, hashUpdated, "annotation must change when the QuotaPolicy changes")
+
+	// Delete the QuotaPolicy: the annotation must be removed again.
+	require.NoError(t, fakeClient.Delete(t.Context(), qp))
+	require.NoError(t, c.newHTTPRoute(t.Context(), httpRoute, aiGatewayRoute))
+	_, ok = httpRoute.Annotations[httpRouteQuotaPolicyHashAnnotationKey]
+	require.False(t, ok, "annotation should be removed when the QuotaPolicy is deleted")
 }

@@ -1,0 +1,30 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# This should fail validation: the rule has no structured `source.jwt`, but its
+# CEL expression reads request.auth.jwt, which is only trustworthy when OAuth is
+# configured.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: authorization-cel-jwt-without-oauth
+  namespace: default
+spec:
+  parentRefs:
+    - name: some-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-service
+      kind: Service
+      port: 80
+  securityPolicy:
+    authorization:
+      rules:
+        - cel: '"mcp.admin" in request.auth.jwt.scopes'
+          target:
+            tools:
+              - backend: mcp-service
+                tool: dangerous-tool
