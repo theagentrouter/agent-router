@@ -48,6 +48,22 @@ func TestChatCompletionSpan_RecordResponse(t *testing.T) {
 	}, actualSpan.Attributes)
 }
 
+func TestChatCompletionSpan_RecordGuardrail(t *testing.T) {
+	s := &chatCompletionSpan{}
+	actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+		s.span = span
+		s.RecordGuardrail("deny-pii", "Request", "blocked")
+		return false
+	})
+	require.Len(t, actualSpan.Events, 1)
+	require.Equal(t, "guardrail.evaluation", actualSpan.Events[0].Name)
+	require.ElementsMatch(t, []attribute.KeyValue{
+		attribute.String("aigateway.guardrail.name", "deny-pii"),
+		attribute.String("aigateway.guardrail.phase", "Request"),
+		attribute.String("aigateway.guardrail.result", "blocked"),
+	}, actualSpan.Events[0].Attributes)
+}
+
 // TestChatCompletionSpan_RecordBackend pins that the backend only reaches the
 // span when the convention's recorder asks for it. The backend is resolved for
 // every request, so a recorder whose convention defines no backend attributes

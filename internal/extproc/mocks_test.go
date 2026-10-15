@@ -325,6 +325,18 @@ func (m *mockChatCompletionSpan) EndSpan() { m.endedCount++ }
 
 var _ tracingapi.ChatCompletionSpan = &mockChatCompletionSpan{}
 
+// mockGuardrailChatCompletionSpan additionally implements [tracingapi.GuardrailSpan].
+type mockGuardrailChatCompletionSpan struct {
+	mockChatCompletionSpan
+	guardrailEvents []string
+}
+
+func (m *mockGuardrailChatCompletionSpan) RecordGuardrail(name, phase, result string) {
+	m.guardrailEvents = append(m.guardrailEvents, name+"/"+phase+"/"+result)
+}
+
+var _ tracingapi.GuardrailSpan = &mockGuardrailChatCompletionSpan{}
+
 // mockBackendChatCompletionSpan additionally implements [tracingapi.BackendSpan],
 // which only spans whose semantic convention records the resolved backend do.
 type mockBackendChatCompletionSpan struct {
