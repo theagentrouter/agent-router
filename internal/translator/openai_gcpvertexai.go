@@ -580,6 +580,14 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) applyVendorSpecificField
 		if vendorGenConfig.MediaResolution != "" && mediaResolutionAvailable(requestModel) {
 			gcr.GenerationConfig.MediaResolution = vendorGenConfig.MediaResolution
 		}
+		if vendorGenConfig.ThinkingLevel != "" {
+			if gcr.GenerationConfig.ThinkingConfig == nil {
+				gcr.GenerationConfig.ThinkingConfig = &genai.ThinkingConfig{}
+			}
+			// Gemini rejects a request that sets both a thinking budget and a level.
+			gcr.GenerationConfig.ThinkingConfig.ThinkingLevel = vendorGenConfig.ThinkingLevel
+			gcr.GenerationConfig.ThinkingConfig.ThinkingBudget = nil
+		}
 	}
 	if gcpVendorFields.SafetySettings != nil {
 		gcr.SafetySettings = gcpVendorFields.SafetySettings

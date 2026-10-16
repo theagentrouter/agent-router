@@ -13,6 +13,8 @@ import (
 	"mime"
 	"net/url"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -586,16 +588,34 @@ func responseJSONSchemaAvailable(requestModel internalapi.RequestModel) bool {
 	return strings.Contains(requestModel, "gemini") && (strings.Contains(requestModel, "2.5") || strings.Contains(requestModel, "3"))
 }
 
+// geminiVersionPattern captures the major version of a Gemini model name, e.g. "3" from
+// "gemini-3-pro-preview" and "gemini-3.5-flash", or "4" from "gemini-4-argon".
+var geminiVersionPattern = regexp.MustCompile(`gemini-(\d+)(?:\.\d+)?\b`)
+
+// geminiMajorVersion returns the major version of a Gemini model, or 0 when the model name
+// carries no version (e.g. "gemini-flash-latest") or is not a Gemini model.
+func geminiMajorVersion(requestModel internalapi.RequestModel) int {
+	m := geminiVersionPattern.FindStringSubmatch(strings.ToLower(requestModel))
+	if m == nil {
+		return 0
+	}
+	major, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
+	return major
+}
+
 // mediaResolutionAvailable checks if the model supports media resolution settings.
 // Only Gemini 3.0+ models support this feature for controlling image/video quality.
 func mediaResolutionAvailable(requestModel internalapi.RequestModel) bool {
-	return strings.Contains(requestModel, "gemini") && strings.Contains(requestModel, "3")
+	return geminiMajorVersion(requestModel) >= 3
 }
 
 // reasoningEffortAvailable checks if the model supports reasoning effort.
 // Only Gemini 3.0+ models support this feature for controlling reasoning depth.
 func reasoningEffortAvailable(requestModel internalapi.RequestModel) bool {
-	return strings.Contains(requestModel, "gemini") && strings.Contains(requestModel, "3")
+	return geminiMajorVersion(requestModel) >= 3
 }
 
 // isGeminiFlashModel checks if the model is a Gemini Flash model.

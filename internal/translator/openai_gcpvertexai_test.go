@@ -2742,3 +2742,49 @@ func TestGCPVertexAIRedactBody(t *testing.T) {
 		require.NotContains(t, *resp.Choices[0].Message.Content, "[REDACTED")
 	})
 }
+
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_VendorThinkingLevel(t *testing.T) {
+	tests := []struct {
+		name    string
+		reqBody string
+		want    *genai.ThinkingConfig
+	}{
+		{
+			name:    "thinking_level on Gemini 4",
+			reqBody: `{"model":"gemini-4-argon","messages":[{"role":"user","content":"hi"}],"generationConfig":{"thinking_level":"HIGH"}}`,
+			want:    &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh},
+		},
+		{
+			name:    "thinking_level on a model without a version in its name",
+			reqBody: `{"model":"gemini-flash-latest","messages":[{"role":"user","content":"hi"}],"generationConfig":{"thinking_level":"MEDIUM"}}`,
+			want:    &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelMedium},
+		},
+		{
+			name:    "thinking_level overrides reasoning_effort",
+			reqBody: `{"model":"gemini-3-pro","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"low","generationConfig":{"thinking_level":"HIGH"}}`,
+			want:    &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh},
+		},
+		{
+			name:    "thinking_level replaces a thinking budget and keeps include_thoughts",
+			reqBody: `{"model":"gemini-4-argon","messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":1000,"includeThoughts":true},"generationConfig":{"thinking_level":"LOW"}}`,
+			want:    &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelLow, IncludeThoughts: true},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var req openai.ChatCompletionRequest
+			require.NoError(t, json.Unmarshal([]byte(tc.reqBody), &req))
+
+			translator := NewChatCompletionOpenAIToGCPVertexAITranslator("")
+			_, body, err := translator.RequestBody(nil, &req, false)
+			require.NoError(t, err)
+
+			var got struct {
+				GenerationConfig *genai.GenerationConfig `json:"generationConfig"`
+			}
+			require.NoError(t, json.Unmarshal(body, &got))
+			require.NotNil(t, got.GenerationConfig)
+			require.Equal(t, tc.want, got.GenerationConfig.ThinkingConfig)
+		})
+	}
+}

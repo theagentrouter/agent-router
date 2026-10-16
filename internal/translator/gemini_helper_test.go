@@ -1598,6 +1598,41 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 			expectedErrMsg: "unsupported reasoning effort level",
 			requestModel:   "gemini-3-pro",
 		},
+		{
+			name: "reasoning effort medium on Gemini 4 maps to ThinkingLevelMedium",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortMedium,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelMedium,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "gemini-4-argon",
+		},
+		{
+			name: "reasoning effort high on Gemini 4 maps to ThinkingLevelHigh",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortHigh,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelHigh,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "gemini-4-argon",
+		},
+		{
+			name: "reasoning effort ignored for Gemini 2.5 with a 3 elsewhere in the name",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortHigh,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{},
+			expectedResponseMode:     responseModeNone,
+			requestModel:             "gemini-2.5-flash-preview-03-2025",
+		},
 	}
 
 	for _, tc := range tests {
@@ -1616,6 +1651,37 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 					t.Errorf("geminiResponseMode mismatch: got %v, want %v", responseMode, tc.expectedResponseMode)
 				}
 			}
+		})
+	}
+}
+
+func TestGeminiVersionGatedFeatures(t *testing.T) {
+	tests := []struct {
+		model     internalapi.RequestModel
+		wantMajor int
+		wantGated bool
+	}{
+		{model: "gemini-1.5-pro", wantMajor: 1},
+		{model: "gemini-2.5-flash", wantMajor: 2},
+		{model: "gemini-2.5-flash-preview-03-2025", wantMajor: 2},
+		{model: "gemini-2.0-flash-lite-001", wantMajor: 2},
+		{model: "gemini-3-pro", wantMajor: 3, wantGated: true},
+		{model: "gemini-3-pro-preview", wantMajor: 3, wantGated: true},
+		{model: "gemini-3.1-flash-lite-image", wantMajor: 3, wantGated: true},
+		{model: "gemini-3.5-flash", wantMajor: 3, wantGated: true},
+		{model: "Gemini-3.5-Flash", wantMajor: 3, wantGated: true},
+		{model: "gemini-4-argon", wantMajor: 4, wantGated: true},
+		{model: "gemini-4", wantMajor: 4, wantGated: true},
+		{model: "gemini-10-pro", wantMajor: 10, wantGated: true},
+		{model: "gemini-flash-latest", wantMajor: 0},
+		{model: "gemini-exp-1206", wantMajor: 0},
+		{model: "claude-3-opus", wantMajor: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.model, func(t *testing.T) {
+			require.Equal(t, tc.wantMajor, geminiMajorVersion(tc.model))
+			require.Equal(t, tc.wantGated, reasoningEffortAvailable(tc.model))
+			require.Equal(t, tc.wantGated, mediaResolutionAvailable(tc.model))
 		})
 	}
 }
