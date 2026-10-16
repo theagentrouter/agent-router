@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
@@ -336,6 +337,9 @@ func TestServePOST_JSONRPCRequest(t *testing.T) {
 		expBodyOnNonOKStatus string
 		params               any
 		validate             func(*testing.T, []byte)
+		// noRouteHeader omits both the route header and the session ID, modelling a request that
+		// did not go through the Gateway's frontend HTTPRoute.
+		noRouteHeader bool
 	}{
 		{
 			method:               "unknown-method",
@@ -359,6 +363,7 @@ func TestServePOST_JSONRPCRequest(t *testing.T) {
 			method:        "initialize",
 			params:        &mcp.InitializeParams{},
 			expStatusCode: 500,
+			noRouteHeader: true,
 		},
 		{
 			method:           "tools/list",
@@ -564,7 +569,10 @@ func TestServePOST_JSONRPCRequest(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set(sessionIDHeader, sessionID)
+			if !tt.noRouteHeader {
+				req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+				req.Header.Set(sessionIDHeader, sessionID)
+			}
 			rr := httptest.NewRecorder()
 
 			proxy.servePOST(rr, req)
@@ -601,6 +609,93 @@ func TestServePOST_JSONRPCRequest(t *testing.T) {
 	}
 }
 
+// TestServePOST_ToolsCallRequest_CrossRouteSessionReuse verifies that a session created on an
+// OAuth-protected route cannot be resumed through another route on the same Gateway. Otherwise the
+// protected route's per-tool JWT rules would be evaluated against a bearer token that was never
+// verified by Envoy (the other route has no securityPolicy.oauth), so a caller could forge claims.
+func TestServePOST_ToolsCallRequest_CrossRouteSessionReuse(t *testing.T) {
+	// Unsigned (alg=none) token carrying the elevated scope. Only Envoy's JWT filter on the
+	// protected route would reject it; the proxy itself never verifies signatures.
+	forged := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"sub": "alice", "scope": "admin"})
+	forgedToken, err := forged.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	require.NoError(t, err)
+
+	compiledAuth, err := compileAuthorization(&filterapi.MCPRouteAuthorization{
+		DefaultAction: filterapi.AuthorizationActionDeny,
+		// The protected route has securityPolicy.oauth configured.
+		VerifiedJWT: true,
+		Rules: []filterapi.MCPRouteAuthorizationRule{{
+			Action: filterapi.AuthorizationActionAllow,
+			Source: &filterapi.MCPAuthorizationSource{JWT: filterapi.JWTSource{Scopes: []string{"admin"}}},
+			Target: &filterapi.MCPAuthorizationTarget{Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "admin-tool"}}},
+		}},
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		route      string
+		wantStatus int
+	}{
+		// The advisory's PoC: resume the protected session through the unprotected route.
+		{name: "through other route", route: "open-route", wantStatus: http.StatusBadRequest},
+		// Control: the same request through the protected route reaches the backend. In a real
+		// deployment Envoy would have rejected the forged token before reaching the proxy.
+		{name: "through original route", route: "protected-route", wantStatus: http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var backendCalled bool
+			backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				backendCalled = true
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","result":"success"}`))
+			}))
+			t.Cleanup(backendServer.Close)
+
+			proxy := newTestMCPProxy()
+			proxy.backendListenerAddr = backendServer.URL
+			proxy.routes = map[filterapi.MCPRouteName]*mcpProxyConfigRoute{
+				"protected-route": {
+					backends:      map[filterapi.MCPBackendName]filterapi.MCPBackend{"backend1": {Name: "backend1"}},
+					authorization: compiledAuth,
+				},
+				"open-route": {
+					backends: map[filterapi.MCPBackendName]filterapi.MCPBackend{"backend1": {Name: "backend1"}},
+				},
+			}
+
+			// Session legitimately created by "alice" on the protected route.
+			sessionID := secureID(t, proxy, "protected-route@alice@backend1:dGVzdC1zZXNzaW9u") // "test-session" base64 encoded.
+
+			id, err := jsonrpc.MakeID("1")
+			require.NoError(t, err)
+			paramsData, err := json.Marshal(&mcp.CallToolParams{Name: "backend1__admin-tool"})
+			require.NoError(t, err)
+			body, err := jsonrpc.EncodeMessage(&jsonrpc.Request{Method: "tools/call", ID: id, Params: paramsData})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(internalapi.MCPRouteHeader, tt.route)
+			req.Header.Set(internalapi.MCPSubjectHeader, "alice")
+			req.Header.Set("Authorization", "Bearer "+forgedToken)
+			req.Header.Set(sessionIDHeader, sessionID)
+			rr := httptest.NewRecorder()
+
+			proxy.servePOST(rr, req)
+
+			require.Equal(t, tt.wantStatus, rr.Code, rr.Body.String())
+			require.Equal(t, tt.wantStatus == http.StatusOK, backendCalled)
+			if tt.wantStatus != http.StatusOK {
+				require.Contains(t, rr.Body.String(), errSessionRouteMismatch.Error())
+			}
+		})
+	}
+}
+
 func TestServePOST_ToolsCallRequest(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -612,7 +707,7 @@ func TestServePOST_ToolsCallRequest(t *testing.T) {
 		{name: "backend1", route: "test-route", tool: "backend1__test-tool", wantBackend: "backend1", wantStatus: http.StatusOK},
 		{name: "backend2", route: "test-route", tool: "backend2__test-tool", wantBackend: "backend2", wantStatus: http.StatusOK},
 		{name: "backend3", route: "test-route-another", tool: "backend3__test-tool", wantBackend: "backend3", wantStatus: http.StatusOK},
-		{name: "test-route-another", tool: "unknown__test-tool", wantBackend: "unknown", wantStatus: http.StatusNotFound},
+		{name: "test-route-another", route: "test-route-another", tool: "unknown__test-tool", wantBackend: "unknown", wantStatus: http.StatusNotFound},
 		{name: "backend1-not-whitelisted", route: "test-route", tool: "backend1__custom-tool", wantBackend: "backend1", wantStatus: http.StatusBadRequest},
 	}
 
@@ -668,7 +763,7 @@ func TestServePOST_ToolsCallRequest(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			// This header is used to establish MCP session with the backends associated with the route.
 			// It is set by the frontend listeners based on the selected route.
-			req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+			req.Header.Set(internalapi.MCPRouteHeader, tt.route)
 			req.Header.Set(sessionIDHeader, sessionID)
 			rr := httptest.NewRecorder()
 
@@ -728,6 +823,7 @@ func TestServePOST_UnsupportedMethod(t *testing.T) {
 	require.NoError(t, err)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	httpReq.Header.Set(internalapi.MCPRouteHeader, "test-route")
 	httpReq.Header.Set(sessionIDHeader, secureID(t, proxy, "test-route@@backend1:dGVzdC1zZXNzaW9u")) // "test-session" base64 encoded.
 	rr := httptest.NewRecorder()
 
@@ -1031,7 +1127,7 @@ data: %s
 	rr := httptest.NewRecorder()
 	sessionID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("test-session")))
 	eventID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("_1")))
-	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID), "")
+	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID), "", "")
 	require.NoError(t, err)
 
 	proxy.proxyResponseBody(t.Context(), s, rr, httpResp, &jsonrpc.Request{Method: "test", ID: id}, filterapi.MCPBackend{Name: "mybackend"}, nil) //nolint:errcheck
@@ -1095,6 +1191,7 @@ func TestServePOST_NotificationsInitialized(t *testing.T) {
 	require.NoError(t, err)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	httpReq.Header.Set(internalapi.MCPRouteHeader, "test-route")
 	httpReq.Header.Set(sessionIDHeader, secureID(t, proxy, "test-route@@backend1:dGVzdC1zZXNzaW9u")) // "test-session" base64 encoded.
 	rr := httptest.NewRecorder()
 
@@ -1221,6 +1318,7 @@ func TestServePOST_InvalidPromptsGetParams(t *testing.T) {
 	require.NoError(t, err)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	httpReq.Header.Set(internalapi.MCPRouteHeader, "test-route")
 	httpReq.Header.Set(sessionIDHeader, secureID(t, proxy, "test-route@@backend1:dGVzdC1zZXNzaW9u")) // "test-session" base64 encoded.
 	rr := httptest.NewRecorder()
 

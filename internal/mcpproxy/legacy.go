@@ -130,7 +130,7 @@ func (m *mcpRequestContext) serveGET(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing session ID", http.StatusBadRequest)
 		return
 	}
-	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(lastEventID), extractSubject(r))
+	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(lastEventID), extractRoute(r), extractSubject(r))
 	if err != nil {
 		m.l.Error("invalid session ID in GET request", slog.String("session_id", sessionID), slog.String("error", err.Error()))
 		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), sessionErrorStatus(err))
@@ -164,7 +164,7 @@ func (m *mcpRequestContext) serverDELETE(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// we didn't care about last event id in DELETE.
-	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), "", extractSubject(r))
+	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), "", extractRoute(r), extractSubject(r))
 	if err != nil {
 		m.l.Error("invalid session ID in DELETE request", slog.String("session_id", sessionID), slog.String("error", err.Error()))
 		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), sessionErrorStatus(err))
@@ -213,7 +213,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 		})
 	}()
 	if sessionID := r.Header.Get(sessionIDHeader); sessionID != "" {
-		s, err = m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(r.Header.Get(lastEventIDHeader)), extractSubject(r))
+		s, err = m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(r.Header.Get(lastEventIDHeader)), extractRoute(r), extractSubject(r))
 		if err != nil {
 			errType = metrics.MCPErrorInvalidSessionID
 			m.l.Error("invalid session ID in POST request", slog.String("session_id", sessionID), slog.String("error", err.Error()))
@@ -1549,6 +1549,15 @@ func (m *mcpRequestContext) handleSetLoggingLevel(ctx context.Context, s *sessio
 	}, span, func(cse *compositeSessionEntry) bool {
 		return cse.capabilities != nil && cse.capabilities.Logging != nil
 	})
+}
+
+// extractRoute returns the MCPRoute the request was routed through.
+//
+// The route is read from internalapi.MCPRouteHeader, which the Gateway's frontend HTTPRoute
+// unconditionally sets (overwriting any client-supplied value) for every MCPRoute, so it reliably
+// identifies the route, and therefore the Envoy-side security policy, the request went through.
+func extractRoute(r *http.Request) filterapi.MCPRouteName {
+	return r.Header.Get(internalapi.MCPRouteHeader)
 }
 
 // extractSubject returns the authenticated subject (the JWT "sub" claim).

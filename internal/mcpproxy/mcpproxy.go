@@ -302,12 +302,26 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 // resume another user's session and act with its already-initialized backend session(s).
 var errSessionSubjectMismatch = errors.New("session ID was issued for a different authenticated subject")
 
+// errSessionRouteMismatch is returned by sessionFromID when the route embedded in the decrypted
+// session ID does not match the MCPRoute the current request was routed through. Sessions are
+// bound to the route they were created on: the resumed session carries that route's backends,
+// tool selectors and authorization config, and those must only be applied to requests that went
+// through that route's Envoy-side security (e.g. JWT verification). Otherwise a session created
+// on an OAuth-protected route could be resumed through a route without OAuth, where the bearer
+// token and the subject header are not verified, and the protected route's authorization rules
+// would be evaluated against unverified, caller-supplied claims.
+var errSessionRouteMismatch = errors.New("session ID was issued for a different route")
+
 // sessionFromID returns the session with the given ID, or error if not found or invalid.
+//
+// currentRoute is the MCPRoute the current request was routed through (the
+// internalapi.MCPRouteHeader set by the Gateway) and MUST match the route embedded in the session
+// ID, so that a session can only be resumed through the route it was created on.
 //
 // currentSubject is the authenticated subject of the current request (see extractSubject) and
 // MUST be compared against the subject embedded in the session ID to prevent session hijacking:
 // resuming a session must only be allowed for the same authenticated caller that created it.
-func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, lastEvent secureClientToGatewayEventID, currentSubject string) (*session, error) {
+func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, lastEvent secureClientToGatewayEventID, currentRoute filterapi.MCPRouteName, currentSubject string) (*session, error) {
 	decrypted, err := m.sessionCrypto.Decrypt(string(id))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt session ID: %w", err)
@@ -316,6 +330,9 @@ func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, las
 	perBackendSessionIDs, route, subject, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
 	if err != nil {
 		return nil, err
+	}
+	if route != currentRoute {
+		return nil, errSessionRouteMismatch
 	}
 	if subject != currentSubject {
 		return nil, errSessionSubjectMismatch
