@@ -307,6 +307,14 @@ static_resources:
                             headers:
                               - name: x-test-backend
                                 string_match:
+                                  exact: cred-leak-fallback
+                          route:
+                            cluster: testupstream-cred-leak-fallback
+                        - match:
+                            prefix: "/"
+                            headers:
+                              - name: x-test-backend
+                                string_match:
                                   exact: dynmd-cred
                           route:
                             cluster: testupstream-dynmd-cred
@@ -1873,6 +1881,83 @@ static_resources:
                   filter_metadata:
                     aigateway.envoy.io:
                       per_route_rule_backend_name: "testupstream-body-mutation-anthropic"
+    # Leak path of a header-sourced credential: the failing primary reads x-aigw-api-key, the
+    # retry replays the original headers to the secondary. The extproc strips the header on
+    # every backend, which is what this exercises.
+    - name: testupstream-cred-leak-fallback
+      connect_timeout: 0.25s
+      type: STATIC
+      per_connection_buffer_limit_bytes: 52428800
+      lb_policy: ROUND_ROBIN
+      outlier_detection:
+        consecutive_5xx: 1
+        interval: 1s
+        base_ejection_time: 2s # Must be smaller than the require.Eventually's interval. Otherwise, the tests may pass without going through the fallback since the always-failing backend could be ejected by the time when require.Eventually retries due to the previous request IF the retry is not configured.
+        max_ejection_percent: 100
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http_protocol_options: {}
+          http_filters:
+            - name: upstream_extproc
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                allow_mode_override: true
+                request_attributes:
+                  - xds.upstream_host_metadata.filter_metadata['aigateway.envoy.io']['per_route_rule_backend_name']
+                processing_mode:
+                  request_header_mode: "SEND"
+                  request_body_mode: "NONE"
+                  response_header_mode: "SKIP"
+                  response_body_mode: "NONE"
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: extproc_cluster
+                  timeout: 30s
+                message_timeout: 60s
+                metadataOptions:
+                  receivingNamespaces:
+                    untyped:
+                      - io.envoy.ai_gateway
+            - name: envoy.filters.http.header_mutation
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.header_mutation.v3.HeaderMutation
+                mutations:
+                  request_mutations:
+                    - append:
+                        append_action: ADD_IF_ABSENT
+                        header:
+                          key: content-length
+                          value: "%DYNAMIC_METADATA(io.envoy.ai_gateway:content_length)%"
+            - name: envoy.filters.http.upstream_codec
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.upstream_codec.v3.UpstreamCodec
+      load_assignment:
+        cluster_name: testupstream-cred-leak-fallback
+        endpoints:
+          - priority: 0 # Primary: the error server, always answers 500.
+            lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 1066
+                metadata:
+                  filter_metadata:
+                    aigateway.envoy.io:
+                      per_route_rule_backend_name: "testupstream-cred-fallback-primary"
+          - priority: 1 # Secondary: the test upstream, where the assertions run.
+            lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 8080
+                metadata:
+                  filter_metadata:
+                    aigateway.envoy.io:
+                      per_route_rule_backend_name: "testupstream-cred-fallback-secondary"
     # testupstream-dynmd-cred sources its API key from dynamic metadata written by the downstream
     # header_to_metadata filter. forwarding_namespaces mirrors what the extension server emits for
     # a credentialOverride.fromDynamicMetadata policy; without it Envoy sends an empty

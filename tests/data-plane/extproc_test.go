@@ -86,6 +86,29 @@ var (
 		},
 		HeaderMutation: &filterapi.HTTPHeaderMutation{Remove: awsCredentialOverrideHeaders},
 	}
+	// Reads a per-request credential from x-aigw-api-key and always fails (error server), so
+	// Envoy retries to the secondary while replaying the original headers, the leak path.
+	testUpstreamCredFallbackPrimary = filterapi.Backend{
+		Name: "testupstream-cred-fallback-primary", Schema: openAISchema,
+		Auth: &filterapi.BackendAuth{
+			APIKey: &filterapi.APIKeyAuth{Key: "primary-configured-key"},
+			CredentialOverride: &filterapi.CredentialOverride{
+				HeaderName:           "x-aigw-api-key",
+				FallbackToConfigured: true,
+				InputHeadersToRemove: []string{"x-aigw-api-key"},
+			},
+		},
+		HeaderMutation: &filterapi.HTTPHeaderMutation{Remove: []string{"x-aigw-api-key"}},
+	}
+	// No override of its own. The controller strips the primary's input header from every backend
+	// of the gateway, which is what keeps the injected credential off the wire on retry.
+	testUpstreamCredFallbackSecondary = filterapi.Backend{
+		Name: "testupstream-cred-fallback-secondary", Schema: openAISchema,
+		Auth: &filterapi.BackendAuth{
+			APIKey: &filterapi.APIKeyAuth{Key: "secondary-configured-key"},
+		},
+		HeaderMutation: &filterapi.HTTPHeaderMutation{Remove: []string{"x-aigw-api-key"}},
+	}
 	// Sources its API key from downstream dynamic metadata. Unit tests construct the
 	// MetadataContext directly and cannot catch a missing forwarding_namespaces, hence this one.
 	testUpstreamDynMdCredBackend = filterapi.Backend{
