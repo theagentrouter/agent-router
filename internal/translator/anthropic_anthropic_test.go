@@ -25,6 +25,7 @@ func TestAnthropicToAnthropic_RequestBody(t *testing.T) {
 		forceBodyMutation bool
 		modelNameOverride string
 		prefix            string
+		originalPath      string
 
 		expRequestModel internalapi.RequestModel
 		expNewBody      []byte
@@ -96,10 +97,46 @@ func TestAnthropicToAnthropic_RequestBody(t *testing.T) {
 			expNewBody:        nil,
 			expPath:           "/custom/messages",
 		},
+		{
+			name:            "query string preserved",
+			original:        []byte(`{"model":"claude-2","messages":[{"role":"user","content":"Hello!"}]}`),
+			body:            anthropicschema.MessagesRequest{Stream: false, Model: "claude-2"},
+			prefix:          "v1",
+			originalPath:    "/anthropic/v1/messages?beta=true",
+			expRequestModel: "claude-2",
+			expNewBody:      nil,
+			expPath:         "/v1/messages?beta=true",
+		},
+		{
+			name:              "query string preserved with model override",
+			original:          []byte(`{"model":"claude-2","messages":[{"role":"user","content":"Hello!"}]}`),
+			body:              anthropicschema.MessagesRequest{Stream: false, Model: "claude-2"},
+			modelNameOverride: "claude-100.1",
+			prefix:            "v1",
+			originalPath:      "/anthropic/v1/messages?beta=true&foo=bar",
+			expRequestModel:   "claude-100.1",
+			expNewBody:        []byte(`{"model":"claude-100.1","messages":[{"role":"user","content":"Hello!"}]}`),
+			expPath:           "/v1/messages?beta=true&foo=bar",
+		},
+		{
+			name:            "original path without query",
+			original:        []byte(`{"model":"claude-2","messages":[{"role":"user","content":"Hello!"}]}`),
+			body:            anthropicschema.MessagesRequest{Stream: false, Model: "claude-2"},
+			prefix:          "v1",
+			originalPath:    "/anthropic/v1/messages",
+			expRequestModel: "claude-2",
+			expNewBody:      nil,
+			expPath:         "/v1/messages",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			translator := NewAnthropicToAnthropicTranslator(tc.prefix, tc.modelNameOverride)
 			require.NotNil(t, translator)
+			if tc.originalPath != "" {
+				translator.(RequestHeadersSetter).SetRequestHeaders(map[string]string{
+					internalapi.OriginalPathHeader: tc.originalPath,
+				})
+			}
 
 			headerMutation, bodyMutation, err := translator.RequestBody(tc.original, &tc.body, tc.forceBodyMutation)
 			require.NoError(t, err)

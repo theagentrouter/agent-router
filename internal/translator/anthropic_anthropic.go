@@ -39,6 +39,7 @@ func NewAnthropicToAnthropicTranslator(prefix string, modelNameOverride internal
 type anthropicToAnthropicTranslator struct {
 	modelNameOverride      internalapi.ModelNameOverride
 	path                   string
+	rawQuery               string
 	requestModel           internalapi.RequestModel
 	stream                 bool
 	buffered               []byte
@@ -69,11 +70,21 @@ func (a *anthropicToAnthropicTranslator) RequestBody(original []byte, body *anth
 
 	newBody = forceOriginalBodyIfEmpty(forceBodyMutation, newBody, original)
 
-	newHeaders = []internalapi.Header{{pathHeaderName, a.path}}
+	newPath := a.path
+	if a.rawQuery != "" {
+		newPath += "?" + a.rawQuery
+	}
+	newHeaders = []internalapi.Header{{pathHeaderName, newPath}}
 	if len(newBody) > 0 {
 		newHeaders = append(newHeaders, internalapi.Header{contentLengthHeaderName, strconv.Itoa(len(newBody))})
 	}
 	return
+}
+
+// SetRequestHeaders implements [RequestHeadersSetter].
+// It keeps the query string of the original request so that it is forwarded with the rewritten path.
+func (a *anthropicToAnthropicTranslator) SetRequestHeaders(headers map[string]string) {
+	_, a.rawQuery, _ = strings.Cut(headers[internalapi.OriginalPathHeader], "?")
 }
 
 // ResponseHeaders implements [AnthropicMessagesTranslator.ResponseHeaders].
