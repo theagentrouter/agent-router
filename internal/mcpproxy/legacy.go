@@ -38,6 +38,7 @@ var (
 	errSessionNotFound      = errors.New("session not found")
 	errBackendNotFound      = errors.New("backend not found")
 	errInvalidToolName      = errors.New("invalid tool name")
+	errInvalidPromptName    = errors.New("invalid prompt name")
 	errBackendResponseError = errors.New("one or more backends returned an error response")
 )
 
@@ -457,7 +458,7 @@ func errorType(err error) metrics.MCPErrorType {
 	}
 
 	// Check for specific error types
-	if errors.Is(err, errBackendNotFound) || errors.Is(err, errSessionNotFound) || errors.Is(err, errInvalidToolName) {
+	if errors.Is(err, errBackendNotFound) || errors.Is(err, errSessionNotFound) || errors.Is(err, errInvalidToolName) || errors.Is(err, errInvalidPromptName) {
 		return metrics.MCPErrorInvalidParam
 	}
 	var toolCallValidaitonError *errToolCall
@@ -1193,6 +1194,18 @@ func (m *mcpRequestContext) resolvePromptBackend(routeName filterapi.MCPRouteNam
 	return upstreamResourceName(name)
 }
 
+// promptAllowed reports whether the backend's promptSelector on the given route allows the
+// upstream prompt name. Prompts filtered out of prompts/list must not be reachable by name
+// either, mirroring the toolSelector check in handleToolCallRequest.
+func (m *mcpRequestContext) promptAllowed(routeName filterapi.MCPRouteName, backendName, promptName string) bool {
+	route := m.routes[routeName]
+	if route == nil {
+		return false
+	}
+	selector := route.promptSelectors[backendName]
+	return selector == nil || selector.allows(promptName)
+}
+
 // handlePromptGetRequest handles the "prompts/get" JSON-RPC method.
 func (m *mcpRequestContext) handlePromptGetRequest(ctx context.Context, s *session, w http.ResponseWriter, req *jsonrpc.Request, p *mcp.GetPromptParams) (handlerResult, error) {
 	backendName, promptName, err := m.resolvePromptBackend(s.route, p.Name)
@@ -1205,6 +1218,10 @@ func (m *mcpRequestContext) handlePromptGetRequest(ctx context.Context, s *sessi
 	if err != nil {
 		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in prompt name %s", errBackendNotFound, backendName, p.Name)
+	}
+	if !m.promptAllowed(s.route, backendName, promptName) {
+		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", p.Name))
+		return result, fmt.Errorf("%w: %s", errInvalidPromptName, p.Name)
 	}
 	cse := s.getCompositeSessionEntry(backendName)
 	if cse == nil {
@@ -1231,9 +1248,12 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 	var (
 		err         error
 		backendName string
+		// promptName is the client-facing prompt name, kept for error messages.
+		promptName string
 	)
 	switch param.Ref.Type {
 	case "ref/prompt":
+		promptName = param.Ref.Name
 		backendName, param.Ref.Name, err = m.resolvePromptBackend(s.route, param.Ref.Name)
 	case "ref/resource":
 		backendName, param.Ref.URI, err = upstreamResourceURI(param.Ref.URI)
@@ -1251,6 +1271,10 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 	if err != nil {
 		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in resource name %s", errBackendNotFound, backendName, cmp.Or(param.Ref.Name, param.Ref.URI))
+	}
+	if param.Ref.Type == "ref/prompt" && !m.promptAllowed(s.route, backendName, param.Ref.Name) {
+		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", promptName))
+		return result, fmt.Errorf("%w: %s", errInvalidPromptName, promptName)
 	}
 
 	cse := s.getCompositeSessionEntry(backend.Name)
