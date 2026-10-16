@@ -737,17 +737,7 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 	// Usage-only chunk (emitted when stream_options.include_usage=true)
 	// One of the two ways to indicate stream end (other is endOfStream)
 	if len(chunk.Choices) == 0 && chunk.Usage != nil {
-		s.inputTokens = chunk.Usage.PromptTokens
-		s.outputTokens = chunk.Usage.CompletionTokens
-		// OpenAI's cached_tokens/cache_write_tokens are a breakdown within
-		// prompt_tokens, not additive like Anthropic's native cache fields, so we don't
-		// forward them here to avoid double-counting.
-		s.tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
-			int64(s.inputTokens),
-			int64(s.outputTokens),
-			ptr.To(int64(0)),
-			ptr.To(int64(0)),
-		)
+		s.recordUsage(chunk.Usage)
 		return s.emitClosingEvents(out)
 	}
 
@@ -815,7 +805,29 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 		s.stopReason = string(openAIFinishReasonToAnthropic(choice.FinishReason))
 	}
 
+	// Some backends put the usage on the same chunk as the choice (often the one with
+	// finish_reason) instead of sending a usage-only chunk. The closing events are emitted at
+	// the end of the stream, so record it here for them.
+	if chunk.Usage != nil {
+		s.recordUsage(chunk.Usage)
+	}
+
 	return nil
+}
+
+// recordUsage stores the token usage reported by an OpenAI chunk for the closing events.
+func (s *openAIStreamToAnthropicState) recordUsage(usage *openai.Usage) {
+	s.inputTokens = usage.PromptTokens
+	s.outputTokens = usage.CompletionTokens
+	// OpenAI's cached_tokens/cache_write_tokens are a breakdown within
+	// prompt_tokens, not additive like Anthropic's native cache fields, so we don't
+	// forward them here to avoid double-counting.
+	s.tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
+		int64(s.inputTokens),
+		int64(s.outputTokens),
+		ptr.To(int64(0)),
+		ptr.To(int64(0)),
+	)
 }
 
 // emitMessageStart emits the Anthropic message_start SSE event.
