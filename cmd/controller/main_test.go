@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"strings"
@@ -23,10 +24,13 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -329,6 +333,45 @@ func Test_maybePatchAdmissionWebhook(t *testing.T) {
 	err = c.Get(t.Context(), client.ObjectKey{Name: w.Name}, updated)
 	require.NoError(t, err)
 	require.Equal(t, updated.Webhooks[0].ClientConfig.CABundle, []byte("somebundle"))
+}
+
+// Test_maybePatchAdmissionWebhook_conflict reproduces two controller replicas racing to set the CA bundle:
+// the other replica writes the bundle between our Get and Update, so our Update gets a Conflict.
+func Test_maybePatchAdmissionWebhook_conflict(t *testing.T) {
+	const ns = "envoy-ai-gateway-system"
+	t.Setenv("POD_NAMESPACE", ns)
+	p := t.TempDir() + "/bundle"
+	require.NoError(t, os.WriteFile(p, []byte("somebundle"), 0o600))
+
+	w := &admissionregistrationv1.MutatingWebhookConfiguration{
+		ObjectMeta: metav1.ObjectMeta{Name: mutatingWebhookConfigurationName + "." + ns},
+		Webhooks:   []admissionregistrationv1.MutatingWebhook{{}},
+	}
+	var updates int
+	c := fake.NewClientBuilder().WithObjects(w).WithInterceptorFuncs(interceptor.Funcs{
+		Update: func(ctx context.Context, cli client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			updates++
+			if updates == 1 {
+				// The other replica wins the race.
+				winner := &admissionregistrationv1.MutatingWebhookConfiguration{}
+				require.NoError(t, cli.Get(ctx, client.ObjectKeyFromObject(obj), winner))
+				winner.Webhooks[0].ClientConfig.CABundle = []byte("somebundle")
+				require.NoError(t, cli.Update(ctx, winner))
+				return apierrors.NewConflict(schema.GroupResource{
+					Group:    "admissionregistration.k8s.io",
+					Resource: "mutatingwebhookconfigurations",
+				}, obj.GetName(), errors.New("the object has been modified"))
+			}
+			return cli.Update(ctx, obj, opts...)
+		},
+	}).Build()
+
+	require.NoError(t, maybePatchAdmissionWebhook(t.Context(), c, p))
+	require.Equal(t, 1, updates, "the retry must not write once the bundle already matches")
+
+	updated := &admissionregistrationv1.MutatingWebhookConfiguration{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Name: w.Name}, updated))
+	require.Equal(t, []byte("somebundle"), updated.Webhooks[0].ClientConfig.CABundle)
 }
 
 func Test_parseAndValidateFlags_extProcImagePullSecrets(t *testing.T) {
