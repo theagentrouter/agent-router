@@ -201,6 +201,11 @@ func TestMessageContent_MessagesStreamChunk(t *testing.T) {
 			jsonStr: ` {"type":"message_stop"}`,
 		},
 		{
+			name:    "ping",
+			exp:     MessagesStreamChunk{Type: "ping"},
+			jsonStr: `{"type":"ping"}`,
+		},
+		{
 			name:    "invalid event",
 			jsonStr: `abcdes`,
 			wantErr: true,
