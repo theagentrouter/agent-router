@@ -63,6 +63,41 @@ spec:
           - "sum"
           - "countdown"
 ---
+# Same OAuth configuration as mcp-route-oauth above, except that resource is omitted so the
+# gateway derives the identifier from each request. The two routes serve different paths, so
+# their well-known endpoints do not collide, and one gateway covers both the pinned and the
+# derived behaviour.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-route-oauth-derived
+  namespace: default
+spec:
+  path: "/mcp-derived"
+  parentRefs:
+    - name: mcp-gateway-oauth
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: testmcpserver-oauth
+      port: 1063
+  securityPolicy:
+    oauth:
+      issuer: "https://auth-server.example.com"
+      jwks:
+        localJWKS:
+          type: ValueRef
+          valueRef:
+            group: ""
+            kind: ConfigMap
+            name: jwks-configmap
+      protectedResourceMetadata:
+        resourceName: "example-resource-derived"
+        scopesSupported:
+          - "echo"
+          - "sum"
+          - "countdown"
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:

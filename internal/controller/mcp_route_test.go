@@ -423,6 +423,52 @@ func Test_newHTTPRoute_MCPOauth(t *testing.T) {
 	for _, rule := range oauthRules {
 		require.Equal(t, mcpRoute.Spec.Headers, rule.Matches[0].Headers)
 	}
+
+	// The protected resource metadata document is served by the MCP proxy rather than by a
+	// static direct response, so that its "resource" identifier can name the scheme, authority
+	// and path the client actually used. That means the rule forwards to the shared proxy
+	// Backend and carries the route header the proxy resolves the OAuth config from.
+	prmRule := oauthRules[0]
+	require.Empty(t, prmRule.Filters[0].ExtensionRef)
+	require.Len(t, prmRule.BackendRefs, 1)
+	require.Equal(t, gwapiv1.ObjectName(mcpProxySharedBackendName), prmRule.BackendRefs[0].Name)
+	require.Equal(t, gwapiv1.Kind("Backend"), ptr.Deref(prmRule.BackendRefs[0].Kind, ""))
+	require.Equal(t, gwapiv1.PortNumber(internalapi.MCPProxyPort), ptr.Deref(prmRule.BackendRefs[0].Port, 0))
+	require.Equal(t, gwapiv1.HTTPRouteFilterRequestHeaderModifier, prmRule.Filters[0].Type)
+	require.Equal(t, []gwapiv1.HTTPHeader{{
+		Name:  internalapi.MCPRouteHeader,
+		Value: mcpRouteHeaderValue(mcpRoute),
+	}}, prmRule.Filters[0].RequestHeaderModifier.Set)
+
+	// The authorization server metadata endpoints are issuer-derived, not host-derived, so
+	// they keep being answered by a static direct response.
+	for _, rule := range oauthRules[1:] {
+		require.Empty(t, rule.BackendRefs)
+		require.Equal(t, gwapiv1.HTTPRouteFilterExtensionRef, rule.Filters[0].Type)
+	}
+}
+
+func Test_newHTTPRoute_MCPOauth_CustomPath(t *testing.T) {
+	c := requireNewFakeClientWithIndexesForMCP(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	ctrlr := NewMCPRouteController(c, nil, logr.Discard(), eventCh.Ch)
+
+	httpRoute := &gwapiv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: "mcp-route", Namespace: "ns"}}
+	mcpRoute := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "mcp-route", Namespace: "ns"},
+		Spec: aigv1b1.MCPRouteSpec{
+			SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{OAuth: &aigv1b1.MCPRouteOAuth{}},
+			Path:           ptr.To("/tenant/mcp"),
+			ParentRefs:     []gwapiv1.ParentReference{{Name: gwapiv1.ObjectName("gw")}},
+			BackendRefs:    []aigv1b1.MCPRouteBackendRef{{}},
+		},
+	}
+	require.NoError(t, ctrlr.newMainHTTPRoute(httpRoute, mcpRoute, mcpProxySharedBackendName))
+
+	// The well-known path the proxy serves must be the one the derived resource_metadata URL
+	// points at, i.e. the well-known prefix followed by the route's serving path.
+	require.Equal(t, "/.well-known/oauth-protected-resource/tenant/mcp",
+		ptr.Deref(httpRoute.Spec.Rules[1].Matches[0].Path.Value, ""))
 }
 
 func Test_newHTTPRoute_MCP_Hostnames(t *testing.T) {

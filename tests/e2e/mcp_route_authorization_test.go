@@ -196,44 +196,68 @@ func TestMCPRouteAuthorization(t *testing.T) {
 		require.Contains(t, errMsg, "forbidden", "unexpected error: %v", err)
 	})
 
-	t.Run("WWW-Authenticate on insufficient scope", func(t *testing.T) {
-		token := makeSignedJWT(t, "sum") // only sum scope; echo requires echo
-		authHTTPClient := &http.Client{
-			Timeout:   10 * time.Second,
-			Transport: &bearerTokenTransport{token: token},
-		}
+	// The insufficient_scope challenge is the one resource_metadata surface built by the MCP
+	// proxy rather than by Envoy, so it is the only place the derived identifier can be proven
+	// on the 403 path. mcp-route-authorization-derived is identical to the route above except
+	// that it omits protectedResourceMetadata.resource.
+	for _, tc := range []struct {
+		name                 string
+		path                 string
+		routeHeader          string
+		wantResourceMetadata string
+	}{
+		{
+			name:                 "WWW-Authenticate on insufficient scope",
+			path:                 "/mcp-authorization",
+			routeHeader:          "default/mcp-route-authorization-default-deny",
+			wantResourceMetadata: "https://foo.bar.com/.well-known/oauth-protected-resource/mcp",
+		},
+		{
+			// No statically configured value could match here: the suite reaches the gateway
+			// through a port-forward on a port picked at run time.
+			name:                 "WWW-Authenticate on insufficient scope with a derived resource",
+			path:                 "/mcp-authorization-derived",
+			routeHeader:          "default/mcp-route-authorization-derived",
+			wantResourceMetadata: fwd.Address() + "/.well-known/oauth-protected-resource/mcp-authorization-derived",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token := makeSignedJWT(t, "sum") // only sum scope; echo requires echo
+			authHTTPClient := &http.Client{
+				Timeout:   10 * time.Second,
+				Transport: &bearerTokenTransport{token: token},
+			}
 
-		routeHeader := "default/mcp-route-authorization-default-deny"
+			// First, initialize a session to obtain a session ID header.
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			t.Cleanup(cancel)
 
-		// First, initialize a session to obtain a session ID header.
-		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-		t.Cleanup(cancel)
+			sess := requireConnectMCP(ctx, t, client, fwd.Address()+tc.path, authHTTPClient)
+			t.Cleanup(func() {
+				_ = sess.Close()
+			})
 
-		sess := requireConnectMCP(ctx, t, client, fmt.Sprintf("%s/mcp-authorization", fwd.Address()), authHTTPClient)
-		t.Cleanup(func() {
-			_ = sess.Close()
+			// Now call a tool that requires a missing scope to trigger insufficient_scope.
+			reqBody := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mcp-backend-authorization__echo","arguments":{"text":"Hello, world!"}}}`)
+			req, err := http.NewRequest(http.MethodPost, fwd.Address()+tc.path, bytes.NewReader(reqBody))
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("x-tenant-id", "t-123")
+			req.Header.Set("mcp-session-id", sess.ID())
+			req.Header.Set("x-ai-eg-mcp-route", tc.routeHeader)
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			require.Equal(t, http.StatusForbidden, resp.StatusCode)
+			wwwAuth := resp.Header.Get("WWW-Authenticate")
+			require.Contains(t, wwwAuth, `error="insufficient_scope"`)
+			require.Contains(t, wwwAuth, `scope="echo"`) // expected missing scope
+			require.Contains(t, wwwAuth, fmt.Sprintf(`resource_metadata="%s"`, tc.wantResourceMetadata))
 		})
-
-		// Now call a tool that requires a missing scope to trigger insufficient_scope.
-		reqBody := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mcp-backend-authorization__echo","arguments":{"text":"Hello, world!"}}}`)
-		req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/mcp-authorization", fwd.Address()), bytes.NewReader(reqBody))
-		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-tenant-id", "t-123")
-		req.Header.Set("mcp-session-id", sess.ID())
-		req.Header.Set("x-ai-eg-mcp-route", routeHeader)
-
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-
-		require.Equal(t, http.StatusForbidden, resp.StatusCode)
-		wwwAuth := resp.Header.Get("WWW-Authenticate")
-		require.Contains(t, wwwAuth, `error="insufficient_scope"`)
-		require.Contains(t, wwwAuth, `scope="echo"`) // expected missing scope
-		require.Contains(t, wwwAuth, `resource_metadata="https://foo.bar.com/.well-known/oauth-protected-resource/mcp"`)
-	})
+	}
 
 	t.Run("empty source matches all sources", func(t *testing.T) {
 		token := makeSignedJWT(t, "not-a-real-scope")
