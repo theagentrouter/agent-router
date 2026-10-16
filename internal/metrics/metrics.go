@@ -151,10 +151,15 @@ type TokenUsage struct {
 	cachedInputTokens uint32
 	// CacheCreationInputTokens is the total number of tokens written to cache.
 	cacheCreationInputTokens uint32
+	// CacheCreation5mInputTokens is the number of tokens written to a five-minute cache.
+	cacheCreation5mInputTokens uint32
+	// CacheCreation1hInputTokens is the number of tokens written to a one-hour cache.
+	cacheCreation1hInputTokens uint32
 	// ReasoningTokens is the number of reasoning tokens consumed.
 	reasoningTokens uint32
 
-	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet, reasoningTokenSet bool
+	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet,
+	cacheCreation5mInputTokenSet, cacheCreation1hInputTokenSet, reasoningTokenSet bool
 }
 
 // InputTokens returns the number of input tokens and whether it was set.
@@ -180,6 +185,16 @@ func (u *TokenUsage) CachedInputTokens() (uint32, bool) {
 // CacheCreationInputTokens returns the number of cache creation input tokens and whether it was set.
 func (u *TokenUsage) CacheCreationInputTokens() (uint32, bool) {
 	return u.cacheCreationInputTokens, u.cacheCreationInputTokenSet
+}
+
+// CacheCreation5mInputTokens returns the number of input tokens written to a five-minute cache and whether it was set.
+func (u *TokenUsage) CacheCreation5mInputTokens() (uint32, bool) {
+	return u.cacheCreation5mInputTokens, u.cacheCreation5mInputTokenSet
+}
+
+// CacheCreation1hInputTokens returns the number of input tokens written to a one-hour cache and whether it was set.
+func (u *TokenUsage) CacheCreation1hInputTokens() (uint32, bool) {
+	return u.cacheCreation1hInputTokens, u.cacheCreation1hInputTokenSet
 }
 
 // SetInputTokens sets the number of input tokens and marks the field as set.
@@ -210,6 +225,18 @@ func (u *TokenUsage) SetCachedInputTokens(tokens uint32) {
 func (u *TokenUsage) SetCacheCreationInputTokens(tokens uint32) {
 	u.cacheCreationInputTokens = tokens
 	u.cacheCreationInputTokenSet = true
+}
+
+// SetCacheCreation5mInputTokens sets the number of input tokens written to a five-minute cache and marks the field as set.
+func (u *TokenUsage) SetCacheCreation5mInputTokens(tokens uint32) {
+	u.cacheCreation5mInputTokens = tokens
+	u.cacheCreation5mInputTokenSet = true
+}
+
+// SetCacheCreation1hInputTokens sets the number of input tokens written to a one-hour cache and marks the field as set.
+func (u *TokenUsage) SetCacheCreation1hInputTokens(tokens uint32) {
+	u.cacheCreation1hInputTokens = tokens
+	u.cacheCreation1hInputTokenSet = true
 }
 
 // ReasoningTokens returns the number of reasoning tokens and whether it was set.
@@ -247,6 +274,18 @@ func (u *TokenUsage) AddCacheCreationInputTokens(tokens uint32) {
 	u.cacheCreationInputTokens += tokens
 }
 
+// AddCacheCreation5mInputTokens increments the recorded five-minute cache creation input tokens and marks the field as set.
+func (u *TokenUsage) AddCacheCreation5mInputTokens(tokens uint32) {
+	u.cacheCreation5mInputTokenSet = true
+	u.cacheCreation5mInputTokens += tokens
+}
+
+// AddCacheCreation1hInputTokens increments the recorded one-hour cache creation input tokens and marks the field as set.
+func (u *TokenUsage) AddCacheCreation1hInputTokens(tokens uint32) {
+	u.cacheCreation1hInputTokenSet = true
+	u.cacheCreation1hInputTokens += tokens
+}
+
 // AddReasoningTokens increments the recorded reasoning tokens and marks the field as set.
 func (u *TokenUsage) AddReasoningTokens(tokens uint32) {
 	u.reasoningTokenSet = true
@@ -256,7 +295,8 @@ func (u *TokenUsage) AddReasoningTokens(tokens uint32) {
 // IsZero reports whether no token usage field has been set.
 func (u *TokenUsage) IsZero() bool {
 	return !u.inputTokenSet && !u.outputTokenSet && !u.totalTokenSet &&
-		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet
+		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet &&
+		!u.cacheCreation5mInputTokenSet && !u.cacheCreation1hInputTokenSet && !u.reasoningTokenSet
 }
 
 // Override updates the TokenUsage fields with values from another TokenUsage instance.
@@ -281,6 +321,14 @@ func (u *TokenUsage) Override(other TokenUsage) {
 	if other.cacheCreationInputTokenSet {
 		u.cacheCreationInputTokens = other.cacheCreationInputTokens
 		u.cacheCreationInputTokenSet = true
+	}
+	if other.cacheCreation5mInputTokenSet {
+		u.cacheCreation5mInputTokens = other.cacheCreation5mInputTokens
+		u.cacheCreation5mInputTokenSet = true
+	}
+	if other.cacheCreation1hInputTokenSet {
+		u.cacheCreation1hInputTokens = other.cacheCreation1hInputTokens
+		u.cacheCreation1hInputTokenSet = true
 	}
 	if other.reasoningTokenSet {
 		u.reasoningTokens = other.reasoningTokens

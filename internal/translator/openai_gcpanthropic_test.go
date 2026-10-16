@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -414,6 +415,18 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 		require.Contains(t, err.Error(), "failed to unmarshal body")
 	})
 
+	t.Run("cache creation usage split by TTL", func(t *testing.T) {
+		const responseBody = `{"id":"msg_cache","model":"claude-sonnet-4-5","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"type":"message","usage":{"input_tokens":10,"output_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":5,"ephemeral_1h_input_tokens":2}}}`
+		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
+		_, _, usage, _, err := translator.ResponseBody(
+			map[string]string{statusHeaderName: "200"}, strings.NewReader(responseBody), true, nil,
+		)
+		require.NoError(t, err)
+		requireTokenUsageValue(t, 7, usage.CacheCreationInputTokens)
+		requireTokenUsageValue(t, 5, usage.CacheCreation5mInputTokens)
+		requireTokenUsageValue(t, 2, usage.CacheCreation1hInputTokens)
+	})
+
 	tests := []struct {
 		name                   string
 		inputResponse          *anthropic.Message
@@ -661,6 +674,10 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 				int32(tt.expectedOpenAIResponse.Usage.TotalTokens),                             // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.CompletionTokensDetails.ReasoningTokens), // nolint:gosec
 			)
+			// The marshaled SDK fixture reports a complete zero-valued TTL breakdown.
+			// Preserve that provider-reported split rather than deriving it from the aggregate.
+			expectedTokenUsage.SetCacheCreation5mInputTokens(0)
+			expectedTokenUsage.SetCacheCreation1hInputTokens(0)
 			require.Equal(t, expectedTokenUsage, usedToken)
 
 			if diff := cmp.Diff(tt.expectedOpenAIResponse, gotResp, cmpopts.IgnoreFields(openai.ChatCompletionResponse{}, "Created")); diff != "" {
@@ -1253,7 +1270,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseError(t *testing
 			require.NoError(t, err)
 			require.NotNil(t, body)
 			require.NotNil(t, hm)
-			require.Len(t, hm, 2)
+			require.Len(t, hm, 2) //nolint:testifylint // jsonContentType below is an HTTP media type, not JSON-encoded data.
 			require.Equal(t, contentTypeHeaderName, hm[0].Key())
 			require.Equal(t, jsonContentType, hm[0].Value()) //nolint:testifylint
 			require.Equal(t, contentLengthHeaderName, hm[1].Key())

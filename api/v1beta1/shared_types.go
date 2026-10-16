@@ -131,6 +131,12 @@ type LLMRequestCost struct {
 	//	* input_tokens: the number of input tokens. Type: unsigned integer.
 	//	* cached_input_tokens: the number of cached read input tokens. Type: unsigned integer.
 	//	* cache_creation_input_tokens: the number of cache creation input tokens. Type: unsigned integer.
+	//
+	// The TTL-specific cache creation variables are populated only when the provider reports a complete
+	// breakdown; otherwise both are zero in CEL.
+	//
+	//	* cache_creation_5m_input_tokens: the number of input tokens written to a five-minute cache. Type: unsigned integer.
+	//	* cache_creation_1h_input_tokens: the number of input tokens written to a one-hour cache. Type: unsigned integer.
 	//	* output_tokens: the number of output tokens. Type: unsigned integer.
 	//	* total_tokens: the total number of tokens. Type: unsigned integer.
 	//	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.
@@ -139,7 +145,7 @@ type LLMRequestCost struct {
 	//
 	// 	* "model == 'llama' ?  input_tokens + output_token * 0.5 : total_tokens"
 	//	* "backend == 'foo.default' ?  input_tokens + output_tokens : total_tokens"
-	//	* "backend == 'bar.default' ?  (input_tokens - cached_input_tokens) + cached_input_tokens * 0.1 + cache_creation_input_tokens * 1.25 + output_tokens : total_tokens"
+	//	* "cache_creation_5m_input_tokens + cache_creation_1h_input_tokens * 2u"
 	//	* "input_tokens + output_tokens + total_tokens"
 	//	* "input_tokens * output_tokens"
 	//
@@ -155,7 +161,7 @@ const (
 	LLMRequestCostTypeInputToken LLMRequestCostType = "InputToken"
 	// LLMRequestCostTypeCachedInputToken is the cost type of the cached input token.
 	LLMRequestCostTypeCachedInputToken LLMRequestCostType = "CachedInputToken"
-	// LLMRequestCostTypeCacheCreationInputToken is the cost type of the cached input token.
+	// LLMRequestCostTypeCacheCreationInputToken is the cost type of all cache creation input tokens.
 	LLMRequestCostTypeCacheCreationInputToken LLMRequestCostType = "CacheCreationInputToken"
 	// LLMRequestCostTypeOutputToken is the cost type of the output token.
 	LLMRequestCostTypeOutputToken LLMRequestCostType = "OutputToken"

@@ -641,18 +641,22 @@ spec:
                         of input tokens. Type: unsigned integer.\n\t* cached_input_tokens:
                         the number of cached read input tokens. Type: unsigned integer.\n\t*
                         cache_creation_input_tokens: the number of cache creation
-                        input tokens. Type: unsigned integer.\n\t* output_tokens:
-                        the number of output tokens. Type: unsigned integer.\n\t*
-                        total_tokens: the total number of tokens. Type: unsigned integer.\n\t*
-                        reasoning_tokens: the number of reasoning tokens. Type: unsigned
-                        integer.\n\nFor example, the following expressions are valid:\n\n\t*
-                        \"model == 'llama' ?  input_tokens + output_token * 0.5 :
-                        total_tokens\"\n\t* \"backend == 'foo.default' ?  input_tokens
-                        + output_tokens : total_tokens\"\n\t* \"backend == 'bar.default'
-                        ?  (input_tokens - cached_input_tokens) + cached_input_tokens
-                        * 0.1 + cache_creation_input_tokens * 1.25 + output_tokens
-                        : total_tokens\"\n\t* \"input_tokens + output_tokens + total_tokens\"\n\t*
-                        \"input_tokens * output_tokens\""
+                        input tokens. Type: unsigned integer.\n\nThe TTL-specific
+                        cache creation variables are populated only when the provider
+                        reports a complete\nbreakdown; otherwise both are zero in
+                        CEL.\n\n\t* cache_creation_5m_input_tokens: the number of
+                        input tokens written to a five-minute cache. Type: unsigned
+                        integer.\n\t* cache_creation_1h_input_tokens: the number of
+                        input tokens written to a one-hour cache. Type: unsigned integer.\n\t*
+                        output_tokens: the number of output tokens. Type: unsigned
+                        integer.\n\t* total_tokens: the total number of tokens. Type:
+                        unsigned integer.\n\t* reasoning_tokens: the number of reasoning
+                        tokens. Type: unsigned integer.\n\nFor example, the following
+                        expressions are valid:\n\n\t* \"model == 'llama' ?  input_tokens
+                        + output_token * 0.5 : total_tokens\"\n\t* \"backend == 'foo.default'
+                        ?  input_tokens + output_tokens : total_tokens\"\n\t* \"cache_creation_5m_input_tokens
+                        + cache_creation_1h_input_tokens * 2u\"\n\t* \"input_tokens
+                        + output_tokens + total_tokens\"\n\t* \"input_tokens * output_tokens\""
                       type: string
                     metadataKey:
                       description: MetadataKey is the key of the metadata to store
@@ -1385,18 +1389,22 @@ spec:
                         of input tokens. Type: unsigned integer.\n\t* cached_input_tokens:
                         the number of cached read input tokens. Type: unsigned integer.\n\t*
                         cache_creation_input_tokens: the number of cache creation
-                        input tokens. Type: unsigned integer.\n\t* output_tokens:
-                        the number of output tokens. Type: unsigned integer.\n\t*
-                        total_tokens: the total number of tokens. Type: unsigned integer.\n\t*
-                        reasoning_tokens: the number of reasoning tokens. Type: unsigned
-                        integer.\n\nFor example, the following expressions are valid:\n\n\t*
-                        \"model == 'llama' ?  input_tokens + output_token * 0.5 :
-                        total_tokens\"\n\t* \"backend == 'foo.default' ?  input_tokens
-                        + output_tokens : total_tokens\"\n\t* \"backend == 'bar.default'
-                        ?  (input_tokens - cached_input_tokens) + cached_input_tokens
-                        * 0.1 + cache_creation_input_tokens * 1.25 + output_tokens
-                        : total_tokens\"\n\t* \"input_tokens + output_tokens + total_tokens\"\n\t*
-                        \"input_tokens * output_tokens\""
+                        input tokens. Type: unsigned integer.\n\nThe TTL-specific
+                        cache creation variables are populated only when the provider
+                        reports a complete\nbreakdown; otherwise both are zero in
+                        CEL.\n\n\t* cache_creation_5m_input_tokens: the number of
+                        input tokens written to a five-minute cache. Type: unsigned
+                        integer.\n\t* cache_creation_1h_input_tokens: the number of
+                        input tokens written to a one-hour cache. Type: unsigned integer.\n\t*
+                        output_tokens: the number of output tokens. Type: unsigned
+                        integer.\n\t* total_tokens: the total number of tokens. Type:
+                        unsigned integer.\n\t* reasoning_tokens: the number of reasoning
+                        tokens. Type: unsigned integer.\n\nFor example, the following
+                        expressions are valid:\n\n\t* \"model == 'llama' ?  input_tokens
+                        + output_token * 0.5 : total_tokens\"\n\t* \"backend == 'foo.default'
+                        ?  input_tokens + output_tokens : total_tokens\"\n\t* \"cache_creation_5m_input_tokens
+                        + cache_creation_1h_input_tokens * 2u\"\n\t* \"input_tokens
+                        + output_tokens + total_tokens\"\n\t* \"input_tokens * output_tokens\""
                       type: string
                     metadataKey:
                       description: MetadataKey is the key of the metadata to store
