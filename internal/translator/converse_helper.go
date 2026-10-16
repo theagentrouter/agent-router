@@ -67,6 +67,10 @@ func openAIToolsToBedrockToolConfig(tools []openai.Tool, toolChoice *openai.Chat
 				toolConfig.ToolChoice = &awsbedrock.ToolChoice{
 					Any: &awsbedrock.AnyToolChoice{},
 				}
+			case "none":
+				// Bedrock has no "none" tool choice, so send none rather than a forced call to a tool named "none".
+				// The tools stay in the request because Bedrock requires a tool configuration while the conversation
+				// holds toolUse or toolResult blocks.
 			default:
 				// Anthropic Claude supports tool_choice parameter with three options.
 				// * `auto` allows Claude to decide whether to call any provided tools or not.
