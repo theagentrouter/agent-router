@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/tidwall/sjson"
+	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -121,11 +122,12 @@ func (a *anthropicToOpenAIV1ChatCompletionTranslator) responseBodyNonStreaming(b
 
 	responseModel = cmp.Or(openAIResp.Model, a.requestModel)
 
+	uncached, cacheRead, cacheWrite := splitPromptTokens(openAIResp.Usage.PromptTokens, openAIResp.Usage.PromptTokensDetails)
 	tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
-		int64(openAIResp.Usage.PromptTokens),
+		int64(uncached),
 		int64(openAIResp.Usage.CompletionTokens),
-		nil,
-		nil,
+		ptr.To(int64(cacheRead)),
+		ptr.To(int64(cacheWrite)),
 	)
 
 	anthropicResp := openAIResponseToAnthropic(openAIResp, responseModel)
