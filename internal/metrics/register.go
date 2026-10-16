@@ -16,6 +16,15 @@ func mustRegisterCounter(meter metric.Meter, name string, options ...metric.Floa
 	return h
 }
 
+// mustRegisterUpDownCounter registers an up/down counter with the meter and panics if it fails.
+func mustRegisterUpDownCounter(meter metric.Meter, name string, options ...metric.Float64UpDownCounterOption) metric.Float64UpDownCounter {
+	h, err := meter.Float64UpDownCounter(name, options...)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
 // mustRegisterHistogram registers a histogram with the meter and panics if it fails.
 func mustRegisterHistogram(meter metric.Meter, name string, options ...metric.Float64HistogramOption) metric.Float64Histogram {
 	h, err := meter.Float64Histogram(name, options...)
