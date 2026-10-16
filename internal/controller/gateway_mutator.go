@@ -293,7 +293,7 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 		},
 	}
 	optional := true
-	for i := range maxFilterConfigBundleSlots {
+	for i := range g.filterConfigBundleMaxSlots() {
 		projections = append(projections, corev1.VolumeProjection{
 			Secret: &corev1.SecretProjection{
 				LocalObjectReference: corev1.LocalObjectReference{
