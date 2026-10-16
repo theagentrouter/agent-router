@@ -462,6 +462,14 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 			choice.FinishReason = openai.ChatCompletionChoicesFinishReasonToolCalls
 		}
 
+		// Surface why the candidate finished, e.g. which safety category blocked it. Safety ratings are
+		// only copied to the final chunk of the candidate, which holds the ratings relevant for the block.
+		if candidate.FinishReason != "" {
+			choice.NativeFinishReason = geminiNativeFinishReason(candidate.FinishReason)
+			choice.FinishMessage = candidate.FinishMessage
+			choice.Delta.SafetyRatings = candidate.SafetyRatings
+		}
+
 		choices = append(choices, choice)
 	}
 

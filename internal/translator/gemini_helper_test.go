@@ -3525,3 +3525,42 @@ func TestMapReasoningEffortToThinkingLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestGeminiCandidatesToOpenAIChoices_FinishDetails(t *testing.T) {
+	tests := []struct {
+		name                   string
+		candidate              *genai.Candidate
+		wantFinishReason       openai.ChatCompletionChoicesFinishReason
+		wantNativeFinishReason string
+		wantFinishMessage      string
+	}{
+		{
+			name:                   "PROHIBITED_CONTENT keeps the native finish reason and message",
+			candidate:              &genai.Candidate{FinishReason: genai.FinishReasonProhibitedContent, FinishMessage: "blocked"},
+			wantFinishReason:       openai.ChatCompletionChoicesFinishReasonContentFilter,
+			wantNativeFinishReason: "PROHIBITED_CONTENT",
+			wantFinishMessage:      "blocked",
+		},
+		{
+			name:             "STOP has no native finish reason",
+			candidate:        &genai.Candidate{FinishReason: genai.FinishReasonStop},
+			wantFinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+		},
+		{
+			name:             "MAX_TOKENS has no native finish reason",
+			candidate:        &genai.Candidate{FinishReason: genai.FinishReasonMaxTokens},
+			wantFinishReason: openai.ChatCompletionChoicesFinishReasonLength,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			choices, err := geminiCandidatesToOpenAIChoices([]*genai.Candidate{tc.candidate}, responseModeNone)
+			require.NoError(t, err)
+			require.Len(t, choices, 1)
+			require.Equal(t, tc.wantFinishReason, choices[0].FinishReason)
+			require.Equal(t, tc.wantNativeFinishReason, choices[0].NativeFinishReason)
+			require.Equal(t, tc.wantFinishMessage, choices[0].FinishMessage)
+		})
+	}
+}

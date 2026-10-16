@@ -876,6 +876,8 @@ func geminiCandidatesToOpenAIChoices(candidates []*genai.Candidate, responseMode
 		}
 
 		choice.FinishReason = geminiFinishReasonToOpenAI(candidate.FinishReason, toolCalls)
+		choice.NativeFinishReason = geminiNativeFinishReason(candidate.FinishReason)
+		choice.FinishMessage = candidate.FinishMessage
 
 		choices = append(choices, choice)
 	}
@@ -886,6 +888,18 @@ func geminiCandidatesToOpenAIChoices(candidates []*genai.Candidate, responseMode
 // Define a type constraint that includes both stream and non-stream tool call slice types.
 type toolCallSlice interface {
 	[]openai.ChatCompletionMessageToolCallParam | []openai.ChatCompletionChunkChoiceDeltaToolCall
+}
+
+// geminiNativeFinishReason returns the Gemini finish reason for the native_finish_reason field when
+// geminiFinishReasonToOpenAI loses information, e.g. SAFETY and PROHIBITED_CONTENT both map to
+// content_filter. Lossless reasons return "" so that regular responses stay unchanged.
+func geminiNativeFinishReason(reason genai.FinishReason) string {
+	switch reason {
+	case "", genai.FinishReasonStop, genai.FinishReasonMaxTokens:
+		return ""
+	default:
+		return string(reason)
+	}
 }
 
 // geminiFinishReasonToOpenAI converts Gemini finish reason to OpenAI finish reason.

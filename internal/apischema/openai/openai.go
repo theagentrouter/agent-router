@@ -1492,6 +1492,16 @@ type ChatCompletionResponseChoice struct {
 	// Message is described in the OpenAI API documentation:
 	// https://platform.openai.com/docs/api-reference/chat/object#chat/object-choices
 	Message ChatCompletionResponseChoiceMessage `json:"message,omitempty"`
+
+	// GCPVertexAI specific fields.
+
+	// NativeFinishReason is the provider's finish reason as-is (e.g. "PROHIBITED_CONTENT"), set when the
+	// mapping to FinishReason loses information. The name follows OpenRouter's native_finish_reason.
+	NativeFinishReason string `json:"native_finish_reason,omitempty"`
+
+	// FinishMessage explains why the model stopped generating tokens, copied from the GCP Vertex AI response as-is.
+	// https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerateContentResponse#Candidate
+	FinishMessage string `json:"finish_message,omitempty"`
 }
 
 // ChatCompletionResponseChoiceMessage is described in the OpenAI API documentation:
@@ -1673,6 +1683,10 @@ type ChatCompletionResponseChunkChoice struct {
 	Delta        *ChatCompletionResponseChunkChoiceDelta `json:"delta,omitzero"`
 	Logprobs     *ChatCompletionChoicesLogprobs          `json:"logprobs,omitzero"`
 	FinishReason ChatCompletionChoicesFinishReason       `json:"finish_reason,omitempty"`
+
+	// GCPVertexAI specific fields, see ChatCompletionResponseChoice.
+	NativeFinishReason string `json:"native_finish_reason,omitempty"`
+	FinishMessage      string `json:"finish_message,omitempty"`
 }
 
 type ChatCompletionChunkChoiceDeltaToolCall struct {
@@ -1698,6 +1712,12 @@ type ChatCompletionResponseChunkChoiceDelta struct {
 	// content) that cannot be represented in the plain-string reasoning_content,
 	// following the LiteLLM convention also used on the non-streaming Message.
 	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
+
+	// GCPVertexAI specific fields.
+
+	// SafetyRatings contains the safety ratings of the candidate copied from the GCP Vertex AI response as-is,
+	// set on the chunk that carries the finish reason. See ChatCompletionResponseChoiceMessage.SafetyRatings.
+	SafetyRatings []*genai.SafetyRating `json:"safety_ratings,omitempty"`
 }
 
 // Error is described in the OpenAI API documentation

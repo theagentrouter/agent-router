@@ -2742,3 +2742,65 @@ func TestGCPVertexAIRedactBody(t *testing.T) {
 		require.NotContains(t, *resp.Choices[0].Message.Content, "[REDACTED")
 	})
 }
+
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingFinishDetails(t *testing.T) {
+	tests := []struct {
+		name        string
+		gcpChunk    string
+		wantChoices string
+	}{
+		{
+			name: "SAFETY block with safety ratings and finish message",
+			gcpChunk: `{"candidates":[{"content":{"role":"model"},"finishReason":"SAFETY","finishMessage":"Response was blocked due to safety.",` +
+				`"safetyRatings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","probability":"HIGH","blocked":true},` +
+				`{"category":"HARM_CATEGORY_HARASSMENT","probability":"NEGLIGIBLE"}]}]}`,
+			wantChoices: `[{"index":0,"delta":{"role":"assistant","safety_ratings":[` +
+				`{"blocked":true,"category":"HARM_CATEGORY_DANGEROUS_CONTENT","probability":"HIGH"},` +
+				`{"category":"HARM_CATEGORY_HARASSMENT","probability":"NEGLIGIBLE"}]},` +
+				`"finish_reason":"content_filter","native_finish_reason":"SAFETY","finish_message":"Response was blocked due to safety."}]`,
+		},
+		{
+			name:        "PROHIBITED_CONTENT block without safety ratings",
+			gcpChunk:    `{"candidates":[{"finishReason":"PROHIBITED_CONTENT"}]}`,
+			wantChoices: `[{"index":0,"delta":{},"finish_reason":"content_filter","native_finish_reason":"PROHIBITED_CONTENT"}]`,
+		},
+		{
+			name:        "regular STOP chunk is unchanged",
+			gcpChunk:    `{"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"},"finishReason":"STOP"}]}`,
+			wantChoices: `[{"index":0,"delta":{"content":"Hello","role":"assistant"},"finish_reason":"stop"}]`,
+		},
+		{
+			name: "safety ratings of intermediate chunks are not copied",
+			gcpChunk: `{"candidates":[{"content":{"parts":[{"text":"Hel"}],"role":"model"},` +
+				`"safetyRatings":[{"category":"HARM_CATEGORY_HARASSMENT","probability":"NEGLIGIBLE"}]}]}`,
+			wantChoices: `[{"index":0,"delta":{"content":"Hel","role":"assistant"}}]`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var chunk genai.GenerateContentResponse
+			require.NoError(t, json.Unmarshal([]byte(tc.gcpChunk), &chunk))
+			translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+			choices, err := translator.geminiCandidatesToOpenAIStreamingChoices(chunk.Candidates)
+			require.NoError(t, err)
+			got, err := json.Marshal(choices)
+			require.NoError(t, err)
+			require.JSONEq(t, tc.wantChoices, string(got))
+		})
+	}
+
+	t.Run("finish details reach the SSE stream", func(t *testing.T) {
+		translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+		_, bodyMut, _, _, err := translator.handleStreamingResponse(
+			strings.NewReader(`{"candidates":[{"finishReason":"SPII","safetyRatings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","probability":"LOW"}]}]}`),
+			false,
+			nil,
+		)
+		require.NoError(t, err)
+		body := string(bodyMut)
+		require.Contains(t, body, `"finish_reason":"content_filter"`)
+		require.Contains(t, body, `"native_finish_reason":"SPII"`)
+		require.Contains(t, body, `"safety_ratings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","probability":"LOW"}]`)
+	})
+}
