@@ -20,6 +20,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/gcp"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -67,8 +68,8 @@ type gcpVertexAIErrorDetails struct {
 
 // NewChatCompletionOpenAIToGCPVertexAITranslator implements [Factory] for OpenAI to GCP Gemini translation.
 // This translator converts OpenAI ChatCompletion API requests to GCP Gemini API format.
-func NewChatCompletionOpenAIToGCPVertexAITranslator(modelNameOverride internalapi.ModelNameOverride) OpenAIChatCompletionTranslator {
-	return &openAIToGCPVertexAITranslatorV1ChatCompletion{modelNameOverride: modelNameOverride, toolCallIndex: int64(0)}
+func NewChatCompletionOpenAIToGCPVertexAITranslator(modelNameOverride internalapi.ModelNameOverride, hints *filterapi.ModelTranslationHints) OpenAIChatCompletionTranslator {
+	return &openAIToGCPVertexAITranslatorV1ChatCompletion{modelNameOverride: modelNameOverride, hints: hints, toolCallIndex: int64(0)}
 }
 
 // openAIToGCPVertexAITranslatorV1ChatCompletion translates OpenAI Chat Completions API to GCP Vertex AI Gemini API.
@@ -77,6 +78,7 @@ func NewChatCompletionOpenAIToGCPVertexAITranslator(modelNameOverride internalap
 type openAIToGCPVertexAITranslatorV1ChatCompletion struct {
 	responseMode      geminiResponseMode
 	modelNameOverride internalapi.ModelNameOverride
+	hints             *filterapi.ModelTranslationHints
 	stream            bool // Track if this is a streaming request.
 	streamDelimiter   []byte
 	bufferedBody      []byte // Buffer for incomplete JSON chunks.
@@ -518,13 +520,13 @@ func getGenerationConfigThinkingConfig(tu *openai.ThinkingUnion) *genai.Thinking
 // openAIMessageToGeminiMessage converts an OpenAI ChatCompletionRequest to a GCP Gemini GenerateContentRequest.
 func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) openAIMessageToGeminiMessage(openAIReq *openai.ChatCompletionRequest, requestModel internalapi.RequestModel) (*gcp.GenerateContentRequest, error) {
 	// Convert OpenAI messages to Gemini Contents and SystemInstruction.
-	contents, systemInstruction, err := openAIMessagesToGeminiContents(openAIReq.Messages, requestModel)
+	contents, systemInstruction, err := openAIMessagesToGeminiContents(openAIReq.Messages, requestModel, o.hints)
 	if err != nil {
 		return nil, err
 	}
 
 	// Some models support only partialJSONSchema.
-	parametersJSONSchemaAvailable := responseJSONSchemaAvailable(requestModel)
+	parametersJSONSchemaAvailable := responseJSONSchemaAvailable(requestModel, o.hints)
 	// Convert OpenAI tools to Gemini tools.
 	tools, err := openAIToolsToGeminiTools(openAIReq.Tools, parametersJSONSchemaAvailable)
 	if err != nil {
@@ -538,7 +540,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) openAIMessageToGeminiMes
 	}
 
 	// Convert generation config.
-	generationConfig, responseMode, err := openAIReqToGeminiGenerationConfig(openAIReq, requestModel)
+	generationConfig, responseMode, err := openAIReqToGeminiGenerationConfig(openAIReq, requestModel, o.hints)
 	if err != nil {
 		return nil, fmt.Errorf("invalid generation configs: %w", err)
 	}
@@ -577,7 +579,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) applyVendorSpecificField
 		if gcr.GenerationConfig == nil {
 			gcr.GenerationConfig = &genai.GenerationConfig{}
 		}
-		if vendorGenConfig.MediaResolution != "" && mediaResolutionAvailable(requestModel) {
+		if vendorGenConfig.MediaResolution != "" && mediaResolutionAvailable(requestModel, o.hints) {
 			gcr.GenerationConfig.MediaResolution = vendorGenConfig.MediaResolution
 		}
 	}

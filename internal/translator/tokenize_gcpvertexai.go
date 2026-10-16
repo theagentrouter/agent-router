@@ -39,7 +39,7 @@ type ToGCPVertexAIV1Tokenize struct {
 // tokenizeToGeminiCountToken converts an OpenAI tokenize chat request to GCP Gemini CountTokens format.
 func (o *ToGCPVertexAIV1Tokenize) tokenizeToGeminiCountToken(tokenizeChatReq *tokenize.ChatRequest, requestModel internalapi.RequestModel) (*gcp.CountTokenRequest, error) {
 	// Convert messages to Gemini Contents and SystemInstruction.
-	contents, systemInstruction, err := openAIMessagesToGeminiContents(tokenizeChatReq.Messages, requestModel)
+	contents, systemInstruction, err := openAIMessagesToGeminiContents(tokenizeChatReq.Messages, requestModel, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func (o *ToGCPVertexAIV1Tokenize) tokenizeToGeminiCountToken(tokenizeChatReq *to
 	}
 
 	// Some models support only partialJSONSchema.
-	parametersJSONSchemaAvailable := responseJSONSchemaAvailable(requestModel)
+	parametersJSONSchemaAvailable := responseJSONSchemaAvailable(requestModel, nil)
 	// Convert OpenAI tools to Gemini tools.
 	tools, err := openAIToolsToGeminiTools(tokenizeChatReq.Tools, parametersJSONSchemaAvailable)
 	if err != nil {
