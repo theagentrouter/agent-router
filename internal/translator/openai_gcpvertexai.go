@@ -476,6 +476,12 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) convertGCPChunkToOpenAI(
 		// For now, create empty choices on error to prevent breaking the stream.
 		choices = []openai.ChatCompletionResponseChunkChoice{}
 	}
+	if geminiPromptBlocked(chunk) {
+		choices = []openai.ChatCompletionResponseChunkChoice{{
+			Delta:        &openai.ChatCompletionResponseChunkChoiceDelta{Role: openai.ChatMessageRoleAssistant},
+			FinishReason: openai.ChatCompletionChoicesFinishReasonContentFilter,
+		}}
+	}
 
 	return &openai.ChatCompletionResponseChunk{
 		ID:      chunk.ResponseID,
@@ -591,6 +597,14 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiResponseToOpenAIMe
 	choices, err := geminiCandidatesToOpenAIChoices(gcr.Candidates, o.responseMode)
 	if err != nil {
 		return nil, fmt.Errorf("error converting choices: %w", err)
+	}
+	// A blocked prompt has no candidates. Report it the same way as a blocked candidate so that
+	// clients see a content_filter finish reason instead of a response with no choices.
+	if geminiPromptBlocked(gcr) {
+		choices = []openai.ChatCompletionResponseChoice{{
+			Message:      openai.ChatCompletionResponseChoiceMessage{Role: openai.ChatMessageRoleAssistant},
+			FinishReason: openai.ChatCompletionChoicesFinishReasonContentFilter,
+		}}
 	}
 
 	// Set up the OpenAI response.
