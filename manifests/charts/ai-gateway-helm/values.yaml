@@ -318,6 +318,10 @@ controller:
         # Fallback seed used to derive the MCP session encryption key.
         # Set to a non-empty value to enable fallback.
         # It should be the previous seed used before changing to the new seed.
+        # The chart stores it in a Secret named "<controller fullname>-mcp-session-encryption-fallback".
+        # While it is set, the controller is restarted on every "helm upgrade" so that changes to either seed take
+        # effect. When it is not set, restart the controller manually after changing the seed
+        # (e.g. "kubectl rollout restart deployment/<controller fullname>").
         seed: ""
         # Number of PBKDF2 iterations to use for deriving the MCP session encryption key with the fallback seed.
         iterations: 100000

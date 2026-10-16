@@ -42,6 +42,15 @@ Name of the Secret that holds the MCP session encryption seed.
 {{- end }}
 
 {{/*
+Name of the Secret that holds the MCP session encryption fallback seed.
+The fullname is truncated first so the suffix is always kept; otherwise a long fullname would truncate this
+to the same name as the primary seed Secret.
+*/}}
+{{- define "ai-gateway-helm.controller.mcpFallbackSessionEncryptionSecretName" -}}
+{{- printf "%s-mcp-session-encryption-fallback" (include "ai-gateway-helm.controller.fullname" . | trunc 31 | trimSuffix "-") }}
+{{- end }}
+
+{{/*
 Create chart name and version as used by the chart label.
 */}}
 {{- define "ai-gateway-helm.chart" -}}

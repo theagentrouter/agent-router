@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -18,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
@@ -175,30 +177,31 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 		b.extProcAsSideCar = true
 		return b
 	}())
-	// mcpSessionEncryptionSeed only enters the container args when needMCP is
-	// true, so verify drift under that input.
-	assertDriftsMCP := func(name string, mutated *extProcBuilder) {
+	// The MCP session encryption config is delivered through the filter config Secrets, not the
+	// container, so it must not alter the hash: the hash is stored in a pod-template annotation and
+	// would otherwise be an offline guessing oracle for the seed.
+	assertNoDriftMCP := func(name string, mutated *extProcBuilder) {
 		t.Helper()
 		mcpInput := extProcContainerInput{needMCP: true}
-		require.NotEqual(t, base.extProcContainerHash(mcpInput), mutated.extProcContainerHash(mcpInput),
-			"%s change must alter the config hash when MCP is enabled", name)
+		require.Equal(t, base.extProcContainerHash(mcpInput), mutated.extProcContainerHash(mcpInput),
+			"%s change must not alter the config hash", name)
 	}
-	assertDriftsMCP("mcpSessionEncryptionSeed", func() *extProcBuilder {
+	assertNoDriftMCP("mcpSessionEncryptionSeed", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.mcpSessionEncryptionSeed = "different-seed"
 		return b
 	}())
-	assertDriftsMCP("mcpSessionEncryptionIterations", func() *extProcBuilder {
+	assertNoDriftMCP("mcpSessionEncryptionIterations", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.mcpSessionEncryptionIterations = 101
 		return b
 	}())
-	assertDriftsMCP("mcpFallbackSessionEncryptionSeed", func() *extProcBuilder {
+	assertNoDriftMCP("mcpFallbackSessionEncryptionSeed", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.mcpFallbackSessionEncryptionSeed = "different-fallback"
 		return b
 	}())
-	assertDriftsMCP("mcpFallbackSessionEncryptionIterations", func() *extProcBuilder {
+	assertNoDriftMCP("mcpFallbackSessionEncryptionIterations", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.mcpFallbackSessionEncryptionIterations = 201
 		return b
@@ -373,4 +376,37 @@ func TestImageTagOrDigest(t *testing.T) {
 			require.Equal(t, tt.expected, imageTagOrDigest(tt.image))
 		})
 	}
+}
+
+func TestExtProcBuilder_mcpSessionEncryption(t *testing.T) {
+	t.Run("nil builder", func(t *testing.T) {
+		var b *extProcBuilder
+		require.Nil(t, b.mcpSessionEncryption())
+	})
+	t.Run("no seed", func(t *testing.T) {
+		b := newExtProcBuilder(&Options{MCPSessionEncryptionIterations: 100}, false, logr.Discard())
+		require.Nil(t, b.mcpSessionEncryption())
+	})
+	t.Run("seed without fallback", func(t *testing.T) {
+		b := newExtProcBuilder(&Options{
+			MCPSessionEncryptionSeed:               "seed",
+			MCPSessionEncryptionIterations:         100,
+			MCPFallbackSessionEncryptionIterations: 200,
+		}, false, logr.Discard())
+		require.Equal(t, &filterapi.MCPSessionEncryption{Seed: "seed", Iterations: 100}, b.mcpSessionEncryption())
+	})
+	t.Run("seed with fallback", func(t *testing.T) {
+		b := newExtProcBuilder(&Options{
+			MCPSessionEncryptionSeed:               "seed",
+			MCPSessionEncryptionIterations:         100,
+			MCPFallbackSessionEncryptionSeed:       "fallback",
+			MCPFallbackSessionEncryptionIterations: 200,
+		}, false, logr.Discard())
+		require.Equal(t, &filterapi.MCPSessionEncryption{
+			Seed:               "seed",
+			Iterations:         100,
+			FallbackSeed:       "fallback",
+			FallbackIterations: 200,
+		}, b.mcpSessionEncryption())
+	})
 }

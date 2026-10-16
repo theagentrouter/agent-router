@@ -331,6 +331,42 @@ func Test_maybePatchAdmissionWebhook(t *testing.T) {
 	require.Equal(t, updated.Webhooks[0].ClientConfig.CABundle, []byte("somebundle"))
 }
 
+func Test_parseAndValidateFlags_mcpSessionEncryptionSeedEnvVars(t *testing.T) {
+	t.Run("from env vars", func(t *testing.T) {
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "env-seed")
+		t.Setenv(mcpFallbackSessionEncryptionSeedEnvVar, "env-fallback-seed")
+		f, err := parseAndValidateFlags([]string{"--mcpFallbackSessionEncryptionIterations=200"})
+		require.NoError(t, err)
+		require.Equal(t, "env-seed", f.mcpSessionEncryptionSeed)
+		require.Equal(t, "env-fallback-seed", f.mcpFallbackSessionEncryptionSeed)
+		require.Equal(t, 200, f.mcpFallbackSessionEncryptionIterations)
+	})
+	t.Run("flags take precedence", func(t *testing.T) {
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "env-seed")
+		t.Setenv(mcpFallbackSessionEncryptionSeedEnvVar, "env-fallback-seed")
+		f, err := parseAndValidateFlags([]string{
+			"--mcpSessionEncryptionSeed=flag-seed",
+			"--mcpFallbackSessionEncryptionSeed=flag-fallback-seed",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "flag-seed", f.mcpSessionEncryptionSeed)
+		require.Equal(t, "flag-fallback-seed", f.mcpFallbackSessionEncryptionSeed)
+	})
+	t.Run("empty env vars are ignored", func(t *testing.T) {
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "")
+		t.Setenv(mcpFallbackSessionEncryptionSeedEnvVar, "")
+		f, err := parseAndValidateFlags(nil)
+		require.NoError(t, err)
+		require.Equal(t, "default-insecure-seed", f.mcpSessionEncryptionSeed)
+		require.Empty(t, f.mcpFallbackSessionEncryptionSeed)
+	})
+	t.Run("fallback iterations are validated for the env var seed", func(t *testing.T) {
+		t.Setenv(mcpFallbackSessionEncryptionSeedEnvVar, "env-fallback-seed")
+		_, err := parseAndValidateFlags([]string{"--mcpFallbackSessionEncryptionIterations=0"})
+		require.ErrorContains(t, err, "mcp fallback session encryption iterations must be positive")
+	})
+}
+
 func Test_parseAndValidateFlags_extProcImagePullSecrets(t *testing.T) {
 	tests := []struct {
 		name     string

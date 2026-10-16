@@ -3612,6 +3612,13 @@ func TestGatewayController_reconcileFilterMCPConfigSecret(t *testing.T) {
 	require.Equal(t, "mcp-uuid", cfg.UUID)
 	require.NotNil(t, cfg.MCPConfig)
 	require.Equal(t, "http://127.0.0.1:"+strconv.Itoa(internalapi.MCPBackendListenerPort), cfg.MCPConfig.BackendListenerAddr)
+	// The MCP session encryption config is delivered through the filter config Secrets.
+	require.Equal(t, &filterapi.MCPSessionEncryption{
+		Seed:               "seed",
+		Iterations:         100,
+		FallbackSeed:       "fallback",
+		FallbackIterations: 200,
+	}, cfg.MCPConfig.SessionEncryption)
 }
 
 func TestGatewayController_writeFilterConfigBundleShards(t *testing.T) {

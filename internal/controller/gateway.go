@@ -616,6 +616,9 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	// Configuration for MCP processor.
 	var effectiveMCPRoute bool
 	ec.MCPConfig, effectiveMCPRoute = mcpConfig(mcpRoutes)
+	if ec.MCPConfig != nil {
+		ec.MCPConfig.SessionEncryption = c.mcpSessionEncryption()
+	}
 	hasEffectiveRoute = hasEffectiveRoute || effectiveMCPRoute
 
 	c.warnUndeclaredMetadataNamespaces(ec, declaredMetadataNamespaces, gatewayName, gatewayNamespace)

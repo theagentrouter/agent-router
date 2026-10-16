@@ -399,11 +399,19 @@ helm-test: helm-package  ## Test the helm chart with a dummy version.
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "startupProbe:"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "failureThreshold: 75"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "name: ai-gateway-controller-mcp-session-encryption"
-	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -qF -- "--mcpSessionEncryptionSeed=\$$(MCP_SESSION_ENCRYPTION_SEED)"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "name: MCP_SESSION_ENCRYPTION_SEED"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "--mcpSessionEncryptionSeed"
 	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "default-insecure-seed"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.seed=my-test-seed | grep -q -- "seed: bXktdGVzdC1zZWVk"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.existingSecret=my-seed-secret | grep -q -- "name: my-seed-secret"
 	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.existingSecret=my-seed-secret | grep -q -- "mcp-session-encryption"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "seed: bXktb2xkLXNlZWQ="
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "my-old-seed"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed --set controller.podAnnotations.foo=bar | grep -q -- "foo: bar"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.fullnameOverride=a-very-long-controller-fullname-override-value --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "name: a-very-long-controller-fullname-mcp-session-encryption-fallback"
 
 # This pushes the helm chart to the OCI registry, requiring the access to the registry endpoint.
 .PHONY: helm-push

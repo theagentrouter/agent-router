@@ -153,8 +153,11 @@ func (s *session) lastEventID() string {
 		_, _ = b.WriteString(",")
 	}
 	lastEventID := b.String()[:b.Len()-1] // string the trailing ','.
-	if s.reqCtx != nil && s.reqCtx.sessionCrypto != nil {
-		encrypted, err := s.reqCtx.sessionCrypto.Encrypt(lastEventID)
+	if s.reqCtx == nil {
+		return lastEventID
+	}
+	if sessionCrypto := s.reqCtx.currentSessionCrypto(); sessionCrypto != nil {
+		encrypted, err := sessionCrypto.Encrypt(lastEventID)
 		if err != nil {
 			s.reqCtx.l.Error("failed to encrypt last event ID", slog.String("error", err.Error()))
 			return ""
