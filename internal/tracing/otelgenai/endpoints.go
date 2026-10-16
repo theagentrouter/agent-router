@@ -257,10 +257,13 @@ func NewResponsesRecorder(config *Config) tracingapi.ResponsesRecorder {
 // Decisions has no standard GenAI operation name, so it uses a custom value.
 func NewDecisionsRecorder(config *Config) tracingapi.DecisionsRecorder {
 	return &recorder[openai.DecisionRequest, openai.DecisionResponse, struct{}]{
-		operation:     OperationDecisions,
-		config:        configOrEnv(config),
-		requestModel:  func(r *openai.DecisionRequest) string { return r.Model },
-		responseAttrs: decisionsResponseAttrs,
+		operation:          OperationDecisions,
+		config:             configOrEnv(config),
+		requestModel:       func(r *openai.DecisionRequest) string { return r.Model },
+		responseAttrs:      decisionsResponseAttrs,
+		inputMessages:      decisionsInputMessages,
+		systemInstructions: decisionsSystemInstructions,
+		outputMessages:     decisionsOutputMessages,
 	}
 }
 
