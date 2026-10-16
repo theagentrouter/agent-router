@@ -24,8 +24,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
 	"github.com/envoyproxy/ai-gateway/internal/bodymutator"
+	"github.com/envoyproxy/ai-gateway/internal/contextcache"
 	"github.com/envoyproxy/ai-gateway/internal/endpointspec"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/headermutator"
@@ -33,6 +35,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/llmcostcel"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
+	"github.com/envoyproxy/ai-gateway/internal/redaction"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 	"github.com/envoyproxy/ai-gateway/internal/translator"
 )
@@ -129,6 +132,9 @@ type (
 		backendName              string
 		routeName                string
 		handler                  filterapi.BackendAuthHandler
+		// cacheResolver is the context-cache resolver for this backend.
+		// Non-nil only for GCP Vertex AI backends; set in SetBackend.
+		cacheResolver contextcache.CacheResolver
 		// unsupportedBackendErr is set by SetBackend and answered as a 422 in ProcessRequestHeaders.
 		unsupportedBackendErr error
 		// cost is the cost of the request that is accumulated during the processing of the response.
@@ -371,7 +377,47 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	// * The request is a streaming request, and the IncludeUsage option is set to false since we need to ensure that
 	//	the token usage is calculated correctly without being bypassed.
 	forceBodyMutation := u.onRetry() || u.parent.forceBodyMutation
+
+	// Resolve GCP context cache when the resolver is present and the translator supports
+	// cache injection. This must happen before RequestBody so the translator can use
+	// the resolved cache name and filtered message list.
+	var cacheApplied bool
+	var cacheName string
+	if u.cacheResolver != nil {
+		if cacheSetter, ok := u.translator.(translator.ContextCacheSetter); ok {
+			if req, ok := any(u.parent.originalRequestBody).(*openai.ChatCompletionRequest); ok {
+				result, resolveErr := u.cacheResolver.Resolve(ctx, req)
+				if resolveErr != nil {
+					u.logger.Error("context cache resolution failed", slog.String("error", resolveErr.Error()))
+					u.metrics.RecordRequestCompletion(ctx, false, u.requestHeaders)
+					return createUserFacingErrorResponse(502, "UpstreamError", "upstream cache service error"), nil
+				}
+				if result != nil {
+					cacheResult := &translator.ContextCacheResult{
+						CacheName:        result.CacheName,
+						FilteredMessages: result.Messages,
+						Created:          result.Created,
+					}
+					// Only a create is billed as a cache write; a reused cache is not.
+					if result.Created {
+						cacheResult.WriteTokenCount = uint32(result.TokenCount) //nolint:gosec
+					}
+					cacheSetter.SetContextCacheResult(cacheResult)
+					cacheApplied, cacheName = true, result.CacheName
+				}
+			}
+		}
+	}
+
 	newHeaders, newBody, err := u.translator.RequestBody(u.parent.originalRequestBodyRaw, u.parent.originalRequestBody, forceBodyMutation)
+	if err == nil && cacheApplied && u.parent.debugLogEnabled {
+		body := string(newBody)
+		if u.parent.enableRedaction {
+			body = redaction.RedactString(body)
+		}
+		u.logger.Debug("request body rewritten for context cache",
+			slog.String("cache", cacheName), slog.String("body", body))
+	}
 	if err != nil {
 		if userFacingErr := internalapi.GetUserFacingError(err); userFacingErr != nil {
 			// return to user as 422 -  e.g., "invalid request body: tool_choice type not supported"
@@ -752,6 +798,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	u.backendName = backend.Backend.Name
 	u.routeName = routeName
 	u.handler = backend.Handler
+	u.cacheResolver = backend.CacheResolver
 	u.headerMutator = headermutator.NewHeaderMutator(backend.Backend.HeaderMutation, rp.requestHeaders)
 	u.bodyMutator = bodymutator.NewBodyMutator(backend.Backend.BodyMutation, rp.originalRequestBodyRaw)
 	// Header-derived labels/CEL must be able to see the overridden request model.

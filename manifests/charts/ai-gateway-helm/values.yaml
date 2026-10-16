@@ -52,6 +52,15 @@ extProc:
   logFormat: text
   # Enable redaction of sensitive information in debug logs (only takes effect when logLevel is "debug").
   enableRedaction: false
+  # Context caching for GCP Vertex AI (Gemini) backends. Setting storeURL enables it for every
+  # GCP Vertex AI backend; leaving it empty disables it.
+  contextCache:
+    # Store shared by all extproc replicas, as "host:port" or a "redis://" URL of a
+    # Redis-compatible server. A URL may contain credentials, which end up in the extproc
+    # container args.
+    storeURL: ""
+    # Cache TTL used when a cache_control marker does not specify one. Whole seconds, at least 60s.
+    defaultTTL: 300s
 
   ## @param extProc.extraEnvVars Array with extra environment variables to add to extProc containers
   ## e.g:

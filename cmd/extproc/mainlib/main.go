@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/envoyproxy/ai-gateway/internal/contextcache/redis"
 	"github.com/envoyproxy/ai-gateway/internal/endpointspec"
 	"github.com/envoyproxy/ai-gateway/internal/extproc"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -70,6 +71,11 @@ type extProcFlags struct {
 	maxRecvMsgSize int
 	// endpointPrefixes is the comma-separated key-value pairs for endpoint prefixes.
 	endpointPrefixes string
+	// contextCacheStoreURL is the shared store for GCP Vertex AI context caching. Empty
+	// disables context caching.
+	contextCacheStoreURL string
+	// contextCacheDefaultTTL is the cache TTL used when a cache_control marker gives none.
+	contextCacheDefaultTTL time.Duration
 }
 
 // newLogHandler returns the slog handler for the requested output format. Anything other than
@@ -162,6 +168,10 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 		"Number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.")
 	fs.DurationVar(&flags.mcpWriteTimeout, "mcpWriteTimeout", 120*time.Second,
 		"The maximum duration before timing out writes of the MCP response")
+	fs.StringVar(&flags.contextCacheStoreURL, "contextCacheStoreURL", "",
+		"Shared store for GCP Vertex AI context caching, as host:port or a redis:// URL of a Redis-compatible server. Empty disables context caching.")
+	fs.DurationVar(&flags.contextCacheDefaultTTL, "contextCacheDefaultTTL", 300*time.Second,
+		"Cache TTL used when a cache_control marker does not specify one. Whole seconds, at least 60s.")
 
 	if err := fs.Parse(args); err != nil {
 		return extProcFlags{}, fmt.Errorf("failed to parse extProcFlags: %w", err)
@@ -202,6 +212,11 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 		}
 	}
 
+	if flags.contextCacheStoreURL != "" {
+		if flags.contextCacheDefaultTTL < time.Minute || flags.contextCacheDefaultTTL%time.Second != 0 {
+			errs = append(errs, fmt.Errorf("contextCacheDefaultTTL must be whole seconds and at least 60s, got %s", flags.contextCacheDefaultTTL))
+		}
+	}
 	return flags, errors.Join(errs...)
 }
 
@@ -326,6 +341,13 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to create external processor server: %w", err)
 	}
+	if flags.contextCacheStoreURL != "" {
+		store, storeErr := redis.NewStore(flags.contextCacheStoreURL)
+		if storeErr != nil {
+			return fmt.Errorf("invalid contextCacheStoreURL: %w", storeErr)
+		}
+		server.EnableContextCache(store, flags.contextCacheDefaultTTL)
+	}
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/chat/completions"), extproc.NewFactory(
 		chatCompletionMetricsFactory, tracing.ChatCompletionTracer(), endpointspec.ChatCompletionsEndpointSpec{}))
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/completions"), extproc.NewFactory(
@@ -428,6 +450,8 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	go func() {
 		<-ctx.Done()
 		s.GracefulStop()
+		// Stop context-cache syncers once no request can reach a resolver.
+		server.Close()
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

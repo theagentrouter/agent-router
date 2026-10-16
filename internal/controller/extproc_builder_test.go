@@ -8,6 +8,7 @@ package controller
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/stretchr/testify/require"
@@ -79,7 +80,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	input := extProcContainerInput{}
 	baseHash := base.extProcContainerHash(input)
 	require.NotEmpty(t, baseHash)
-	require.Equal(t, 20, reflect.TypeOf(extProcBuilder{}).NumField(),
+	require.Equal(t, 22, reflect.TypeOf(extProcBuilder{}).NumField(),
 		"update drift coverage when extProcBuilder fields change")
 
 	// Helper: mutate a copy of the builder, recompute, expect a different hash.
@@ -91,6 +92,17 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 		})
 	}
 
+	assertDrifts("contextCacheStoreURL", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.contextCacheStoreURL = "redis:6379"
+		return b
+	}())
+	assertDrifts("contextCacheDefaultTTL", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.contextCacheStoreURL = "redis:6379"
+		b.contextCacheDefaultTTL = 10 * time.Minute
+		return b
+	}())
 	assertDrifts("extraEnvVars", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.extraEnvVars = []corev1.EnvVar{{Name: "OTEL_SERVICE_NAME", Value: "ai-gateway"}}
@@ -373,4 +385,16 @@ func TestImageTagOrDigest(t *testing.T) {
 			require.Equal(t, tt.expected, imageTagOrDigest(tt.image))
 		})
 	}
+}
+
+// Context-cache args are passed only when a Redis URL is set, so deployments without
+// caching keep identical args.
+func TestBuildExtProcBaseArgs_ContextCache(t *testing.T) {
+	b := newTestBuilder()
+	require.NotContains(t, b.buildExtProcBaseArgs(false), "-contextCacheStoreURL")
+
+	b.contextCacheStoreURL = "redis:6379"
+	b.contextCacheDefaultTTL = 10 * time.Minute
+	args := b.buildExtProcBaseArgs(false)
+	require.Subset(t, args, []string{"-contextCacheStoreURL", "redis:6379", "-contextCacheDefaultTTL", "10m0s"})
 }

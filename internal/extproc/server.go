@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -26,6 +27,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
+	"github.com/envoyproxy/ai-gateway/internal/contextcache"
+	"github.com/envoyproxy/ai-gateway/internal/contextcache/gcpcache"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/redaction"
@@ -65,6 +68,17 @@ type Server struct {
 	routerProcessorsPerReqID      map[string]Processor
 	routerProcessorsPerReqIDMutex sync.RWMutex
 	uuidFn                        func() string
+	// cacheStore is the shared context-cache store, set by EnableContextCache. Nil
+	// disables context caching for every backend.
+	cacheStore contextcache.Store
+	// cacheDefaultTTL is the cache TTL used when a cache_control marker gives none.
+	cacheDefaultTTL time.Duration
+	// cacheResolvers holds one context-cache resolver per GCP Vertex AI backend, keyed by
+	// backend name. Resolvers are carried across config reloads so that their background
+	// syncers keep running and are not restarted on every filterapi update.
+	cacheResolvers map[string]*gcpcache.Resolver
+	// cacheResolversMu guards cacheResolvers against LoadConfig racing Close.
+	cacheResolversMu sync.Mutex
 }
 
 // NewServer creates a new external processor server.
@@ -76,9 +90,17 @@ func NewServer(logger *slog.Logger, enableRedaction bool) (*Server, error) {
 		enableRedaction:          enableRedaction,
 		processorFactories:       make(map[string]ProcessorFactory),
 		routerProcessorsPerReqID: make(map[string]Processor),
+		cacheResolvers:           make(map[string]*gcpcache.Resolver),
 		uuidFn:                   uuid.NewString,
 	}
 	return srv, nil
+}
+
+// EnableContextCache turns on context caching for every GCP Vertex AI backend, using store
+// to share resolved caches across replicas. It must be called before the first LoadConfig.
+func (s *Server) EnableContextCache(store contextcache.Store, defaultTTL time.Duration) {
+	s.cacheStore = store
+	s.cacheDefaultTTL = defaultTTL
 }
 
 // LoadConfig updates the configuration of the external processor.
@@ -87,8 +109,63 @@ func (s *Server) LoadConfig(ctx context.Context, config *filterapi.Config) error
 	if err != nil {
 		return fmt.Errorf("cannot create runtime filter config: %w", err)
 	}
+
+	// LoadConfig is reachable on a Server built directly rather than through NewServer
+	// (notably in tests), so the logger is resolved here rather than assumed non-nil.
+	logger := s.logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
+	// Attach a context-cache resolver to each GCP Vertex AI (Gemini) backend when context
+	// caching is enabled. Only the Gemini translator uses resolved caches, so other GCP
+	// schemas (such as GCPAnthropic) get none. Resolvers are keyed by backend name and
+	// reused across reloads; a reused resolver is given the reload's auth handler, since the
+	// controller rotates the token. Resolvers whose backend disappeared or changed schema
+	// are closed, which stops their background syncer.
+	s.cacheResolversMu.Lock()
+	defer s.cacheResolversMu.Unlock()
+	live := make(map[string]*gcpcache.Resolver, len(s.cacheResolvers))
+	for _, rb := range newConfig.Backends {
+		if s.cacheStore == nil || rb.Backend.Schema.Name != filterapi.APISchemaGCPVertexAI {
+			continue
+		}
+		auth, ok := rb.Handler.(filterapi.GCPAuthHandler)
+		if !ok {
+			continue
+		}
+		name := rb.Backend.Name
+		resolver, ok := s.cacheResolvers[name]
+		if ok {
+			resolver.SetAuth(auth)
+		} else {
+			resolver = gcpcache.New(nil, s.cacheStore, auth, s.cacheDefaultTTL, logger)
+		}
+		// Start is a no-op for a resolver already running. It runs under the resolver's own
+		// context, not ctx, which is cancelled when this reload finishes.
+		resolver.Start()
+		live[name] = resolver
+		rb.CacheResolver = resolver
+	}
+	for name, resolver := range s.cacheResolvers {
+		if _, ok := live[name]; !ok {
+			_ = resolver.Close()
+		}
+	}
+	s.cacheResolvers = live
+
 	s.config = newConfig // This is racey, but we don't care.
 	return nil
+}
+
+// Close stops the background syncer of every context-cache resolver. It is safe to call
+// more than once.
+func (s *Server) Close() {
+	s.cacheResolversMu.Lock()
+	defer s.cacheResolversMu.Unlock()
+	for _, resolver := range s.cacheResolvers {
+		_ = resolver.Close()
+	}
 }
 
 // Register a new processor for the given request path.

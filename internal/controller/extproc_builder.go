@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -60,6 +61,8 @@ func newExtProcBuilder(options *Options, extProcAsSideCar bool, logger logr.Logg
 		logLevel:                               options.ExtProcLogLevel,
 		logFormat:                              options.ExtProcLogFormat,
 		enableRedaction:                        options.ExtProcEnableRedaction,
+		contextCacheStoreURL:                   options.ExtProcContextCacheStoreURL,
+		contextCacheDefaultTTL:                 options.ExtProcContextCacheDefaultTTL,
 		udsPath:                                options.UDSPath,
 		requestHeaderAttributes:                options.RequestHeaderAttributes,
 		spanRequestHeaderAttributes:            options.TracingRequestHeaderAttributes,
@@ -87,6 +90,9 @@ type extProcBuilder struct {
 	logFormat       string
 	enableRedaction bool
 	udsPath         string
+
+	contextCacheStoreURL   string
+	contextCacheDefaultTTL time.Duration
 
 	requestHeaderAttributes        *string
 	spanRequestHeaderAttributes    *string
@@ -210,8 +216,12 @@ type extProcConfigDigest struct {
 	LogLevel        string
 	// LogFormat is omitted when it is the default, so deployments that never asked for JSON keep
 	// the same hash as before this field existed and are not rolled on upgrade.
-	LogFormat                              string `json:",omitempty"`
-	EnableRedaction                        bool
+	LogFormat       string `json:",omitempty"`
+	EnableRedaction bool
+	// ContextCache* are omitted when caching is off, so deployments without it keep the
+	// same hash and are not rolled on upgrade.
+	ContextCacheStoreURL                   string        `json:",omitempty"`
+	ContextCacheDefaultTTL                 time.Duration `json:",omitempty"`
 	UDSPath                                string
 	RequestHeaderAttributes                *string
 	SpanRequestHeaderAttributes            *string
@@ -239,6 +249,8 @@ func (b *extProcBuilder) extProcContainerHash(input extProcContainerInput) strin
 		LogLevel:                               b.logLevel,
 		LogFormat:                              b.nonDefaultLogFormat(),
 		EnableRedaction:                        b.enableRedaction,
+		ContextCacheStoreURL:                   b.contextCacheStoreURL,
+		ContextCacheDefaultTTL:                 b.contextCacheTTLArg(),
 		UDSPath:                                b.udsPath,
 		RequestHeaderAttributes:                b.requestHeaderAttributes,
 		SpanRequestHeaderAttributes:            b.spanRequestHeaderAttributes,
@@ -330,7 +342,22 @@ func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {
 	if b.enableRedaction {
 		args = append(args, "-enableRedaction")
 	}
+	if b.contextCacheStoreURL != "" {
+		args = append(args, "-contextCacheStoreURL", b.contextCacheStoreURL)
+		if ttl := b.contextCacheTTLArg(); ttl != 0 {
+			args = append(args, "-contextCacheDefaultTTL", ttl.String())
+		}
+	}
 	return args
+}
+
+// contextCacheTTLArg returns the TTL to pass to extproc, or 0 when caching is off or the
+// TTL is unset, in which case extproc uses its own default.
+func (b *extProcBuilder) contextCacheTTLArg() time.Duration {
+	if b.contextCacheStoreURL == "" {
+		return 0
+	}
+	return b.contextCacheDefaultTTL
 }
 
 // extProcUDSVolumeName is the name of the volume backing the extproc UDS socket,
