@@ -263,8 +263,11 @@ func requireNewMCPEnvWithExtProcEnv(t *testing.T, extraEnv []string, forceJSONRe
 // newSession creates a new MCP client session and registers it for progress notifications.
 func (m *mcpEnv) newSession(t *testing.T) *mcpSession {
 	ret := m.newSessionWithoutSpanCheck(t)
-	span := m.collector.TakeSpan()
-	t.Log("created new MCP session with ID ", ret.session.ID(), ", first span: ", span.String())
+	// go-sdk v1.7+ probes server/discover before falling back to initialize.
+	// Legacy test backends reject discover, so Connect emits a failed discover
+	// span followed by the Initialize span we assert here.
+	span := takeSpanNamed(t, m.collector, "Initialize")
+	t.Log("created new MCP session with ID ", ret.session.ID(), ", initialize span: ", span.String())
 	requireMCPSpan(t, span, "Initialize", map[string]string{
 		"mcp.method.name":    "initialize",
 		"mcp.client.name":    "demo-http-client",
@@ -388,4 +391,93 @@ func backendsFromSpan(t *testing.T, span *tracev1.Span) []string {
 		}
 	}
 	return backends
+}
+
+// takeSpanNamed drains collector spans until one with the given name appears.
+// Used when Connect probes server/discover before initialize, leaving an extra span.
+func takeSpanNamed(t *testing.T, collector *testotel.OTLPCollector, name string) *tracev1.Span {
+	t.Helper()
+	for range 10 {
+		span := collector.TakeSpan()
+		require.NotNil(t, span, "expected span %q, collector drained", name)
+		if span.Name == name {
+			return span
+		}
+		t.Logf("skipping intermediate span %q while waiting for %q", span.Name, name)
+	}
+	require.FailNowf(t, "span not found", "did not see span named %q", name)
+	return nil
+}
+
+// drainSpans discards any pending spans in the collector (best-effort, short timeout each).
+func drainSpans(collector *testotel.OTLPCollector) {
+	for range 20 {
+		if collector.TakeSpan() == nil {
+			return
+		}
+	}
+}
+
+// modernMCPEnv holds the test environment for modern (2026-07-28) MCP dataplane tests.
+// Unlike mcpEnv it uses a stateless modernClient instead of the go-sdk mcp.Client.
+type modernMCPEnv struct {
+	modernCli         *modernClient
+	extProcMetricsURL string
+	baseURL           string
+	env               *dataplaneenv.TestEnvironment
+	collector         *testotel.OTLPCollector
+}
+
+// requireNewModernMCPEnv sets up a test environment with modern (2026-07-28) MCP backend servers.
+func requireNewModernMCPEnv(t *testing.T, writeTimeout time.Duration, path string) *modernMCPEnv {
+	t.Helper()
+
+	internaltesting.ClearTestEnv(t)
+
+	collector := testotel.StartOTLPCollector()
+	t.Cleanup(collector.Close)
+	mcpConfig := &filterapi.MCPConfig{
+		BackendListenerAddr: "http://127.0.0.1:9999",
+		Routes: []filterapi.MCPRoute{
+			{
+				Name: "test-route",
+				Backends: []filterapi.MCPBackend{
+					{Name: "dumb-mcp-backend"},
+					{Name: "default-mcp-backend"},
+				},
+			},
+		},
+	}
+	config, err := json.Marshal(filterapi.Config{MCPConfig: mcpConfig, Version: version.Parse()})
+	require.NoError(t, err)
+
+	env := dataplaneenv.StartTestEnvironment(t,
+		func(_ testing.TB, _ io.Writer, ports map[string]int) {
+			srv1 := testmcp.NewModernServer(&testmcp.ModernOptions{
+				Port:           ports["ts1"],
+				DumbEchoServer: false,
+				WriteTimeout:   writeTimeout,
+			})
+			srv2 := testmcp.NewModernServer(&testmcp.ModernOptions{
+				Port:           ports["ts2"],
+				DumbEchoServer: true,
+				WriteTimeout:   writeTimeout,
+			})
+			t.Cleanup(func() {
+				_ = srv1.Close()
+				_ = srv2.Close()
+			})
+		}, map[string]int{"ts1": 8080, "ts2": 8081, "special_listener": 9999},
+		string(config), collector.Env(), envoyConfig, true, true,
+		writeTimeout,
+	)
+
+	m := &modernMCPEnv{
+		collector:         collector,
+		extProcMetricsURL: fmt.Sprintf("http://localhost:%d/metrics", env.ExtProcAdminPort()),
+		baseURL:           fmt.Sprintf("http://localhost:%d%s", env.EnvoyListenerPort(), path),
+		env:               env,
+	}
+	m.modernCli = newModernClient(m.baseURL)
+	return m
 }

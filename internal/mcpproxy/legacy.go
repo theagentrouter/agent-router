@@ -229,7 +229,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 		if s == nil {
 			errType = metrics.MCPErrorInvalidSessionID
 			err = errors.New("missing session ID")
-			onErrorResponse(w, http.StatusBadRequest, "missing session ID")
+			onLegacyErrorResponse(w, http.StatusBadRequest, "missing session ID")
 			return
 		}
 		if doNotForwardResponseToBackends(msg) {
@@ -252,7 +252,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 		if s == nil && msg.Method != "initialize" {
 			errType = metrics.MCPErrorInvalidSessionID
 			err = errors.New("missing session ID")
-			onErrorResponse(w, http.StatusBadRequest, "missing session ID")
+			onLegacyErrorResponse(w, http.StatusBadRequest, "missing session ID")
 			return
 		}
 
@@ -262,7 +262,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			err = m.handleNotificationsRootsListChanged(ctx, s, w, msg, params, span)
@@ -271,7 +271,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			result, err = m.handleCompletionComplete(ctx, s, w, msg, params.(*mcp.CompleteParams), span)
@@ -281,7 +281,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			m.metrics.RecordProgress(ctx, params)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			result, err = m.handleClientToServerNotificationsProgress(ctx, s, w, msg, params.(*mcp.ProgressNotificationParams), span)
@@ -292,7 +292,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
 				m.l.Error("Failed to unmarshal initialize params", slog.String("error", err.Error()))
-				onErrorResponse(w, http.StatusBadRequest, "invalid initialize params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid initialize params")
 				return
 			}
 			// The Envoy frontend listener’s HTTPRouteFilter adds the route name header.
@@ -301,7 +301,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			if route == "" {
 				errType = metrics.MCPErrorInternal
 				m.l.Error("cannot find route header in the downstream request")
-				onErrorResponse(w, http.StatusInternalServerError, "missing route header")
+				onLegacyErrorResponse(w, http.StatusInternalServerError, "missing route header")
 				return
 			}
 			err = m.handleInitializeRequest(ctx, w, msg, params.(*mcp.InitializeParams), route, extractSubject(r), span, startAt)
@@ -322,7 +322,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
 				m.l.Error("Failed to unmarshal set logging level params", slog.String("error", err.Error()))
-				onErrorResponse(w, http.StatusBadRequest, "invalid set logging level params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid set logging level params")
 				return
 			}
 			err = m.handleSetLoggingLevel(ctx, s, w, msg, params.(*mcp.SetLoggingLevelParams), span)
@@ -334,7 +334,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			err = m.handlePromptListRequest(ctx, s, w, msg, params.(*mcp.ListPromptsParams), span)
@@ -343,7 +343,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			result, err = m.handlePromptGetRequest(ctx, s, w, msg, params.(*mcp.GetPromptParams))
@@ -353,7 +353,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
 				m.l.Error("Failed to unmarshal params", slog.String("method", msg.Method), slog.String("error", err.Error()))
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			result, err = m.handleToolCallRequest(ctx, s, w, msg, params.(*mcp.CallToolParams), span, r)
@@ -362,7 +362,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			err = m.handleToolsListRequest(ctx, s, w, msg, params.(*mcp.ListToolsParams), span)
@@ -371,7 +371,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			err = m.handleResourceListRequest(ctx, s, w, msg, params.(*mcp.ListResourcesParams), span)
@@ -380,7 +380,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			result, err = m.handleResourceReadRequest(ctx, s, w, msg, params.(*mcp.ReadResourceParams))
@@ -389,7 +389,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			err = m.handleResourcesTemplatesListRequest(ctx, s, w, msg, params.(*mcp.ListResourceTemplatesParams), span)
@@ -398,7 +398,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			result, err = m.handleResourcesSubscribeRequest(ctx, s, w, msg, params.(*mcp.SubscribeParams), span)
@@ -407,7 +407,7 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 			span, err = parseParamsAndMaybeStartSpan(ctx, m, msg, params, r.Header)
 			if err != nil {
 				errType = metrics.MCPErrorInvalidParam
-				onErrorResponse(w, http.StatusBadRequest, "invalid params")
+				onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params")
 				return
 			}
 			result, err = m.handleResourcesUnsubscribeRequest(ctx, s, w, msg, params.(*mcp.UnsubscribeParams), span)
@@ -423,14 +423,14 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 		default:
 			errType = metrics.MCPErrorUnsupportedMethod
 			err = fmt.Errorf("unsupported method: %s", msg.Method)
-			onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("unsupported method: %s", msg.Method))
+			onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("unsupported method: %s", msg.Method))
 			return
 		}
 		errType = errorType(err)
 	default:
 		errType = metrics.MCPErrorUnsupportedResponse
 		err = errors.New("unsupported JSON-RPC message type")
-		onErrorResponse(w, http.StatusBadRequest, "unsupported JSON-RPC message type")
+		onLegacyErrorResponse(w, http.StatusBadRequest, "unsupported JSON-RPC message type")
 	}
 }
 
@@ -493,9 +493,9 @@ func (m *mcpRequestContext) handleInitializeRequest(ctx context.Context, w http.
 		m.l.Error("failed to create new session", slog.String("error", err.Error()))
 		if errors.Is(err, errNoMatchingBackendSelector) {
 			// This is an authorization decision, not a system failure.
-			onErrorResponse(w, http.StatusForbidden, "access denied")
+			onLegacyErrorResponse(w, http.StatusForbidden, "access denied")
 		} else {
-			onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to create new session: %v", err))
+			onLegacyErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to create new session: %v", err))
 		}
 		return err
 	}
@@ -514,7 +514,7 @@ func (m *mcpRequestContext) handleInitializeRequest(ctx context.Context, w http.
 	marshal, err := json.Marshal(result)
 	if err != nil {
 		m.l.Error("failed to create new session", slog.String("error", err.Error()))
-		onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to create new session: %v", err))
+		onLegacyErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to create new session: %v", err))
 		return err
 	}
 
@@ -525,7 +525,7 @@ func (m *mcpRequestContext) handleInitializeRequest(ctx context.Context, w http.
 	})
 	if err != nil {
 		m.l.Error("failed to create new session", slog.String("error", err.Error()))
-		onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to create new session: %v", err))
+		onLegacyErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to create new session: %v", err))
 		return err
 	}
 	if m.l.Enabled(ctx, slog.LevelDebug) {
@@ -546,14 +546,14 @@ func (m *mcpRequestContext) handleClientToServerResponse(ctx context.Context, s 
 	clientToServer, ok := res.ID.Raw().(string)
 	// We should've modified the server->client request ID to include the backend name.
 	if !ok {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid response ID type: %v", res.ID.Raw()))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid response ID type: %v", res.ID.Raw()))
 		return handlerResult{}, errors.New("invalid response ID type")
 	}
 	// TODO: we might want to encrypt/sign the ID to prevent tampering just like session in maybeServerToClientRequestModify.
 	//		If we do that, we need to decrypt/verify it here.
 	parts := strings.Split(clientToServer, nameSeparator)
 	if len(parts) != 3 {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid response ID format: %s", clientToServer))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid response ID format: %s", clientToServer))
 		return handlerResult{}, errors.New("invalid response ID format")
 	}
 	originalIDRaw := parts[0]
@@ -565,12 +565,12 @@ func (m *mcpRequestContext) handleClientToServerResponse(ctx context.Context, s 
 	case "i": // ID is an int64 encoded as bytes.
 		i64, err := strconv.ParseInt(originalIDRaw, 10, 64)
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
+			onLegacyErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
 			return result, fmt.Errorf("invalid response ID format: %w", err)
 		}
 		id, err = jsonrpc.MakeID(float64(i64))
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
+			onLegacyErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
 			return result, fmt.Errorf("invalid response ID format: %w", err)
 		}
 		if m.l.Enabled(ctx, slog.LevelDebug) {
@@ -579,16 +579,16 @@ func (m *mcpRequestContext) handleClientToServerResponse(ctx context.Context, s 
 	case "f": // ID is a float64 encoded as bytes.
 		b, err := hex.DecodeString(originalIDRaw)
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
+			onLegacyErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
 			return result, fmt.Errorf("invalid response ID format: %w: %s", err, originalIDRaw)
 		}
 		if len(b) != 8 {
-			onErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
+			onLegacyErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
 			return result, fmt.Errorf("invalid response ID format: float64 ID requires 8 bytes, got %d", len(b))
 		}
 		id, err = jsonrpc.MakeID(math.Float64frombits(binary.LittleEndian.Uint64(b)))
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
+			onLegacyErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
 			return result, fmt.Errorf("invalid response ID format: %w", err)
 		}
 		if m.l.Enabled(ctx, slog.LevelDebug) {
@@ -597,26 +597,26 @@ func (m *mcpRequestContext) handleClientToServerResponse(ctx context.Context, s 
 	case "s": // ID is a string encoded as base64.
 		decoded, err := base64.StdEncoding.DecodeString(originalIDRaw)
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
+			onLegacyErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
 			return result, fmt.Errorf("invalid response ID format: %w: %s", err, originalIDRaw)
 		}
 		id, err = jsonrpc.MakeID(string(decoded))
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
+			onLegacyErrorResponse(w, http.StatusBadRequest, "invalid response ID format")
 			return result, fmt.Errorf("invalid response ID format: %w", err)
 		}
 		if m.l.Enabled(ctx, slog.LevelDebug) {
 			m.l.Debug("Parsed string ID", slog.String("id", originalIDRaw), slog.Any("jsonrpc_id", id))
 		}
 	default:
-		onErrorResponse(w, http.StatusBadRequest, "invalid response ID type identifier")
+		onLegacyErrorResponse(w, http.StatusBadRequest, "invalid response ID type identifier")
 		return result, fmt.Errorf("invalid response ID type identifier: %s", typeIdentifier)
 	}
 	res.ID = id
 
 	backend, err := m.getBackendForRoute(s.route, backendName)
 	if err != nil {
-		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s", errBackendNotFound, backendName)
 	}
 
@@ -624,12 +624,12 @@ func (m *mcpRequestContext) handleClientToServerResponse(ctx context.Context, s 
 	if cse == nil {
 		// No session for this backend usually means backendSelector excluded it for this
 		// session; treat it as an authorization decision rather than a malformed request.
-		onErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
 		return result, fmt.Errorf("%w: no MCP session found for backend %s", errSessionNotFound, backendName)
 	}
 	resp, err := m.invokeJSONRPCRequest(ctx, s.route, backend, cse, res, nil)
 	if err != nil {
-		onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to send: %v", err))
+		onLegacyErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to send: %v", err))
 		return result, err
 	}
 	defer func() {
@@ -656,7 +656,7 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 		var err error
 		backendName, toolName, err = upstreamResourceName(p.Name)
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid tool name %s: %v", p.Name, err))
+			onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid tool name %s: %v", p.Name, err))
 			return handlerResult{}, err
 		}
 	}
@@ -665,7 +665,7 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 
 	backend, err := m.getBackendForRoute(s.route, backendName)
 	if err != nil {
-		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s", errBackendNotFound, backendName)
 	}
 
@@ -673,13 +673,13 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 	route := m.routes[s.route]
 	if route == nil {
 		// This should never happen as the route must have been validated when the session is created.
-		onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("route not found: %s", s.route))
+		onLegacyErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("route not found: %s", s.route))
 		return result, fmt.Errorf("route not found: %s", s.route)
 	}
 
 	selector := route.toolSelectors[backendName]
 	if selector != nil && !selector.allows(toolName) {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid tool name: %s", toolName))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid tool name: %s", toolName))
 		return result, fmt.Errorf("%w: %s", errInvalidToolName, toolName)
 	}
 
@@ -707,7 +707,7 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 					w.Header().Set("WWW-Authenticate", challenge)
 				}
 			}
-			onErrorResponse(w, http.StatusForbidden, "access denied")
+			onLegacyErrorResponse(w, http.StatusForbidden, "access denied")
 			return result, fmt.Errorf("authorization failed")
 		}
 	}
@@ -716,7 +716,7 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 	if cse == nil {
 		// No session for this backend usually means backendSelector excluded it for this
 		// session; treat it as an authorization decision rather than a malformed request.
-		onErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
 		return result, fmt.Errorf("%w: no MCP session found for backend %s", errSessionNotFound, backendName)
 	}
 
@@ -900,34 +900,20 @@ func (m *mcpRequestContext) maybeUpdateProgressTokenMetadata(ctx context.Context
 }
 
 // maybeResponseModify modifies the client->server response to include the backend name where needed.
+// URI rewriting uses the same raw-JSON helpers as the modern path so unknown
+// fields on tools/call and resources/read results are preserved.
 func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.Request, msg *jsonrpc.Response, backend filterapi.MCPBackendName) error {
 	if msg.Result == nil {
 		return nil
 	}
 	switch req.Method {
 	case "resources/read":
-		result := &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{}}
-		if err := json.Unmarshal(msg.Result, result); err != nil {
-			return fmt.Errorf("failed to unmarshal resources/read result: %w", err)
+		if rewritten, ok := rewriteResourcesReadResult(json.RawMessage(msg.Result), backend); ok {
+			msg.Result = []byte(rewritten)
 		}
-		for _, res := range result.Contents {
-			res.URI = downstreamResourceURI(res.URI, backend)
-		}
-		// Older backends omit caching hints, which would otherwise be re-encoded as an invalid empty
-		// cacheScope. Read results can be user-specific, so a missing scope defaults to private.
-		if result.CacheScope == "" {
-			result.CacheScope = "private"
-		}
-		msg.Result, _ = json.Marshal(result) // Already decoded result, so ignore error.
 	case "tools/call":
-		result := &mcp.CallToolResult{}
-		if err := json.Unmarshal(msg.Result, result); err != nil {
-			// Non-standard result shape: pass through unchanged since the backend owns this payload.
-			m.l.Debug("tools/call result is not a standard CallToolResult, skipping URI rewrite", slog.String("error", err.Error()))
-			return nil
-		}
-		if rewriteToolResultURIs(result, backend) {
-			msg.Result, _ = json.Marshal(result) // Already decoded result, so ignore error.
+		if rewritten, ok := rewriteToolsCallResult(json.RawMessage(msg.Result), backend); ok {
+			msg.Result = []byte(rewritten)
 		}
 	}
 	return nil
@@ -1069,20 +1055,20 @@ func (m *mcpRequestContext) recordResponse(ctx context.Context, rawMsg jsonrpc.M
 func (m *mcpRequestContext) handleResourceReadRequest(ctx context.Context, s *session, w http.ResponseWriter, req *jsonrpc.Request, p *mcp.ReadResourceParams) (handlerResult, error) {
 	backendName, resourceName, err := upstreamResourceURI(p.URI)
 	if err != nil {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid resource name %s: %v", p.URI, err))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid resource name %s: %v", p.URI, err))
 		return handlerResult{}, err
 	}
 	result := handlerResult{backendName: backendName}
 	backend, err := m.getBackendForRoute(s.route, backendName)
 	if err != nil {
-		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in resource name %s", errBackendNotFound, backendName, p.URI)
 	}
 	sess := s.getCompositeSessionEntry(backendName)
 	if sess == nil {
 		// No session for this backend usually means backendSelector excluded it for this
 		// session; treat it as an authorization decision rather than a malformed request.
-		onErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
 		return result, fmt.Errorf("%w: no MCP session found for backend %s", errSessionNotFound, backendName)
 	}
 	// Send the request to the MCP backend listener.
@@ -1122,20 +1108,20 @@ func (m *mcpRequestContext) handleResourcesSubscriptionRequest(ctx context.Conte
 	}
 	backendName, resourceName, err := upstreamResourceURI(uri)
 	if err != nil {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid resource name %s: %v", uri, err))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid resource name %s: %v", uri, err))
 		return handlerResult{}, err
 	}
 	result := handlerResult{backendName: backendName}
 	backend, err := m.getBackendForRoute(s.route, backendName)
 	if err != nil {
-		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in resource name %s", errBackendNotFound, backendName, uri)
 	}
 	cse := s.getCompositeSessionEntry(backendName)
 	if cse == nil {
 		// No session for this backend usually means backendSelector excluded it for this
 		// session; treat it as an authorization decision rather than a malformed request.
-		onErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
 		return result, fmt.Errorf("%w: no MCP session found for backend %s", errSessionNotFound, backendName)
 	}
 
@@ -1197,20 +1183,20 @@ func (m *mcpRequestContext) resolvePromptBackend(routeName filterapi.MCPRouteNam
 func (m *mcpRequestContext) handlePromptGetRequest(ctx context.Context, s *session, w http.ResponseWriter, req *jsonrpc.Request, p *mcp.GetPromptParams) (handlerResult, error) {
 	backendName, promptName, err := m.resolvePromptBackend(s.route, p.Name)
 	if err != nil {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name %s: %v", p.Name, err))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name %s: %v", p.Name, err))
 		return handlerResult{}, err
 	}
 	result := handlerResult{backendName: backendName}
 	backend, err := m.getBackendForRoute(s.route, backendName)
 	if err != nil {
-		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in prompt name %s", errBackendNotFound, backendName, p.Name)
 	}
 	cse := s.getCompositeSessionEntry(backendName)
 	if cse == nil {
 		// No session for this backend usually means backendSelector excluded it for this
 		// session; treat it as an authorization decision rather than a malformed request.
-		onErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
 		return result, fmt.Errorf("%w: no MCP session found for backend %s", errSessionNotFound, backendName)
 	}
 	// Send the request to the MCP backend listener.
@@ -1239,7 +1225,7 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 		backendName, param.Ref.URI, err = upstreamResourceURI(param.Ref.URI)
 	}
 	if err != nil {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid resource name %s: %v", cmp.Or(param.Ref.Name, param.Ref.URI), err))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid resource name %s: %v", cmp.Or(param.Ref.Name, param.Ref.URI), err))
 		return handlerResult{}, err
 	}
 	result := handlerResult{backendName: backendName}
@@ -1249,7 +1235,7 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 
 	backend, err := m.getBackendForRoute(s.route, backendName)
 	if err != nil {
-		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in resource name %s", errBackendNotFound, backendName, cmp.Or(param.Ref.Name, param.Ref.URI))
 	}
 
@@ -1257,7 +1243,7 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 	if cse == nil {
 		// No session for this backend usually means backendSelector excluded it for this
 		// session; treat it as an authorization decision rather than a malformed request.
-		onErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
 		return result, fmt.Errorf("%w: no MCP session found for backend %s", errSessionNotFound, backendName)
 	}
 
@@ -1274,13 +1260,13 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 func (m *mcpRequestContext) handleClientToServerNotificationsProgress(ctx context.Context, s *session, w http.ResponseWriter, req *jsonrpc.Request, p *mcp.ProgressNotificationParams, span tracingapi.MCPSpan) (handlerResult, error) {
 	pt, ok := p.ProgressToken.(string)
 	if !ok {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken type %T", p.ProgressToken))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken type %T", p.ProgressToken))
 		return handlerResult{}, fmt.Errorf("invalid progressToken type %T", p.ProgressToken)
 	}
 
 	parts := strings.Split(pt, nameSeparator)
 	if len(parts) != 3 {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s", pt))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s", pt))
 		return handlerResult{}, fmt.Errorf("invalid progressToken %s", pt)
 	}
 
@@ -1295,14 +1281,14 @@ func (m *mcpRequestContext) handleClientToServerNotificationsProgress(ctx contex
 	case "s":
 		decoded, err := base64.StdEncoding.DecodeString(originalPt)
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: %v", pt, err))
+			onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: %v", pt, err))
 			return result, fmt.Errorf("invalid progressToken %s: %w", pt, err)
 		}
 		p.ProgressToken = string(decoded)
 	case "i":
 		v, err := strconv.ParseInt(originalPt, 10, 64)
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: %v", pt, err))
+			onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: %v", pt, err))
 			return result, fmt.Errorf("invalid progressToken %s: %w", pt, err)
 		}
 		p.ProgressToken = v
@@ -1310,29 +1296,29 @@ func (m *mcpRequestContext) handleClientToServerNotificationsProgress(ctx contex
 		// Bytes encoded as hex string.
 		b, err := hex.DecodeString(originalPt)
 		if err != nil {
-			onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: %v", pt, err))
+			onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: %v", pt, err))
 			return result, fmt.Errorf("invalid progressToken %s: %w", pt, err)
 		}
 		if len(b) != 8 {
-			onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: invalid length", pt))
+			onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: invalid length", pt))
 			return result, fmt.Errorf("invalid progressToken %s: invalid length", pt)
 		}
 		v := math.Float64frombits(binary.LittleEndian.Uint64(b))
 		p.ProgressToken = v
 	default:
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: unknown type %s", pt, originalPtType))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid progressToken %s: unknown type %s", pt, originalPtType))
 		return result, fmt.Errorf("invalid progressToken %s: unknown type %s", pt, originalPtType)
 	}
 	backend, err := m.getBackendForRoute(s.route, backendName)
 	if err != nil {
-		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in progressToken %s", errBackendNotFound, backendName, pt)
 	}
 	cse := s.getCompositeSessionEntry(backend.Name)
 	if cse == nil {
 		// No session for this backend usually means backendSelector excluded it for this
 		// session; treat it as an authorization decision rather than a malformed request.
-		onErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
+		onLegacyErrorResponse(w, http.StatusForbidden, fmt.Sprintf("no MCP session found for backend %s", backendName))
 		return result, fmt.Errorf("%w: no MCP session found for backend %s", errSessionNotFound, backendName)
 	}
 
@@ -1372,7 +1358,7 @@ func copyProxyHeaders(resp *http.Response, w http.ResponseWriter) {
 func (m *mcpRequestContext) invokeAndProxyResponse(ctx context.Context, s *session, w http.ResponseWriter, backend filterapi.MCPBackend, sess *compositeSessionEntry, req *jsonrpc.Request, params mcp.Params, span tracingapi.MCPSpan) error {
 	resp, err := m.invokeJSONRPCRequest(ctx, s.route, backend, sess, req, params)
 	if err != nil {
-		onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("call to %s failed: %v", backend.Name, err))
+		onLegacyErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("call to %s failed: %v", backend.Name, err))
 		return err
 	}
 	defer func() {
@@ -1381,10 +1367,10 @@ func (m *mcpRequestContext) invokeAndProxyResponse(ctx context.Context, s *sessi
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("call to %s failed and failed to read body: %v", backend.Name, err))
+			onLegacyErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("call to %s failed and failed to read body: %v", backend.Name, err))
 			return err
 		}
-		onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("call to %s failed with status code %d, body=%s", backend.Name, resp.StatusCode, string(body)))
+		onLegacyErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("call to %s failed with status code %d, body=%s", backend.Name, resp.StatusCode, string(body)))
 		return errors.New("tool call failed with non-200 status code")
 	}
 	copyProxyHeaders(resp, w)
@@ -1464,7 +1450,7 @@ func sendToAllBackendsAndAggregateResponsesImpl[responseType any, paramsType mcp
 				if reqMsg, ok := msg.(*jsonrpc.Request); ok {
 					if err := m.maybeServerToClientRequestModify(ctx, reqMsg, event.backend); err != nil {
 						logger.Error("failed to modify server->client request", slog.String("error", err.Error()))
-						onErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to modify server->client request: %v", err))
+						onLegacyErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("failed to modify server->client request: %v", err))
 						return fmt.Errorf("failed to modify server->client request: %w", err)
 					}
 				}
