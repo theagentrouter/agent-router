@@ -29,6 +29,7 @@ func NewEmbeddingOpenAIToAWSBedrockTranslator(modelNameOverride internalapi.Mode
 type openAIToAWSBedrockTranslatorV1Embedding struct {
 	modelNameOverride internalapi.ModelNameOverride
 	requestModel      internalapi.RequestModel
+	encodingFormat    *string
 }
 
 // RequestBody implements [OpenAIEmbeddingTranslator.RequestBody].
@@ -40,6 +41,7 @@ func (o *openAIToAWSBedrockTranslatorV1Embedding) RequestBody(_ []byte, req *ope
 		model = o.modelNameOverride
 	}
 	o.requestModel = model
+	o.encodingFormat = req.EncodingFormat
 
 	if req.OfCompletion == nil {
 		return nil, nil, fmt.Errorf("%w: AWS Bedrock Titan requires an input-based embedding request (messages not supported)", internalapi.ErrInvalidRequestBody)
@@ -102,7 +104,7 @@ func (o *openAIToAWSBedrockTranslatorV1Embedding) ResponseBody(_ map[string]stri
 			{
 				Object:    "embedding",
 				Index:     0,
-				Embedding: openai.EmbeddingUnion{Value: titanResp.Embedding},
+				Embedding: encodeEmbedding(titanResp.Embedding, o.encodingFormat),
 			},
 		},
 		Usage: openai.EmbeddingUsage{

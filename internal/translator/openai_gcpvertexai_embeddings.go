@@ -45,6 +45,7 @@ type openAIToGCPVertexAITranslatorV1Embedding struct {
 	requestModel      internalapi.RequestModel
 	modelNameOverride internalapi.ModelNameOverride
 	useEmbedContent   bool
+	encodingFormat    *string
 }
 
 // createInstancesFromEmbeddingInputItem converts an EmbeddingInputItem to GCP Instance(s).
@@ -286,6 +287,7 @@ func (o *openAIToGCPVertexAITranslatorV1Embedding) RequestBody(_ []byte, req *op
 	newHeaders []internalapi.Header, newBody []byte, err error,
 ) {
 	o.requestModel = req.Model
+	o.encodingFormat = req.EncodingFormat
 	if o.modelNameOverride != "" {
 		// Use modelName override if set.
 		o.requestModel = o.modelNameOverride
@@ -409,7 +411,7 @@ func (o *openAIToGCPVertexAITranslatorV1Embedding) parsePredictResponse(respBody
 				openaiResp.Data[i] = openai.Embedding{
 					Object:    "embedding",
 					Index:     i,
-					Embedding: openai.EmbeddingUnion{Value: float64Values},
+					Embedding: encodeEmbedding(float64Values, o.encodingFormat),
 				}
 				if prediction.Embeddings.Statistics != nil {
 					promptTokens += prediction.Embeddings.Statistics.TokenCount
@@ -445,7 +447,7 @@ func (o *openAIToGCPVertexAITranslatorV1Embedding) parseEmbedContentResponse(res
 		openaiResp.Data = []openai.Embedding{{
 			Object:    "embedding",
 			Index:     0,
-			Embedding: openai.EmbeddingUnion{Value: float64Values},
+			Embedding: encodeEmbedding(float64Values, o.encodingFormat),
 			Truncated: gcpResp.Truncated,
 		}}
 		if gcpResp.UsageMetadata != nil {
