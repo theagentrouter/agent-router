@@ -168,6 +168,31 @@ func newUpstreamProcessor[ReqT, RespT, RespChunkT any, EndpointSpecT endpointspe
 	}
 }
 
+// Close implements [Processor.Close].
+//
+// The router filter's processor forwards to the upstream filter's processor, which owns the
+// metrics instance for the current attempt. This mirrors the response-path forwarding above.
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) Close(ctx context.Context) {
+	if r.upstreamFilter != nil {
+		r.upstreamFilter.Close(ctx)
+	}
+}
+
+// Close implements [Processor.Close].
+//
+// This stream is being torn down before the response completed, most commonly because the
+// downstream client disconnected mid-generation. The provider bills the tokens that were
+// actually processed, so emit what was accumulated instead of dropping it: the token usage
+// seen so far (translators override costs with the latest cumulative usage as chunks arrive,
+// the same state the dynamic metadata path already relies on for disconnect races), plus a
+// failed completion record. Both emits are idempotent inside the metrics implementation, so a
+// request that had already recorded its completion (including local replies and error paths)
+// emits nothing here.
+func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) Close(ctx context.Context) {
+	u.metrics.RecordTokenUsageOnClose(ctx, u.costs, u.requestHeaders)
+	u.metrics.RecordRequestCompletionOnClose(ctx, u.requestHeaders)
+}
+
 // ProcessResponseHeaders implements [Processor.ProcessResponseHeaders].
 func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessResponseHeaders(ctx context.Context, headerMap *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {
 	// If the request failed to route and/or immediate response was returned before the upstream filter was set,
