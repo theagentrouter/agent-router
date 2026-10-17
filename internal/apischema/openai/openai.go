@@ -1191,6 +1191,12 @@ type ChatCompletionRequest struct {
 	// PredictionContent provides configuration for a Predicted Output, which can greatly improve response times when large parts of the model response are known ahead of time.
 	PredictionContent *PredictionContent `json:"prediction,omitempty"`
 
+	// The retention policy for the prompt cache. Set to 24h to enable extended prompt caching, which keeps cached prefixes active for longer, up to a maximum of 24 hours
+	PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
+
+	// Used by OpenAI to cache responses for similar requests to optimize your cache hit rates.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
+
 	// WebSearchOptions configures web search tool for models that support it.
 	// This tool searches the web for relevant results to use in a response.
 	// Docs: https://platform.openai.com/docs/guides/tools-web-search?api-mode=chat
