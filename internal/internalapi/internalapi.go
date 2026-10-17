@@ -8,6 +8,8 @@
 package internalapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"regexp"
@@ -127,7 +129,35 @@ const (
 	// This is the default header name in the reference implementation:
 	// https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/2b5b337b45c3289e5f9367b2c19deef021722fcd/pkg/epp/server/runserver.go#L63
 	EndpointPickerHeaderKey = "x-gateway-destination-endpoint"
+	// EndpointPickerMetadataNamespace is the dynamic metadata namespace in which the endpoint picker
+	// also publishes the endpoint it selected, under the EndpointPickerHeaderKey key. Unlike the
+	// request header, dynamic metadata cannot be set by a client.
+	EndpointPickerMetadataNamespace = "envoy.lb"
 )
+
+// inferencePoolFallbackServiceSuffix is appended to an InferencePool's name to form the name of
+// its fallback Service. See InferencePoolFallbackServiceName.
+const inferencePoolFallbackServiceSuffix = "-epp-fallback"
+
+// dns1035LabelRegexp matches a valid Kubernetes Service name (an RFC 1035 label).
+var dns1035LabelRegexp = regexp.MustCompile(`^[a-z]([-a-z0-9]*[a-z0-9])?$`)
+
+// InferencePoolFallbackServiceName returns the name of the headless Service that the controller
+// creates, in the InferencePool's namespace, for an InferencePool whose endpoint picker has
+// failureMode FailOpen. The Service selects the same Pods as the pool, and the extension server
+// resolves it so that Envoy can reach the pool's ready endpoints when the endpoint picker is
+// unavailable, or when the endpoint it chose has failed and the request is retried.
+//
+// A Service name must be an RFC 1035 label of at most 63 characters, while an InferencePool name
+// may be a longer DNS subdomain, so names that don't fit fall back to a stable hash of the pool name.
+func InferencePoolFallbackServiceName(poolName string) string {
+	name := poolName + inferencePoolFallbackServiceSuffix
+	if len(name) <= 63 && dns1035LabelRegexp.MatchString(name) {
+		return name
+	}
+	sum := sha256.Sum256([]byte(poolName))
+	return "epp-fallback-" + hex.EncodeToString(sum[:])[:16]
+}
 
 const (
 	// XDSClusterMetadataBackendNamePath is the full attribute path to access the backend name in cluster metadata in xDS attributes.
