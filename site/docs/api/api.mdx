@@ -614,6 +614,7 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1alpha1-protectedresourcemetadata)
 - [QuotaBucketMode](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotabucketmode)
 - [QuotaDefinition](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotadefinition)
+- [QuotaLimitFromMetadata](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotalimitfrommetadata)
 - [QuotaPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotapolicyspec)
 - [QuotaPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotapolicystatus)
 - [QuotaRule](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotarule)
@@ -2470,6 +2471,33 @@ QuotaDefinition specified expression for computing request cost and rules for ma
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-quotalimitfrommetadata">QuotaLimitFromMetadata</a>
+
+
+
+**Appears in:**
+- [QuotaValue](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotavalue)
+
+QuotaLimitFromMetadata identifies the dynamic metadata value used to
+override a QuotaValue for an individual request.
+
+##### Fields
+
+
+
+<ApiField
+  name="namespace"
+  type="string"
+  required="true"
+  description="Namespace is the dynamic metadata namespace written by the producer<br />filter, for example `envoy.filters.http.ext_authz`."
+/><ApiField
+  name="key"
+  type="string"
+  required="true"
+  description="Key is the dynamic metadata field key within the namespace that<br />contains the Envoy rate limit override struct (requests_per_unit and unit)."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-quotapolicyspec">QuotaPolicySpec</a>
 
 
@@ -2549,7 +2577,7 @@ QuotaPolicyStatus contains the conditions by the reconciliation result.
   name="shadowMode"
   type="boolean"
   required="false"
-  description="ShadowMode indicates whether this quota rule runs in shadow mode.<br />When enabled, all quota checks are performed (cache lookups,<br />counter updates, telemetry generation), but the outcome is never enforced.<br />The request always succeeds, even if the configured quota is exceeded."
+  description="ShadowMode indicates whether this quota rule runs in shadow mode.<br />When enabled, all quota checks are performed (cache lookups,<br />counter updates, telemetry generation), but the outcome is never enforced.<br />If Quota.FromMetadata is set, it still selects the effective limit and<br />duration; ShadowMode only controls enforcement of that result.<br />The request always succeeds, even if the configured quota is exceeded."
 />
 
 
@@ -2572,12 +2600,17 @@ QuotaValue defines the quota limits using sliding window.
   name="limit"
   type="integer"
   required="true"
-  description="The limit alloted for a specified time window."
+  description="The limit alloted for a specified time window.<br />This is the static baseline used by the rate limit service when<br />FromMetadata is absent or cannot be resolved."
 /><ApiField
   name="duration"
   type="string"
   required="true"
   description="Time window. Must be exactly one of: `1s` (1 second), `1m` (1 minute), `1h` (1 hour), `1d` (1 day), `1w` (1 week), `1mo` (1 month), or `1y` (1 year)."
+/><ApiField
+  name="fromMetadata"
+  type="[QuotaLimitFromMetadata](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotalimitfrommetadata)"
+  required="false"
+  description="FromMetadata optionally overrides Limit and Duration for a request using<br />a struct written to Envoy dynamic metadata by an earlier HTTP filter.<br />The value must contain requests_per_unit and unit, where unit is an<br />Envoy rate limit unit such as SECOND, MINUTE, HOUR, or DAY."
 />
 
 
@@ -2598,7 +2631,7 @@ QuotaValue defines the quota limits using sliding window.
   name="costExpression"
   type="string"
   required="false"
-  description="CostExpression specifies a CEL expression for computing the quota burndown of the LLM-related request.<br />If no expression is specified the `total_tokens` value is used.<br />For example:<br /> `input_tokens + cached_input_tokens + output_tokens`"
+  description="ServiceQuota is not currently enforced by the extension server. This<br />includes FromMetadata on Quota; it is accepted for API consistency with<br />per-model quotas but has no effect until service-quota enforcement lands.<br />CostExpression specifies a CEL expression for computing the quota burndown of the LLM-related request.<br />If no expression is specified the `total_tokens` value is used.<br />For example:<br /> `input_tokens + cached_input_tokens + output_tokens`"
 /><ApiField
   name="quota"
   type="[QuotaValue](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotavalue)"

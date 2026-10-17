@@ -62,6 +62,11 @@ func Test_DynamicMetadataRateLimit(t *testing.T) {
 	t.Cleanup(func() {
 		_ = e2elib.KubectlDeleteManifest(context.Background(), manifest)
 	})
+	const policyManifest = "testdata/dynamic_metadata_ratelimit_policy.yaml"
+	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), policyManifest))
+	t.Cleanup(func() {
+		_ = e2elib.KubectlDeleteManifest(context.Background(), policyManifest)
+	})
 
 	const egSelector = "gateway.envoyproxy.io/owning-gateway-name=envoy-ai-gateway-dynamic-ratelimit"
 	e2elib.RequireWaitForGatewayPodReady(t, egSelector)

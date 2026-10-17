@@ -1397,6 +1397,35 @@ func Test_computeQuotaPolicyHash(t *testing.T) {
 		require.NotEqual(t, before, after, "a structural change must change the hash")
 	})
 
+	t.Run("fromMetadata-only change produces different hash", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		qp := newQuotaPolicy("qp", ns, 100, "apple")
+		qp.Spec.PerModelQuotas = []aigv1a1.PerModelQuota{{
+			ModelName: ptr.To("gpt-4"),
+			Quota: aigv1a1.QuotaDefinition{
+				DefaultBucket: aigv1a1.QuotaValue{
+					Limit: 10, Duration: "1m",
+					FromMetadata: &aigv1a1.QuotaLimitFromMetadata{
+						Namespace: "envoy.filters.http.ext_authz",
+						Key:       "total_limit",
+					},
+				},
+			},
+		}}
+		require.NoError(t, fakeClient.Create(t.Context(), qp))
+		before, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(qp), qp))
+		qp.Spec.PerModelQuotas[0].Quota.DefaultBucket.FromMetadata.Key = "other_limit"
+		require.NoError(t, fakeClient.Update(t.Context(), qp))
+
+		after, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.NotEqual(t, before, after, "changing only fromMetadata.key must change the hash")
+	})
+
 	t.Run("terminating policy is ignored", func(t *testing.T) {
 		fakeClient := requireNewFakeClientWithIndexes(t)
 		c := newController(fakeClient)
