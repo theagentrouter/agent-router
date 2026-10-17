@@ -127,6 +127,17 @@ const (
 	// This is the default header name in the reference implementation:
 	// https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/2b5b337b45c3289e5f9367b2c19deef021722fcd/pkg/epp/server/runserver.go#L63
 	EndpointPickerHeaderKey = "x-gateway-destination-endpoint"
+	// EndpointOrderMetadataNamespace is the dynamic metadata namespace a custom ext_proc sets,
+	// upstream of the router filter, to specify the desired per-request attempt order of
+	// backend Priority tiers (see aigv1b1.AIGatewayRouteRuleBackendRef.Priority). It is
+	// consumed on the data plane by the custom Envoy "envoy.retry_priorities.header_order"
+	// RetryPriority extension, which is attached to eligible routes by the extension server
+	// (see maybeSetHeaderOrderRetryPriority).
+	EndpointOrderMetadataNamespace = "envoy.ai_gateway.endpoint_order"
+	// EndpointOrderMetadataKey is the key, within EndpointOrderMetadataNamespace, whose value
+	// must be a list of numbers representing the ordered list of priority indices, e.g.
+	// [3, 0, 2].
+	EndpointOrderMetadataKey = "order"
 )
 
 const (
