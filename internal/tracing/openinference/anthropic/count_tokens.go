@@ -66,7 +66,7 @@ func (r *CountTokensRecorder) RecordResponse(span trace.Span, resp *anthropic.Co
 
 // RecordResponseOnError implements the same method as defined in tracingapi.CountTokensRecorder.
 func (r *CountTokensRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
 
 // RecordResponseChunks implements SpanRecorder.RecordResponseChunks as a no-op (count_tokens doesn't stream).
