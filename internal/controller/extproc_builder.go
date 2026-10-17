@@ -145,9 +145,7 @@ func (b *extProcBuilder) buildExtProcContainer(input extProcContainerInput) core
 			Drop: []corev1.Capability{"ALL"},
 		},
 		Privileged:   ptr.To(false),
-		RunAsGroup:   ptr.To(int64(65532)),
 		RunAsNonRoot: ptr.To(true),
-		RunAsUser:    ptr.To(int64(65532)),
 		SeccompProfile: &corev1.SeccompProfile{
 			Type: corev1.SeccompProfileTypeRuntimeDefault,
 		},
