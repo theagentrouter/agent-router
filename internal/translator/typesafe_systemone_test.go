@@ -152,6 +152,7 @@ type mockSystemOneSpan struct {
 }
 
 func (m *mockSystemOneSpan) EndSpan()                   {}
+func (m *mockSystemOneSpan) EndSpanOnCancel()           {}
 func (m *mockSystemOneSpan) EndSpanOnError(int, []byte) {}
 func (m *mockSystemOneSpan) RecordResponse(resp *typesafeschema.SystemOneResponse) {
 	m.recorded = resp

@@ -586,6 +586,7 @@ func (m *mockMessageSpan) RecordResponse(resp *anthropic.MessagesResponse) {
 func (m *mockMessageSpan) RecordResponseChunk(_ *anthropic.MessagesStreamChunk) {}
 func (m *mockMessageSpan) EndSpanOnError(_ int, _ []byte)                       {}
 func (m *mockMessageSpan) EndSpan()                                             {}
+func (m *mockMessageSpan) EndSpanOnCancel()                                     {}
 
 // buildOpenAITextResponse is a helper that marshals a simple OpenAI ChatCompletionResponse
 // containing a single text choice and returns it as a bytes.Reader.

@@ -41,11 +41,19 @@ type mockProcessor struct {
 	expBody               *extprocv3.HttpBody
 	retProcessingResponse *extprocv3.ProcessingResponse
 	retErr                error
+	streamTerminated      *bool
 }
 
 // SetBackend implements [Processor.SetBackend].
 func (m mockProcessor) SetBackend(context.Context, *filterapi.RuntimeBackend, string, Processor) error {
 	return nil
+}
+
+// OnStreamTerminate implements [Processor.OnStreamTerminate].
+func (m mockProcessor) OnStreamTerminate() {
+	if m.streamTerminated != nil {
+		*m.streamTerminated = true
+	}
 }
 
 // ProcessRequestHeaders implements [Processor.ProcessRequestHeaders].
@@ -305,10 +313,11 @@ var _ metrics.Metrics = &mockMetrics{}
 
 // mockChatCompletionSpan implements [tracingapi.ChatCompletionSpan], recording how the span ended.
 type mockChatCompletionSpan struct {
-	endedOnErrorCount int
-	endedCount        int
-	errorStatusCode   int
-	errorBody         []byte
+	endedOnErrorCount  int
+	endedOnCancelCount int
+	endedCount         int
+	errorStatusCode    int
+	errorBody          []byte
 }
 
 func (m *mockChatCompletionSpan) RecordResponseChunk(*openai.ChatCompletionResponseChunk) {}
@@ -320,6 +329,8 @@ func (m *mockChatCompletionSpan) EndSpanOnError(statusCode int, body []byte) {
 	m.errorStatusCode = statusCode
 	m.errorBody = body
 }
+
+func (m *mockChatCompletionSpan) EndSpanOnCancel() { m.endedOnCancelCount++ }
 
 func (m *mockChatCompletionSpan) EndSpan() { m.endedCount++ }
 

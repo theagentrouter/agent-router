@@ -2089,6 +2089,7 @@ func (m *mockSpan) RecordResponse(resp *openai.ChatCompletionResponse) {
 }
 func (m *mockSpan) EndSpanOnError(_ int, _ []byte) {}
 func (m *mockSpan) EndSpan()                       {}
+func (m *mockSpan) EndSpanOnCancel()               {}
 
 func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody_WithSpanRecording(t *testing.T) {
 	translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "").(*openAIToGCPAnthropicTranslatorV1ChatCompletion)

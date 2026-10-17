@@ -2599,3 +2599,61 @@ func mustCompileCEL(t *testing.T, expr string) cel.Program {
 	require.NoError(t, err)
 	return prog
 }
+
+func TestRouterFilter_OnStreamTerminate(t *testing.T) {
+	t.Run("client disconnected before the response path ran", func(t *testing.T) {
+		span := &mockChatCompletionSpan{}
+		p := &chatCompletionProcessorRouterFilter{span: span}
+
+		p.OnStreamTerminate()
+
+		require.Equal(t, 1, span.endedOnCancelCount)
+		require.Zero(t, span.endedCount)
+		require.Zero(t, span.endedOnErrorCount)
+	})
+	t.Run("span already ended by the response path", func(t *testing.T) {
+		span := &mockChatCompletionSpan{}
+		p := &chatCompletionProcessorRouterFilter{span: span}
+		p.endSpan()
+
+		p.OnStreamTerminate()
+
+		require.Equal(t, 1, span.endedCount)
+		require.Zero(t, span.endedOnCancelCount)
+	})
+	t.Run("span already ended with an error", func(t *testing.T) {
+		span := &mockChatCompletionSpan{}
+		p := &chatCompletionProcessorRouterFilter{span: span}
+		p.endSpanOnError(500, []byte("upstream error"))
+
+		p.OnStreamTerminate()
+
+		require.Equal(t, 1, span.endedOnErrorCount)
+		require.Zero(t, span.endedOnCancelCount)
+	})
+	t.Run("ends the span once however often the hook runs", func(t *testing.T) {
+		span := &mockChatCompletionSpan{}
+		p := &chatCompletionProcessorRouterFilter{span: span}
+
+		p.OnStreamTerminate()
+		p.OnStreamTerminate()
+
+		require.Equal(t, 1, span.endedOnCancelCount)
+	})
+	t.Run("tracing disabled", func(t *testing.T) {
+		p := &chatCompletionProcessorRouterFilter{}
+
+		require.NotPanics(t, p.OnStreamTerminate)
+	})
+	t.Run("upstream filter leaves the span to the router filter", func(t *testing.T) {
+		span := &mockChatCompletionSpan{}
+		parent := &chatCompletionProcessorRouterFilter{span: span}
+		u := &chatCompletionProcessorUpstreamFilter{parent: parent}
+
+		u.OnStreamTerminate()
+
+		require.Zero(t, span.endedOnCancelCount)
+		require.Zero(t, span.endedCount)
+		require.Zero(t, span.endedOnErrorCount)
+	})
+}

@@ -15,6 +15,7 @@ type MockSpan struct {
 	RespChunks    []*openai.ChatCompletionResponseChunk
 	ErrorStatus   int
 	ErrBody       string
+	Cancelled     bool
 	EndSpanCalled bool
 }
 
@@ -32,6 +33,11 @@ func (s *MockSpan) RecordResponse(resp *openai.ChatCompletionResponse) {
 func (s *MockSpan) EndSpanOnError(statusCode int, body []byte) {
 	s.ErrorStatus = statusCode
 	s.ErrBody = string(body)
+}
+
+// EndSpanOnCancel implements tracingapi.ChatCompletionSpan.
+func (s *MockSpan) EndSpanOnCancel() {
+	s.Cancelled = true
 }
 
 // EndSpan implements tracingapi.ChatCompletionSpan.
