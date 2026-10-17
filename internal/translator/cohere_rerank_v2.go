@@ -71,7 +71,8 @@ func (t *cohereToCohereTranslatorV2Rerank) ResponseHeaders(map[string]string) (n
 }
 
 // ResponseBody implements [CohereRerankTranslator.ResponseBody].
-// For rerank, token usage is provided via meta.tokens.input_tokens when available.
+// Token usage comes from meta.tokens when the provider reports it. Cohere bills rerank in search
+// units instead and reports them in meta.billed_units.search_units.
 func (t *cohereToCohereTranslatorV2Rerank) ResponseBody(_ map[string]string, body io.Reader, _ bool, span tracingapi.RerankSpan) (
 	newHeaders []internalapi.Header, newBody []byte, tokenUsage metrics.TokenUsage, responseModel internalapi.ResponseModel, err error,
 ) {
@@ -100,6 +101,9 @@ func (t *cohereToCohereTranslatorV2Rerank) ResponseBody(_ map[string]string, bod
 			totalTokens += output
 		}
 		tokenUsage.SetTotalTokens(totalTokens)
+	}
+	if resp.Meta != nil && resp.Meta.BilledUnits != nil && resp.Meta.BilledUnits.SearchUnits != nil {
+		tokenUsage.SetSearchUnits(uint32(*resp.Meta.BilledUnits.SearchUnits)) //nolint:gosec
 	}
 
 	// Cohere rerank responses do not echo model; report the effective request model if known.

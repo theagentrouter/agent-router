@@ -950,6 +950,7 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 		out, _ := costs.OutputTokens()
 		total, _ := costs.TotalTokens()
 		reasoning, _ := costs.ReasoningTokens()
+		searchUnits, _ := costs.SearchUnits()
 		cost, err = llmcostcel.EvaluateProgram(
 			celProg,
 			requestHeaders[internalapi.ModelNameHeaderKeyDefault],
@@ -961,6 +962,7 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 			out,
 			total,
 			reasoning,
+			searchUnits,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("failed to evaluate CEL expression: %w", err)

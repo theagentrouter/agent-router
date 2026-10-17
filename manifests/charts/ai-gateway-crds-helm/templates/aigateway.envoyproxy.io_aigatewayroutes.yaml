@@ -176,6 +176,8 @@ spec:
                         the number of output tokens. Type: unsigned integer.\n\t*
                         total_tokens: the total number of tokens. Type: unsigned integer.\n\t*
                         reasoning_tokens: the number of reasoning tokens. Type: unsigned
+                        integer.\n\t* search_units: the number of billed search units,
+                        reported by Cohere rerank instead of tokens. Type: unsigned
                         integer.\n\nFor example, the following expressions are valid:\n\n\t*
                         \"model == 'llama' ?  input_tokens + output_token * 0.5 :
                         total_tokens\"\n\t* \"backend == 'foo.default' ?  input_tokens
@@ -1114,6 +1116,8 @@ spec:
                         the number of output tokens. Type: unsigned integer.\n\t*
                         total_tokens: the total number of tokens. Type: unsigned integer.\n\t*
                         reasoning_tokens: the number of reasoning tokens. Type: unsigned
+                        integer.\n\t* search_units: the number of billed search units,
+                        reported by Cohere rerank instead of tokens. Type: unsigned
                         integer.\n\nFor example, the following expressions are valid:\n\n\t*
                         \"model == 'llama' ?  input_tokens + output_token * 0.5 :
                         total_tokens\"\n\t* \"backend == 'foo.default' ?  input_tokens

@@ -130,6 +130,7 @@ type LLMRequestCost struct {
 	//	* output_tokens: the number of output tokens. Type: unsigned integer.
 	//	* total_tokens: the total number of tokens. Type: unsigned integer.
 	//	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.
+	//	* search_units: the number of billed search units, reported by Cohere rerank instead of tokens. Type: unsigned integer.
 	//
 	// For example, the following expressions are valid:
 	//

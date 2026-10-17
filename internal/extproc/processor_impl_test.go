@@ -470,10 +470,13 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 		mt.retUsedToken.SetInputTokens(1)
 		mt.retUsedToken.SetCachedInputTokens(1)
 		mt.retUsedToken.SetCacheCreationInputTokens(3)
+		mt.retUsedToken.SetSearchUnits(2)
 
 		celProgInt, err := llmcostcel.NewProgram("54321")
 		require.NoError(t, err)
 		celProgUint, err := llmcostcel.NewProgram("uint(9999)")
+		require.NoError(t, err)
+		celProgSearchUnits, err := llmcostcel.NewProgram("search_units")
 		require.NoError(t, err)
 		p := &chatCompletionProcessorUpstreamFilter{
 			translator: mt,
@@ -493,6 +496,10 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 						{
 							CELProg:        celProgUint,
 							LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCEL, MetadataKey: "cel_uint"},
+						},
+						{
+							CELProg:        celProgSearchUnits,
+							LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCEL, MetadataKey: "cel_search_units"},
 						},
 					},
 				},
@@ -528,6 +535,8 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 			GetStructValue().Fields["cel_int"].GetNumberValue())
 		require.Equal(t, float64(9999), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
 			GetStructValue().Fields["cel_uint"].GetNumberValue())
+		require.Equal(t, float64(2), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+			GetStructValue().Fields["cel_search_units"].GetNumberValue())
 		require.Equal(t, "ai_gateway_llm", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["model_name_override"].GetStringValue())
 		require.Equal(t, "some_backend", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["ai_service_backend_name"].GetStringValue())
 		require.Equal(t, "some_route", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["route_name"].GetStringValue())
