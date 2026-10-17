@@ -117,7 +117,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 
 		// Check the path header.
 		pathHeader := hm[0]
-		require.Equal(t, pathHeaderName, pathHeader.Key())
+		require.Equal(t, gcpPathHeaderName, pathHeader.Key())
 		expectedPath := fmt.Sprintf("publishers/anthropic/models/%s:rawPredict", openAIReq.Model)
 		require.Equal(t, expectedPath, pathHeader.Value())
 
@@ -142,7 +142,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 
 		// Check that the :path header uses the override model name.
 		pathHeader := hm[0]
-		require.Equal(t, pathHeaderName, pathHeader.Key())
+		require.Equal(t, gcpPathHeaderName, pathHeader.Key())
 		expectedPath := fmt.Sprintf("publishers/anthropic/models/%s:rawPredict", overrideModelName)
 		require.Equal(t, expectedPath, pathHeader.Value())
 	})
@@ -216,7 +216,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 
 		// Check that the :path header uses the streamRawPredict specifier.
 		pathHeader := hm
-		require.Equal(t, pathHeaderName, pathHeader[0].Key())
+		require.Equal(t, gcpPathHeaderName, pathHeader[0].Key())
 		expectedPath := fmt.Sprintf("publishers/anthropic/models/%s:streamRawPredict", streamReq.Model)
 		require.Equal(t, expectedPath, pathHeader[0].Value())
 

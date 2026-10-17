@@ -93,7 +93,7 @@ func TestGCPHandler_Do(t *testing.T) {
 			name:    "basic headers update",
 			handler: handler,
 			requestHeaders: map[string]string{
-				":path": "publishers/google/models/gemini-pro:generateContent",
+				"gcp-path": "publishers/google/models/gemini-pro:generateContent",
 			},
 			wantPathValue: "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent",
 		},
@@ -143,7 +143,7 @@ func TestGCPHandler_Do_WithTokenSource(t *testing.T) {
 	}
 
 	requestHeaders := map[string]string{
-		":path": "publishers/google/models/gemini-pro:generateContent",
+		"gcp-path": "publishers/google/models/gemini-pro:generateContent",
 	}
 
 	hdrs, err := handler.Do(context.Background(), requestHeaders, nil)
@@ -162,7 +162,7 @@ func TestGCPHandler_Do_TokenSourceError(t *testing.T) {
 	}
 
 	requestHeaders := map[string]string{
-		":path": "publishers/google/models/gemini-pro:generateContent",
+		"gcp-path": "publishers/google/models/gemini-pro:generateContent",
 	}
 
 	_, err := handler.Do(context.Background(), requestHeaders, nil)
