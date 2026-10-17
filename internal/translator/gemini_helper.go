@@ -59,6 +59,9 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 	var systemInstruction *genai.Content
 	knownToolCalls := make(map[string]string)
 	var gcpParts []*genai.Part
+	// Whether gcpParts currently holds function responses rather than user text or media.
+	// The two must not end up in the same content.
+	pendingIsFunctionResponse := false
 
 	for _, msgUnion := range messages {
 		switch {
@@ -93,6 +96,15 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 			if err != nil {
 				return nil, nil, fmt.Errorf("invalid user message: %w", err)
 			}
+			if len(parts) == 0 {
+				continue
+			}
+			// A function response occupies its own content; text cannot share it.
+			if pendingIsFunctionResponse && len(gcpParts) > 0 {
+				gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
+				gcpParts = nil
+			}
+			pendingIsFunctionResponse = false
 			gcpParts = append(gcpParts, parts...)
 		case msgUnion.OfTool != nil:
 			msg := msgUnion.OfTool
@@ -100,6 +112,11 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 			if err != nil {
 				return nil, nil, fmt.Errorf("invalid tool message: %w", err)
 			}
+			if !pendingIsFunctionResponse && len(gcpParts) > 0 {
+				gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
+				gcpParts = nil
+			}
+			pendingIsFunctionResponse = true
 			gcpParts = append(gcpParts, part)
 		case msgUnion.OfAssistant != nil:
 			// Flush any accumulated user/tool parts before assistant.
@@ -107,12 +124,17 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 				gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
 				gcpParts = nil
 			}
+			pendingIsFunctionResponse = false
 			msg := msgUnion.OfAssistant
 			assistantParts, toolCalls, err := assistantMsgToGeminiParts(msg)
 			if err != nil {
 				return nil, nil, fmt.Errorf("invalid assistant message: %w", err)
 			}
 			maps.Copy(knownToolCalls, toolCalls)
+			// Every content must carry at least one part.
+			if len(assistantParts) == 0 {
+				continue
+			}
 			gcpContents = append(gcpContents, genai.Content{Role: genai.RoleModel, Parts: assistantParts})
 		default:
 			return nil, nil, fmt.Errorf("%w: invalid role in message", internalapi.ErrInvalidRequestBody)
@@ -122,6 +144,12 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 	// If there are any remaining parts after processing all messages, add them as user content.
 	if len(gcpParts) > 0 {
 		gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
+	}
+
+	// A trailing model turn carries nothing for the model to continue from, and requests
+	// ending with one are rejected.
+	for len(gcpContents) > 0 && gcpContents[len(gcpContents)-1].Role == genai.RoleModel {
+		gcpContents = gcpContents[:len(gcpContents)-1]
 	}
 	return gcpContents, systemInstruction, nil
 }
@@ -181,6 +209,10 @@ func userMsgToGeminiParts(msg openai.ChatCompletionUserMessageParam, requestMode
 		for _, content := range contentValue {
 			switch {
 			case content.OfText != nil:
+				// Mirrors the string branch above; empty text parts are rejected.
+				if content.OfText.Text == "" {
+					continue
+				}
 				parts = append(parts, genai.NewPartFromText(content.OfText.Text))
 			case content.OfImageURL != nil:
 				imgURL := content.OfImageURL.ImageURL.URL
