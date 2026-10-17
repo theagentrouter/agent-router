@@ -36,6 +36,12 @@ func TestMessageContent_UnmarshalJSON(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "empty array content",
+			jsonStr: `[]`,
+			want:    MessageContent{Array: []ContentBlockParam{}},
+			wantErr: false,
+		},
+		{
 			name:    "invalid content",
 			jsonStr: `12345`,
 			want:    MessageContent{},
@@ -247,6 +253,11 @@ func TestMessageContent_MarshalJSON(t *testing.T) {
 			want: `[{"text":"Hello, ","type":"text"},{"text":"world!","type":"text"}]`,
 		},
 		{
+			name: "empty array content",
+			mc:   MessageContent{Array: []ContentBlockParam{}},
+			want: `[]`,
+		},
+		{
 			name:    "empty content",
 			mc:      MessageContent{},
 			wantErr: true,
@@ -264,6 +275,21 @@ func TestMessageContent_MarshalJSON(t *testing.T) {
 			require.JSONEq(t, tt.want, string(got))
 		})
 	}
+}
+
+func TestMessageParam_PerMessageEffortRoundTrip(t *testing.T) {
+	input := `{"role":"system","content":[],"output_config":{"effort":"low"}}`
+
+	var message MessageParam
+	require.NoError(t, json.Unmarshal([]byte(input), &message))
+	require.Equal(t, MessageRoleSystem, message.Role)
+	require.Empty(t, message.Content.Array)
+	require.NotNil(t, message.OutputConfig)
+	require.Equal(t, MessageOutputConfigEffortLow, message.OutputConfig.Effort)
+
+	output, err := json.Marshal(&message)
+	require.NoError(t, err)
+	require.JSONEq(t, input, string(output))
 }
 
 func TestContentBlockParam_UnmarshalJSON(t *testing.T) {

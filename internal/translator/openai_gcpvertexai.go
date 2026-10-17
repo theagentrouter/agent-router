@@ -20,6 +20,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/gcp"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -99,6 +100,9 @@ type openAIToGCPVertexAITranslatorV1ChatCompletion struct {
 func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) RequestBody(_ []byte, openAIReq *openai.ChatCompletionRequest, _ bool) (
 	newHeaders []internalapi.Header, newBody []byte, err error,
 ) {
+	if err = rejectPerMessageOutputConfig(openAIReq.Messages, string(filterapi.APISchemaGCPVertexAI)); err != nil {
+		return
+	}
 	o.requestModel = openAIReq.Model
 	if o.modelNameOverride != "" {
 		// Use modelName override if set.

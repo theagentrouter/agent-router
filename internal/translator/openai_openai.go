@@ -69,6 +69,9 @@ type openAIToOpenAITranslatorV1ChatCompletion struct {
 func (o *openAIToOpenAITranslatorV1ChatCompletion) RequestBody(original []byte, req *openai.ChatCompletionRequest, forceBodyMutation bool) (
 	newHeaders []internalapi.Header, newBody []byte, err error,
 ) {
+	if err = rejectPerMessageOutputConfig(req.Messages, "OpenAI-compatible"); err != nil {
+		return
+	}
 	if req.Stream {
 		o.stream = true
 	}
