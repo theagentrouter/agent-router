@@ -275,12 +275,29 @@ func (s *Server) createRoutesForBackendListener(routes []*routev3.RouteConfigura
 	return mcpRouteConfig
 }
 
-// modifyMCPGatewayGeneratedRoutes finds the mcp proxy dummy IP in the clusters and
-// swaps it to the localhost.
+// modifyMCPGatewayGeneratedCluster points MCP routes at the proxy listener used by
+// the current deployment mode.
 func (s *Server) modifyMCPGatewayGeneratedCluster(clusters []*clusterv3.Cluster) {
 	for _, c := range clusters {
 		if strings.Contains(c.Name, internalapi.MCPMainHTTPRoutePrefix) && strings.HasSuffix(c.Name, "/rule/0") {
 			name := c.Name
+			address := &corev3.Address{
+				Address: &corev3.Address_Pipe{
+					Pipe: &corev3.Pipe{Path: internalapi.MCPProxySocketPath},
+				},
+			}
+			if s.isStandAloneMode {
+				address = &corev3.Address{
+					Address: &corev3.Address_SocketAddress{
+						SocketAddress: &corev3.SocketAddress{
+							Address: "127.0.0.1",
+							PortSpecifier: &corev3.SocketAddress_PortValue{
+								PortValue: internalapi.MCPProxyPort,
+							},
+						},
+					},
+				}
+			}
 			*c = clusterv3.Cluster{
 				Name:                 name,
 				ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC},
@@ -293,16 +310,7 @@ func (s *Server) modifyMCPGatewayGeneratedCluster(clusters []*clusterv3.Cluster)
 								{
 									HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
 										Endpoint: &endpointv3.Endpoint{
-											Address: &corev3.Address{
-												Address: &corev3.Address_SocketAddress{
-													SocketAddress: &corev3.SocketAddress{
-														Address: "127.0.0.1",
-														PortSpecifier: &corev3.SocketAddress_PortValue{
-															PortValue: internalapi.MCPProxyPort,
-														},
-													},
-												},
-											},
+											Address: address,
 										},
 									},
 								},

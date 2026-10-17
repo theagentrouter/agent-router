@@ -52,6 +52,8 @@ const (
 	MCPBackendListenerPort = 10088
 	// MCPProxyPort is the port where the MCP proxy listens.
 	MCPProxyPort = 9856
+	// MCPProxySocketPath is the path where the MCP proxy listens inside the Envoy Gateway pod.
+	MCPProxySocketPath = "/etc/ai-gateway-extproc-uds/mcp.sock"
 	// MCPGeneratedResourceCommonPrefix is the common prefix for all MCP-related generated resources.
 	MCPGeneratedResourceCommonPrefix = "ai-eg-mcp-"
 	// MCPMainHTTPRoutePrefix is the prefix for the main HTTPRoute resources generated for MCP.

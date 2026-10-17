@@ -7,12 +7,12 @@ package extensionserver
 
 import (
 	"testing"
+	"time"
 
 	egextension "github.com/envoyproxy/gateway/proto/extension"
 	accesslogv3 "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
-	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	htomv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_to_metadata/v3"
@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/anypb"
-	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
@@ -193,60 +192,40 @@ func TestServer_createRoutesForBackendListener(t *testing.T) {
 
 func TestServer_modifyMCPGatewayGeneratedCluster(t *testing.T) {
 	tests := []struct {
-		name             string
-		clusters         []*clusterv3.Cluster
-		expectedClusters []*clusterv3.Cluster
+		name       string
+		standalone bool
+		assertAddr func(*testing.T, *corev3.Address)
 	}{
 		{
-			name: "modifies MCP cluster",
-			clusters: []*clusterv3.Cluster{
-				{Name: "normal-cluster"},
-				{Name: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"},
+			name: "uses UDS in controller mode",
+			assertAddr: func(t *testing.T, address *corev3.Address) {
+				require.Equal(t, internalapi.MCPProxySocketPath, address.GetPipe().GetPath())
 			},
-			expectedClusters: []*clusterv3.Cluster{
-				{Name: "normal-cluster"},
-				{
-					Name:                 internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0",
-					ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC},
-					ConnectTimeout:       &durationpb.Duration{Seconds: 10},
-					LoadAssignment: &endpointv3.ClusterLoadAssignment{
-						ClusterName: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0",
-						Endpoints: []*endpointv3.LocalityLbEndpoints{
-							{
-								LbEndpoints: []*endpointv3.LbEndpoint{
-									{
-										HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
-											Endpoint: &endpointv3.Endpoint{
-												Address: &corev3.Address{
-													Address: &corev3.Address_SocketAddress{
-														SocketAddress: &corev3.SocketAddress{
-															Address: "127.0.0.1",
-															PortSpecifier: &corev3.SocketAddress_PortValue{
-																PortValue: internalapi.MCPProxyPort,
-															},
-														},
-													},
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
+		},
+		{
+			name:       "uses TCP in standalone mode",
+			standalone: true,
+			assertAddr: func(t *testing.T, address *corev3.Address) {
+				socket := address.GetSocketAddress()
+				require.Equal(t, "127.0.0.1", socket.GetAddress())
+				require.Equal(t, uint32(internalapi.MCPProxyPort), socket.GetPortValue())
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &Server{log: testr.New(t)}
-			s.modifyMCPGatewayGeneratedCluster(tt.clusters)
+			normal := &clusterv3.Cluster{Name: "normal-cluster"}
+			target := &clusterv3.Cluster{Name: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"}
+			clusters := []*clusterv3.Cluster{normal, target}
+			s := &Server{log: testr.New(t), isStandAloneMode: tt.standalone}
+			s.modifyMCPGatewayGeneratedCluster(clusters)
 
-			for i, expectedCluster := range tt.expectedClusters {
-				require.Empty(t, cmp.Diff(expectedCluster, tt.clusters[i], protocmp.Transform()))
-			}
+			require.Equal(t, &clusterv3.Cluster{Name: "normal-cluster"}, normal)
+			require.Equal(t, clusterv3.Cluster_STATIC, target.GetType())
+			require.Equal(t, 10*time.Second, target.GetConnectTimeout().AsDuration())
+			address := target.GetLoadAssignment().GetEndpoints()[0].GetLbEndpoints()[0].GetEndpoint().GetAddress()
+			tt.assertAddr(t, address)
 		})
 	}
 }

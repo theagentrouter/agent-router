@@ -65,6 +65,18 @@ func TestExtProcContainerHash_Deterministic(t *testing.T) {
 	}
 }
 
+func TestExtProcBuilder_MCPUsesUnixSocket(t *testing.T) {
+	args := newTestBuilder().buildExtProcBaseArgs(true)
+	require.Contains(t, args, "-mcpAddr")
+	for i, arg := range args {
+		if arg == "-mcpAddr" {
+			require.Equal(t, "unix://"+internalapi.MCPProxySocketPath, args[i+1])
+			return
+		}
+	}
+	t.Fatal("-mcpAddr argument not found")
+}
+
 // TestExtProcContainerHash_Drift asserts that every config field the issue
 // lists as "silently half-honored" actually moves the hash, so a controller
 // restart with a changed flag is detected and triggers a rollout. A change to
