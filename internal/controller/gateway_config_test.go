@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/stretchr/testify/require"
@@ -235,14 +234,11 @@ func TestGatewayConfigController_DeletionDoesNotBlock(t *testing.T) {
 	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
 	c := NewGatewayConfigController(fakeClient, ctrl.Log, eventCh.Ch)
 
-	deletionTime := metav1.NewTime(time.Now())
-
-	// Create a GatewayConfig marked for deletion.
+	// Create a GatewayConfig.
 	gatewayConfig := &aigv1b1.GatewayConfig{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              "test-config",
-			Namespace:         "default",
-			DeletionTimestamp: &deletionTime,
+			Name:      "test-config",
+			Namespace: "default",
 		},
 		Spec: aigv1b1.GatewayConfigSpec{},
 	}
@@ -272,7 +268,9 @@ func TestGatewayConfigController_DeletionDoesNotBlock(t *testing.T) {
 	err = fakeClient.Create(t.Context(), gateway)
 	require.NoError(t, err)
 
-	// Reconcile should not block deletion and should notify the referencing Gateway.
+	require.NoError(t, fakeClient.Delete(t.Context(), gatewayConfig))
+
+	// Reconcile after deletion should notify the referencing Gateway.
 	_, err = c.Reconcile(t.Context(), reconcile.Request{
 		NamespacedName: client.ObjectKey{Name: "test-config", Namespace: "default"},
 	})
@@ -326,6 +324,12 @@ func TestGatewayConfigController_ListErrorSetsNotAcceptedStatus(t *testing.T) {
 	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updated.Status.Conditions[0].Type)
 	require.Equal(t, metav1.ConditionFalse, updated.Status.Conditions[0].Status)
 	require.Contains(t, updated.Status.Conditions[0].Message, "failed to find referencing Gateways")
+
+	require.NoError(t, fakeClient.Delete(t.Context(), gatewayConfig))
+	_, err = c.Reconcile(t.Context(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(gatewayConfig),
+	})
+	require.ErrorContains(t, err, "failed to find referencing Gateways")
 }
 
 func TestGatewayConfigController_GatewayReferencesNonExistingConfig(t *testing.T) {
@@ -363,8 +367,10 @@ func TestGatewayConfigController_GatewayReferencesNonExistingConfig(t *testing.T
 	})
 	require.NoError(t, err)
 
-	// No events should be sent since the GatewayConfig doesn't exist.
-	require.Empty(t, eventCh.RequireItemsEventually(t, 0))
+	// A missing config may have been deleted, so reconcile its referencing Gateway.
+	events := eventCh.RequireItemsEventually(t, 1)
+	require.Len(t, events, 1)
+	require.Equal(t, client.ObjectKeyFromObject(gateway), client.ObjectKeyFromObject(events[0]))
 }
 
 func TestGatewayConfigConditionsNotAccepted(t *testing.T) {
