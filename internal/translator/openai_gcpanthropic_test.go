@@ -569,16 +569,10 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 					{
 						Index: 0,
 						Message: openai.ChatCompletionResponseChoiceMessage{
-							Role: "assistant",
-							ReasoningContent: &openai.ReasoningContentUnion{
-								Value: &openai.ReasoningContent{
-									ReasoningContent: &awsbedrock.ReasoningContentBlock{
-										ReasoningText: &awsbedrock.ReasoningTextBlock{
-											Text:      "Let me think about this...",
-											Signature: "signature_123",
-										},
-									},
-								},
+							Role:             "assistant",
+							ReasoningContent: &openai.ReasoningContentUnion{Value: "Let me think about this..."},
+							ThinkingBlocks: []openai.ThinkingBlock{
+								{Type: "thinking", Thinking: "Let me think about this...", Signature: "signature_123"},
 							},
 						},
 						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
@@ -616,12 +610,93 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 						Index: 0,
 						Message: openai.ChatCompletionResponseChoiceMessage{
 							Role: "assistant",
-							ReasoningContent: &openai.ReasoningContentUnion{
-								Value: &openai.ReasoningContent{
-									ReasoningContent: &awsbedrock.ReasoningContentBlock{
-										RedactedContent: []byte("redacted_data_content"),
-									},
-								},
+							ThinkingBlocks: []openai.ThinkingBlock{
+								{Type: "redacted_thinking", Data: "redacted_data_content"},
+							},
+						},
+						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+					},
+				},
+			},
+		},
+		{
+			name: "response with signature-only thinking content",
+			inputResponse: &anthropic.Message{
+				ID:    "msg_01XYZ790",
+				Model: "claude-3-5-sonnet-20241022",
+				Role:  constant.Assistant(anthropic.MessageParamRoleAssistant),
+				Content: []anthropic.ContentBlockUnion{
+					{Type: "thinking", Signature: "signature_only"},
+					{Type: "text", Text: "The answer is 42."},
+				},
+				StopReason: anthropic.StopReasonEndTurn,
+				Usage:      anthropic.Usage{InputTokens: 10, OutputTokens: 20},
+			},
+			respHeaders: map[string]string{statusHeaderName: "200"},
+			expectedOpenAIResponse: openai.ChatCompletionResponse{
+				ID:      "msg_01XYZ790",
+				Model:   "claude-3-5-sonnet-20241022",
+				Created: openai.JSONUNIXTime(time.Unix(releaseDateUnix, 0)),
+				Object:  "chat.completion",
+				Usage: openai.Usage{
+					PromptTokens:            10,
+					CompletionTokens:        20,
+					TotalTokens:             30,
+					PromptTokensDetails:     &openai.PromptTokensDetails{},
+					CompletionTokensDetails: &openai.CompletionTokensDetails{},
+				},
+				Choices: []openai.ChatCompletionResponseChoice{
+					{
+						Index: 0,
+						Message: openai.ChatCompletionResponseChoiceMessage{
+							Role:    "assistant",
+							Content: ptr.To("The answer is 42."),
+							ThinkingBlocks: []openai.ThinkingBlock{
+								{Type: "thinking", Signature: "signature_only"},
+							},
+						},
+						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+					},
+				},
+			},
+		},
+		{
+			name: "response with thinking, redacted thinking and text content",
+			inputResponse: &anthropic.Message{
+				ID:    "msg_01XYZ791",
+				Model: "claude-3-5-sonnet-20241022",
+				Role:  constant.Assistant(anthropic.MessageParamRoleAssistant),
+				Content: []anthropic.ContentBlockUnion{
+					{Type: "thinking", Thinking: "Let me think about this...", Signature: "signature_123"},
+					{Type: "redacted_thinking", Data: "redacted_data_content"},
+					{Type: "text", Text: "The answer is 42."},
+				},
+				StopReason: anthropic.StopReasonEndTurn,
+				Usage:      anthropic.Usage{InputTokens: 10, OutputTokens: 20},
+			},
+			respHeaders: map[string]string{statusHeaderName: "200"},
+			expectedOpenAIResponse: openai.ChatCompletionResponse{
+				ID:      "msg_01XYZ791",
+				Model:   "claude-3-5-sonnet-20241022",
+				Created: openai.JSONUNIXTime(time.Unix(releaseDateUnix, 0)),
+				Object:  "chat.completion",
+				Usage: openai.Usage{
+					PromptTokens:            10,
+					CompletionTokens:        20,
+					TotalTokens:             30,
+					PromptTokensDetails:     &openai.PromptTokensDetails{},
+					CompletionTokensDetails: &openai.CompletionTokensDetails{},
+				},
+				Choices: []openai.ChatCompletionResponseChoice{
+					{
+						Index: 0,
+						Message: openai.ChatCompletionResponseChoiceMessage{
+							Role:             "assistant",
+							Content:          ptr.To("The answer is 42."),
+							ReasoningContent: &openai.ReasoningContentUnion{Value: "Let me think about this..."},
+							ThinkingBlocks: []openai.ThinkingBlock{
+								{Type: "thinking", Thinking: "Let me think about this...", Signature: "signature_123"},
+								{Type: "redacted_thinking", Data: "redacted_data_content"},
 							},
 						},
 						FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
@@ -1038,6 +1113,71 @@ func TestMessageTranslation(t *testing.T) {
 			},
 		},
 		{
+			name: "assistant message with thinking_blocks and tool calls",
+			inputMessages: []openai.ChatCompletionMessageParamUnion{
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: "Let me check."},
+						ThinkingBlocks: []openai.ThinkingBlock{
+							{Type: "thinking", Thinking: "I need the weather.", Signature: "signature-123"},
+							{Type: "thinking", Signature: "signature-456"},
+							{Type: "redacted_thinking", Data: "redacted-data"},
+						},
+						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+							{
+								ID:   ptr.To("tool_1"),
+								Type: openai.ChatCompletionMessageToolCallTypeFunction,
+								Function: openai.ChatCompletionMessageToolCallFunctionParam{
+									Name:      "get_weather",
+									Arguments: `{"location":"Paris"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedAnthropicMsgs: []anthropic.MessageParam{
+				{
+					Role: anthropic.MessageParamRoleAssistant,
+					Content: []anthropic.ContentBlockParamUnion{
+						anthropic.NewThinkingBlock("signature-123", "I need the weather."),
+						anthropic.NewThinkingBlock("signature-456", ""),
+						anthropic.NewRedactedThinkingBlock("redacted-data"),
+						anthropic.NewTextBlock("Let me check."),
+						{
+							OfToolUse: &anthropic.ToolUseBlockParam{
+								ID:    "tool_1",
+								Type:  "tool_use",
+								Name:  "get_weather",
+								Input: map[string]any{"location": "Paris"},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "assistant message with thinking_blocks missing signature or data",
+			inputMessages: []openai.ChatCompletionMessageParamUnion{
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role: openai.ChatMessageRoleAssistant,
+						ThinkingBlocks: []openai.ThinkingBlock{
+							{Type: "thinking", Thinking: "No signature."},
+							{Type: "redacted_thinking"},
+						},
+					},
+				},
+			},
+			expectedAnthropicMsgs: []anthropic.MessageParam{
+				{
+					Role:    anthropic.MessageParamRoleAssistant,
+					Content: []anthropic.ContentBlockParamUnion{},
+				},
+			},
+		},
+		{
 			name: "assistant message with redacted thinking content ([]byte) - should fail",
 			inputMessages: []openai.ChatCompletionMessageParamUnion{
 				{
@@ -1098,6 +1238,12 @@ func TestMessageTranslation(t *testing.T) {
 						if expectedContent.OfText != nil {
 							require.NotNil(t, actualContent.OfText)
 							require.Equal(t, expectedContent.OfText.Text, actualContent.OfText.Text)
+						}
+						if expectedContent.OfThinking != nil {
+							require.Equal(t, expectedContent.OfThinking, actualContent.OfThinking)
+						}
+						if expectedContent.OfRedactedThinking != nil {
+							require.Equal(t, expectedContent.OfRedactedThinking, actualContent.OfRedactedThinking)
 						}
 						if expectedContent.OfToolUse != nil {
 							require.NotNil(t, actualContent.OfToolUse)

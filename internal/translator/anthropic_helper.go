@@ -20,10 +20,8 @@ import (
 	anthropicParam "github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	openAIconstant "github.com/openai/openai-go/shared/constant"
-	"k8s.io/utils/ptr"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
-	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -424,10 +422,29 @@ func processAssistantContent(contentBlocks []anthropic.ContentBlockParamUnion, c
 	return contentBlocks, nil
 }
 
+// thinkingBlocksToAnthropic converts the thinking_blocks echoed back on an assistant message to
+// Anthropic thinking and redacted_thinking blocks, which must precede the message's other content.
+func thinkingBlocksToAnthropic(thinkingBlocks []openai.ThinkingBlock) []anthropic.ContentBlockParamUnion {
+	contentBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(thinkingBlocks))
+	for _, block := range thinkingBlocks {
+		switch block.Type {
+		case string(constant.ValueOf[constant.Thinking]()):
+			if block.Signature != "" {
+				contentBlocks = append(contentBlocks, anthropic.NewThinkingBlock(block.Signature, block.Thinking))
+			}
+		case string(constant.ValueOf[constant.RedactedThinking]()):
+			if block.Data != "" {
+				contentBlocks = append(contentBlocks, anthropic.NewRedactedThinkingBlock(block.Data))
+			}
+		}
+	}
+	return contentBlocks
+}
+
 // openAIMessageToAnthropicMessageRoleAssistant converts an OpenAI assistant message to Anthropic content blocks.
 // The tool_use content is appended to the Anthropic message content list if tool_calls are present.
 func openAIMessageToAnthropicMessageRoleAssistant(openAiMessage *openai.ChatCompletionAssistantMessageParam) (anthropicMsg anthropic.MessageParam, err error) {
-	contentBlocks := make([]anthropic.ContentBlockParamUnion, 0)
+	contentBlocks := thinkingBlocksToAnthropic(openAiMessage.ThinkingBlocks)
 	if v, ok := openAiMessage.Content.Value.(string); ok && len(v) > 0 {
 		contentBlocks = append(contentBlocks, anthropic.NewTextBlock(v))
 	} else if content, ok := openAiMessage.Content.Value.(openai.ChatCompletionAssistantMessageParamContent); ok {
@@ -858,7 +875,6 @@ func anthropicToolUseToOpenAICalls(block *anthropic.ContentBlockUnion) ([]openai
 var (
 	sseEventPrefixSpace = []byte("event: ")
 	sseEventPrefix      = []byte("event:")
-	emptyStrPtr         = ptr.To("")
 )
 
 // streamingToolCall holds the state for a single tool call that is being streamed.
@@ -1211,14 +1227,11 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 			}
 			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
 		}
-		if event.ContentBlock.Type == string(constant.ValueOf[constant.Thinking]()) {
-			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: emptyStrPtr}
-			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
-		}
-
 		if event.ContentBlock.Type == string(constant.ValueOf[constant.RedactedThinking]()) {
-			// This is a latency-hiding event, ignore it.
-			return nil, nil
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{
+				ThinkingBlocks: []openai.ThinkingBlock{{Type: event.ContentBlock.Type, Data: event.ContentBlock.Data}},
+			}
+			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
 		}
 
 		return nil, nil
@@ -1264,16 +1277,18 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 			return nil, fmt.Errorf("unmarshal content_block_delta: %w", err)
 		}
 		switch event.Delta.Type {
-		case string(constant.ValueOf[constant.TextDelta]()), string(constant.ValueOf[constant.ThinkingDelta]()):
-			// Treat thinking_delta just like a text_delta, but read the field
-			// that belongs to the variant: RawContentBlockDeltaUnion.Text is
-			// only populated for text_delta, and .Thinking only for
-			// thinking_delta.
-			text := event.Delta.Text
-			if event.Delta.Type == string(constant.ValueOf[constant.ThinkingDelta]()) {
-				text = event.Delta.Thinking
+		case string(constant.ValueOf[constant.TextDelta]()):
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &event.Delta.Text}
+			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
+		case string(constant.ValueOf[constant.ThinkingDelta]()):
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{
+				ReasoningContent: &openai.StreamReasoningContent{Text: event.Delta.Thinking},
 			}
-			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &text}
+			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
+		case string(constant.ValueOf[constant.SignatureDelta]()):
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{
+				ThinkingBlocks: []openai.ThinkingBlock{{Type: string(constant.ValueOf[constant.Thinking]()), Signature: event.Delta.Signature}},
+			}
 			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
 		case string(constant.ValueOf[constant.InputJSONDelta]()):
 			tool, ok := p.activeToolCalls[p.toolIndex]
@@ -1342,8 +1357,8 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 func (p *anthropicStreamParser) constructOpenAIChatCompletionChunk(delta *openai.ChatCompletionResponseChunkChoiceDelta, finishReason openai.ChatCompletionChoicesFinishReason) *openai.ChatCompletionResponseChunk {
 	// Add the 'assistant' role to the very first chunk of the response.
 	if !p.sentFirstChunk {
-		// Only add the role if the delta actually contains content or a tool call.
-		if delta.Content != nil || len(delta.ToolCalls) > 0 {
+		// Only add the role if the delta actually contains content, reasoning or a tool call.
+		if delta.Content != nil || len(delta.ToolCalls) > 0 || delta.ReasoningContent != nil || len(delta.ThinkingBlocks) > 0 {
 			delta.Role = openai.ChatMessageRoleAssistant
 			p.sentFirstChunk = true
 		}
@@ -1434,26 +1449,18 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 			}
 		case string(constant.ValueOf[constant.Thinking]()):
 			if output.Thinking != "" {
-				choice.Message.ReasoningContent = &openai.ReasoningContentUnion{
-					Value: &openai.ReasoningContent{
-						ReasoningContent: &awsbedrock.ReasoningContentBlock{
-							ReasoningText: &awsbedrock.ReasoningTextBlock{
-								Text:      output.Thinking,
-								Signature: output.Signature,
-							},
-						},
-					},
-				}
+				choice.Message.ReasoningContent = &openai.ReasoningContentUnion{Value: output.Thinking}
+			}
+			if output.Thinking != "" || output.Signature != "" {
+				choice.Message.ThinkingBlocks = append(choice.Message.ThinkingBlocks, openai.ThinkingBlock{
+					Type: output.Type, Thinking: output.Thinking, Signature: output.Signature,
+				})
 			}
 		case string(constant.ValueOf[constant.RedactedThinking]()):
 			if output.Data != "" {
-				choice.Message.ReasoningContent = &openai.ReasoningContentUnion{
-					Value: &openai.ReasoningContent{
-						ReasoningContent: &awsbedrock.ReasoningContentBlock{
-							RedactedContent: []byte(output.Data),
-						},
-					},
-				}
+				choice.Message.ThinkingBlocks = append(choice.Message.ThinkingBlocks, openai.ThinkingBlock{
+					Type: output.Type, Data: output.Data,
+				})
 			}
 		}
 	}
