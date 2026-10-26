@@ -204,10 +204,6 @@ func (r *Resolver) Resolve(ctx context.Context, openAIReq *openai.ChatCompletion
 	// treated as a miss, so an unreachable store degrades caching rather than the
 	// request. GCP-side failures below are a different matter and do fail fast.
 	if e, ok := r.storeGet(ctx, cacheKey); ok {
-		r.logger.Debug("gcpcache: cache hit",
-			slog.String("key", cacheKey), slog.String("cache", e.Name),
-			slog.Time("expireTime", e.ExpireTime), slog.Int("cachedMessages", breakpoint+1),
-			slog.Int("remainingMessages", len(remainderMessages)))
 		return &contextcache.ResolveResult{
 			CacheName:  e.Name,
 			Messages:   remainderMessages,
@@ -217,17 +213,10 @@ func (r *Resolver) Resolve(ctx context.Context, openAIReq *openai.ChatCompletion
 
 	// Store miss — create against GCP. See resolveUncached for how concurrent
 	// resolutions of the same key behave.
-	r.logger.Debug("gcpcache: cache miss, creating",
-		slog.String("key", cacheKey), slog.String("model", openAIReq.Model),
-		slog.String("ttl", ttl), slog.Int("cachedMessages", breakpoint+1))
 	result, err := r.resolveUncached(ctx, openAIReq, auth, cacheKey, ttl, contents, systemInstruction, geminiTools)
 	if err != nil {
 		return nil, err
 	}
-	r.logger.Debug("gcpcache: cache created",
-		slog.String("key", cacheKey), slog.String("cache", result.CacheName),
-		slog.Time("expireTime", result.ExpireTime), slog.Int("tokenCount", result.TokenCount),
-		slog.Int("remainingMessages", len(remainderMessages)))
 
 	// resolveUncached leaves Messages unset because it deals only in the cached prefix;
 	// the remainder is per-request.

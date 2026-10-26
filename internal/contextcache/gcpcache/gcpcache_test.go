@@ -6,11 +6,9 @@
 package gcpcache
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -758,30 +756,4 @@ func TestComputeCacheKey_StableWithMaps(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
-}
-
-// A miss logs the miss and the create; the following request logs a hit.
-func TestResolver_DebugLogs(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	expireISO := time.Now().Add(5 * time.Minute).UTC().Format(time.RFC3339)
-	fake := newFakeCacheServer(t, `{"cachedContents":[]}`,
-		`{"name":"c/new","expireTime":"`+expireISO+`","usageMetadata":{"totalTokenCount":7}}`, http.StatusOK)
-	host := fake.srv.URL[len("http://"):]
-	r := New(&http.Client{Transport: &redirectTransport{fakeHost: host}}, newMemStore(), syncAuth, 0, logger)
-	req := &openai.ChatCompletionRequest{
-		Model:    "gemini-1.5-pro",
-		Messages: []openai.ChatCompletionMessageParamUnion{systemMsg("sys", ephemeralFields()), userMsg("q")},
-	}
-
-	_, err := r.Resolve(context.Background(), req)
-	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "gcpcache: cache miss, creating")
-	assert.Contains(t, buf.String(), "gcpcache: cache created")
-	assert.Contains(t, buf.String(), "cache=c/new")
-
-	buf.Reset()
-	_, err = r.Resolve(context.Background(), req)
-	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "gcpcache: cache hit")
 }

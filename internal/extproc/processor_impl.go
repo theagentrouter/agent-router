@@ -35,7 +35,6 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/llmcostcel"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
-	"github.com/envoyproxy/ai-gateway/internal/redaction"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 	"github.com/envoyproxy/ai-gateway/internal/translator"
 )
@@ -382,8 +381,6 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	// Resolve GCP context cache when the resolver is present and the translator supports
 	// cache injection. This must happen before RequestBody so the translator can use
 	// the resolved cache name and filtered message list.
-	var cacheApplied bool
-	var cacheName string
 	if u.cacheResolver != nil {
 		if cacheSetter, ok := u.translator.(translator.ContextCacheSetter); ok {
 			if req, ok := any(u.parent.originalRequestBody).(*openai.ChatCompletionRequest); ok {
@@ -404,21 +401,12 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 						cacheResult.WriteTokenCount = uint32(result.TokenCount) //nolint:gosec
 					}
 					cacheSetter.SetContextCacheResult(cacheResult)
-					cacheApplied, cacheName = true, result.CacheName
 				}
 			}
 		}
 	}
 
 	newHeaders, newBody, err := u.translator.RequestBody(u.parent.originalRequestBodyRaw, u.parent.originalRequestBody, forceBodyMutation)
-	if err == nil && cacheApplied && u.parent.debugLogEnabled {
-		body := string(newBody)
-		if u.parent.enableRedaction {
-			body = redaction.RedactString(body)
-		}
-		u.logger.Debug("request body rewritten for context cache",
-			slog.String("cache", cacheName), slog.String("body", body))
-	}
 	if err != nil {
 		if userFacingErr := internalapi.GetUserFacingError(err); userFacingErr != nil {
 			// return to user as 422 -  e.g., "invalid request body: tool_choice type not supported"
