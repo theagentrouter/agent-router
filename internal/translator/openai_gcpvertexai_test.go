@@ -2743,6 +2743,148 @@ func TestGCPVertexAIRedactBody(t *testing.T) {
 	})
 }
 
+// TestOpenAIToGCPVertexAITranslator_ContextCacheSetter verifies that SetContextCacheResult
+// correctly injects the cache name into the Gemini request, replaces the message list
+// with the filtered remainder, and records cache-write tokens in ResponseBody.
+func TestOpenAIToGCPVertexAITranslator_ContextCacheSetter(t *testing.T) {
+	t.Run("cache name injected into Gemini request", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+
+		// Seed a cache result before RequestBody.
+		tr.SetContextCacheResult(&ContextCacheResult{
+			CacheName:        "projects/p/locations/us-central1/cachedContents/abc",
+			FilteredMessages: []openai.ChatCompletionMessageParamUnion{},
+			Created:          true,
+			WriteTokenCount:  256,
+		})
+
+		req := &openai.ChatCompletionRequest{
+			Model: "gemini-1.5-pro",
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Content: openai.StringOrUserRoleContentUnion{Value: "hello"},
+					Role:    openai.ChatMessageRoleUser,
+				}},
+			},
+		}
+
+		_, bodyBytes, err := tr.RequestBody(nil, req, false)
+		require.NoError(t, err)
+
+		// The Gemini request should carry the cachedContent field.
+		require.Contains(t, string(bodyBytes), `"cachedContent":"projects/p/locations/us-central1/cachedContents/abc"`)
+
+		// cacheWriteTokens should be set for response attribution.
+		require.Equal(t, uint32(256), tr.cacheWriteTokens)
+	})
+
+	t.Run("cached request drops tools, tool config and system instruction", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+		tr.SetContextCacheResult(&ContextCacheResult{
+			CacheName: "projects/p/locations/us-central1/cachedContents/abc",
+			FilteredMessages: []openai.ChatCompletionMessageParamUnion{
+				{OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Content: openai.ContentUnion{Value: "late system"},
+					Role:    openai.ChatMessageRoleSystem,
+				}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Content: openai.StringOrUserRoleContentUnion{Value: "hello"},
+					Role:    openai.ChatMessageRoleUser,
+				}},
+			},
+		})
+		req := &openai.ChatCompletionRequest{
+			Model: "gemini-1.5-pro",
+			Tools: []openai.Tool{{
+				Type:     openai.ToolTypeFunction,
+				Function: &openai.FunctionDefinition{Name: "get_weather"},
+			}},
+			ToolChoice: &openai.ChatCompletionToolChoiceUnion{Value: "auto"},
+		}
+		_, bodyBytes, err := tr.RequestBody(nil, req, false)
+		require.NoError(t, err)
+		body := string(bodyBytes)
+		require.Contains(t, body, `"cachedContent"`)
+		require.NotContains(t, body, "get_weather")
+		require.NotContains(t, body, `"toolConfig":{`)
+		require.NotContains(t, body, "late system")
+		require.Contains(t, body, "hello")
+	})
+
+	t.Run("cache hit does not set write tokens", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+
+		tr.SetContextCacheResult(&ContextCacheResult{
+			CacheName:       "projects/p/locations/us-central1/cachedContents/existing",
+			Created:         false,
+			WriteTokenCount: 0,
+		})
+
+		req := &openai.ChatCompletionRequest{
+			Model:    "gemini-1.5-pro",
+			Messages: []openai.ChatCompletionMessageParamUnion{},
+		}
+		_, _, err := tr.RequestBody(nil, req, false)
+		require.NoError(t, err)
+		require.Equal(t, uint32(0), tr.cacheWriteTokens)
+	})
+
+	t.Run("a hit reports no write tokens even if a count is set", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+		tr.SetContextCacheResult(&ContextCacheResult{CacheName: "c/hit", Created: false, WriteTokenCount: 99})
+		_, _, err := tr.RequestBody(nil, &openai.ChatCompletionRequest{Model: "gemini-1.5-pro"}, false)
+		require.NoError(t, err)
+		require.Zero(t, tr.cacheWriteTokens)
+	})
+
+	t.Run("cache write tokens appear in non-streaming ResponseBody", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+		tr.cacheWriteTokens = 512
+
+		gcpResp := `{
+			"candidates": [{
+				"content": {"parts": [{"text": "hello"}]},
+				"finishReason": "STOP"
+			}],
+			"usageMetadata": {
+				"promptTokenCount": 100,
+				"candidatesTokenCount": 20,
+				"totalTokenCount": 120
+			}
+		}`
+
+		_, _, tokenUsage, _, err := tr.ResponseBody(nil, strings.NewReader(gcpResp), true, nil)
+		require.NoError(t, err)
+
+		cacheCreation, set := tokenUsage.CacheCreationInputTokens()
+		require.True(t, set, "CacheCreationInputTokens must be set when cacheWriteTokens > 0")
+		require.Equal(t, uint32(512), cacheCreation)
+	})
+
+	t.Run("no cache write tokens when not created", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPVertexAITranslator("").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
+		// cacheWriteTokens defaults to zero.
+
+		gcpResp := `{
+			"candidates": [{
+				"content": {"parts": [{"text": "hello"}]},
+				"finishReason": "STOP"
+			}],
+			"usageMetadata": {
+				"promptTokenCount": 50,
+				"candidatesTokenCount": 10,
+				"totalTokenCount": 60
+			}
+		}`
+
+		_, _, tokenUsage, _, err := tr.ResponseBody(nil, strings.NewReader(gcpResp), true, nil)
+		require.NoError(t, err)
+
+		_, set := tokenUsage.CacheCreationInputTokens()
+		require.False(t, set, "CacheCreationInputTokens must not be set when no cache was created")
+	})
+}
+
 func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_ResponseBody_NullBody(t *testing.T) {
 	// genai's GenerateContentResponse.UnmarshalJSON dereferences a nil pointer when it is given
 	// a JSON null, so a null body or stream event must be handled before decoding.

@@ -71,6 +71,12 @@ spec:
             {{- if .Values.extProc.enableRedaction }}
             - --extProcEnableRedaction=true
             {{- end }}
+            {{- with .Values.extProc.contextCache }}
+            {{- if .storeURL }}
+            - --extProcContextCacheStoreURL={{ .storeURL }}
+            - --extProcContextCacheDefaultTTL={{ .defaultTTL | default "300s" }}
+            {{- end }}
+            {{- end }}
             {{- with (include "ai-gateway-helm.extProc.imagePullSecretsString" .) }}
             - --extProcImagePullSecrets={{ . }}
             {{- end }}

@@ -23,7 +23,15 @@ var (
 	// NewEncoder is equivalent to encoding/json.NewEncoder.
 	NewEncoder = config.NewEncoder
 	// NewDecoder is equivalent to encoding/json.NewDecoder.
-	NewDecoder = config.NewDecoder
+	NewDecoder   = config.NewDecoder
+	sortedConfig = sonicjson.Config{
+		CaseSensitive: true,
+		SortMapKeys:   true,
+	}.Froze()
+
+	// MarshalSorted is Marshal with map keys sorted, so equal values always produce the
+	// same bytes. Use it when the output is hashed or compared, not on hot paths.
+	MarshalSorted = sortedConfig.Marshal
 	// MarshalForDeterministicTesting marshals a value to JSON in a deterministic way for testing.
 	// The normal sonic configuration does not guarantee deterministic output in terms of field order.
 	// It panics if called outside of tests.

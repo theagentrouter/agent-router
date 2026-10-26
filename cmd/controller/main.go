@@ -45,6 +45,8 @@ type flags struct {
 	extProcLogFormat               string
 	logFormat                      string
 	extProcEnableRedaction         bool
+	extProcContextCacheStoreURL    string
+	extProcContextCacheDefaultTTL  time.Duration
 	extProcImage                   string
 	extProcImagePullPolicy         corev1.PullPolicy
 	enableLeaderElection           bool
@@ -162,6 +164,16 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		"extProcEnableRedaction",
 		false,
 		"Enable redaction of sensitive information in debug logs for the external processor.",
+	)
+	extProcContextCacheStoreURLPtr := fs.String(
+		"extProcContextCacheStoreURL",
+		"",
+		"Shared store for context caching in the external processor, as host:port or a redis:// URL of a Redis-compatible server. Empty disables context caching.",
+	)
+	extProcContextCacheDefaultTTLPtr := fs.Duration(
+		"extProcContextCacheDefaultTTL",
+		300*time.Second,
+		"Context cache TTL used when a cache_control marker does not specify one. Whole seconds, at least 60s. Default is 300s.",
 	)
 	extProcImagePtr := fs.String(
 		"extProcImage",
@@ -412,6 +424,8 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		extProcLogFormat:                       *extProcLogFormatPtr,
 		logFormat:                              *logFormatPtr,
 		extProcEnableRedaction:                 *extProcEnableRedactionPtr,
+		extProcContextCacheStoreURL:            *extProcContextCacheStoreURLPtr,
+		extProcContextCacheDefaultTTL:          *extProcContextCacheDefaultTTLPtr,
 		extProcImage:                           *extProcImagePtr,
 		extProcImagePullPolicy:                 extProcPullPolicy,
 		enableLeaderElection:                   *enableLeaderElectionPtr,
@@ -546,6 +560,8 @@ func main() {
 		ExtProcLogLevel:                        parsedFlags.extProcLogLevel,
 		ExtProcLogFormat:                       parsedFlags.extProcLogFormat,
 		ExtProcEnableRedaction:                 parsedFlags.extProcEnableRedaction,
+		ExtProcContextCacheStoreURL:            parsedFlags.extProcContextCacheStoreURL,
+		ExtProcContextCacheDefaultTTL:          parsedFlags.extProcContextCacheDefaultTTL,
 		EnableLeaderElection:                   parsedFlags.enableLeaderElection,
 		UDSPath:                                extProcUDSPath,
 		RequestHeaderAttributes:                parsedFlags.requestHeaderAttributes,

@@ -71,6 +71,11 @@ type Options struct {
 	ExtProcLogFormat string
 	// ExtProcEnableRedaction enables redaction of sensitive information in debug logs for the external processor.
 	ExtProcEnableRedaction bool
+	// ExtProcContextCacheStoreURL is the shared store for GCP Vertex AI context caching in the
+	// external processor. Empty disables context caching.
+	ExtProcContextCacheStoreURL string
+	// ExtProcContextCacheDefaultTTL is the cache TTL used when a cache_control marker gives none.
+	ExtProcContextCacheDefaultTTL time.Duration
 	// ExtProcImage is the image for the external processor set on Deployment.
 	ExtProcImage string
 	// ExtProcImagePullPolicy is the image pull policy for the external processor set on Deployment.
