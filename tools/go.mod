@@ -1,6 +1,6 @@
 module github.com/envoyproxy/ai-gateway/tools
 
-go 1.27.2
+go 1.27.3
 
 // This brings PR: https://github.com/elastic/crd-ref-docs/pull/118
 // And fixes: https://github.com/elastic/crd-ref-docs/issues/60
