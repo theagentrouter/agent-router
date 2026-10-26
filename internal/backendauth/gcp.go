@@ -30,6 +30,7 @@ type gcpHandler struct {
 	tokenSource    oauth2.TokenSource // Token source for ADC (auto-refreshing).
 	region         string             // The GCP region to use for requests.
 	projectName    string             // The GCP project to use for requests.
+	isPassThrough  bool
 }
 
 func newGCPHandler(ctx context.Context, gcpAuth *filterapi.GCPAuth) (filterapi.BackendAuthHandler, error) {
@@ -38,8 +39,13 @@ func newGCPHandler(ctx context.Context, gcpAuth *filterapi.GCPAuth) (filterapi.B
 	}
 
 	handler := &gcpHandler{
-		region:      gcpAuth.Region,
-		projectName: gcpAuth.ProjectName,
+		region:        gcpAuth.Region,
+		projectName:   gcpAuth.ProjectName,
+		isPassThrough: gcpAuth.IsPassThrough,
+	}
+
+	if handler.isPassThrough {
+		return handler, nil
 	}
 
 	if gcpAuth.AccessToken != "" {
@@ -63,21 +69,47 @@ func newGCPHandler(ctx context.Context, gcpAuth *filterapi.GCPAuth) (filterapi.B
 //
 // This method updates the request headers to:
 //  1. Prepend the GCP API prefix to the ":path" header, constructing the full endpoint URL.
-//  2. Add an "Authorization" header with the GCP access token.
+//  2. Add an "Authorization" header with the GCP access token, unless the handler is in
+//     pass-through mode, in which case the client's own "Authorization" header is used as-is.
 //
 // The ":path" header is expected to contain the API-specific suffix, which is injected by translator.requestBody.
 // The suffix is combined with the generated prefix to form the complete path for the GCP API call.
 func (g *gcpHandler) Do(_ context.Context, requestHeaders map[string]string, _ []byte) ([]internalapi.Header, error) {
 	// Build the GCP URL prefix using the configured region and project name.
-	prefixPath := fmt.Sprintf("/v1/projects/%s/locations/%s", g.projectName, g.region)
+	projectName := g.projectName
+	region := g.region
+	if g.isPassThrough {
+		// In pass-through mode the configured project/region take precedence when set,
+		// and the per-request headers are used as a fallback.
+		if projectName == "" {
+			var ok bool
+			if projectName, ok = requestHeaders["gcp-project"]; !ok {
+				return nil, fmt.Errorf("gcp-project header must be specified")
+			}
+		}
+
+		if region == "" {
+			var ok bool
+			if region, ok = requestHeaders["gcp-region"]; !ok {
+				return nil, fmt.Errorf("gcp-region header must be specified")
+			}
+		}
+	}
+
+	prefixPath := fmt.Sprintf("/v1/projects/%s/locations/%s", projectName, region)
 	// Find and update the ":path" header by prepending the prefix.
-	path := requestHeaders[":path"]
+	path := requestHeaders["gcp-path"]
 
 	if path == "" {
-		return nil, fmt.Errorf("missing ':path' header in the request")
+		return nil, fmt.Errorf("missing 'gcp-path' header in the request")
 	}
 
 	newPath := fmt.Sprintf("%s/%s", prefixPath, path)
+	resultHeaders := []internalapi.Header{{":path", newPath}}
+
+	if g.isPassThrough {
+		return resultHeaders, nil
+	}
 
 	// Get the access token
 	var accessToken string
@@ -91,8 +123,7 @@ func (g *gcpHandler) Do(_ context.Context, requestHeaders map[string]string, _ [
 		accessToken = g.gcpAccessToken
 	}
 
+	resultHeaders = append(resultHeaders, internalapi.Header{"Authorization", fmt.Sprintf("Bearer %s", accessToken)})
 	// Add the Authorization header with the GCP access token.
-	requestHeaders[":path"] = newPath
-	requestHeaders["Authorization"] = fmt.Sprintf("Bearer %s", accessToken)
-	return []internalapi.Header{{":path", newPath}, {"Authorization", fmt.Sprintf("Bearer %s", accessToken)}}, nil
+	return resultHeaders, nil
 }

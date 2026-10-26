@@ -400,7 +400,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			wantError: false,
 			// Since these are stub implementations, we expect nil mutations.
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-pro:generateContent"},
+				{"gcp-path", "publishers/google/models/gemini-pro:generateContent"},
 			},
 			wantBody: wantBdy,
 		},
@@ -437,7 +437,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			wantError: false,
 			// Since these are stub implementations, we expect nil mutations.
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-pro:streamGenerateContent?alt=sse"},
+				{"gcp-path", "publishers/google/models/gemini-pro:streamGenerateContent?alt=sse"},
 			},
 			wantBody: wantBdy,
 		},
@@ -475,7 +475,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			wantError: false,
 			// Since these are stub implementations, we expect nil mutations.
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-flash:generateContent"},
+				{"gcp-path", "publishers/google/models/gemini-flash:generateContent"},
 			},
 			wantBody: wantBdy,
 		},
@@ -529,7 +529,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			onRetry:   false,
 			wantError: false,
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-pro:generateContent"},
+				{"gcp-path", "publishers/google/models/gemini-pro:generateContent"},
 			},
 			wantBody: wantBdyWithTools,
 		},
@@ -578,7 +578,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			onRetry:   false,
 			wantError: false,
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-1.5-pro:generateContent"},
+				{"gcp-path", "publishers/google/models/gemini-1.5-pro:generateContent"},
 			},
 			wantBody: wantBdyWithVendorFields,
 		},
@@ -625,7 +625,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			onRetry:   false,
 			wantError: false,
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-1.5-pro:generateContent"},
+				{"gcp-path", "publishers/google/models/gemini-1.5-pro:generateContent"},
 			},
 			wantBody: wantBdyWithSafetySettingFields,
 		},
@@ -669,7 +669,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			onRetry:   false,
 			wantError: false,
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-3-pro:generateContent"},
+				{"gcp-path", "publishers/google/models/gemini-3-pro:generateContent"},
 			},
 			wantBody: wantBdyWithMediaResolutionFields,
 		},
@@ -709,7 +709,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			onRetry:   false,
 			wantError: false,
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-1.5-pro:generateContent"},
+				{"gcp-path", "publishers/google/models/gemini-1.5-pro:generateContent"},
 			},
 			wantBody: wantBdyWithGuidedChoice,
 		},
@@ -749,7 +749,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			onRetry:   false,
 			wantError: false,
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-1.5-pro:generateContent"},
+				{"gcp-path", "publishers/google/models/gemini-1.5-pro:generateContent"},
 			},
 			wantBody: wantBdyWithGuidedRegex,
 		},
@@ -776,7 +776,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 			onRetry:   false,
 			wantError: false,
 			wantHeaderMut: []internalapi.Header{
-				{":path", "publishers/google/models/gemini-1.5-pro:generateContent"},
+				{"gcp-path", "publishers/google/models/gemini-1.5-pro:generateContent"},
 			},
 			wantBody: wantBdyWithEnterpriseWebSearch,
 		},
