@@ -1,18 +1,31 @@
 ---
-description: Generate release notes for Envoy AI Gateway following the established style and structure.
+description: Generate release notes for Agent Router (formerly Envoy AI Gateway) following the established style and structure.
 ---
 
-Generate release notes for Envoy AI Gateway following the established style and structure.
+> Mirrored in `.claude/commands/release-notes` (git-tracked) and `.cursor/commands/generate-release-notes.md` — keep all three in sync when editing.
+
+Generate release notes for Agent Router following the established style and structure.
 
 ## Instructions
 
-You are generating release notes for the Envoy AI Gateway project. Follow this workflow:
+You are generating release notes for the Agent Router project. Follow this workflow:
+
+### Project Naming
+
+The project was renamed from Envoy AI Gateway to **Agent Router** in September 2026 (an Agentic AI Foundation project).
+
+- **Use "Agent Router"** for the project in every title, subtitle, overview, and prose sentence. Do not write "Envoy AI Gateway" except in a deliberate "formerly Envoy AI Gateway" mention.
+- **Site:** `https://theagentrouter.ai` (release notes at `https://theagentrouter.ai/release-notes/vX.Y`). `aigateway.envoyproxy.io` only redirects; never link to it.
+- **Repository:** `https://github.com/theagentrouter/agent-router`.
+- **Keep these identifiers unchanged.** They were not renamed, and users type them literally: the `aigateway.envoyproxy.io` API group, CRD kinds (`AIGatewayRoute`, `AIServiceBackend`, `BackendSecurityPolicy`, `MCPRoute`, …), the `aigw` CLI, the `envoy-ai-gateway-system` namespace, Helm charts (`oci://docker.io/envoyproxy/ai-gateway-helm`, `ai-gateway-crds-helm`), container images (`docker.io/envoyproxy/ai-gateway-*`), `AI_GATEWAY_*` environment variables, and the Go module path.
+- **Envoy and Envoy Gateway keep their names.** Agent Router is built on them.
 
 ### Step 1: Gather Context
 
 1. **Identify the previous release tag:**
 
    ```bash
+   git fetch upstream --tags
    git describe --tags --abbrev=0
    git tag --sort=-v:refname | head -10
    ```
@@ -31,8 +44,24 @@ You are generating release notes for the Envoy AI Gateway project. Follow this w
    ```
 
 4. **Review the existing release notes for style reference:**
-   - Read `site/src/data/releases/v0.4.json` and `site/src/data/releases/v0.3.json`
-   - Read `site/src/pages/release-notes/v0.4.mdx` and `site/src/pages/release-notes/v0.3.mdx`
+   - Read the JSON for the two most recent series in `site/src/data/releases/` (for example `v1.1.json` and `v1.0.json`)
+   - Read the matching pages in `site/src/pages/release-notes/` and the latest `release-notes/vX.Y.Z.md`
+   - `site/src/pages/release-notes/v0.7.mdx` is the reference for rendering `bugFixes` and `breakingChanges` on the main release
+
+5. **Check the latest Envoy Gateway release.** The release notes always document the **latest Envoy Gateway patch release**. If `go.mod` is behind, assume the bump lands before the release, use the latest version in the notes, and tell the user the bump is still needed:
+
+   ```bash
+   grep -E "envoyproxy/gateway |sigs.k8s.io/gateway-api" go.mod
+   gh release list -R envoyproxy/gateway --limit 8
+   # Envoy Proxy version shipped by that EG release
+   gh api "repos/envoyproxy/gateway/contents/api/v1alpha1/shared_types.go?ref=<eg-tag>" -q .content | base64 -d | grep DefaultEnvoyProxyImage
+   # Gateway API version used by that EG release
+   gh api "repos/envoyproxy/gateway/contents/go.mod?ref=<eg-tag>" -q .content | base64 -d | grep "sigs.k8s.io/gateway-api "
+   # Breaking changes or security flags in that EG release that operators must know about
+   gh api "repos/envoyproxy/gateway/contents/release-notes/<eg-tag>.yaml?ref=<eg-tag>" -q .content | base64 -d
+   ```
+
+   Take the Envoy Proxy and Gateway API versions from that EG release, not from `.envoy-version`. If the EG release has its own breaking changes, mention them in Upgrade Guidance.
 
 ### Step 2: Verify Features Against Code
 
@@ -145,11 +174,13 @@ Verify actual dependency versions from source files:
 grep -E "^go " go.mod
 
 # Key dependencies
-grep -E "envoyproxy/gateway|sigs.k8s.io/gateway-api" go.mod
+grep -E "envoyproxy/gateway|sigs.k8s.io/gateway-api|modelcontextprotocol/go-sdk" go.mod
 
-# Envoy version
+# Envoy version pinned for the standalone aigw CLI (not necessarily what EG ships)
 cat .envoy-version
 ```
+
+For Envoy Gateway, Envoy Proxy, and Gateway API, document the **latest EG patch release** (see Step 1.5), not just what `go.mod` pins.
 
 #### Test Coverage
 
@@ -197,6 +228,10 @@ List deprecated features with:
 
 Document fixes for user-facing bugs
 
+#### Security Hardening
+
+Security fixes that change behavior (stricter validation, newly required ReferenceGrants, fail-closed defaults) belong in `breakingChanges` with a migration step. Fixes that don't change behavior belong in `bugFixes`. Describe the new behavior and what operators must do, not how the old behavior could be exploited. Reference GHSA IDs only after the advisory is published.
+
 #### Breaking Changes (`breakingChanges`)
 
 List changes that require user action:
@@ -223,7 +258,7 @@ Create `site/src/data/releases/vX.Y.json` following this exact schema:
 {
   "series": {
     "version": "vX.Y",
-    "title": "Envoy AI Gateway vX.Y.x",
+    "title": "Agent Router vX.Y.x",
     "subtitle": "Release introducing [key features summary].",
     "badge": "Latest",
     "badgeType": "milestone"
@@ -276,12 +311,12 @@ Create `site/src/data/releases/vX.Y.json` following this exact schema:
           "description": "Updated to Go X.Y.Z for improved performance and security."
         },
         {
-          "title": "Envoy Gateway vX.Y",
-          "description": "Built on Envoy Gateway vX.Y for proven data plane capabilities."
+          "title": "Envoy Gateway vX.Y.Z",
+          "description": "Built on Envoy Gateway vX.Y.Z (latest patch release) for proven data plane capabilities."
         },
         {
           "title": "Envoy vX.Y",
-          "description": "Leveraging Envoy Proxy's battle-tested networking capabilities."
+          "description": "Leveraging Envoy Proxy vX.Y.Z, as shipped by Envoy Gateway vX.Y.Z."
         },
         {
           "title": "Gateway API vX.Y.Z",
@@ -299,27 +334,29 @@ Create `site/src/data/releases/vX.Y.json` following this exact schema:
 
 ### Step 5: Generate the MDX Page
 
-Create `site/src/pages/release-notes/vX.Y.mdx` using this template:
+Create `site/src/pages/release-notes/vX.Y.mdx` using this template. Keep the established section order: New Features → API Updates → Deprecations → Breaking Changes → Bug Fixes → Upgrade Guidance → Dependencies → Patch Releases → Acknowledgements → What's Next. Every release since v0.2 opens with New Features. Don't move Breaking Changes to the top; if the release has breaking changes, say so in the last sentence of the `overview` instead. Bug Fixes render on the main release, not only on patch releases.
+
+Write section headings as plain markdown at the top level, never inside a JSX expression or fragment. MDX does not parse `## Heading` inside `{cond && (<>…</>)}`: it renders the literal text `## ⚠️ Breaking Changes` and leaves the heading out of the table of contents. If a release has no breaking changes or no deprecations, delete that heading and its `<ItemList>` from the page instead of wrapping them in a condition.
 
 ```mdx
 ---
-title: Envoy AI Gateway vX.Y.x Release Series
+title: Agent Router vX.Y.x Release Series
 description: [Brief description of major features]
 toc_min_heading_level: 2
 toc_max_heading_level: 4
 ---
 
-import Link from "@docusaurus/Link";
+import Link from '@docusaurus/Link';
 import {
   ReleaseSeriesLayout,
   ReleaseHeader,
   FeatureSectionCard,
   PatchRelease,
   ItemList,
-  Dependencies,
-} from "../../components/ReleaseNotes";
-import releaseData from "../../data/releases/vX.Y.json";
-import React from "react";
+  Dependencies
+} from '../../components/ReleaseNotes';
+import releaseData from '../../data/releases/vX.Y.json';
+import React from 'react';
 
 export const { series, releases, navigation } = releaseData;
 export const mainRelease = releases[0];
@@ -348,39 +385,27 @@ export const patchReleases = releases.slice(1).reverse();
 ## ✨ New Features
 
 {mainRelease.features.map((featureSection, index) => (
-
-{" "}
-
-<FeatureSectionCard key={index} section={featureSection} />
+  <FeatureSectionCard key={index} section={featureSection} />
 ))}
 
 ## 🔗 API Updates
 
 {mainRelease.apiChanges.length > 0 && (
-
-{" "}
-
-<ItemList items={mainRelease.apiChanges} />
+  <ItemList items={mainRelease.apiChanges} />
 )}
 
-{mainRelease.deprecations?.length > 0 && (
+### Deprecations
 
-{" "}
+<ItemList items={mainRelease.deprecations} />
 
-<>
-  ### Deprecations
-  <ItemList items={mainRelease.deprecations} />
-</>
-)}
+## ⚠️ Breaking Changes
 
-{mainRelease.breakingChanges?.length > 0 && (
+<ItemList items={mainRelease.breakingChanges} />
 
-{" "}
+## 🐛 Bug Fixes
 
-<>
-  ## ⚠️ Breaking Changes
-  <ItemList items={mainRelease.breakingChanges} />
-</>
+{mainRelease.bugFixes?.length > 0 && (
+  <ItemList items={mainRelease.bugFixes} />
 )}
 
 ## 📖 Upgrade Guidance
@@ -394,17 +419,16 @@ export const patchReleases = releases.slice(1).reverse();
 ## ⏩ Patch Releases
 
 {patchReleases.map((release, index) => (
-
-<PatchRelease
-  key={index}
-  version={release.version}
-  date={release.date}
-  type={release.type}
-  tags={release.tags}
-  overview={release.overview}
-  features={release.features}
-  bugFixes={release.bugFixes}
-/>
+  <PatchRelease
+    key={index}
+    version={release.version}
+    date={release.date}
+    type={release.type}
+    tags={release.tags}
+    overview={release.overview}
+    features={release.features}
+    bugFixes={release.bugFixes}
+  />
 ))}
 
 ## 🙏 Acknowledgements
@@ -425,8 +449,8 @@ Create `release-notes/vX.Y.Z.md` (at the repo root, sibling to `RELEASES.md`). T
 Rules:
 
 - **No MDX.** No imports, no React components, no `<code>` HTML tags — use markdown backticks instead.
-- **Same sections, same order** as the MDX page, so the GitHub release body and the site stay aligned: short overview paragraph → Breaking Changes → New Features (with the same feature-group subheadings) → API Updates → Bug Fixes → Upgrade Guidance (full migration steps and code blocks) → Dependency Versions → Acknowledgements → What's Next.
-- **Self-contained.** A reader pasting this into GitHub should see the full release without needing to follow any link, but include a single link near the top to the rendered version on the site (`https://aigateway.envoyproxy.io/release-notes/vX.Y`).
+- **Same sections, same order** as the MDX page, so the GitHub release body and the site stay aligned: short overview paragraph → New Features (with the same feature-group subheadings) → API Updates → Deprecations → Breaking Changes → Bug Fixes → Upgrade Guidance (full migration steps and code blocks) → Dependency Versions → Acknowledgements → What's Next. Older copies (`v0.6.0.md`, `v1.1.0.md`) put Breaking Changes first; don't copy that.
+- **Self-contained.** A reader pasting this into GitHub should see the full release without needing to follow any link, but include a single link near the top to the rendered version on the site (`https://theagentrouter.ai/release-notes/vX.Y`). Title the file `# Agent Router vX.Y.Z`.
 - **Filename includes the patch version** (`v0.6.0.md`, not `v0.6.md`) so future patch releases get their own files.
 
 ### Step 6: Update Navigation
@@ -440,7 +464,9 @@ Update the previous release's JSON to add the `next` navigation:
 }
 ```
 
-Update `site/src/data/releases/index.json` with the new `lastUpdated` date.
+In the same previous-series JSON, change `series.badge` from `"Latest"` to `"Stable"` (keep its `badgeType`). Only the newest series carries the `Latest` badge.
+
+Update `site/src/data/releases/index.json` with the new `lastUpdated` date. Its `metadata.description` should read `Release Notes for Agent Router`.
 
 ### Step 6b: Update the Release Notes Index Page
 
@@ -490,6 +516,11 @@ Change the previous "Latest" release card:
 
 - Set `featured={false}`
 - Update the `date` range to end at the new release date (e.g., "November 7, 2025 - January 16, 2026")
+- Its `badge` now reads `Stable`, because Step 6 changed the badge in its JSON
+
+#### 5. Check the docs version cut
+
+If the release also cuts a docs version, `lastVersion` in `site/docusaurus.config.ts` and the homepage "vX.Y Release now available" card in `site/src/components/HomepageFeatures/index.tsx` must point at the new version. Otherwise the site keeps showing the previous release. Flag it to the user if the docs cut hasn't happened yet.
 
 ### Step 7: Verify Each Item Against Code
 
@@ -601,7 +632,7 @@ Ask these questions:
 - [ ] Verified CLI changes against `cmd/aigw/` source files
 - [ ] Verified authentication changes against `internal/backendauth/`
 - [ ] Cross-referenced features with test files for accuracy
-- [ ] Verified dependency versions from `go.mod` and `.envoy-version`
+- [ ] Verified dependency versions from `go.mod`, and checked the latest Envoy Gateway release (Step 1.5)
 
 #### Content Generation
 
@@ -610,6 +641,10 @@ Ask these questions:
 - [ ] Created MDX page file
 - [ ] Updated previous release navigation
 - [ ] Updated `site/src/data/releases/index.json` lastUpdated date
+- [ ] Previous series badge changed from `Latest` to `Stable`
+- [ ] Created `release-notes/vX.Y.Z.md` plain-markdown copy
+- [ ] Project called "Agent Router" everywhere; API group, CRD kinds, chart and image names left unchanged
+- [ ] Envoy Gateway listed at its latest patch release, with Envoy and Gateway API versions taken from that EG release
 - [ ] Updated `site/src/pages/release-notes/index.mdx` with new import, allReleases array, and ReleaseCard
 
 #### Item-by-Item Verification (Step 7)

@@ -56,8 +56,11 @@ func TestRunExtprocStartFailure(t *testing.T) {
 		errChan <- run(ctx, &cmdRun{}, opts, os.Stdout, io.Discard)
 	}()
 
+	// run returns only after Envoy Gateway shuts down, which waits for its initial load of the
+	// resources even when the context is already canceled. That is slow under -race, and this
+	// timeout only needs to catch run hanging after the extproc fails.
 	select {
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		t.Fatal("expected extproc start to fail promptly")
 	case err := <-errChan:
 		require.ErrorIs(t, err, errExtProcRun)
@@ -105,17 +108,80 @@ func TestRunCmdContext_writeEnvoyResourcesAndRunExtProc_noListeners(t *testing.T
 	require.EqualError(t, err, "gateway aigw-run has no listeners configured")
 }
 
+//go:embed testdata/cross_namespace_secret.yaml
+var crossNamespaceSecretConfig string
+
+//go:embed testdata/cross_namespace_secret_grant.yaml
+var crossNamespaceSecretGrant string
+
+func TestRunCmdContext_writeEnvoyResourcesAndRunExtProc_crossNamespaceSecret(t *testing.T) {
+	t.Run("allowed by ReferenceGrant", func(t *testing.T) {
+		envoyGatewayResources := &bytes.Buffer{}
+		var capturedArgs []string
+		runCtx := &runCmdContext{
+			envoyGatewayResourcesOut: envoyGatewayResources,
+			stderrLogger:             slog.New(slog.DiscardHandler),
+			stderr:                   io.Discard,
+			tmpdir:                   t.TempDir(),
+			extProcLauncher: func(ctx context.Context, args []string, _ io.Writer) error {
+				capturedArgs = args
+				<-ctx.Done()
+				return nil
+			},
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		_, done, _, err := runCtx.writeEnvoyResourcesAndRunExtProc(ctx, crossNamespaceSecretConfig+"\n---\n"+crossNamespaceSecretGrant)
+		require.NoError(t, err)
+		cancel()
+		require.NoError(t, <-done)
+
+		cfg := requireExtProcConfigBundle(t, findFlagValue(capturedArgs, "--configBundlePath"))
+		require.Len(t, cfg.Backends, 1)
+		require.NotNil(t, cfg.Backends[0].Auth)
+		require.NotNil(t, cfg.Backends[0].Auth.APIKey)
+		require.Equal(t, "shared-api-key", cfg.Backends[0].Auth.APIKey.Key)
+		require.Contains(t, envoyGatewayResources.String(), "kind: ReferenceGrant",
+			"Envoy Gateway needs the ReferenceGrant too")
+	})
+
+	t.Run("without ReferenceGrant", func(t *testing.T) {
+		runCtx := &runCmdContext{
+			envoyGatewayResourcesOut: &bytes.Buffer{},
+			stderrLogger:             slog.New(slog.DiscardHandler),
+			stderr:                   io.Discard,
+			tmpdir:                   t.TempDir(),
+		}
+		// Reconcile errors panic in aigw, so the missing grant stops it instead of the backend being
+		// silently left out.
+		var recovered any
+		func() {
+			defer func() { recovered = recover() }()
+			_, _, _, _ = runCtx.writeEnvoyResourcesAndRunExtProc(t.Context(), crossNamespaceSecretConfig)
+		}()
+		err, ok := recovered.(error)
+		require.True(t, ok, "expected a panic with an error, got %v", recovered)
+		require.ErrorContains(t, err, "is not permitted")
+	})
+}
+
 func Test_mustStartExtProc(t *testing.T) {
 	mockErr := errors.New("mock extproc error")
+	var capturedArgs []string
 	runCtx := &runCmdContext{
-		stderrLogger:    slog.New(slog.DiscardHandler),
-		stderr:          io.Discard,
-		tmpdir:          t.TempDir(),
-		adminPort:       1064,
-		extProcLauncher: func(context.Context, []string, io.Writer) error { return mockErr },
+		stderrLogger: slog.New(slog.DiscardHandler),
+		stderr:       io.Discard,
+		tmpdir:       t.TempDir(),
+		adminPort:    1064,
+		extProcLauncher: func(_ context.Context, args []string, _ io.Writer) error {
+			capturedArgs = args
+			return mockErr
+		},
 	}
 	done := runCtx.mustStartExtProc(t.Context(), &filterapi.Config{Version: version.Parse()})
 	require.ErrorIs(t, <-done, mockErr)
+
+	cfg := requireExtProcConfigBundle(t, findFlagValue(capturedArgs, "--configBundlePath"))
+	require.Equal(t, version.Parse(), cfg.Version)
 }
 
 func Test_mustStartExtProc_defaultHeaderAttributes(t *testing.T) {
@@ -348,6 +414,21 @@ func Test_newRunnerErrorHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+// requireExtProcConfigBundle reads back the filter config that mustStartExtProc wrote to bundlePath.
+func requireExtProcConfigBundle(t *testing.T, bundlePath string) *filterapi.Config {
+	t.Helper()
+	require.NotEmpty(t, bundlePath)
+	indexRaw, err := os.ReadFile(filepath.Join(bundlePath, filterapi.ConfigBundleIndexFileName))
+	require.NoError(t, err)
+	index, err := filterapi.UnmarshalConfigBundleIndex(indexRaw)
+	require.NoError(t, err)
+	cfg, err := filterapi.ReassembleBundleConfig(index, func(part filterapi.ConfigBundlePart) ([]byte, error) {
+		return os.ReadFile(filepath.Join(bundlePath, filepath.FromSlash(part.Path)))
+	})
+	require.NoError(t, err)
+	return cfg
 }
 
 func findFlagValue(args []string, flag string) string {

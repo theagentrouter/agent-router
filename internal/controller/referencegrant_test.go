@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
@@ -253,6 +254,12 @@ func TestReferenceGrantValidator_ValidateAIServiceBackendReference(t *testing.T)
 				if tt.expectedErrorString != "" {
 					require.Contains(t, err.Error(), tt.expectedErrorString)
 				}
+				if tt.expectedErrorString == "is not permitted" {
+					var referenceErr *ReferenceNotPermittedError
+					require.ErrorAs(t, err, &referenceErr)
+					require.Equal(t, tt.backendNamespace, referenceErr.TargetNamespace)
+					require.Equal(t, tt.backendName, referenceErr.TargetName)
+				}
 			} else {
 				require.NoError(t, err)
 			}
@@ -385,6 +392,199 @@ func TestReferenceGrantValidator_ValidateInferencePoolReference(t *testing.T) {
 	}
 }
 
+// TestReferenceGrantValidator_ValidateSecretReference tests cross-namespace Secret references from
+// a BackendSecurityPolicy (Azure ClientSecretRef, GCP CredentialsFile.SecretRef, OIDC ClientSecret),
+// which must be governed by ReferenceGrant just like AIGatewayRoute -> AIServiceBackend/InferencePool.
+func TestReferenceGrantValidator_ValidateSecretReference(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = gwapiv1b1.Install(scheme)
+	_ = aigv1a1.AddToScheme(scheme)
+
+	secretGrant := func(fromNS string, toGroup gwapiv1b1.Group, toKind gwapiv1b1.Kind) gwapiv1b1.ReferenceGrant {
+		return gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "grant", Namespace: "secret-ns"},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{
+					Group:     aiServiceBackendGroup,
+					Kind:      backendSecurityPolicyKind,
+					Namespace: gwapiv1b1.Namespace(fromNS),
+				}},
+				To: []gwapiv1b1.ReferenceGrantTo{{Group: toGroup, Kind: toKind}},
+			},
+		}
+	}
+
+	tests := []struct {
+		name                string
+		bspNamespace        string
+		secretNamespace     string
+		secretName          string
+		referenceGrants     []gwapiv1b1.ReferenceGrant
+		expectedError       bool
+		expectedErrorString string
+	}{
+		{
+			name:            "Same namespace reference - should succeed",
+			bspNamespace:    "default",
+			secretNamespace: "default",
+			secretName:      "my-secret",
+		},
+		{
+			name:            "Cross-namespace with valid ReferenceGrant - should succeed",
+			bspNamespace:    "tenant-a",
+			secretNamespace: "secret-ns",
+			secretName:      "victim-secret",
+			referenceGrants: []gwapiv1b1.ReferenceGrant{secretGrant("tenant-a", secretGroup, secretKind)},
+		},
+		{
+			name:            "Cross-namespace without ReferenceGrant - should fail",
+			bspNamespace:    "tenant-a",
+			secretNamespace: "secret-ns",
+			secretName:      "victim-secret",
+			expectedError:   true,
+			expectedErrorString: "cross-namespace reference from BackendSecurityPolicy in namespace tenant-a " +
+				"to Secret victim-secret in namespace secret-ns is not permitted",
+		},
+		{
+			name:                "Cross-namespace with ReferenceGrant for wrong from namespace - should fail",
+			bspNamespace:        "tenant-a",
+			secretNamespace:     "secret-ns",
+			secretName:          "victim-secret",
+			referenceGrants:     []gwapiv1b1.ReferenceGrant{secretGrant("tenant-b", secretGroup, secretKind)},
+			expectedError:       true,
+			expectedErrorString: "is not permitted",
+		},
+		{
+			name:                "Cross-namespace with ReferenceGrant allowing wrong target kind - should fail",
+			bspNamespace:        "tenant-a",
+			secretNamespace:     "secret-ns",
+			secretName:          "victim-secret",
+			referenceGrants:     []gwapiv1b1.ReferenceGrant{secretGrant("tenant-a", aiServiceBackendGroup, aiServiceBackendKind)},
+			expectedError:       true,
+			expectedErrorString: "is not permitted",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs := make([]client.Object, len(tt.referenceGrants))
+			for i := range tt.referenceGrants {
+				objs[i] = &tt.referenceGrants[i]
+			}
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(objs...).
+				WithIndex(&gwapiv1b1.ReferenceGrant{}, k8sClientIndexReferenceGrantToTargetKind, referenceGrantToTargetKindIndexFunc).
+				Build()
+
+			validator := newReferenceGrantValidator(fakeClient)
+			err := validator.validateSecretReference(context.Background(), tt.bspNamespace, tt.secretNamespace, tt.secretName)
+
+			if tt.expectedError {
+				require.Error(t, err)
+				if tt.expectedErrorString != "" {
+					require.Contains(t, err.Error(), tt.expectedErrorString)
+				}
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestReferenceGrantValidator_ToName verifies that a ReferenceGrantTo with a name only authorizes
+// references to that specific object, as required by the Gateway API spec.
+func TestReferenceGrantValidator_ToName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = gwapiv1b1.Install(scheme)
+
+	grant := func(toGroup gwapiv1b1.Group, toKind gwapiv1b1.Kind, fromKind gwapiv1b1.Kind, name *gwapiv1b1.ObjectName) *gwapiv1b1.ReferenceGrant {
+		return &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "grant", Namespace: "shared"},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{Group: aiServiceBackendGroup, Kind: fromKind, Namespace: "app"}},
+				To:   []gwapiv1b1.ReferenceGrantTo{{Group: toGroup, Kind: toKind, Name: name}},
+			},
+		}
+	}
+	newValidator := func(objs ...client.Object) *referenceGrantValidator {
+		return newReferenceGrantValidator(fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(objs...).
+			WithIndex(&gwapiv1b1.ReferenceGrant{}, k8sClientIndexReferenceGrantToTargetKind, referenceGrantToTargetKindIndexFunc).
+			Build())
+	}
+	granted := ptr.To(gwapiv1b1.ObjectName("granted"))
+
+	t.Run("Secret", func(t *testing.T) {
+		v := newValidator(grant(secretGroup, secretKind, backendSecurityPolicyKind, granted))
+		require.NoError(t, v.validateSecretReference(t.Context(), "app", "shared", "granted"))
+		err := v.validateSecretReference(t.Context(), "app", "shared", "other")
+		require.ErrorContains(t, err, "is not permitted")
+	})
+	t.Run("AIServiceBackend", func(t *testing.T) {
+		v := newValidator(grant(aiServiceBackendGroup, aiServiceBackendKind, aiGatewayRouteKind, granted))
+		require.NoError(t, v.validateAIServiceBackendReference(t.Context(), "app", "shared", "granted"))
+		err := v.validateAIServiceBackendReference(t.Context(), "app", "shared", "other")
+		require.ErrorContains(t, err, "is not permitted")
+	})
+	t.Run("InferencePool", func(t *testing.T) {
+		v := newValidator(grant(inferencePoolGroup, inferencePoolKind, aiGatewayRouteKind, granted))
+		require.NoError(t, v.validateInferencePoolReference(t.Context(), "app", "shared", "granted"))
+		err := v.validateInferencePoolReference(t.Context(), "app", "shared", "other")
+		require.ErrorContains(t, err, "is not permitted")
+	})
+	t.Run("no name grants every object of the kind", func(t *testing.T) {
+		v := newValidator(grant(secretGroup, secretKind, backendSecurityPolicyKind, nil))
+		require.NoError(t, v.validateSecretReference(t.Context(), "app", "shared", "granted"))
+		require.NoError(t, v.validateSecretReference(t.Context(), "app", "shared", "other"))
+	})
+	t.Run("empty name only matches empty target", func(t *testing.T) {
+		v := newValidator(grant(secretGroup, secretKind, backendSecurityPolicyKind, ptr.To(gwapiv1b1.ObjectName(""))))
+		require.Error(t, v.validateSecretReference(t.Context(), "app", "shared", "other"))
+	})
+}
+
+// TestReferenceGrantValidator_TerminatingGrant verifies that a ReferenceGrant being deleted no longer
+// authorizes any reference, even while its finalizer keeps it in the cache.
+func TestReferenceGrantValidator_TerminatingGrant(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = gwapiv1b1.Install(scheme)
+
+	grant := &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "grant",
+			Namespace:         "shared",
+			DeletionTimestamp: ptr.To(metav1.Now()),
+			Finalizers:        []string{aiGatewayControllerFinalizer},
+		},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{Group: aiServiceBackendGroup, Kind: backendSecurityPolicyKind, Namespace: "app"}},
+			To:   []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+		},
+	}
+	v := newReferenceGrantValidator(fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(grant).
+		WithIndex(&gwapiv1b1.ReferenceGrant{}, k8sClientIndexReferenceGrantToTargetKind, referenceGrantToTargetKindIndexFunc).
+		Build())
+
+	err := v.validateSecretReference(t.Context(), "app", "shared", "granted")
+	require.ErrorContains(t, err, "is not permitted")
+}
+
+// TestReferenceGrantValidator_MatchesTo_Name tests matchesTo with a named target.
+func TestReferenceGrantValidator_MatchesTo_Name(t *testing.T) {
+	validator := newReferenceGrantValidator(nil)
+	to := &gwapiv1b1.ReferenceGrantTo{
+		Group: aiServiceBackendGroup,
+		Kind:  aiServiceBackendKind,
+		Name:  ptr.To(gwapiv1b1.ObjectName("backend")),
+	}
+	require.True(t, validator.matchesTo(to, aiServiceBackendGroup, aiServiceBackendKind, "backend"))
+	require.False(t, validator.matchesTo(to, aiServiceBackendGroup, aiServiceBackendKind, "other-backend"))
+}
+
 // TestReferenceGrantValidator_MatchesFrom_WrongGroup tests matchesFrom with wrong group
 func TestReferenceGrantValidator_MatchesFrom_WrongGroup(t *testing.T) {
 	scheme := runtime.NewScheme()
@@ -400,7 +600,7 @@ func TestReferenceGrantValidator_MatchesFrom_WrongGroup(t *testing.T) {
 		Namespace: "route-ns",
 	}
 
-	result := validator.matchesFrom(from, "route-ns")
+	result := validator.matchesFrom(from, aiServiceBackendGroup, aiGatewayRouteKind, "route-ns")
 	require.False(t, result, "should return false for wrong group")
 }
 
@@ -419,7 +619,7 @@ func TestReferenceGrantValidator_MatchesFrom_WrongKind(t *testing.T) {
 		Namespace: "route-ns",
 	}
 
-	result := validator.matchesFrom(from, "route-ns")
+	result := validator.matchesFrom(from, aiServiceBackendGroup, aiGatewayRouteKind, "route-ns")
 	require.False(t, result, "should return false for wrong kind")
 }
 
@@ -438,7 +638,7 @@ func TestReferenceGrantValidator_MatchesFrom_WrongNamespace(t *testing.T) {
 		Namespace: "wrong-ns",
 	}
 
-	result := validator.matchesFrom(from, "route-ns")
+	result := validator.matchesFrom(from, aiServiceBackendGroup, aiGatewayRouteKind, "route-ns")
 	require.False(t, result, "should return false for wrong namespace")
 }
 
@@ -456,7 +656,7 @@ func TestReferenceGrantValidator_MatchesTo_WrongGroup(t *testing.T) {
 		Kind:  aiServiceBackendKind,
 	}
 
-	result := validator.matchesTo(to, aiServiceBackendGroup, aiServiceBackendKind)
+	result := validator.matchesTo(to, aiServiceBackendGroup, aiServiceBackendKind, "backend")
 	require.False(t, result, "should return false for wrong group")
 }
 
@@ -474,7 +674,7 @@ func TestReferenceGrantValidator_MatchesTo_WrongKind(t *testing.T) {
 		Kind:  "WrongKind",
 	}
 
-	result := validator.matchesTo(to, aiServiceBackendGroup, aiServiceBackendKind)
+	result := validator.matchesTo(to, aiServiceBackendGroup, aiServiceBackendKind, "backend")
 	require.False(t, result, "should return false for wrong kind")
 }
 
@@ -601,6 +801,68 @@ func TestReferenceGrantValidator_WithIndex(t *testing.T) {
 		)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "is not permitted")
+	})
+}
+
+func TestReferenceGrantValidator_ValidateQuotaPolicyAIServiceBackendReference(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, gwapiv1b1.Install(scheme))
+	require.NoError(t, aigv1a1.AddToScheme(scheme))
+
+	newClient := func(grants ...client.Object) client.Client {
+		return fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(grants...).
+			WithIndex(&gwapiv1b1.ReferenceGrant{}, k8sClientIndexReferenceGrantToTargetKind, referenceGrantToTargetKindIndexFunc).
+			Build()
+	}
+	validGrant := func(name *gwapiv1b1.ObjectName) *gwapiv1b1.ReferenceGrant {
+		return &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow-quota", Namespace: "providers"},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{
+					Group:     aiServiceBackendGroup,
+					Kind:      quotaPolicyKind,
+					Namespace: "platform",
+				}},
+				To: []gwapiv1b1.ReferenceGrantTo{{
+					Group: aiServiceBackendGroup,
+					Kind:  aiServiceBackendKind,
+					Name:  name,
+				}},
+			},
+		}
+	}
+
+	t.Run("same namespace does not require grant", func(t *testing.T) {
+		v := newReferenceGrantValidator(newClient())
+		require.NoError(t, v.validateQuotaPolicyAIServiceBackendReference(
+			t.Context(), "platform", "platform", "provider"))
+	})
+	t.Run("valid named grant", func(t *testing.T) {
+		v := newReferenceGrantValidator(newClient(validGrant(ptr.To(gwapiv1b1.ObjectName("provider")))))
+		require.NoError(t, v.validateQuotaPolicyAIServiceBackendReference(
+			t.Context(), "platform", "providers", "provider"))
+		require.Error(t, v.validateQuotaPolicyAIServiceBackendReference(
+			t.Context(), "platform", "providers", "other"))
+	})
+	t.Run("kind-wide grant", func(t *testing.T) {
+		v := newReferenceGrantValidator(newClient(validGrant(nil)))
+		require.NoError(t, v.validateQuotaPolicyAIServiceBackendReference(
+			t.Context(), "platform", "providers", "any-provider"))
+	})
+	t.Run("wrong source and target are denied", func(t *testing.T) {
+		wrong := validGrant(nil)
+		wrong.Spec.From[0].Kind = aiGatewayRouteKind
+		v := newReferenceGrantValidator(newClient(wrong))
+		require.Error(t, v.validateQuotaPolicyAIServiceBackendReference(
+			t.Context(), "platform", "providers", "provider"))
+
+		wrong.Spec.From[0].Kind = quotaPolicyKind
+		wrong.Spec.To[0].Kind = "Secret"
+		v = newReferenceGrantValidator(newClient(wrong))
+		require.Error(t, v.validateQuotaPolicyAIServiceBackendReference(
+			t.Context(), "platform", "providers", "provider"))
 	})
 }
 

@@ -14,7 +14,7 @@ Logs to include the AI/LLM/MCP details.
 
 ## LLM Metadata in Access Logs
 
-Envoy AI Gateway populates information in the filter dynamic metadata under the `io.envoy.ai_gateway` namespace.
+Agent Router populates information in the filter dynamic metadata under the `io.envoy.ai_gateway` namespace.
 This metadata includes information about the selected model, prompt and completion token usage, and other
 details about the LLM request, and can be extracted and included in the Envoy Access Logs.
 
@@ -166,14 +166,14 @@ With this configuration, the access log entries will include the AI Gateway meta
 You can deploy the example to quickly try the access log configuration against a local backend:
 
 <CodeBlock language="shell">
-{`kubectl apply -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/access-log/basic.yaml`}
+{`kubectl apply -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/access-log/basic.yaml`}
 </CodeBlock>
 
 Once everything is applied you can send requests to the gateway and see the access logs in the gateway pod logs.
 
 ## MCP Metadata in Access Logs
 
-Envoy AI Gateway automatically populates MCP information in the filter dynamic metadata under the `io.envoy.ai_gateway` namespace.
+Agent Router automatically populates MCP information in the filter dynamic metadata under the `io.envoy.ai_gateway` namespace.
 This metadata includes information about the request, MCP session, MCP method call, etc, and can be extracted and
 included in the Envoy Access Logs.
 
@@ -271,5 +271,5 @@ With this configuration, the access log entries will include the AI Gateway meta
 ### Trying it out
 
 You can deploy the example to quickly try the access log configuration by following the
-[MCP examples](https://github.com/envoyproxy/ai-gateway/tree/main/examples/mcp) and use any of the
+[MCP examples](https://github.com/theagentrouter/agent-router/tree/main/examples/mcp) and use any of the
 provided configurations.

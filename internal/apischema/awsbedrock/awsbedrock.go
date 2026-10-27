@@ -566,8 +566,9 @@ type ToolConfiguration struct {
 // information, see Tool use (function calling) (https://docs.aws.amazon.com/bedrock/latest/userguide/tool-use.html)
 // in the Amazon Bedrock User Guide.
 type Tool struct {
-	// The specification for the tool.
-	ToolSpec *ToolSpecification `json:"toolSpec"`
+	// The specification for the tool. Omitted when this element only carries a cache point,
+	// as Bedrock rejects an element that sets more than one of the union's members.
+	ToolSpec *ToolSpecification `json:"toolSpec,omitempty"`
 
 	// Cache point for prompt caching. Enables caching of preceding content.
 	// See https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html for more information.
@@ -636,6 +637,22 @@ type TitanEmbeddingResponse struct {
 
 	// InputTextTokenCount is the number of tokens in the input text.
 	InputTextTokenCount int `json:"inputTextTokenCount"`
+}
+
+// CountTokensConverseInput mirrors the Converse input for the Bedrock CountTokens API.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+type CountTokensConverseInput struct {
+	Messages   []*Message            `json:"messages,omitempty"`
+	System     []*SystemContentBlock `json:"system,omitempty"`
+	ToolConfig *ToolConfiguration    `json:"toolConfig,omitempty"`
+}
+
+// CountTokensConverseRequest is the request structure for the Bedrock CountTokens API using Converse-style input.
+// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
+type CountTokensConverseRequest struct {
+	Input struct {
+		Converse *CountTokensConverseInput `json:"converse"`
+	} `json:"input"`
 }
 
 // CountTokensInvokeModelRequest is the request structure for the Bedrock CountTokens API using InvokeModel-style input.

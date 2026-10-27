@@ -111,8 +111,13 @@ func AddMCPServers(data *ConfigData, input *MCPServers) error {
 		if serverURL.Port() != "" {
 			port, _ = strconv.Atoi(serverURL.Port())
 		}
-		if serverURL.Scheme == "https" && port == 0 {
-			port = 443
+		if port == 0 {
+			switch serverURL.Scheme {
+			case "https":
+				port = 443
+			case "http":
+				port = 80
+			}
 		}
 
 		// Extract path (default to "/" if empty)

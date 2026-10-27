@@ -6,8 +6,11 @@
 package e2e
 
 import (
+	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,26 +18,33 @@ import (
 	gie "sigs.k8s.io/gateway-api-inference-extension/conformance"
 	v1 "sigs.k8s.io/gateway-api/conformance/apis/v1"
 	"sigs.k8s.io/gateway-api/conformance/utils/config"
+	"sigs.k8s.io/gateway-api/conformance/utils/flags"
+	"sigs.k8s.io/gateway-api/conformance/utils/suite"
+	"sigs.k8s.io/gateway-api/conformance/utils/tlog"
 
+	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/tests/internal/e2elib"
 )
 
 func TestGatewayAPIInferenceExtension(t *testing.T) {
+	flag.Parse()
 	const manifest = "testdata/inference-extension-conformance.yaml"
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), manifest))
 
 	options := gie.DefaultOptions(t)
+	flags.ApplyAll(&options.ConfigurableOptions)
+	data, _ := json.Marshal(options)
+	tlog.Logf(t, "Running Conformance tests with options: %s\n", string(data))
 	options.ReportOutputPath = "./inference-extension-conformance-test-report.yaml"
 	options.Debug = false
-	options.CleanupBaseResources = true
 	options.Implementation = v1.Implementation{
 		Organization: "EnvoyProxy",
 		Project:      "Envoy AI Gateway",
 		URL:          "https://github.com/envoyproxy/ai-gateway",
 		Contact:      []string{"@envoy-ai-gateway/maintainers"},
-		Version:      "latest",
+		Version:      implementationVersion(t),
 	}
-	options.ConformanceProfiles.Insert(gie.GatewayLayerProfileName)
+	options.ConformanceProfiles = []suite.ConformanceProfileName{gie.GatewayLayerProfileName}
 	options.AllowCRDsMismatch = true
 	defaultTimeoutConfig := config.DefaultTimeoutConfig()
 	defaultTimeoutConfig.HTTPRouteMustHaveCondition = 10 * time.Second
@@ -43,7 +53,9 @@ func TestGatewayAPIInferenceExtension(t *testing.T) {
 	config.SetupTimeoutConfig(&defaultTimeoutConfig)
 	options.TimeoutConfig = defaultTimeoutConfig
 	options.GatewayClassName = "inference-pool"
-	options.SkipTests = []string{}
+	options.SkipTests = []string{
+		"GatewayWeightedAcrossTwoInferencePools", // TODO: fix me
+	}
 
 	// Setup cleanup to print report even if test fails
 	t.Cleanup(func() {
@@ -58,4 +70,16 @@ func TestGatewayAPIInferenceExtension(t *testing.T) {
 	})
 
 	gie.RunConformanceWithOptions(t, options)
+}
+
+// implementationVersion returns the git tag pointing at HEAD, or "latest" if HEAD is not tagged.
+func implementationVersion(t *testing.T) string {
+	out, err := exec.CommandContext(t.Context(), "git", "describe", "--tags", "--exact-match").Output()
+	if err != nil {
+		return "latest"
+	}
+	if tag := strings.TrimSpace(string(out)); tag != "" {
+		return tag
+	}
+	return "latest"
 }

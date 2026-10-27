@@ -1,0 +1,37 @@
+# Agent Router — https://theagentrouter.ai
+# Open source project. All crawlers, including AI training and answer bots, are welcome.
+
+User-agent: *
+Allow: /
+Disallow: /404.html
+Disallow: /search
+
+# AI training crawlers — explicitly allowed
+User-agent: GPTBot
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+User-agent: CCBot
+Allow: /
+User-agent: Applebot-Extended
+Allow: /
+User-agent: Meta-ExternalAgent
+Allow: /
+
+# AI answer / search bots — explicitly allowed
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ChatGPT-User
+Allow: /
+User-agent: Claude-SearchBot
+Allow: /
+User-agent: Claude-User
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: Perplexity-User
+Allow: /
+
+Sitemap: https://theagentrouter.ai/sitemap.xml

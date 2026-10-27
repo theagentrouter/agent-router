@@ -6,7 +6,7 @@ sidebar_position: 6
 
 # Prompt Caching
 
-Envoy AI Gateway provides provider-agnostic prompt caching through a unified `cache_control` API. The same cache syntax works across multiple providers: Direct Anthropic, GCP Vertex AI (Claude models), and AWS Bedrock (Claude models). This reduces costs and improves response times by caching frequently-used content like system prompts, tool definitions, and reference documents.
+Agent Router provides provider-agnostic prompt caching through a unified `cache_control` API. The same cache syntax works across multiple providers: Direct Anthropic, GCP Vertex AI (Claude models), and AWS Bedrock (Claude models). This reduces costs and improves response times by caching frequently-used content like system prompts, tool definitions, and reference documents.
 
 ## Supported Providers
 
@@ -169,6 +169,6 @@ When caching is active, the response includes cache information in the `usage` f
 
 ## Further Reading
 
-- [Prompt Caching Examples](https://github.com/envoyproxy/ai-gateway/tree/main/examples/cache) -- Detailed examples with curl commands for each provider.
+- [Prompt Caching Examples](https://github.com/theagentrouter/agent-router/tree/main/examples/cache) -- Detailed examples with curl commands for each provider.
 - [Connecting to GCP Vertex AI](../../getting-started/connect-providers/gcp-vertexai.md) -- Set up GCP Vertex AI as a provider.
 - [Connecting to AWS Bedrock](../../getting-started/connect-providers/aws-bedrock.md) -- Set up AWS Bedrock as a provider.

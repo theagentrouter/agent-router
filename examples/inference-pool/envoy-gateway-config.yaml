@@ -1,0 +1,36 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: envoy-gateway-config
+  namespace: envoy-gateway-system
+data:
+  envoy-gateway.yaml: |
+    apiVersion: gateway.envoyproxy.io/v1alpha1
+    kind: EnvoyGateway
+    provider:
+      type: Kubernetes
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    extensionApis:
+      enableEnvoyPatchPolicy: true
+      enableBackend: true
+      enableLua: true
+      enableSDSSecretRef: true
+    extensionManager:
+      # Enable InferencePool custom resource support
+      backendResources:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          version: v1
+    gatewayAPI:
+      enabled: [XListenerSet]
+    rateLimit:
+      backend:
+        type: Redis
+        redis:
+          url: redis.redis-system.svc.cluster.local:6379

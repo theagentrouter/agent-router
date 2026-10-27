@@ -9,7 +9,7 @@ ARG VARIANT=static
 ARG COMMAND_NAME
 
 # Base image configuration
-ARG GOLANG_BASE_IMAGE=golang:1.26
+ARG GOLANG_BASE_IMAGE=golang:1.27
 ARG RUNTIME_BASE_IMAGE=gcr.io/distroless/${VARIANT}-debian12:nonroot
 
 # Pre-download Envoy for aigw using func-e. This reduces latency and avoids

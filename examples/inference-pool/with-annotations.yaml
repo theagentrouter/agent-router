@@ -39,7 +39,7 @@ spec:
     spec:
       containers:
         - name: upstream
-          image: registry.k8s.io/ai-gateway/testupstream:v0.0.0-latest
+          image: docker.io/envoyproxy/ai-gateway-testupstream:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

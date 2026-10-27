@@ -1,0 +1,293 @@
+{
+  "series": {
+    "version": "v1.2",
+    "title": "Agent Router v1.2.x",
+    "subtitle": "First release as Agent Router: MCP security hardening, bare MCP tool names, caller-supplied MCP credentials, AWS OpenAI-compatible and TypeSafe backends, and Envoy Gateway v1.9.",
+    "badge": "Latest",
+    "badgeType": "milestone"
+  },
+  "releases": [
+    {
+      "version": "v1.2.0",
+      "date": "October 6, 2026",
+      "type": "minor",
+      "tags": [
+        { "text": "Agent Router", "type": "feature" },
+        { "text": "MCP Security Hardening", "type": "feature" },
+        { "text": "MCP Prefix Mode", "type": "feature" },
+        { "text": "MCP Credential Passthrough", "type": "feature" },
+        { "text": "MCP Policy Merging", "type": "feature" },
+        { "text": "AWS OpenAI-Compatible", "type": "feature" },
+        { "text": "TypeSafe System One", "type": "feature" },
+        { "text": "Header Value Filters", "type": "feature" },
+        { "text": "Per-Backend Metrics", "type": "feature" },
+        { "text": "Envoy Gateway v1.9", "type": "feature" }
+      ],
+      "overview": "Agent Router v1.2.0 is the first release under the project's new name (formerly Envoy AI Gateway). Nothing you deploy is renamed: the aigateway.envoyproxy.io API group, the CRDs, the Helm charts, the container images, and the aigw CLI all stay the same. This release hardens MCP authentication and cross-namespace references. It adds bare tool names, caller-supplied credentials, and policy merging to MCPRoute, plus two new backend schemas (AWSOpenAI and TypeSafe). It also moves to Envoy Gateway v1.9.2, Gateway API v1.6, and Gateway API Inference Extension v1.6. Several security fixes change behavior, so read the breaking changes before you upgrade.",
+      "features": [
+        {
+          "title": "Agent Router",
+          "items": [
+            {
+              "title": "Same project, new name",
+              "description": "Envoy AI Gateway is now Agent Router, an Agentic AI Foundation project with the same code, maintainers, and Apache 2.0 license. The website moved to <a href=\"https://theagentrouter.ai\">theagentrouter.ai</a> and the repository to <a href=\"https://github.com/theagentrouter/agent-router\">theagentrouter/agent-router</a>; old links redirect. Your manifests, Helm values, and automation keep working unchanged."
+            }
+          ]
+        },
+        {
+          "title": "MCP Gateway",
+          "items": [
+            {
+              "title": "Bare tool and prompt names with <code>prefixMode: Never</code>",
+              "description": "Clients that hardcode tool names, such as interactive MCP Apps, no longer have to see the <code>&lt;backend&gt;__</code> prefix. Set <code>prefixMode: Never</code> on the route or on individual <code>backendRefs</code>. A Never-mode backend must list its tools in <code>toolSelector.include</code>, and the controller marks the route NotAccepted if two Never-mode backends expose the same name. Prompts are exposed bare only when they are listed in the new <code>promptSelector.include</code>. Resources always keep the prefix. The default is still <code>Always</code>."
+            },
+            {
+              "title": "Caller-supplied credentials with <code>injectionPolicy: IfNotPresent</code>",
+              "description": "Let users bring their own upstream token, for example a personal GitHub PAT forwarded with <code>forwardHeaders</code>, and fall back to a shared service key when they don't. With <code>IfNotPresent</code>, the configured API key is injected only when the target header is missing. This applies to header injection only."
+            },
+            {
+              "title": "Inherit Gateway-level policies with <code>mergeType</code>",
+              "description": "The SecurityPolicy and BackendTrafficPolicy that Agent Router generates for an MCPRoute used to replace any Gateway- or listener-level policy. Set <code>securityPolicy.mergeType</code> or <code>backendTrafficPolicy.mergeType</code> to <code>StrategicMerge</code> or <code>JSONMerge</code> to keep a Gateway-wide rate limit or ext-auth policy in force alongside MCP OAuth."
+            },
+            {
+              "title": "OAuth for identity providers with non-standard metadata paths",
+              "description": "<code>oauth.authorizationServerMetadataUrl</code> points the controller at the exact RFC 8414 metadata document when the issuer URL doesn't lead to it. The controller fetches this document while reconciling, so it needs network access to the identity provider. If the fetch fails, reconciliation fails."
+            },
+            {
+              "title": "Groundwork for the next MCP spec",
+              "description": "The <code>initialize</code> response now negotiates the protocol version with the client and backends instead of always answering 2025-06-18. Merged list responses also carry <code>ttlMs</code> and <code>cacheScope</code> caching hints. Support for the stateless 2026-07-28 MCP specification is in progress and not yet enabled."
+            }
+          ]
+        },
+        {
+          "title": "Providers & API Compatibility",
+          "items": [
+            {
+              "title": "AWS OpenAI-compatible endpoint (<code>AWSOpenAI</code>)",
+              "description": "Send OpenAI-format <code>/v1/chat/completions</code> and <code>/v1/responses</code> requests to Bedrock Runtime's OpenAI-compatible <code>/openai/v1</code> endpoint without a translation hop. Requests are signed with SigV4 through an AWS <code>BackendSecurityPolicy</code>. The prefix defaults to <code>openai/v1</code>. Other endpoints return 422."
+            },
+            {
+              "title": "TypeSafe System One (<code>TypeSafe</code>)",
+              "description": "Route TypeSafe's Jev decision model through the gateway at <code>/typesafe/v1/systemone</code> with API-key auth. Request bodies pass through unchanged apart from a model name override, and token usage feeds the standard metrics and <code>llmRequestCosts</code>. Streaming is not supported."
+            },
+            {
+              "title": "Per-backend <code>anthropic-beta</code> filtering",
+              "description": "One <code>anthropic-beta</code> value that a provider rejects no longer fails the whole request. <code>AIServiceBackend.spec.headerValueFilters</code> drops listed values (<code>Denylist</code>, the default) or keeps only listed values (<code>Allowlist</code>). It applies to <code>/v1/messages</code> traffic to <code>GCPAnthropic</code> and <code>AWSAnthropic</code> backends. Bedrock also accepts four more beta flags, including <code>thinking-token-count-2026-05-13</code>."
+            },
+            {
+              "title": "Claude and Gemini request coverage",
+              "description": "Claude Opus 5 and 5.5 accept <code>reasoning_effort</code> on Vertex AI and Bedrock, and structured output (<code>response_format</code>) on Vertex AI. Chat-completion tools forward <code>eager_input_streaming</code> to Claude. Gemini on Vertex AI accepts vLLM-style <code>structured_outputs</code> (<code>json</code>, <code>regex</code>, <code>choice</code>)."
+            },
+            {
+              "title": "OpenAI <code>cache_write_tokens</code>",
+              "description": "Prompt-cache writes reported as <code>cache_write_tokens</code> by OpenAI Chat Completions and the Responses API now count toward cache-creation token metrics and costs. Translated Claude and Bedrock responses report the same value."
+            }
+          ]
+        },
+        {
+          "title": "Model Catalog & Observability",
+          "items": [
+            {
+              "title": "Hide aliases from <code>/v1/models</code>",
+              "description": "Set <code>excludeFromModelsEndpoint: true</code> on an <code>AIGatewayRoute</code> rule to keep internal or backwards-compatible model aliases out of <code>/v1/models</code> and <code>/anthropic/v1/models</code>. Requests to those models still route normally."
+            },
+            {
+              "title": "Per-backend GenAI metrics",
+              "description": "All four <code>gen_ai.*</code> metrics now carry a <code>gen_ai.backend</code> attribute (<code>gen_ai_backend</code> in Prometheus) set to the backend's <code>namespace/name</code>. This lets you compare latency, time to first token, and token usage across providers serving the same model."
+            }
+          ]
+        },
+        {
+          "title": "Inference & Operations",
+          "items": [
+            {
+              "title": "Gateway API Inference Extension v1.6",
+              "description": "An <code>InferencePool</code> without <code>endpointPickerRef</code> is now reported as <code>Accepted=False</code> (<code>EndpointPickerRefMissing</code>) instead of breaking routing. <code>appProtocol: kubernetes.io/h2c</code> is honored for cleartext HTTP/2 model servers."
+            },
+            {
+              "title": "Safer controller rollouts",
+              "description": "The controller reports Ready only after its caches sync, so Envoy Gateway no longer calls the extension server with an empty view of your resources during a rollout. The chart adds a startup probe and a <code>controller.priorityClassName</code> value."
+            }
+          ]
+        }
+      ],
+      "apiChanges": [
+        {
+          "title": "<code>AIGatewayRouteRule.excludeFromModelsEndpoint</code>",
+          "description": "Optional boolean (default <code>false</code>) in v1alpha1 and v1beta1."
+        },
+        {
+          "title": "<code>AIServiceBackend.spec.headerValueFilters</code>",
+          "description": "Optional list (max 16, one per header) of <code>{name, mode, values}</code>. <code>mode</code> is <code>Denylist</code> (default) or <code>Allowlist</code>; <code>values</code> holds up to 64 entries. A CEL rule rejects the field unless the schema is <code>GCPAnthropic</code> or <code>AWSAnthropic</code>, and only <code>anthropic-beta</code> is honored today. v1beta1 only."
+        },
+        {
+          "title": "<code>VersionedAPISchema.name</code>: <code>AWSOpenAI</code> and <code>TypeSafe</code>",
+          "description": "Two new schema values. <code>TypeSafe</code> defaults its version to <code>v1</code>."
+        },
+        {
+          "title": "<code>GatewayConfig.spec.extProc.metadataForwardingNamespaces</code>",
+          "description": "Optional list (max 32) of dynamic metadata namespaces that Envoy forwards to the external processor. It is required for <code>credentialOverride.fromDynamicMetadata</code>. Under Envoy Gateway <code>mergeGateways</code>, every Gateway in the class shares the union of these namespaces."
+        },
+        {
+          "title": "<code>MCPRoute.spec.prefixMode</code> and <code>backendRefs[].prefixMode</code>",
+          "description": "<code>Always</code> or <code>Never</code>; unset means <code>Always</code>. The per-backend value takes precedence. v1beta1 only."
+        },
+        {
+          "title": "<code>MCPRoute.spec.backendRefs[].promptSelector</code>",
+          "description": "Filters prompts with <code>include</code>, <code>includeRegex</code>, <code>exclude</code>, or <code>excludeRegex</code> (max 32 each). Exclude rules win over include rules. v1beta1 only."
+        },
+        {
+          "title": "<code>MCPRoute.spec.securityPolicy.mergeType</code> and <code>spec.backendTrafficPolicy.mergeType</code>",
+          "description": "Envoy Gateway <code>MergeType</code>; <code>Replace</code> is rejected. Unset keeps the previous override behavior."
+        },
+        {
+          "title": "<code>MCPRoute.spec.backendRefs[].securityPolicy.apiKey.injectionPolicy</code>",
+          "description": "<code>Always</code> (default) or <code>IfNotPresent</code>. <code>IfNotPresent</code> cannot be combined with <code>queryParam</code>. v1beta1 only."
+        },
+        {
+          "title": "<code>MCPRoute.spec.securityPolicy.oauth.authorizationServerMetadataUrl</code>",
+          "description": "Optional URI, up to 1024 characters."
+        },
+        {
+          "title": "New <code>MCPRoute</code> validation for JWT-based CEL",
+          "description": "<code>securityPolicy.oauth</code> is now required when an authorization rule or <code>backendSelector</code> rule's <code>cel</code> expression references <code>auth.jwt</code>. See Breaking Changes."
+        }
+      ],
+      "deprecations": [
+        {
+          "title": "<code>cache_creation_input_tokens</code> in translated OpenAI-format responses",
+          "description": "Responses translated from Claude and Bedrock now report <code>cache_write_tokens</code> alongside the legacy <code>cache_creation_input_tokens</code> field. Read <code>cache_write_tokens</code> instead; the legacy field will be removed in v1.3.0."
+        }
+      ],
+      "bugFixes": [
+        {
+          "title": "Credential rotation no longer serves stale tokens",
+          "description": "Fixes a v1.1.0 regression: the controller read backend credential Secrets from its informer cache, so a rotated credential could miss the filter config and upstream calls failed until the next reconcile. Secrets are read from the API server again. Credential changes in a <code>BackendSecurityPolicy</code> that targets an <code>InferencePool</code> now also reach the Gateway's filter config."
+        },
+        {
+          "title": "Revoking a ReferenceGrant takes effect immediately",
+          "description": "Deleting a ReferenceGrant, or removing a <code>from</code> entry, now reconciles the affected <code>AIGatewayRoute</code>s (including <code>InferencePool</code> backends) and <code>BackendSecurityPolicy</code>s (including OIDC client secrets). Access they relied on used to stay in place until an unrelated reconcile."
+        },
+        {
+          "title": "Gateways with TCP or TLS listeners translate again",
+          "description": "A listener without an HTTP connection manager, such as a TCPRoute or TLS-passthrough listener, made the extension server fail translation for the whole Gateway. Those listeners are now skipped."
+        },
+        {
+          "title": "Controller crash on combined priority backends",
+          "description": "Adding a <code>backendRef</code> before its <code>AIServiceBackend</code> existed could panic and crash-loop the controller. The controller now logs the mismatch and continues."
+        },
+        {
+          "title": "Self-signed webhook survives <code>helm upgrade</code>",
+          "description": "With the default self-signed webhook certificate, an upgrade or Argo CD sync wiped the webhook's <code>caBundle</code>, so Envoy pods failed admission until the controller restarted. The chart now embeds the CA bundle."
+        },
+        {
+          "title": "<code>credentialOverride.fromDynamicMetadata</code> now receives metadata",
+          "description": "In v1.1.0 Envoy never forwarded the metadata namespace to the external processor. Requests silently used the configured credential, or failed with 401 when <code>fallbackToConfigured: false</code>. List the namespace in <code>GatewayConfig.spec.extProc.metadataForwardingNamespaces</code> (see Upgrade Guidance)."
+        },
+        {
+          "title": "Token usage is always captured on streams",
+          "description": "Duplicate <code>stream_options</code> in a streaming request could stop <code>include_usage</code> from reaching the provider, which bypassed token accounting. Usage metadata is now also recorded when a client disconnects right after the final SSE frame. Responses API streams framed with CRLF now report usage, model, and tracing data."
+        },
+        {
+          "title": "Clear 422 errors instead of 500s",
+          "description": "Calling an endpoint that a backend's schema doesn't support (for example <code>/v1/responses</code> to Vertex AI Gemini) returns 422 Unprocessable Entity. Oversized JSON schemas sent to Vertex AI return 422 once they exceed 50,000 nodes."
+        },
+        {
+          "title": "Lower external processor memory",
+          "description": "Model-name strings used as metric labels no longer keep entire request and response bodies in memory, which was most noticeable with large-context requests."
+        },
+        {
+          "title": "Per-tenant token limits charge the right tenant",
+          "description": "With <code>QuotaPolicy</code> <code>Distinct</code> header selectors, the end-of-stream token cost went into one shared bucket instead of the caller's own. See Breaking Changes for the effect on tenants."
+        },
+        {
+          "title": "Claude translation fixes",
+          "description": "Structured outputs keep the property order you declared. Streamed extended-thinking text is no longer empty. The <code>web_search_20260209</code> tool on <code>/v1/chat/completions</code> is now forwarded to Claude instead of rejected with 422; use streaming, because non-streaming responses currently return only the first text block. Tracing of long Claude streams no longer allocates quadratically or panics on malformed delta indices."
+        },
+        {
+          "title": "MCP interoperability",
+          "description": "Backends that send <code>application/json; charset=utf-8</code> (for example the MCP Java SDK) no longer have their list results dropped. OAuth metadata discovery now treats an empty or non-JSON document as a miss and tries the next well-known URL."
+        },
+        {
+          "title": "<code>aigw run</code> base URL handling",
+          "description": "A path in <code>OPENAI_BASE_URL</code> or <code>ANTHROPIC_BASE_URL</code> (for example OpenRouter's <code>/api/v1</code>) is now used as the request prefix instead of being dropped. Base URLs that aren't http or https are rejected."
+        },
+        {
+          "title": "Unresolvable <code>InferencePool</code> routes are rejected",
+          "description": "When Envoy Gateway couldn't resolve an <code>InferencePool</code>, the extension server used to accept a route that only returned 500. It now rejects that route so the error is visible."
+        }
+      ],
+      "breakingChanges": [
+        {
+          "title": "Random MCP session encryption seed",
+          "description": "The Helm chart no longer defaults to the well-known <code>default-insecure-seed</code>. It generates a random seed, stores it in the Secret <code>&lt;controller fullname&gt;-mcp-session-encryption</code>, and reuses it on later upgrades. Upgrading therefore ends active MCP sessions, and clients must re-initialize. To keep sessions during the upgrade, set <code>controller.mcp.sessionEncryption.fallback.seed=default-insecure-seed</code> and remove it once clients have reconnected. If you render the chart with <code>helm template</code> (common with GitOps), set <code>controller.mcp.sessionEncryption.existingSecret</code> or <code>seed</code>. Otherwise every render generates a new seed."
+        },
+        {
+          "title": "MCP OAuth tokens must match <code>oauth.issuer</code>",
+          "description": "The generated JWT provider now checks the token's <code>iss</code> claim. Tokens with a missing or different issuer, including a trailing-slash mismatch, get 401. Make sure <code>securityPolicy.oauth.issuer</code> matches your identity provider's <code>iss</code> exactly."
+        },
+        {
+          "title": "JWT data in MCP CEL requires <code>securityPolicy.oauth</code>",
+          "description": "The gateway reads <code>request.auth.jwt</code> claims and scopes, and the session subject, only from a JWT that Envoy has verified. Without <code>securityPolicy.oauth</code>, claims are empty, and new CRD validation rejects authorization or <code>backendSelector</code> CEL that references <code>auth.jwt</code>. Existing routes that break this rule keep their stored spec, but every update is rejected. At runtime their claim lookups fail, and therefore deny, and their scope checks evaluate to false. Add <code>oauth</code> or remove the JWT references. MCP sessions are now bound to the verified subject; reusing a session ID as a different user returns 401."
+        },
+        {
+          "title": "MCP CEL evaluation errors now deny",
+          "description": "An authorization or <code>backendSelector</code> CEL expression that fails at runtime, for example by reading a header that isn't present, used to be skipped. It now denies: <code>tools/call</code> returns 403, the tool is hidden from <code>tools/list</code>, and the backend is left out of the session. Write expressions defensively, for example <code>\"x-team\" in request.headers &amp;&amp; request.headers[\"x-team\"] == \"blocked\"</code>."
+        },
+        {
+          "title": "MCP OAuth discovery honors <code>spec.headers</code>",
+          "description": "On an MCPRoute with both <code>headers</code> matches and <code>oauth</code>, the OAuth well-known endpoints now apply the same header matches. Clients that run OAuth discovery without those headers get 404."
+        },
+        {
+          "title": "Cross-namespace Secrets in <code>BackendSecurityPolicy</code> need a ReferenceGrant",
+          "description": "<code>azureCredentials.clientSecretRef</code>, <code>gcpCredentials.credentialsFile.secretRef</code>, and the OIDC <code>clientSecret</code> under AWS, Azure, and GCP <code>oidcExchangeToken</code> were read from other namespaces without any check. The <code>secretRef</code> of <code>apiKey</code>, <code>azureAPIKey</code>, <code>anthropicAPIKey</code>, and <code>awsCredentials.credentialsFile</code> ignored its namespace, so a cross-namespace reference failed or silently used a Secret with the same name from the policy's own namespace. All of these now honor the namespace, and a missing grant sets the policy to NotAccepted. Already-issued tokens keep working until they expire, so the failure may appear late. Create a ReferenceGrant in the Secret's namespace (see Upgrade Guidance)."
+        },
+        {
+          "title": "Ungranted cross-namespace backends no longer reach the data plane",
+          "description": "An <code>AIGatewayRoute</code> <code>backendRef</code> to an <code>AIServiceBackend</code> or <code>InferencePool</code> in another namespace without a ReferenceGrant already marked the route NotAccepted, but its credentials were still written to the external processor's config. Such backends are now left out. Working setups already have the grant; this affects only routes that were already NotAccepted."
+        },
+        {
+          "title": "ReferenceGrant <code>to.name</code> is now enforced",
+          "description": "A ReferenceGrant <code>to</code> entry that sets <code>name</code> used to authorize every object of that group and kind in its namespace. It now authorizes only the named object. References to other objects, such as another Secret, <code>AIServiceBackend</code>, or <code>InferencePool</code>, are NotAccepted and left out of the data plane. Check grants that set <code>name</code> before upgrading."
+        },
+        {
+          "title": "Per-tenant token limits are now enforced",
+          "description": "With the <code>QuotaPolicy</code> <code>Distinct</code> fix, tenants can start receiving 429 at the limits you configured. Review per-tenant limits before upgrading."
+        },
+        {
+          "title": "External processor <code>-configPath</code> removed",
+          "description": "The external processor reads only its config bundle (<code>-configBundlePath</code>), and the controller no longer writes the legacy <code>filter-config.yaml</code> Secret. Existing legacy Secrets are left in place and can be deleted. This matters only if you run the external processor yourself, or still have Envoy pods created before config bundles existed (v1.0.x era). Restart those pods before upgrading."
+        }
+      ],
+      "dependencies": [
+        {
+          "title": "Go 1.27.1",
+          "description": "Updated from Go 1.26.4."
+        },
+        {
+          "title": "Envoy Gateway v1.9.2",
+          "description": "Built on Envoy Gateway v1.9.2, up from v1.8.1."
+        },
+        {
+          "title": "Envoy v1.39",
+          "description": "Envoy Proxy v1.39.1, as shipped by Envoy Gateway v1.9.2."
+        },
+        {
+          "title": "Gateway API v1.6.1",
+          "description": "Updated from v1.5.1. Envoy Gateway v1.9 requires the v1.6 CRDs."
+        },
+        {
+          "title": "Gateway API Inference Extension v1.6.2",
+          "description": "Updated from v1.0.2."
+        },
+        {
+          "title": "MCP Go SDK v1.7.0",
+          "description": "Unchanged from v1.1."
+        }
+      ]
+    }
+  ],
+  "navigation": {
+    "previous": { "version": "v1.1.x Series", "path": "/release-notes/v1.1" }
+  }
+}

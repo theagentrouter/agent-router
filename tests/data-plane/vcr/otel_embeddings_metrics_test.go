@@ -119,6 +119,6 @@ func TestOtelOpenAIEmbeddings_metrics_modelNameOverride(t *testing.T) {
 	requestModel := getInvocationModel(span.Attributes, "embedding.invocation_parameters")
 	responseModel := getSpanAttributeString(span.Attributes, "embedding.model_name")
 
-	verifyTokenUsageMetricsWithOriginal(t, "embeddings", metrics, span, originalModel, requestModel, responseModel, false)
-	verifyRequestDurationMetricsWithOriginal(t, "embeddings", metrics, span, originalModel, requestModel, responseModel, false)
+	verifyTokenUsageMetricsWithProvider(t, "embeddings", "openai", "openai-embeddings-override", metrics, span, originalModel, requestModel, responseModel, false)
+	verifyRequestDurationMetricsWithProvider(t, "embeddings", "openai", "openai-embeddings-override", metrics, span, originalModel, requestModel, responseModel, false)
 }

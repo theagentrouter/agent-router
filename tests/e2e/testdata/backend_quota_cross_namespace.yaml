@@ -1,0 +1,231 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+#
+# Cross-namespace QuotaPolicy fixture:
+# - Gateway/AIGatewayRoute/QuotaPolicy live in quota-policy-ns
+# - AIServiceBackend/Backend/testupstream live in quota-backend-ns
+# Route→backend ReferenceGrants are always present so traffic can flow.
+# The test deletes and reapplies the QuotaPolicy→AIServiceBackend ReferenceGrant
+# to cover both denied and authorized policy references.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: quota-policy-ns
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: quota-backend-ns
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy-ai-gateway-quota-cross-ns
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: envoy-ai-gateway-quota-cross-ns
+  namespace: quota-policy-ns
+spec:
+  gatewayClassName: envoy-ai-gateway-quota-cross-ns
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway-quota-cross-ns
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway-quota-cross-ns
+  namespace: quota-policy-ns
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        container:
+          resources: {}
+---
+# Allow the AIGatewayRoute in quota-policy-ns to reference the backend in quota-backend-ns.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-route-to-aiservicebackend
+  namespace: quota-backend-ns
+spec:
+  from:
+    - group: aigateway.envoyproxy.io
+      kind: AIGatewayRoute
+      namespace: quota-policy-ns
+  to:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+---
+# Allow the generated HTTPRoute in quota-policy-ns to reference the EG Backend in quota-backend-ns.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-httproute-to-backend
+  namespace: quota-backend-ns
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: quota-policy-ns
+  to:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+---
+# Allow the QuotaPolicy in quota-policy-ns to reference the AIServiceBackend
+# in quota-backend-ns. The test deletes this grant to verify the denied case.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-quotapolicy-to-aiservicebackend
+  namespace: quota-backend-ns
+spec:
+  from:
+    - group: aigateway.envoyproxy.io
+      kind: QuotaPolicy
+      namespace: quota-policy-ns
+  to:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: cross-ns-quota-route
+  namespace: quota-policy-ns
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway-quota-cross-ns
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: cross-ns-quota-model
+      backendRefs:
+        - name: cross-ns-quota-backend
+          namespace: quota-backend-ns
+          modelNameOverride: cross-ns-quota-model
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_total_token
+      type: TotalToken
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: cross-ns-quota-backend
+  namespace: quota-backend-ns
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: cross-ns-quota-envoy-backend
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: cross-ns-quota-envoy-backend
+  namespace: quota-backend-ns
+spec:
+  endpoints:
+    - fqdn:
+        hostname: cross-ns-quota-testupstream.quota-backend-ns.svc.cluster.local
+        port: 80
+---
+# QuotaPolicy lives in a different namespace from its target AIServiceBackend.
+# Without a QuotaPolicy ReferenceGrant this should be NotAccepted.
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: cross-ns-quota-policy
+  namespace: quota-policy-ns
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: cross-ns-quota-backend
+      namespace: quota-backend-ns
+  perModelQuotas:
+    - modelName: "cross-ns-quota-model"
+      quota:
+        mode: Shared
+        defaultBucket:
+          limit: 10
+          duration: "1h"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cross-ns-quota-testupstream
+  namespace: quota-backend-ns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cross-ns-quota-testupstream
+  template:
+    metadata:
+      labels:
+        app: cross-ns-quota-testupstream
+    spec:
+      containers:
+        - name: testupstream
+          image: docker.io/envoyproxy/ai-gateway-testupstream:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TESTUPSTREAM_ID
+              value: cross-ns-quota
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cross-ns-quota-testupstream
+  namespace: quota-backend-ns
+spec:
+  selector:
+    app: cross-ns-quota-testupstream
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP

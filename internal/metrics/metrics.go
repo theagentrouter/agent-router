@@ -253,6 +253,12 @@ func (u *TokenUsage) AddReasoningTokens(tokens uint32) {
 	u.reasoningTokens += tokens
 }
 
+// IsZero reports whether no token usage field has been set.
+func (u *TokenUsage) IsZero() bool {
+	return !u.inputTokenSet && !u.outputTokenSet && !u.totalTokenSet &&
+		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet
+}
+
 // Override updates the TokenUsage fields with values from another TokenUsage instance.
 // Only fields that are marked as set in the other instance will override the current values.
 func (u *TokenUsage) Override(other TokenUsage) {

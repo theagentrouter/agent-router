@@ -15,6 +15,7 @@ import (
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
 func TestAnthropicToAnthropic_RequestBody(t *testing.T) {
@@ -25,6 +26,7 @@ func TestAnthropicToAnthropic_RequestBody(t *testing.T) {
 		forceBodyMutation bool
 		modelNameOverride string
 		prefix            string
+		originalPath      string
 
 		expRequestModel internalapi.RequestModel
 		expNewBody      []byte
@@ -96,10 +98,46 @@ func TestAnthropicToAnthropic_RequestBody(t *testing.T) {
 			expNewBody:        nil,
 			expPath:           "/custom/messages",
 		},
+		{
+			name:            "query string preserved",
+			original:        []byte(`{"model":"claude-2","messages":[{"role":"user","content":"Hello!"}]}`),
+			body:            anthropicschema.MessagesRequest{Stream: false, Model: "claude-2"},
+			prefix:          "v1",
+			originalPath:    "/anthropic/v1/messages?beta=true",
+			expRequestModel: "claude-2",
+			expNewBody:      nil,
+			expPath:         "/v1/messages?beta=true",
+		},
+		{
+			name:              "query string preserved with model override",
+			original:          []byte(`{"model":"claude-2","messages":[{"role":"user","content":"Hello!"}]}`),
+			body:              anthropicschema.MessagesRequest{Stream: false, Model: "claude-2"},
+			modelNameOverride: "claude-100.1",
+			prefix:            "v1",
+			originalPath:      "/anthropic/v1/messages?beta=true&foo=bar",
+			expRequestModel:   "claude-100.1",
+			expNewBody:        []byte(`{"model":"claude-100.1","messages":[{"role":"user","content":"Hello!"}]}`),
+			expPath:           "/v1/messages?beta=true&foo=bar",
+		},
+		{
+			name:            "original path without query",
+			original:        []byte(`{"model":"claude-2","messages":[{"role":"user","content":"Hello!"}]}`),
+			body:            anthropicschema.MessagesRequest{Stream: false, Model: "claude-2"},
+			prefix:          "v1",
+			originalPath:    "/anthropic/v1/messages",
+			expRequestModel: "claude-2",
+			expNewBody:      nil,
+			expPath:         "/v1/messages",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			translator := NewAnthropicToAnthropicTranslator(tc.prefix, tc.modelNameOverride)
 			require.NotNil(t, translator)
+			if tc.originalPath != "" {
+				translator.(RequestHeadersSetter).SetRequestHeaders(map[string]string{
+					internalapi.OriginalPathHeader: tc.originalPath,
+				})
+			}
 
 			headerMutation, bodyMutation, err := translator.RequestBody(tc.original, &tc.body, tc.forceBodyMutation)
 			require.NoError(t, err)
@@ -305,5 +343,74 @@ func TestAnthropicToAnthropic_ResponseError(t *testing.T) {
 			require.Equal(t, tc.expType, resp.Error.Type)
 			require.Equal(t, "Some error occurred", resp.Error.Message)
 		})
+	}
+}
+
+// The space after "data:" is optional per the SSE specification, and some
+// Anthropic-compatible backends omit it. The stream must still yield usage.
+func TestAnthropicToAnthropic_ResponseBody_streaming_noSpaceAfterColon(t *testing.T) {
+	translator := NewAnthropicToAnthropicTranslator("", "")
+	require.NotNil(t, translator)
+	translator.(*anthropicToAnthropicTranslator).stream = true
+
+	const response = `event: message_start
+data:{"type":"message_start","message":{"model":"claude-sonnet-4-5-20250929","id":"msg_01","type":"message","role":"assistant","content":[],"usage":{"input_tokens":9,"cache_creation_input_tokens":0,"cache_read_input_tokens":1,"output_tokens":0}}}
+
+event: message_delta
+data:{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":16}}
+
+event: message_stop
+data:{"type":"message_stop"}`
+
+	_, _, tokenUsage, responseModel, err := translator.ResponseBody(nil, strings.NewReader(response), true, nil)
+	require.NoError(t, err)
+	require.Equal(t, tokenUsageFrom(10, 1, 0, 16, 26, -1), tokenUsage)
+	require.Equal(t, "claude-sonnet-4-5-20250929", responseModel)
+}
+
+func TestAnthropicMessagesTranslators_ResponseBody_non_streaming_withoutUsage(t *testing.T) {
+	// The AWS and GCP Anthropic translators reuse the Anthropic ResponseBody for non-streaming responses.
+	for _, tr := range []struct {
+		name          string
+		newTranslator func() AnthropicMessagesTranslator
+	}{
+		{name: "Anthropic", newTranslator: func() AnthropicMessagesTranslator { return NewAnthropicToAnthropicTranslator("", "") }},
+		{name: "AWSAnthropic", newTranslator: func() AnthropicMessagesTranslator {
+			return NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+		}},
+		{name: "GCPAnthropic", newTranslator: func() AnthropicMessagesTranslator {
+			return NewAnthropicToGCPAnthropicTranslator("vertex-2023-10-16", "")
+		}},
+	} {
+		for _, tc := range []struct {
+			name     string
+			body     string
+			expModel string
+		}{
+			{name: "no usage", body: `{"model":"claude-from-response","type":"message","role":"assistant","content":[],"stop_reason":"end_turn"}`, expModel: "claude-from-response"},
+			{name: "null usage", body: `{"model":"claude-from-response","type":"message","role":"assistant","content":[],"usage":null}`, expModel: "claude-from-response"},
+			{name: "empty object", body: `{}`},
+			{name: "null body", body: `null`},
+		} {
+			t.Run(tr.name+"/"+tc.name, func(t *testing.T) {
+				translator := tr.newTranslator()
+				reqBody := []byte(`{"model":"claude-from-request","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`)
+				var req anthropicschema.MessagesRequest
+				require.NoError(t, json.Unmarshal(reqBody, &req))
+				_, _, err := translator.RequestBody(reqBody, &req, false)
+				require.NoError(t, err)
+
+				var tokenUsage metrics.TokenUsage
+				var responseModel internalapi.ResponseModel
+				require.NotPanics(t, func() {
+					_, _, tokenUsage, responseModel, err = translator.ResponseBody(nil, strings.NewReader(tc.body), true, nil)
+				})
+				require.NoError(t, err)
+				require.True(t, tokenUsage.IsZero())
+				if tc.expModel != "" {
+					require.Equal(t, tc.expModel, responseModel)
+				}
+			})
+		}
 	}
 }

@@ -8,7 +8,7 @@ sidebar_position: 2
 
 ## Overview
 
-This command runs the Envoy AI Gateway locally as a standalone proxy with a given configuration file without any dependencies such as docker or Kubernetes.
+This command runs the Agent Router locally as a standalone proxy with a given configuration file without any dependencies such as docker or Kubernetes.
 Since the project is primarily focused on the Kubernetes environment, this command is useful for testing the configuration locally before deploying it to a Kubernetes cluster.
 Not only does it help in testing the configuration, but it is also useful in a local development environment of the provider-agnostic AI applications.
 
@@ -86,16 +86,16 @@ For example, to run the AI Gateway with a custom configuration file named `confi
 aigw run config.yaml
 ```
 
-The configuration uses the same API as the Envoy AI Gateway custom resources definitions. See [API Reference](../api/) for more information.
+The configuration uses the same API as the Agent Router custom resources definitions. See [API Reference](../api/) for more information.
 
-The best way to start customizing the configuration is to start with an [example configuration](https://github.com/envoyproxy/ai-gateway/tree/main/examples) and modify it as needed.
+The best way to start customizing the configuration is to start with an [example configuration](https://github.com/theagentrouter/agent-router/tree/main/examples) and modify it as needed.
 
 ### Modify an Example Configuration
 
 First, download an example configuration to use as a starting point:
 
 ```shell
-curl -o ollama.yaml https://raw.githubusercontent.com/envoyproxy/ai-gateway/refs/heads/{vars.aigwGitRef}/examples/aigw/ollama.yaml
+curl -o ollama.yaml https://raw.githubusercontent.com/theagentrouter/agent-router/refs/heads/{vars.aigwGitRef}/examples/aigw/ollama.yaml
 ```
 
 Next, let's say change the model matcher from `.*` (match all) to specifically match `deepseek-r1:1.5b` and save the configuration to `custom.yaml`:
@@ -256,7 +256,7 @@ While running, `aigw` serves admin endpoints on port `1064` by default:
 
 ## OpenTelemetry
 
-Envoy AI Gateway's router joins and records distributed traces when supplied
+Agent Router's router joins and records distributed traces when supplied
 with an [OpenTelemetry](https://opentelemetry.io/) collector endpoint.
 
 Requests to the OpenAI Chat Completions and Embeddings endpoints are recorded
@@ -287,8 +287,20 @@ focused on retrieval and semantic analysis.
   - `OTEL_BSP_SCHEDULE_DELAY`: Batch span processor delay (default: 5000ms)
   - `OTEL_METRIC_EXPORT_INTERVAL`: Metrics export interval (default: 60000ms)
 
+- **Semantic Convention**: Select which span attributes are recorded. See
+  [Tracing][tracing] for the attribute differences.
+  - `AI_GATEWAY_TRACING_SEMCONV`: `openinference` (default) or `gen_ai` for the
+    OpenTelemetry GenAI conventions. An unrecognized value fails startup.
+  - `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`: Capture message content
+    when `gen_ai` is selected (default: `false`). The GenAI conventions treat
+    content as opt-in, unlike OpenInference.
+  - This also selects the vocabulary for MCP spans: the default keeps the
+    gateway-specific `mcp.*` attributes, `gen_ai` opts into the OpenTelemetry MCP
+    conventions.
+
 - **[OpenInference][openinference-config]**: Control sensitive data redaction,
-  such as below. There is [similar config][openinference-embeddings] for embeddings:
+  such as below. These apply only when `AI_GATEWAY_TRACING_SEMCONV` is
+  `openinference`. There is [similar config][openinference-embeddings] for embeddings:
   - `OPENINFERENCE_HIDE_INPUTS`: Hide input messages/prompts (default: `false`)
   - `OPENINFERENCE_HIDE_OUTPUTS`: Hide output messages/completions (default: `false`)
   - `OPENINFERENCE_HIDE_EMBEDDINGS_TEXT`: Hide embeddings input (default: `false`)
@@ -366,5 +378,6 @@ Custom run IDs:
 [otel-env]: https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/
 [openinference-config]: https://github.com/Arize-ai/openinference/blob/main/spec/configuration.md
 [openinference-embeddings]: https://github.com/Arize-ai/openinference/blob/main/spec/embedding_spans.md
-[docker-compose-otel.yaml]: https://github.com/envoyproxy/ai-gateway/blob/main/cmd/aigw/docker-compose-otel.yaml
+[docker-compose-otel.yaml]: https://github.com/theagentrouter/agent-router/blob/main/cmd/aigw/docker-compose-otel.yaml
 [session-tracking]: ../capabilities/observability/tracing.md#session-tracking
+[tracing]: ../capabilities/observability/tracing.md#semantic-conventions

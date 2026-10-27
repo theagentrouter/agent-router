@@ -277,3 +277,33 @@ spec:
       securityPolicy:
         apiKey:
           inline: "invalid-api-key"
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-backend-selector-route
+  namespace: default
+spec:
+  path: "/mcp/backend-selector"
+  parentRefs:
+    - name: mcp-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+      namespace: default
+  backendRefs:
+    - name: mcp-backend
+      port: 1063
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+    - name: mcp-backend-query-api-key
+      port: 1063
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+          queryParam: "api_key"
+  backendSelector:
+    defaultAction: Deny
+    rules:
+      - cel: '("," + request.headers["x-ai-eg-mcp-backend-subset"] + ",").contains("," + request.mcp.backend + ",")'
+        action: Allow

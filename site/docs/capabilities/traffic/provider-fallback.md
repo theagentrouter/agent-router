@@ -6,7 +6,7 @@ sidebar_position: 6
 
 # Provider Fallback
 
-Envoy AI Gateway supports provider fallback to ensure high availability and reliability for AI/LLM workloads. With fallback, you can configure multiple upstream providers for a single route, so that if the primary provider fails (due to network errors, 5xx responses, or other health check failures), traffic is automatically routed to a healthy fallback provider.
+Agent Router supports provider fallback to ensure high availability and reliability for AI/LLM workloads. With fallback, you can configure multiple upstream providers for a single route, so that if the primary provider fails (due to network errors, 5xx responses, or other health check failures), traffic is automatically routed to a healthy fallback provider.
 
 ## When to Use Fallback
 
@@ -18,7 +18,7 @@ Envoy AI Gateway supports provider fallback to ensure high availability and reli
 
 - **Primary and Fallback Backends:** You can specify a prioritized list of backends in your `AIGatewayRoute` using `backendRefs`. The first backend is treated as primary, and subsequent backends are considered fallbacks.
 - **Retry Policy:** Fallback is triggered based on retry policies, which can be configured using the [`BackendTrafficPolicy`](https://gateway.envoyproxy.io/contributions/design/backend-traffic-policy/) API.
-- **Automatic Failover:** When the primary backend becomes unhealthy, Envoy AI Gateway automatically shifts traffic to the next healthy fallback backend.
+- **Automatic Failover:** When the primary backend becomes unhealthy, Agent Router automatically shifts traffic to the next healthy fallback backend.
 
 ## Example
 
@@ -108,5 +108,5 @@ spec:
 
 ## References
 
-- [Provider Fallback Example](https://github.com/envoyproxy/ai-gateway/tree/main/examples/provider_fallback)
+- [Provider Fallback Example](https://github.com/theagentrouter/agent-router/tree/main/examples/provider_fallback)
 - [`BackendTrafficPolicy` API Design](https://gateway.envoyproxy.io/contributions/design/backend-traffic-policy/)

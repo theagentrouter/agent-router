@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -65,6 +66,9 @@ var Scheme = runtime.NewScheme()
 type Options struct {
 	// ExtProcLogLevel is the log level for the external processor, e.g., debug, info, warn, or error.
 	ExtProcLogLevel string
+	// ExtProcLogFormat is the log output format for the external processor, "text" or "json".
+	// Empty means the extproc default, which is text.
+	ExtProcLogFormat string
 	// ExtProcEnableRedaction enables redaction of sensitive information in debug logs for the external processor.
 	ExtProcEnableRedaction bool
 	// ExtProcImage is the image for the external processor set on Deployment.
@@ -108,6 +112,9 @@ type Options struct {
 	RateLimitRunner *runner.Runner
 	// EnvoyGatewayNamespace is the namespace where Envoy Gateway is deployed.
 	EnvoyGatewayNamespace string
+	// CredentialPreRotationWindow is how long before expiry the BackendSecurityPolicy controller rotates
+	// short-lived credentials (AWS OIDC, Azure, GCP).
+	CredentialPreRotationWindow time.Duration
 }
 
 // StartControllers starts the controllers for the AI Gateway.
@@ -128,9 +135,14 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	}
 
 	gatewayEventChan := make(chan event.GenericEvent, 100)
+	// The extproc builder is shared by the mutating webhook and the gateway
+	// reconciler. The webhook uses this builder instance to inject the container;
+	// the reconciler builds an identical one from the same options to write the
+	// desired config hash to workload pod templates.
+	extProcBuilder := newExtProcBuilder(options, isKubernetes133OrLater(versionInfo, logger), logger)
 	gatewayC := NewGatewayController(c, kubernetes.NewForConfigOrDie(config),
-		logger.WithName("gateway"), options.EnvoyGatewayNamespace, options.ExtProcImage, options.ExtProcLogLevel,
-		false, uuid.NewString, isKubernetes133OrLater(versionInfo, logger))
+		logger.WithName("gateway"), options.EnvoyGatewayNamespace,
+		false, uuid.NewString, options, isKubernetes133OrLater(versionInfo, logger))
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1.Gateway{}).
 		WatchesRawSource(source.Channel(
 			gatewayEventChan,
@@ -170,7 +182,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	backendSecurityPolicyEventChan := make(chan event.GenericEvent, 100)
 	inferencePoolEventChan := make(chan event.GenericEvent, 100)
 	backendSecurityPolicyC := NewBackendSecurityPolicyController(c, kubernetes.NewForConfigOrDie(config), logger.
-		WithName("backend-security-policy"), aiServiceBackendEventChan, inferencePoolEventChan)
+		WithName("backend-security-policy"), aiServiceBackendEventChan, inferencePoolEventChan, options.CredentialPreRotationWindow)
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.BackendSecurityPolicy{}).
 		WatchesRawSource(source.Channel(
 			backendSecurityPolicyEventChan,
@@ -197,7 +209,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	} else {
 		// CRD exists, create the controller.
 		inferencePoolC := NewInferencePoolController(c, kubernetes.NewForConfigOrDie(config), logger.
-			WithName("inference-pool"), inferencePoolEventChan)
+			WithName("inference-pool"), inferencePoolEventChan, gatewayEventChan)
 		if err = TypedControllerBuilderForCRD(mgr, &gwaiev1.InferencePool{}).
 			Watches(&gwapiv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(inferencePoolC.gatewayEventHandler)).
 			Watches(&aigv1b1.AIGatewayRoute{}, handler.EnqueueRequestsFromMapFunc(inferencePoolC.aiGatewayRouteEventHandler)).
@@ -240,18 +252,25 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 		return fmt.Errorf("failed to create controller for GatewayConfig: %w", err)
 	}
 
+	var quotaPolicyEventChan chan event.GenericEvent
 	// QuotaPolicy controller for backend quota rate limiting.
 	if options.RateLimitRunner != nil {
+		quotaPolicyEventChan = make(chan event.GenericEvent, 100)
 		quotaPolicyC := NewQuotaPolicyController(c, kube, logger.WithName("quota-policy"), options.RateLimitRunner, aiGatewayRouteEventChan)
 		if err = TypedControllerBuilderForCRD(mgr, &aigv1a1.QuotaPolicy{}).
 			Watches(&aigv1b1.AIServiceBackend{}, handler.EnqueueRequestsFromMapFunc(quotaPolicyC.BackendToQuotaPolicy)).
+			WatchesRawSource(source.Channel(
+				quotaPolicyEventChan,
+				&handler.EnqueueRequestForObject{},
+			)).
 			Complete(quotaPolicyC); err != nil {
 			return fmt.Errorf("failed to create controller for QuotaPolicy: %w", err)
 		}
 	}
 
-	// ReferenceGrant controller for cross-namespace access validation
-	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan)
+	// ReferenceGrant changes can authorize or revoke AIGatewayRoute,
+	// BackendSecurityPolicy, and QuotaPolicy references.
+	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan, quotaPolicyEventChan)
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1b1.ReferenceGrant{}).
 		Complete(referenceGrantC); err != nil {
 		return fmt.Errorf("failed to create controller for ReferenceGrant: %w", err)
@@ -260,25 +279,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	if !options.DisableMutatingWebhook {
 		h := admission.WithCustomDefaulter(Scheme, &corev1.Pod{}, newGatewayMutator(c, mgr.GetAPIReader(), kube,
 			logger.WithName("gateway-mutator"),
-			options.ExtProcImage,
-			options.ExtProcImagePullPolicy,
-			options.ExtProcLogLevel,
-			options.ExtProcEnableRedaction,
-			options.UDSPath,
-			options.RequestHeaderAttributes,
-			options.TracingRequestHeaderAttributes,
-			options.MetricsRequestHeaderAttributes,
-			options.LogRequestHeaderAttributes,
-			options.RootPrefix,
-			options.EndpointPrefixes,
-			options.ExtProcExtraEnvVars,
-			options.ExtProcImagePullSecrets,
-			options.ExtProcMaxRecvMsgSize,
-			isKubernetes133OrLater(versionInfo, logger),
-			options.MCPSessionEncryptionSeed,
-			options.MCPSessionEncryptionIterations,
-			options.MCPFallbackSessionEncryptionSeed,
-			options.MCPFallbackSessionEncryptionIterations,
+			extProcBuilder,
 		))
 		mgr.GetWebhookServer().Register("/mutate", &webhook.Admission{Handler: h})
 	}
@@ -322,6 +323,9 @@ const (
 	// k8sClientIndexAIServiceBackendToTargetingQuotaPolicy is the index name that maps from an AIServiceBackend
 	// to the QuotaPolicy whose targetRefs contains the AIServiceBackend.
 	k8sClientIndexAIServiceBackendToTargetingQuotaPolicy = "AIServiceBackendToTargetingQuotaPolicy"
+	// k8sClientIndexQuotaPolicyTargetNamespace maps a target namespace to
+	// QuotaPolicies that contain a targetRef resolved to that namespace.
+	k8sClientIndexQuotaPolicyTargetNamespace = "QuotaPolicyTargetNamespace"
 	// k8sClientIndexGatewayToGatewayConfig maps from a GatewayConfig name to Gateways referencing it.
 	k8sClientIndexGatewayToGatewayConfig = "GatewayToGatewayConfig"
 
@@ -370,6 +374,11 @@ func ApplyIndexing(ctx context.Context, indexer func(ctx context.Context, obj cl
 	if err != nil {
 		return fmt.Errorf("failed to index field for QuotaPolicy targetRefs: %w", err)
 	}
+	err = indexer(ctx, &aigv1a1.QuotaPolicy{},
+		k8sClientIndexQuotaPolicyTargetNamespace, quotaPolicyTargetNamespaceIndexFunc)
+	if err != nil {
+		return fmt.Errorf("failed to index QuotaPolicy target namespaces: %w", err)
+	}
 
 	err = indexer(ctx, &gwapiv1.Gateway{},
 		k8sClientIndexGatewayToGatewayConfig, gatewayToGatewayConfigIndexFunc)
@@ -410,7 +419,7 @@ func mcpRouteToAttachedGatewayIndexFunc(o client.Object) []string {
 		if ref.Namespace != nil && *ref.Namespace != "" {
 			namespace = string(*ref.Namespace)
 		}
-		ret = append(ret, fmt.Sprintf("%s.%s", ref.Name, namespace))
+		ret = append(ret, namespacedNameIndexKey(string(ref.Name), namespace))
 	}
 	return ret
 }
@@ -428,7 +437,7 @@ func mcpRouteToReferencedSecret(o client.Object) []string {
 		if apiKeyRef.Namespace != nil && *apiKeyRef.Namespace != "" {
 			namespace = string(*apiKeyRef.Namespace)
 		}
-		ret = append(ret, fmt.Sprintf("%s.%s", apiKeyRef.Name, namespace))
+		ret = append(ret, namespacedNameIndexKey(string(apiKeyRef.Name), namespace))
 	}
 	return ret
 }
@@ -438,7 +447,7 @@ func httpRouteToOwnerMCPRouteIndexFunc(o client.Object) []string {
 	if owner == nil || owner.Kind != "MCPRoute" {
 		return nil
 	}
-	return []string{fmt.Sprintf("%s.%s", owner.Name, o.GetNamespace())}
+	return []string{namespacedNameIndexKey(owner.Name, o.GetNamespace())}
 }
 
 func gatewayToGatewayConfigIndexFunc(o client.Object) []string {
@@ -460,9 +469,22 @@ func aiGatewayRouteToAttachedGatewayIndexFunc(o client.Object) []string {
 		if ref.Namespace != nil && *ref.Namespace != "" {
 			namespace = string(*ref.Namespace)
 		}
-		ret = append(ret, fmt.Sprintf("%s.%s", ref.Name, namespace))
+		ret = append(ret, namespacedNameIndexKey(string(ref.Name), namespace))
 	}
 	return ret
+}
+
+// namespacedNameIndexKey returns the "name.namespace" key used by the controller's field indexes.
+// Both the index producers (the IndexFunc implementations) and the consumers (List calls with
+// MatchingFields) must build the key identically, so they all go through this helper.
+func namespacedNameIndexKey(name, namespace string) string {
+	return fmt.Sprintf("%s.%s", name, namespace)
+}
+
+// NamespacedNameKey returns the "namespace/name" key used for namespaced
+// resource identities.
+func NamespacedNameKey(namespace, name string) string {
+	return fmt.Sprintf("%s/%s", namespace, name)
 }
 
 func aiGatewayRouteIndexFunc(o client.Object) []string {
@@ -472,7 +494,7 @@ func aiGatewayRouteIndexFunc(o client.Object) []string {
 		for _, backend := range rule.BackendRefs {
 			// Use the namespace from the backend reference, or default to the route's namespace
 			backendNamespace := backend.GetNamespace(aiGatewayRoute.Namespace)
-			key := fmt.Sprintf("%s.%s", backend.Name, backendNamespace)
+			key := namespacedNameIndexKey(backend.Name, backendNamespace)
 			ret = append(ret, key)
 		}
 	}
@@ -482,44 +504,64 @@ func aiGatewayRouteIndexFunc(o client.Object) []string {
 func backendSecurityPolicyIndexFunc(o client.Object) []string {
 	backendSecurityPolicy := o.(*aigv1b1.BackendSecurityPolicy)
 	var key string
-	switch backendSecurityPolicy.Spec.Type {
-	case aigv1b1.BackendSecurityPolicyTypeAPIKey:
-		apiKey := backendSecurityPolicy.Spec.APIKey
-		key = getSecretNameAndNamespace(apiKey.SecretRef, backendSecurityPolicy.Namespace)
-	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
-		awsCreds := backendSecurityPolicy.Spec.AWSCredentials
-		if awsCreds.CredentialsFile != nil {
-			key = getSecretNameAndNamespace(awsCreds.CredentialsFile.SecretRef, backendSecurityPolicy.Namespace)
-		} else if awsCreds.OIDCExchangeToken != nil {
-			key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
-		}
-	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
-		gcpCreds := backendSecurityPolicy.Spec.GCPCredentials
-		if gcpCreds.CredentialsFile != nil {
-			key = getSecretNameAndNamespace(gcpCreds.CredentialsFile.SecretRef, backendSecurityPolicy.Namespace)
-		}
-	case aigv1b1.BackendSecurityPolicyTypeAzureAPIKey:
-		apiKey := backendSecurityPolicy.Spec.AzureAPIKey
-		key = getSecretNameAndNamespace(apiKey.SecretRef, backendSecurityPolicy.Namespace)
-	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
-		apiKey := backendSecurityPolicy.Spec.AnthropicAPIKey
-		key = getSecretNameAndNamespace(apiKey.SecretRef, backendSecurityPolicy.Namespace)
-	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
-		azureCreds := backendSecurityPolicy.Spec.AzureCredentials
-		if azureCreds.ClientSecretRef != nil {
-			key = getSecretNameAndNamespace(azureCreds.ClientSecretRef, backendSecurityPolicy.Namespace)
-		} else if azureCreds.OIDCExchangeToken != nil {
-			key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
+	if name, namespace, ok := backendSecurityPolicySecretRef(backendSecurityPolicy); ok {
+		key = namespacedNameIndexKey(name, namespace)
+	} else {
+		switch backendSecurityPolicy.Spec.Type {
+		case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
+			if backendSecurityPolicy.Spec.AWSCredentials.OIDCExchangeToken != nil {
+				key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
+			}
+		case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
+			if backendSecurityPolicy.Spec.AzureCredentials.OIDCExchangeToken != nil {
+				key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
+			}
 		}
 	}
 	return []string{key}
+}
+
+// backendSecurityPolicySecretRef returns the name and namespace of the Secret directly referenced by a
+// BackendSecurityPolicy's static credential fields, and whether one is set. OIDC-based credential types
+// don't have a fixed target Secret here (see backendSecurityPolicyIndexFunc, which keys those by the
+// BackendSecurityPolicy itself instead) and are excluded.
+func backendSecurityPolicySecretRef(bsp *aigv1b1.BackendSecurityPolicy) (name, namespace string, ok bool) {
+	var secretRef *gwapiv1.SecretObjectReference
+	switch bsp.Spec.Type {
+	case aigv1b1.BackendSecurityPolicyTypeAPIKey:
+		secretRef = bsp.Spec.APIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
+		if bsp.Spec.AWSCredentials.CredentialsFile != nil {
+			secretRef = bsp.Spec.AWSCredentials.CredentialsFile.SecretRef
+		}
+	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
+		if bsp.Spec.GCPCredentials.CredentialsFile != nil {
+			secretRef = bsp.Spec.GCPCredentials.CredentialsFile.SecretRef
+		}
+	case aigv1b1.BackendSecurityPolicyTypeAzureAPIKey:
+		secretRef = bsp.Spec.AzureAPIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
+		secretRef = bsp.Spec.AnthropicAPIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
+		if bsp.Spec.AzureCredentials.ClientSecretRef != nil {
+			secretRef = bsp.Spec.AzureCredentials.ClientSecretRef
+		}
+	}
+	if secretRef == nil {
+		return "", "", false
+	}
+	namespace = bsp.Namespace
+	if secretRef.Namespace != nil {
+		namespace = string(*secretRef.Namespace)
+	}
+	return string(secretRef.Name), namespace, true
 }
 
 func backendSecurityPolicyTargetRefsIndexFunc(o client.Object) []string {
 	backendSecurityPolicy := o.(*aigv1b1.BackendSecurityPolicy)
 	var ret []string
 	for _, targetRef := range backendSecurityPolicy.Spec.TargetRefs {
-		ret = append(ret, fmt.Sprintf("%s.%s", targetRef.Name, backendSecurityPolicy.Namespace))
+		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), backendSecurityPolicy.Namespace))
 	}
 	return ret
 }
@@ -528,16 +570,24 @@ func quotaPolicyTargetRefsIndexFunc(o client.Object) []string {
 	quotaPolicy := o.(*aigv1a1.QuotaPolicy)
 	var ret []string
 	for _, targetRef := range quotaPolicy.Spec.TargetRefs {
-		ret = append(ret, fmt.Sprintf("%s.%s", targetRef.Name, quotaPolicy.Namespace))
+		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), TargetNamespace(targetRef, quotaPolicy.Namespace)))
 	}
 	return ret
 }
 
-func getSecretNameAndNamespace(secretRef *gwapiv1.SecretObjectReference, namespace string) string {
-	if secretRef.Namespace != nil {
-		return fmt.Sprintf("%s.%s", secretRef.Name, *secretRef.Namespace)
+func quotaPolicyTargetNamespaceIndexFunc(o client.Object) []string {
+	quotaPolicy := o.(*aigv1a1.QuotaPolicy)
+	namespaces := make([]string, 0, len(quotaPolicy.Spec.TargetRefs))
+	seen := make(map[string]struct{}, len(quotaPolicy.Spec.TargetRefs))
+	for _, targetRef := range quotaPolicy.Spec.TargetRefs {
+		namespace := TargetNamespace(targetRef, quotaPolicy.Namespace)
+		if _, ok := seen[namespace]; ok {
+			continue
+		}
+		seen[namespace] = struct{}{}
+		namespaces = append(namespaces, namespace)
 	}
-	return fmt.Sprintf("%s.%s", secretRef.Name, namespace)
+	return namespaces
 }
 
 func getReferenceGrantIndexKey(namespace, kind string) string {

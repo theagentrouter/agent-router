@@ -7,7 +7,9 @@ package endpointspec
 
 import (
 	"bytes"
+	"errors"
 	"mime/multipart"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -66,6 +68,56 @@ func TestChatCompletionsEndpointSpec_ParseBody(t *testing.T) {
 		require.Nil(t, mutated)
 	})
 
+	t.Run("streaming_with_duplicate_stream_options", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true},"stream_options":{"include_usage":false}}`)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.Equal(t, "gpt-4o", model)
+		require.True(t, stream)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.StreamOptions)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+
+		// The mutated body -- which is what actually gets forwarded to the upstream provider --
+		// must contain a single, unambiguous stream_options.include_usage=true and must not retain
+		// any attacker-controlled duplicate "stream_options" key.
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		var mutatedReq openai.ChatCompletionRequest
+		require.NoError(t, json.Unmarshal(mutated, &mutatedReq))
+		require.NotNil(t, mutatedReq.StreamOptions)
+		require.True(t, mutatedReq.StreamOptions.IncludeUsage)
+	})
+
+	t.Run("streaming_preserves_extra_stream_options_fields", func(t *testing.T) {
+		// vLLM supports additional stream_options fields beyond include_usage, e.g.
+		// continuous_usage_stats. Forcing include_usage must not drop them.
+		body := []byte(`{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":false,"continuous_usage_stats":true}}`)
+
+		_, parsed, _, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		require.JSONEq(t, `{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true,"continuous_usage_stats":true}}`, string(mutated))
+	})
+
+	t.Run("streaming_with_duplicate_stream_options_preserves_last_fields", func(t *testing.T) {
+		// With duplicate top-level keys, json.Unmarshal (and therefore `parsed`) takes the
+		// last occurrence. The mutated body must match that behavior and keep its other fields.
+		body := []byte(`{"model":"gpt-4o","stream":true,"stream_options":{"continuous_usage_stats":true},"stream_options":{"include_usage":false,"continuous_usage_stats":false}}`)
+
+		_, parsed, _, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		require.JSONEq(t, `{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true,"continuous_usage_stats":false}}`, string(mutated))
+	})
+
 	t.Run("non_streaming", func(t *testing.T) {
 		req := openai.ChatCompletionRequest{Model: "gpt-4-mini", Stream: false}
 		body, err := json.Marshal(req)
@@ -84,6 +136,7 @@ func TestChatCompletionsEndpointSpec_GetTranslator(t *testing.T) {
 	spec := ChatCompletionsEndpointSpec{}
 	supported := []filterapi.VersionedAPISchema{
 		{Name: filterapi.APISchemaOpenAI, Prefix: "v1"},
+		{Name: filterapi.APISchemaAWSOpenAI},
 		{Name: filterapi.APISchemaAWSBedrock},
 		{Name: filterapi.APISchemaAWSAnthropic},
 		{Name: filterapi.APISchemaAzureOpenAI, Version: "2024-02-01"},
@@ -104,6 +157,16 @@ func TestChatCompletionsEndpointSpec_GetTranslator(t *testing.T) {
 	t.Run("unsupported", func(t *testing.T) {
 		_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: "Unknown"}, "override")
 		require.ErrorContains(t, err, "unsupported API schema")
+	})
+
+	t.Run("AWSOpenAI request", func(t *testing.T) {
+		awsTranslator, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI}, "")
+		require.NoError(t, err)
+		original := []byte(`{"model":"us.openai.gpt-5.6-luna","messages":[]}`)
+		headers, body, err := awsTranslator.RequestBody(original, &openai.ChatCompletionRequest{Model: "us.openai.gpt-5.6-luna"}, false)
+		require.NoError(t, err)
+		require.Equal(t, internalapi.Header{":path", "/openai/v1/chat/completions"}, headers[0])
+		require.Equal(t, original, body)
 	})
 }
 
@@ -312,6 +375,41 @@ func TestRerankEndpointSpec_GetTranslator(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported API schema")
 }
 
+func TestSystemOneEndpointSpec_ParseBody(t *testing.T) {
+	spec := SystemOneEndpointSpec{}
+	t.Run("invalid json", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseBody([]byte("{"), false)
+		require.ErrorContains(t, err, "malformed request")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		body := []byte(`{"model":"jev-latest","state":["a","b"],"questions":{"q":{"type":"noul","instructions":{"ask":"is it?"}}}}`)
+		model, parsed, stream, mutated, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.Equal(t, "jev-latest", model)
+		require.False(t, stream)
+		require.Nil(t, mutated)
+		require.JSONEq(t, `["a","b"]`, string(parsed.State))
+		require.Equal(t, "noul", parsed.Questions["q"].Type)
+		require.JSONEq(t, `{"ask":"is it?"}`, string(parsed.Questions["q"].Instructions))
+	})
+
+	t.Run("multipart unsupported", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseMultipartBody(nil, "multipart/form-data", false)
+		require.ErrorIs(t, err, errMultipartNotSupported)
+	})
+}
+
+func TestSystemOneEndpointSpec_GetTranslator(t *testing.T) {
+	spec := SystemOneEndpointSpec{}
+
+	_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe, Version: "v1"}, "override")
+	require.NoError(t, err)
+
+	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
+	require.ErrorContains(t, err, "unsupported API schema")
+}
+
 func TestResponsesEndpointSpec_ParseBody(t *testing.T) {
 	spec := ResponsesEndpointSpec{}
 	t.Run("invalid json", func(t *testing.T) {
@@ -384,6 +482,97 @@ func TestResponsesEndpointSpec_GetTranslator(t *testing.T) {
 
 	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAzureOpenAI}, "override")
 	require.NoError(t, err)
+
+	awsTranslator, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI}, "us.openai.gpt-5.6-luna")
+	require.NoError(t, err)
+	headers, body, err := awsTranslator.RequestBody(
+		[]byte(`{"model":"gpt-5.6-luna","input":"hello"}`),
+		&openai.ResponseRequest{Model: "gpt-5.6-luna"},
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, internalapi.Header{":path", "/openai/v1/responses"}, headers[0])
+	require.JSONEq(t, `{"model":"us.openai.gpt-5.6-luna","input":"hello"}`, string(body))
+
+	awsTranslator, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI}, "")
+	require.NoError(t, err)
+	original := []byte(`{"model":"us.openai.gpt-5.6-luna","input":"hello"}`)
+	_, body, err = awsTranslator.RequestBody(original, &openai.ResponseRequest{Model: "us.openai.gpt-5.6-luna"}, false)
+	require.NoError(t, err)
+	require.Equal(t, original, body)
+
+	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaCohere}, "override")
+	require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+	require.ErrorContains(t, err, "unsupported API schema")
+}
+
+func TestDecisionsEndpointSpec(t *testing.T) {
+	spec := DecisionsEndpointSpec{}
+
+	t.Run("parse string input", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-6-luna","input":"charged twice","questions":[{"type":"choice","name":"department","instructions":"route it","choices":[{"value":"billing","description":"payment issues"}]}]}`)
+		model, req, stream, mutated, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.Equal(t, "gpt-6-luna", model)
+		require.False(t, stream)
+		require.Nil(t, mutated)
+		require.JSONEq(t, `"charged twice"`, string(req.Input))
+		require.JSONEq(t, `"billing"`, string(req.Questions[0].Choices[0].Value))
+	})
+
+	t.Run("parse boolean choice values", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-6-luna","input":"confirm","questions":[{"type":"choice","instructions":"answer it","choices":[{"value":true},{"value":false}]}]}`)
+		_, req, _, _, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.JSONEq(t, `true`, string(req.Questions[0].Choices[0].Value))
+		require.JSONEq(t, `false`, string(req.Questions[0].Choices[1].Value))
+	})
+
+	t.Run("parse image input", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-6-luna","input":[{"role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}],"questions":[{"type":"predicate","name":"damage","instructions":"visible damage?"}]}`)
+		_, req, _, _, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.JSONEq(t, `[{"role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}]`, string(req.Input))
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseBody([]byte("{"), false)
+		require.ErrorIs(t, err, internalapi.ErrMalformedRequest)
+		require.ErrorContains(t, err, "/v1/decisions")
+	})
+
+	t.Run("multipart unsupported", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseMultipartBody(nil, "multipart/form-data", false)
+		require.ErrorIs(t, err, errMultipartNotSupported)
+	})
+
+	t.Run("translator support", func(t *testing.T) {
+		_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
+		require.NoError(t, err)
+
+		_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe}, "override")
+		require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+	})
+}
+
+func TestDecisionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	body := []byte(`{"model":"gpt-6-luna","input":"customer complaint","safety_identifier":"user-hash-123","questions":[{"type":"choice","name":"department","instructions":"route this complaint","choices":[{"value":"billing","description":"payment issues"}]},{"type":"score","name":"severity","instructions":"score it","levels":[{"label":"critical","description":"no workaround"}]}]}`)
+	_, req, _, _, err := DecisionsEndpointSpec{}.ParseBody(body, false)
+	require.NoError(t, err)
+	redacted, err := DecisionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+	require.NoError(t, err)
+
+	encoded, err := json.Marshal(redacted)
+	require.NoError(t, err)
+	text := string(encoded)
+	require.Contains(t, text, "[REDACTED LENGTH=")
+	require.NotContains(t, text, "customer complaint")
+	require.NotContains(t, text, "payment issues")
+	require.NotContains(t, text, "critical")
+	require.NotContains(t, text, "user-hash-123")
+	require.Contains(t, text, `"safety_identifier":"[REDACTED LENGTH=`)
+	require.Contains(t, text, `"model":"gpt-6-luna"`)
+	require.Contains(t, text, `"name":"department"`)
 }
 
 func TestTokenizeEndpointSpec_ParseBody(t *testing.T) {
@@ -481,6 +670,7 @@ func TestTokenizeEndpointSpec_GetTranslator(t *testing.T) {
 		{Name: filterapi.APISchemaGCPVertexAI},
 		{Name: filterapi.APISchemaGCPAnthropic},
 		{Name: filterapi.APISchemaAWSAnthropic},
+		{Name: filterapi.APISchemaAWSBedrock},
 	}
 
 	for _, schema := range supported {
@@ -1482,4 +1672,313 @@ func TestParseMultipartBody_RejectsJSONOnlyEndpoints(t *testing.T) {
 
 	_, _, _, _, err = SpeechEndpointSpec{}.ParseMultipartBody(nil, "", false)
 	require.ErrorContains(t, err, "multipart body not supported")
+
+	_, _, _, _, err = ResponsesInputTokensEndpointSpec{}.ParseMultipartBody(nil, "", false)
+	require.ErrorContains(t, err, "multipart body not supported")
+}
+
+func TestResponsesInputTokensEndpointSpec_ParseBody(t *testing.T) {
+	spec := ResponsesInputTokensEndpointSpec{}
+
+	t.Run("invalid json", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseBody([]byte("{"), false)
+		require.ErrorContains(t, err, "malformed request")
+	})
+
+	t.Run("empty model allowed", func(t *testing.T) {
+		model, parsed, stream, _, err := spec.ParseBody([]byte(`{"input":"hello"}`), false)
+		require.NoError(t, err)
+		require.Empty(t, model)
+		require.NotNil(t, parsed)
+		require.False(t, stream)
+	})
+
+	t.Run("success", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-4.1","input":"Count these tokens please"}`)
+		model, parsed, stream, mutated, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.Equal(t, "gpt-4.1", model)
+		require.False(t, stream)
+		require.NotNil(t, parsed)
+		require.Nil(t, mutated)
+	})
+}
+
+func TestResponsesInputTokensEndpointSpec_GetTranslator(t *testing.T) {
+	spec := ResponsesInputTokensEndpointSpec{}
+
+	_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
+	require.NoError(t, err)
+
+	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAzureOpenAI, Version: "2025-01-01-preview"}, "override")
+	require.NoError(t, err)
+
+	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAnthropic}, "override")
+	require.ErrorContains(t, err, "unsupported API schema")
+}
+
+func TestCompletionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("string prompt", func(t *testing.T) {
+		const marker = "my-marker-completion-prompt"
+		_, req, _, _, err := CompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"gpt-3.5-turbo-instruct","prompt":"`+marker+`"}`), false)
+		require.NoError(t, err)
+		redacted, err := CompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+		require.Contains(t, mustMarshal(t, req), marker, "original must not be mutated")
+	})
+
+	t.Run("array prompt", func(t *testing.T) {
+		const marker = "array-marker-prompt"
+		_, req, _, _, err := CompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","prompt":["`+marker+`","second"]}`), false)
+		require.NoError(t, err)
+		redacted, err := CompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+	})
+}
+
+func TestEmbeddingsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("completion input string", func(t *testing.T) {
+		const marker = "embed-this-marker"
+		_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(`{"model":"text-embedding-3-small","input":"`+marker+`"}`), false)
+		require.NoError(t, err)
+		redacted, err := EmbeddingsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+		require.Contains(t, mustMarshal(t, req), marker, "original must not be mutated")
+	})
+
+	t.Run("chat messages", func(t *testing.T) {
+		const marker = "chat-embed-marker"
+		_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(`{"model":"m","messages":[{"role":"user","content":"`+marker+`"}]}`), false)
+		require.NoError(t, err)
+		redacted, err := EmbeddingsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+	})
+}
+
+func TestImageGenerationEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	const marker = "draw a marker image of the plans"
+	req := &openai.ImageGenerationRequest{Model: "dall-e-3", Prompt: marker}
+	redacted, err := ImageGenerationEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+	require.NoError(t, err)
+	require.Contains(t, redacted.Prompt, "[REDACTED LENGTH=")
+	require.NotEqual(t, marker, redacted.Prompt)
+	require.Equal(t, marker, req.Prompt, "original must not be mutated")
+}
+
+func TestResponsesEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("instructions/user/string input", func(t *testing.T) {
+		const markerInstr = "marker-instructions"
+		const markerUser = "user-pii-123"
+		const markerInput = "marker-input-text"
+		body := `{"model":"gpt-4o","instructions":"` + markerInstr + `","user":"` + markerUser + `","input":"` + markerInput + `"}`
+		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, markerInstr)
+		require.NotContains(t, out, markerUser)
+		require.NotContains(t, out, markerInput)
+		require.Contains(t, out, "[REDACTED")
+		require.Contains(t, mustMarshal(t, req), markerInstr, "original must not be mutated")
+	})
+
+	t.Run("input as item array", func(t *testing.T) {
+		const marker = "marker-array-input-content"
+		body := `{"model":"gpt-4o","input":[{"type":"message","role":"user","content":"` + marker + `"}]}`
+		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+	})
+}
+
+func TestMessagesEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("string content + string system", func(t *testing.T) {
+		const markerContent = "marker-user-message"
+		const markerSystem = "marker-system-prompt"
+		body := `{"model":"claude-3-5-sonnet","max_tokens":10,"messages":[{"role":"user","content":"` + markerContent + `"}],"system":"` + markerSystem + `"}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, markerContent)
+		require.NotContains(t, out, markerSystem)
+		require.Contains(t, out, "[REDACTED")
+		require.Contains(t, mustMarshal(t, req), markerContent, "original must not be mutated")
+	})
+
+	t.Run("array content blocks", func(t *testing.T) {
+		const marker = "marker-block-text"
+		body := `{"model":"claude-3-5-sonnet","max_tokens":10,"messages":[{"role":"user","content":[{"type":"text","text":"` + marker + `"}]}]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+	})
+}
+
+func TestRerankEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	const markerQ = "marker-query"
+	const markerDoc = "marker-document-content"
+	req := &cohereschema.RerankV2Request{Model: "rerank-v3.5", Query: markerQ, Documents: []string{markerDoc, "another"}}
+	redacted, err := RerankEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+	require.NoError(t, err)
+	require.Contains(t, redacted.Query, "[REDACTED LENGTH=")
+	require.Len(t, redacted.Documents, 2)
+	require.Contains(t, redacted.Documents[0], "[REDACTED LENGTH=")
+	require.NotEqual(t, markerQ, redacted.Query)
+	require.NotEqual(t, markerDoc, redacted.Documents[0])
+	require.Equal(t, markerQ, req.Query, "original must not be mutated")
+	require.Equal(t, markerDoc, req.Documents[0], "original must not be mutated")
+}
+
+func TestSystemOneEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	const markerState = "marker-state-content"
+	const markerInstr = "marker-instructions"
+	const markerCrit = "marker-criteria"
+	body := []byte(`{"model":"jev-latest","state":{"text":"` + markerState + `"},"questions":{"q":{"type":"choice","instructions":"` + markerInstr + `","criteria":{"a":"` + markerCrit + `"}},"empty":{"type":"noul"}}}`)
+	_, req, _, _, err := SystemOneEndpointSpec{}.ParseBody(body, false)
+	require.NoError(t, err)
+
+	redacted, err := SystemOneEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+	require.NoError(t, err)
+	out := mustMarshal(t, redacted)
+	require.NotContains(t, out, markerState)
+	require.NotContains(t, out, markerInstr)
+	require.NotContains(t, out, markerCrit)
+	require.Contains(t, out, "[REDACTED LENGTH=")
+	require.Equal(t, "jev-latest", redacted.Model)
+	require.Equal(t, "choice", redacted.Questions["q"].Type)
+	require.Empty(t, redacted.Questions["empty"].Instructions, "empty values stay empty")
+	require.Contains(t, mustMarshal(t, req), markerState, "original must not be mutated")
+	require.Contains(t, mustMarshal(t, req), markerCrit, "original must not be mutated")
+}
+
+func TestTokenizeEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("completion prompt", func(t *testing.T) {
+		const marker = "tokenize-this-marker-prompt"
+		_, req, _, _, err := TokenizeEndpointSpec{}.ParseBody([]byte(`{"model":"m","prompt":"`+marker+`"}`), false)
+		require.NoError(t, err)
+		redacted, err := TokenizeEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+		require.Contains(t, mustMarshal(t, req), marker, "original must not be mutated")
+	})
+
+	t.Run("chat messages", func(t *testing.T) {
+		const marker = "tokenize-chat-marker"
+		_, req, _, _, err := TokenizeEndpointSpec{}.ParseBody([]byte(`{"model":"m","messages":[{"role":"user","content":"`+marker+`"}]}`), false)
+		require.NoError(t, err)
+		redacted, err := TokenizeEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+	})
+}
+
+// mustMarshal marshals v and returns its string form, failing the test on error.
+func mustMarshal(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return string(b)
+}
+
+// errMarshaler always fails to MarshalJSON, to exercise the fail-safe error
+// branches of redactInterfaceValue and redactUnionField.
+type errMarshaler struct{}
+
+func (errMarshaler) MarshalJSON() ([]byte, error) { return nil, errors.New("marshal-unsupported") }
+
+func TestRedactInterfaceValue_MarshalError(t *testing.T) {
+	// A value that cannot be marshaled must yield a placeholder, never a panic
+	// and never the raw value.
+	out := redactInterfaceValue(errMarshaler{})
+	s, ok := out.(string)
+	require.True(t, ok, "expected a placeholder string on marshal error")
+	require.Contains(t, s, "[REDACTED")
+
+	// A func value is also unmarshalable to JSON.
+	out = redactInterfaceValue(func() {})
+	s, ok = out.(string)
+	require.True(t, ok)
+	require.Contains(t, s, "[REDACTED")
+}
+
+func TestRedactUnionField_MarshalError(t *testing.T) {
+	// A field whose MarshalJSON errors must yield the zero value of T (fail-safe),
+	// so the field logs as absent rather than leaking content.
+	out := redactUnionField(errMarshaler{})
+	require.Equal(t, errMarshaler{}, out)
+}
+
+func TestMessagesCountTokensEndpointSpec_ParseBody(t *testing.T) {
+	spec := MessagesCountTokensEndpointSpec{}
+
+	t.Run("invalid json", func(t *testing.T) {
+		_, _, _, _, err := spec.ParseBody([]byte("["), false)
+		require.ErrorContains(t, err, "malformed request")
+	})
+
+	t.Run("missing model", func(t *testing.T) {
+		body, err := json.Marshal(map[string]any{"messages": []any{}})
+		require.NoError(t, err)
+
+		_, _, _, _, err = spec.ParseBody(body, false)
+		require.ErrorContains(t, err, "model field is required")
+	})
+
+	t.Run("success", func(t *testing.T) {
+		body, err := json.Marshal(map[string]any{
+			"model":    "claude-opus-4-6",
+			"messages": []any{map[string]any{"role": "user", "content": "hello"}},
+		})
+		require.NoError(t, err)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.Equal(t, "claude-opus-4-6", model)
+		require.False(t, stream) // count_tokens is never streaming
+		require.NotNil(t, parsed)
+		require.Nil(t, mutated)
+	})
+}
+
+func TestMessagesCountTokensEndpointSpec_GetTranslator(t *testing.T) {
+	spec := MessagesCountTokensEndpointSpec{}
+	for _, schema := range []filterapi.VersionedAPISchema{
+		{Name: filterapi.APISchemaGCPAnthropic},
+		{Name: filterapi.APISchemaAWSAnthropic},
+		{Name: filterapi.APISchemaAnthropic},
+	} {
+		translator, err := spec.GetTranslator(schema, "override")
+		require.NoError(t, err)
+		require.NotNil(t, translator)
+	}
+
+	_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
+	require.ErrorContains(t, err, "unsupported")
 }

@@ -132,8 +132,8 @@ func TestOtelOpenAIChatCompletions_metrics_modelNameOverride(t *testing.T) {
 	requestModel := "gpt-5-nano" // overridden model
 	responseModel := getSpanAttributeString(span.Attributes, "llm.model_name")
 
-	verifyTokenUsageMetricsWithOriginal(t, "chat", metrics, span, originalModel, requestModel, responseModel, false)
-	verifyRequestDurationMetricsWithOriginal(t, "chat", metrics, span, originalModel, requestModel, responseModel, false)
+	verifyTokenUsageMetricsWithProvider(t, "chat", "openai", "openai-chat-override", metrics, span, originalModel, requestModel, responseModel, false)
+	verifyRequestDurationMetricsWithProvider(t, "chat", "openai", "openai-chat-override", metrics, span, originalModel, requestModel, responseModel, false)
 }
 
 // verifyTimeToFirstTokenMetrics verifies the gen_ai.server.time_to_first_token metric including original model attribute.
@@ -148,6 +148,7 @@ func verifyTimeToFirstTokenMetrics(t *testing.T, metrics *metricsv1.ScopeMetrics
 	expectedAttrs := map[string]string{
 		"gen_ai.operation.name": "chat",
 		"gen_ai.provider.name":  "openai",
+		"gen_ai.backend":        "openai",
 		"gen_ai.original.model": originalModel,
 		"gen_ai.request.model":  requestModel,
 		"gen_ai.response.model": responseModel,
@@ -172,6 +173,7 @@ func verifyTimePerOutputTokenMetricsWithOriginal(t *testing.T, metrics *metricsv
 	expectedAttrs := map[string]string{
 		"gen_ai.operation.name": "chat",
 		"gen_ai.provider.name":  "openai",
+		"gen_ai.backend":        "openai",
 		"gen_ai.original.model": originalModel,
 		"gen_ai.request.model":  requestModel,
 		"gen_ai.response.model": responseModel,

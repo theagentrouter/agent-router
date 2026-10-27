@@ -33,7 +33,11 @@ import (
 
 var (
 	sensitiveHeaderRedactedValue = []byte("[REDACTED]")
-	sensitiveHeaderKeys          = []string{"authorization", "x-api-key"}
+	// sensitiveHeaderKeys are the (lowercased) header names whose values are redacted in debug logs.
+	// They cover every credential header set by the backendauth handlers: "authorization" (API key,
+	// Azure, GCP, AWS SigV4), "x-api-key" (Anthropic), "api-key" (Azure API key) and
+	// "x-amz-security-token" (AWS SigV4 session token).
+	sensitiveHeaderKeys = []string{"authorization", "x-api-key", "api-key", "x-amz-security-token"}
 )
 
 // contextKey is a type for context keys to avoid collisions.
@@ -185,6 +189,8 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 				if internalReqID == "" {
 					return status.Errorf(codes.Internal, "missing internal request ID header from router filter")
 				}
+				upstreamHostAttrs := req.GetAttributes()["envoy.filters.http.ext_proc"]
+				setUpstreamHostAttributes(headersMap, upstreamHostAttrs)
 			} else {
 				// For router filter, create a unique internal request ID to avoid race conditions
 				// with duplicate x-request-id values by appending a UUID suffix to the original request ID
@@ -289,16 +295,16 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 			}
 		}
 		if s.debugLogEnabled && resp != nil && resp.Response != nil {
+			// Header mutations always carry injected backend credentials (e.g. the
+			// upstream Authorization), so they are redacted whenever debug logging
+			// is on — independent of enableRedaction, which only controls body
+			// content. This mirrors redactRequestBodyResponse above.
 			var logContent any
-			if s.enableRedaction {
-				switch val := resp.Response.(type) {
-				case *extprocv3.ProcessingResponse_RequestHeaders:
-					logContent = redactProcessingResponseRequestHeaders(val, s.logger, sensitiveHeaderKeys)
-				case *extprocv3.ProcessingResponse_ImmediateResponse:
-					logContent = val
-				}
-			} else {
-				logContent = resp
+			switch val := resp.Response.(type) {
+			case *extprocv3.ProcessingResponse_RequestHeaders:
+				logContent = redactProcessingResponseRequestHeaders(val, s.logger, sensitiveHeaderKeys, s.enableRedaction)
+			case *extprocv3.ProcessingResponse_ImmediateResponse:
+				logContent = redactImmediateResponse(val, l, sensitiveHeaderKeys)
 			}
 			l.Debug("request headers processed", slog.Any("response", logContent))
 		}
@@ -318,8 +324,9 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 				logContent := redactRequestBodyResponse(val, l, sensitiveHeaderKeys, s.enableRedaction)
 				l.Debug("request body processed", slog.Any("response", logContent))
 			case *extprocv3.ProcessingResponse_ImmediateResponse:
-				// ImmediateResponse (e.g., for malformed requests) doesn't need request body redaction
-				l.Debug("request body processed", slog.Any("response", val))
+				// ImmediateResponse (e.g., for malformed requests) doesn't need request body redaction,
+				// but its header mutation is still filtered.
+				l.Debug("request body processed", slog.Any("response", redactImmediateResponse(val, l, sensitiveHeaderKeys)))
 			}
 		}
 		return resp, nil
@@ -353,7 +360,7 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 				case *extprocv3.ProcessingResponse_ResponseBody:
 					logContent = redactResponseBodyResponseFull(val, l, sensitiveHeaderKeys)
 				case *extprocv3.ProcessingResponse_ImmediateResponse:
-					logContent = val
+					logContent = redactImmediateResponse(val, l, sensitiveHeaderKeys)
 				}
 			} else {
 				logContent = resp
@@ -434,6 +441,24 @@ func resolveRouteName(attributes *structpb.Struct) string {
 	return ""
 }
 
+func setUpstreamHostAttributes(headers map[string]string, attributes *structpb.Struct) {
+	// The upstream-host header is an internal, controller-derived value. A downstream client could also
+	// send it, so drop any inbound copy before overlaying trusted xDS metadata — otherwise, for an
+	// endpoint with no derivable metadata (e.g. EDS), the client-supplied value would survive and drive
+	// the AWS handler's SigV4 host.
+	delete(headers, internalapi.UpstreamHostHeader)
+
+	if attributes == nil {
+		return
+	}
+
+	if v, ok := attributes.Fields[internalapi.XDSUpstreamHostMetadataUpstreamHostPath]; ok {
+		if host := v.GetStringValue(); host != "" {
+			headers[internalapi.UpstreamHostHeader] = host
+		}
+	}
+}
+
 // Check implements [grpc_health_v1.HealthServer].
 func (s *Server) Check(context.Context, *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
 	return &grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_SERVING}, nil
@@ -451,12 +476,25 @@ func (s *Server) List(context.Context, *grpc_health_v1.HealthListRequest) (*grpc
 	}}, nil
 }
 
-// isSensitiveHeader reports whether the header name should be redacted in logs.
-// In addition to the static sensitiveHeaderKeys list, any header with the "x-aigw-"
-// prefix is treated as sensitive because it carries per-request credential overrides.
+// awsCredentialHeaderSuffixes are the tails of the three per-request SigV4 credential headers.
+// The prefix is configurable, so match on the suffix: otherwise a prefix outside x-aigw- (say
+// "x-aws-", to keep an existing injector unchanged) leaks the secret access key into debug logs.
+var awsCredentialHeaderSuffixes = []string{"-access-key-id", "-secret-access-key", "-session-token"}
+
+// isSensitiveHeader reports whether the header should be redacted in logs. Beyond the static
+// sensitiveHeaderKeys list: anything under "x-aigw-", which carries per-request credential
+// overrides, and any AWS SigV4 credential part under any prefix.
 func isSensitiveHeader(key string, sensitiveKeys []string) bool {
 	lower := strings.ToLower(key)
-	return slices.Contains(sensitiveKeys, lower) || strings.HasPrefix(lower, "x-aigw-")
+	if slices.Contains(sensitiveKeys, lower) || strings.HasPrefix(lower, "x-aigw-") {
+		return true
+	}
+	for _, suffix := range awsCredentialHeaderSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // filterSensitiveHeadersForLogging filters out sensitive headers from the provided HeaderMap for logging.
@@ -484,15 +522,29 @@ func filterSensitiveHeadersForLogging(headers *corev3.HeaderMap, sensitiveKeys [
 
 // redactProcessingResponseRequestHeaders creates a safe-to-log copy of the request headers processing response.
 // Used exclusively for debug logging without modifying the actual response sent to Envoy.
-// Redacts sensitive header values (API keys, authorization tokens) while preserving header names for debugging.
-func redactProcessingResponseRequestHeaders(resp *extprocv3.ProcessingResponse_RequestHeaders, logger *slog.Logger, sensitiveKeys []string) *extprocv3.ProcessingResponse_RequestHeaders {
+//
+// Header mutations are always redacted (API keys, authorization tokens) — a backend
+// credential injected here must never reach the debug log, regardless of the
+// [Server.enableRedaction] flag, which only governs the more expensive body-content
+// redaction. When redactBody is false, the body mutation is logged as-is (mirroring
+// [redactRequestBodyResponse]); when true, it is redacted too.
+func redactProcessingResponseRequestHeaders(resp *extprocv3.ProcessingResponse_RequestHeaders, logger *slog.Logger, sensitiveKeys []string, redactBody bool) *extprocv3.ProcessingResponse_RequestHeaders {
+	if resp == nil || resp.RequestHeaders == nil || resp.RequestHeaders.Response == nil {
+		return &extprocv3.ProcessingResponse_RequestHeaders{}
+	}
 	originalHeaderMutation := resp.RequestHeaders.GetResponse().GetHeaderMutation()
+	var bodyMutation *extprocv3.BodyMutation
+	if redactBody {
+		bodyMutation = redactBodyMutation(resp.RequestHeaders.Response.GetBodyMutation())
+	} else {
+		bodyMutation = resp.RequestHeaders.Response.GetBodyMutation()
+	}
 
 	return &extprocv3.ProcessingResponse_RequestHeaders{
 		RequestHeaders: &extprocv3.HeadersResponse{
 			Response: &extprocv3.CommonResponse{
 				HeaderMutation:  redactHeaderMutation(originalHeaderMutation, logger, sensitiveKeys),
-				BodyMutation:    redactBodyMutation(resp.RequestHeaders.Response.GetBodyMutation()),
+				BodyMutation:    bodyMutation,
 				ClearRouteCache: resp.RequestHeaders.Response.GetClearRouteCache(),
 			},
 		},
@@ -603,6 +655,28 @@ func redactRequestBodyResponse(resp *extprocv3.ProcessingResponse_RequestBody, l
 				BodyMutation:    bodyMutation,
 				ClearRouteCache: resp.RequestBody.Response.GetClearRouteCache(),
 			},
+		},
+	}
+}
+
+// redactImmediateResponse creates a safe-to-log copy of an immediate response with sensitive
+// header values redacted. The status, body and details are local error information generated by
+// the filter and are logged as-is.
+func redactImmediateResponse(resp *extprocv3.ProcessingResponse_ImmediateResponse, logger *slog.Logger, sensitiveKeys []string) *extprocv3.ProcessingResponse_ImmediateResponse {
+	if resp == nil || resp.ImmediateResponse == nil {
+		return &extprocv3.ProcessingResponse_ImmediateResponse{}
+	}
+	var headers *extprocv3.HeaderMutation
+	if original := resp.ImmediateResponse.GetHeaders(); original != nil {
+		headers = redactHeaderMutation(original, logger, sensitiveKeys)
+	}
+	return &extprocv3.ProcessingResponse_ImmediateResponse{
+		ImmediateResponse: &extprocv3.ImmediateResponse{
+			Status:     resp.ImmediateResponse.GetStatus(),
+			Headers:    headers,
+			Body:       resp.ImmediateResponse.GetBody(),
+			GrpcStatus: resp.ImmediateResponse.GetGrpcStatus(),
+			Details:    resp.ImmediateResponse.GetDetails(),
 		},
 	}
 }

@@ -128,6 +128,7 @@ func NewServer(opts *Options) (*http.Server, *mcp.Server) {
 
 	s.AddPrompt(CodeReviewPrompt, codReviewPromptHandler)
 	s.AddResource(DummyResource, DummyResourceHandler())
+	s.AddResource(UIRendererResource, DummyResourceHandler())
 	s.AddResourceTemplate(DummyResourceTemplate, DummyResourceHandler())
 	mcp.AddTool(s, ToolEcho.Tool, ToolEcho.Handler)
 	mcp.AddTool(s, ToolSum.Tool, ToolSum.Handler)
@@ -145,6 +146,9 @@ func NewServer(opts *Options) (*http.Server, *mcp.Server) {
 	mcp.AddTool(s, addOrDeleteResourceTool.Tool, addOrDeleteResourceTool.Handler)
 	notificationsCounts := newToolNotificationCounts(handlerCounts)
 	mcp.AddTool(s, notificationsCounts.Tool, notificationsCounts.Handler)
+	mcp.AddTool(s, ToolUIResource.Tool, ToolUIResource.Handler)
+	mcp.AddTool(s, ToolResourceLink.Tool, ToolResourceLink.Handler)
+	mcp.AddTool(s, ToolEmbeddedResource.Tool, ToolEmbeddedResource.Handler)
 
 	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		// Check for API key in query param if configured.

@@ -77,6 +77,14 @@ const (
 
 func requireNewMCPEnv(t *testing.T, forceJSONResponse bool, writeTimeout time.Duration, path string, extprocArgs ...string) *mcpEnv {
 	t.Helper()
+	return requireNewMCPEnvWithExtProcEnv(t, nil, forceJSONResponse, writeTimeout, path, extprocArgs...)
+}
+
+// requireNewMCPEnvWithExtProcEnv is requireNewMCPEnv with extra environment
+// variables for the ExtProc process, used to exercise the tracing semantic
+// convention selector end to end.
+func requireNewMCPEnvWithExtProcEnv(t *testing.T, extraEnv []string, forceJSONResponse bool, writeTimeout time.Duration, path string, extprocArgs ...string) *mcpEnv {
+	t.Helper()
 
 	internaltesting.ClearTestEnv(t)
 
@@ -135,7 +143,7 @@ func requireNewMCPEnv(t *testing.T, forceJSONResponse bool, writeTimeout time.Du
 				_ = srv2.Close()
 			})
 		}, map[string]int{"ts1": 8080, "ts2": 8081, "special_listener": 9999},
-		string(config), collector.Env(), envoyConfig, true, true,
+		string(config), append(collector.Env(), extraEnv...), envoyConfig, true, true,
 		writeTimeout, extprocArgs...,
 	)
 
@@ -254,6 +262,21 @@ func requireNewMCPEnv(t *testing.T, forceJSONResponse bool, writeTimeout time.Du
 
 // newSession creates a new MCP client session and registers it for progress notifications.
 func (m *mcpEnv) newSession(t *testing.T) *mcpSession {
+	ret := m.newSessionWithoutSpanCheck(t)
+	span := m.collector.TakeSpan()
+	t.Log("created new MCP session with ID ", ret.session.ID(), ", first span: ", span.String())
+	requireMCPSpan(t, span, "Initialize", map[string]string{
+		"mcp.method.name":    "initialize",
+		"mcp.client.name":    "demo-http-client",
+		"mcp.client.title":   "",
+		"mcp.client.version": "0.1.0",
+	})
+	return ret
+}
+
+// newSessionWithoutSpanCheck is newSession without the initialize span
+// assertion, for callers that assert a different semantic convention.
+func (m *mcpEnv) newSessionWithoutSpanCheck(t *testing.T) *mcpSession {
 	ret := &mcpSession{
 		toolListChangedNotifications:     make(chan *mcp.ToolListChangedRequest, 100),
 		progressNotifications:            make(chan *mcp.ProgressNotificationClientRequest, 100),
@@ -268,14 +291,6 @@ func (m *mcpEnv) newSession(t *testing.T) *mcpSession {
 
 	ret.session, err = m.client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: m.baseURL}, nil)
 	require.NoError(t, err)
-	span := m.collector.TakeSpan()
-	t.Log("created new MCP session with ID ", ret.session.ID(), ", first span: ", span.String())
-	requireMCPSpan(t, span, "Initialize", map[string]string{
-		"mcp.method.name":    "initialize",
-		"mcp.client.name":    "demo-http-client",
-		"mcp.client.title":   "",
-		"mcp.client.version": "0.1.0",
-	})
 
 	// **NOTE*** Do not add any direct access to the in-memory server session. Otherwise, the tests will result in
 	// not being able to run in end-to-end tests. The test code must solely operate through the client side sessions.

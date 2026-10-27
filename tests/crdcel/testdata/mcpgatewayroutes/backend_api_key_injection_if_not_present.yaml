@@ -1,0 +1,28 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# Valid: injectionPolicy IfNotPresent with a header-injected API key (secretRef).
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: backend-apikey-injection-if-not-present
+  namespace: default
+spec:
+  parentRefs:
+    - name: some-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-service
+      kind: Service
+      port: 80
+      securityPolicy:
+        apiKey:
+          secretRef:
+            name: github-sa-token
+          injectionPolicy: IfNotPresent
+      forwardHeaders:
+        - name: X-GitHub-PAT
+          backendHeader: Authorization

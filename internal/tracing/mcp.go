@@ -27,22 +27,72 @@ var _ tracingapi.MCPSpan = (*mcpSpan)(nil)
 // Ensure mcpTracer implements [tracingapi.MCPTracer].
 var _ tracingapi.MCPTracer = (*mcpTracer)(nil)
 
+// mcpVocabulary is the set of span names, attribute keys and events that one
+// semantic convention emits for MCP requests. The two implementations
+// (mcpVocabularyLegacy and mcpVocabularyOTel) are meant to be read side by side:
+// everything that differs between conventions lives here, and everything that
+// does not - trace context propagation, sampling, custom attribute mappings -
+// lives in mcpTracer and is shared.
+//
+// Every field is non-nil in both vocabularies. A convention that does not record
+// a signal supplies a no-op rather than a nil, so mcpSpan never has to branch.
+type mcpVocabulary struct {
+	// name identifies the convention, matching the semConvs entry it belongs to.
+	name string
+	// spanName derives the span name from the JSON-RPC method and its params.
+	spanName func(method string, p mcp.Params) string
+	// requestAttributes returns the attributes recorded when the span starts.
+	requestAttributes func(req *jsonrpc.Request, p mcp.Params) []attribute.KeyValue
+	// routeToBackend records the backend a request was routed to.
+	routeToBackend func(span trace.Span, backend, sessionID string, isNew bool)
+	// clientSession records the client-facing MCP session.
+	clientSession func(span trace.Span, sessionID string)
+	// event records a timestamped event, e.g. the list aggregation timeline.
+	event func(span trace.Span, name string)
+	// listResult records the size of an aggregated list result.
+	listResult func(span trace.Span, result any)
+	// toolCallResult records the tools/call result payload.
+	toolCallResult func(span trace.Span, resultJSON []byte)
+	// requestError records the failure class of a failed request. The span
+	// status and the exception event are the same under both conventions, so
+	// this covers only the convention-specific attributes.
+	requestError func(span trace.Span, errType string, err error)
+}
+
 // mcpSpan is an implementation of [tracingapi.MCPSpan].
 type mcpSpan struct {
-	span trace.Span
+	span  trace.Span
+	vocab *mcpVocabulary
 }
 
 // RecordRouteToBackend implements [tracingapi.MCPSpan.RecordRouteToBackend].
 func (s mcpSpan) RecordRouteToBackend(backend string, sessionID string, isNew bool) {
-	s.span.AddEvent("route to backend", trace.WithAttributes(
-		attribute.String("mcp.backend.name", backend),
-		attribute.String("mcp.session.id", sessionID),
-		attribute.Bool("mcp.session.new", isNew),
-	))
+	s.vocab.routeToBackend(s.span, backend, sessionID, isNew)
+}
+
+// RecordClientSession implements [tracingapi.MCPSpan.RecordClientSession].
+func (s mcpSpan) RecordClientSession(sessionID string) {
+	s.vocab.clientSession(s.span, sessionID)
+}
+
+// AddEvent implements [tracingapi.MCPSpan.AddEvent].
+func (s mcpSpan) AddEvent(name string) {
+	s.vocab.event(s.span, name)
+}
+
+// RecordListResult implements [tracingapi.MCPSpan.RecordListResult].
+func (s mcpSpan) RecordListResult(result any) {
+	s.vocab.listResult(s.span, result)
+}
+
+// RecordToolCallResult implements [tracingapi.MCPSpan.RecordToolCallResult].
+func (s mcpSpan) RecordToolCallResult(resultJSON []byte) {
+	s.vocab.toolCallResult(s.span, resultJSON)
 }
 
 // EndSpanOnError implements [tracingapi.MCPSpan.EndSpanOnError].
 func (s mcpSpan) EndSpanOnError(errType string, err error) {
+	s.vocab.requestError(s.span, errType, err)
 	s.span.AddEvent("exception", trace.WithAttributes(
 		attribute.String("exception.type", errType),
 		attribute.String("exception.message", err.Error()),
@@ -62,25 +112,26 @@ type mcpTracer struct {
 	tracer            trace.Tracer
 	propagator        propagation.TextMapPropagator
 	attributeMappings map[string]string
+	vocab             *mcpVocabulary
 }
 
-func newMCPTracer(tracer trace.Tracer, propagator propagation.TextMapPropagator, attributeMappings map[string]string) tracingapi.MCPTracer {
+func newMCPTracer(
+	tracer trace.Tracer,
+	propagator propagation.TextMapPropagator,
+	attributeMappings map[string]string,
+	vocab *mcpVocabulary,
+) tracingapi.MCPTracer {
 	return mcpTracer{
 		tracer:            tracer,
 		propagator:        propagator,
 		attributeMappings: attributeMappings,
+		vocab:             vocab,
 	}
 }
 
 // StartSpanAndInjectMeta implements [tracingapi.MCPTracer.StartSpanAndInjectMeta].
 func (m mcpTracer) StartSpanAndInjectMeta(ctx context.Context, req *jsonrpc.Request, param mcp.Params, headers http.Header) tracingapi.MCPSpan {
-	attrs := []attribute.KeyValue{
-		attribute.String("mcp.protocol.version", "2025-06-18"),
-		attribute.String("mcp.transport", "http"),
-		attribute.String("mcp.request.id", fmt.Sprintf("%v", req.ID)),
-		attribute.String("mcp.method.name", req.Method),
-	}
-	attrs = append(attrs, getMCPParamsAsAttributes(param)...)
+	attrs := m.vocab.requestAttributes(req, param)
 
 	for srcName, targetName := range m.attributeMappings {
 		// Check if the attribute is present in the metadata first, as this is the common place to add custom attributes
@@ -93,7 +144,8 @@ func (m mcpTracer) StartSpanAndInjectMeta(ctx context.Context, req *jsonrpc.Requ
 		}
 	}
 
-	// Extract trace context from incoming meta.
+	// Extract trace context: headers first, then _meta on top. Extract returns the context it was
+	// given when a carrier holds none, so either source alone works.
 	mutableMeta := param.GetMeta()
 	if mutableMeta == nil {
 		mutableMeta = make(map[string]any)
@@ -101,11 +153,11 @@ func (m mcpTracer) StartSpanAndInjectMeta(ctx context.Context, req *jsonrpc.Requ
 	mc := metaMapCarrier{
 		m: mutableMeta,
 	}
-	parentCtx := m.propagator.Extract(ctx, mc)
+	parentCtx := m.propagator.Extract(ctx, propagation.HeaderCarrier(headers))
+	parentCtx = m.propagator.Extract(parentCtx, mc)
 
 	// Start the span with options appropriate for the semantic convention.
-	// Convert method name to span name following mcp-go SDK patterns
-	spanName := getSpanName(req.Method)
+	spanName := m.vocab.spanName(req.Method, param)
 	newCtx, span := m.tracer.Start(parentCtx, spanName, trace.WithSpanKind(trace.SpanKindClient))
 
 	// Always inject trace context into the header mutation if provided.
@@ -116,57 +168,10 @@ func (m mcpTracer) StartSpanAndInjectMeta(ctx context.Context, req *jsonrpc.Requ
 	// Only record request attributes if span is recording (sampled).
 	if span.IsRecording() {
 		span.SetAttributes(attrs...)
-		return &mcpSpan{span: span}
+		return &mcpSpan{span: span, vocab: m.vocab}
 	}
 
 	return nil
-}
-
-func getMCPParamsAsAttributes(p mcp.Params) []attribute.KeyValue {
-	var attrs []attribute.KeyValue
-	switch params := p.(type) {
-	case *mcp.InitializeParams:
-		if params.ClientInfo != nil {
-			attrs = append(attrs,
-				attribute.String("mcp.client.name", params.ClientInfo.Name),
-				attribute.String("mcp.client.title", params.ClientInfo.Title),
-				attribute.String("mcp.client.version", params.ClientInfo.Version),
-			)
-		}
-	case *mcp.CallToolParams:
-		attrs = append(attrs, attribute.String("mcp.tool.name", params.Name))
-	case *mcp.GetPromptParams:
-		attrs = append(attrs, attribute.String("mcp.prompt.name", params.Name))
-	case *mcp.SetLoggingLevelParams:
-		attrs = append(attrs, attribute.String("mcp.logging.level", string(params.Level)))
-	case *mcp.ListResourcesParams:
-	case *mcp.ReadResourceParams:
-		attrs = append(attrs, attribute.String("mcp.resource.uri", params.URI))
-	case *mcp.SubscribeParams:
-		attrs = append(attrs, attribute.String("mcp.resource.uri", params.URI))
-	case *mcp.UnsubscribeParams:
-		attrs = append(attrs, attribute.String("mcp.resource.uri", params.URI))
-	case *mcp.ProgressNotificationParams:
-		if params.Progress != 0 {
-			attrs = append(attrs, attribute.Float64("mcp.notifications.progress", params.Progress))
-		}
-		if params.ProgressToken != nil {
-			attrs = append(attrs, attribute.String("mcp.notifications.progress.token", fmt.Sprintf("%v", params.ProgressToken)))
-		}
-		if len(params.Message) > 0 {
-			attrs = append(attrs, attribute.String("mcp.notifications.progress.message", params.Message))
-		}
-	case *mcp.CompleteParams:
-		if len(params.Argument.Name) > 0 {
-			attrs = append(attrs, attribute.String("mcp.complete.argument.name", params.Argument.Name))
-		}
-		if len(params.Argument.Value) > 0 {
-			attrs = append(attrs, attribute.String("mcp.complete.argument.value", params.Argument.Value))
-		}
-
-	}
-
-	return attrs
 }
 
 // Ensure metaMapCarrier implements the [propagation.TextMapCarrier] interface.
@@ -197,36 +202,11 @@ func (c metaMapCarrier) Keys() []string {
 	return keys
 }
 
-// getSpanName converts MCP method names to span names following mcp-go SDK patterns.
-func getSpanName(method string) string {
-	switch method {
-	case "initialize":
-		return "Initialize"
-	case "tools/list":
-		return "ListTools"
-	case "tools/call":
-		return "CallTool"
-	case "prompts/list":
-		return "ListPrompts"
-	case "prompts/get":
-		return "GetPrompt"
-	case "resources/list":
-		return "ListResources"
-	case "resources/read":
-		return "ReadResource"
-	case "resources/subscribe":
-		return "Subscribe"
-	case "resources/unsubscribe":
-		return "Unsubscribe"
-	case "resources/templates/list":
-		return "ListResourceTemplates"
-	case "logging/setLevel":
-		return "SetLoggingLevel"
-	case "completion/complete":
-		return "Complete"
-	case "ping":
-		return "Ping"
-	default:
-		return method
-	}
-}
+// The noop* functions below are the "this convention does not record that
+// signal" implementations of the mcpVocabulary function fields.
+
+func noopSpanSession(trace.Span, string)      {}
+func noopSpanEvent(trace.Span, string)        {}
+func noopSpanListResult(trace.Span, any)      {}
+func noopSpanPayload(trace.Span, []byte)      {}
+func noopSpanError(trace.Span, string, error) {}

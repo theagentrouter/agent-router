@@ -20,6 +20,12 @@
 
 config:
   envoyGateway:
+    # GAIE conformance test required Envoy Gateway namespaced mode
+    provider:
+      type: Kubernetes
+      kubernetes:
+        deploy:
+          type: GatewayNamespace
     extensionManager:
       # Enable InferencePool custom resource support
       backendResources:

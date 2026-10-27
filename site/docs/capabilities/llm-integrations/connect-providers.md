@@ -6,7 +6,7 @@ sidebar_position: 10
 
 # Connecting to AI Providers
 
-Envoy AI Gateway provides a unified interface for connecting to multiple AI providers through a standardized configuration approach. This page explains the fundamental concepts, resources, and relationships required to establish connectivity with any supported AI provider.
+Agent Router provides a unified interface for connecting to multiple AI providers through a standardized configuration approach. This page explains the fundamental concepts, resources, and relationships required to establish connectivity with any supported AI provider.
 
 ## Overview
 
@@ -92,7 +92,6 @@ spec:
   apiKey:
     secretRef:
       name: openai-secret
-      namespace: default
 ```
 
 :::note
@@ -137,7 +136,6 @@ spec:
     credentialsFile:
       secretRef:
         name: aws-secret
-        namespace: default
       profile: default # Optional, defaults to "default"
 ```
 
@@ -161,7 +159,6 @@ spec:
     tenantID: "your-azure-tenant-id"
     clientSecretRef:
       name: azure-secret
-      namespace: default
 ```
 
 :::note
@@ -193,7 +190,7 @@ ADC automatically supports GKE Workload Identity, the `GOOGLE_APPLICATION_CREDEN
 2. Service Account Key Files:
    A service account key file is a JSON file containing a private key that authenticates as a service account.
    You create a service account in GCP, generate a key file, download it, and then store it in the k8s secret referenced by BackendSecurityPolicy.
-   Envoy AI Gateway uses this key file to generate an access token and authenticate with GCP Vertex AI.
+   Agent Router uses this key file to generate an access token and authenticate with GCP Vertex AI.
 
 ```yaml
 apiVersion: aigateway.envoyproxy.io/v1beta1
@@ -240,6 +237,31 @@ spec:
             name: "gcp-client-secret"
             namespace: default
 ```
+
+##### Secrets in another namespace
+
+A `secretRef` or `clientSecretRef` without `namespace` refers to a Secret in the BackendSecurityPolicy's own namespace. A Secret in another namespace also needs a [ReferenceGrant](https://gateway-api.sigs.k8s.io/api-types/referencegrant/) in the Secret's namespace that allows the reference. Without it, the BackendSecurityPolicy is marked `NotAccepted`.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-backend-security-policy-secrets
+  namespace: credentials # the Secret's namespace
+spec:
+  from:
+    - group: aigateway.envoyproxy.io
+      kind: BackendSecurityPolicy
+      namespace: ai-backends # the BackendSecurityPolicy's namespace
+  to:
+    - group: ""
+      kind: Secret
+      name: openai-secret # the Secret's name
+```
+
+The `name` field limits the grant to that one Secret. Without it, the grant covers every Secret in the namespace. To allow several Secrets, add a `to` entry for each.
+
+With `aigw run`, put the ReferenceGrant in the configuration file.
 
 #### Security Best Practices
 
@@ -361,7 +383,6 @@ spec:
   apiKey:
     secretRef:
       name: openai-secret
-      namespace: default
 
 ---
 # Routing configuration

@@ -80,6 +80,14 @@ type GatewayConfigSpec struct {
 	// +listType=map
 	// +listMapKey=metadataKey
 	GlobalLLMRequestCosts []LLMRequestCost `json:"globalLLMRequestCosts,omitempty"`
+
+	// ForwardProxy routes all upstream AI/LLM traffic from Gateways referencing this
+	// GatewayConfig through an HTTP CONNECT forward proxy. This is intended for data planes
+	// in locked-down networks where direct egress to providers is not permitted and all
+	// outbound traffic must traverse a proxy.
+	//
+	// +optional
+	ForwardProxy *GatewayConfigForwardProxy `json:"forwardProxy,omitempty"`
 }
 
 // GatewayConfigExtProc holds runtime-specific configuration for the external processor.
@@ -88,6 +96,17 @@ type GatewayConfigExtProc struct {
 	//
 	// +optional
 	Kubernetes *egv1a1.KubernetesContainerSpec `json:"kubernetes,omitempty"`
+}
+
+// GatewayConfigForwardProxy configures an HTTP CONNECT forward proxy for upstream egress.
+type GatewayConfigForwardProxy struct {
+	// Address is the "host:port" of the HTTP CONNECT proxy. The host may be a hostname or an
+	// IP address; the port is required. Upstream connections are tunnelled through this proxy
+	// via Envoy's http_11_proxy transport socket, preserving the upstream TLS session.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Address string `json:"address"`
 }
 
 // GatewayConfigStatus defines the observed state of GatewayConfig.

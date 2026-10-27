@@ -17,6 +17,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -56,7 +57,7 @@ type openAIToGCPAnthropicTranslatorV1ChatCompletion struct {
 func (o *openAIToGCPAnthropicTranslatorV1ChatCompletion) RequestBody(_ []byte, openAIReq *openai.ChatCompletionRequest, _ bool) (
 	newHeaders []internalapi.Header, newBody []byte, err error,
 ) {
-	params, err := buildAnthropicParams(openAIReq, "GCPAnthropic", o.modelNameOverride)
+	params, err := buildAnthropicParams(openAIReq, filterapi.APISchemaGCPAnthropic, o.modelNameOverride)
 	if err != nil {
 		return
 	}

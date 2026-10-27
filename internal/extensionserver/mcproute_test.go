@@ -15,6 +15,7 @@ import (
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	htomv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_to_metadata/v3"
 	httpconnectionmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/go-logr/logr/testr"
@@ -328,6 +329,19 @@ func TestServer_maybeUpdateMCPRoutes(t *testing.T) {
 										filterNameAPIKeyAuth: emptyConfig,
 										filterNameExtAuth:    emptyConfig,
 									},
+									// rule/0 (frontend MCP proxy route) gets the dynamic-metadata -> header
+									// injection so the HTTP MCP proxy can read the backend subset; authn is
+									// preserved.
+									RequestHeadersToAdd: []*corev3.HeaderValueOption{
+										{
+											AppendAction:   corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+											KeepEmptyValue: true,
+											Header: &corev3.HeaderValue{
+												Key:   internalapi.MCPBackendSubsetHeader,
+												Value: `%DYNAMIC_METADATA(["aigateway.envoy.io", "mcp_backend_subset"])%`,
+											},
+										},
+									},
 								},
 								{
 									Name: internalapi.MCPMainHTTPRoutePrefix + "foo/rule/1",
@@ -583,5 +597,49 @@ func TestServer_maybeGenerateResourcesForMCPGateway(t *testing.T) {
 				tt.check(t, tt.req)
 			}
 		})
+	}
+}
+
+// TestServer_createBackendListener_headerToMetadataRules pins the header_to_metadata rules the MCP
+// backend listener is built with: a stable order, and Remove set only for the internal metadata
+// headers that must not reach the upstream MCP server.
+func TestServer_createBackendListener_headerToMetadataRules(t *testing.T) {
+	s := &Server{log: testr.New(t)}
+
+	type rule struct {
+		header string
+		key    string
+		remove bool
+	}
+	rulesOf := func(t *testing.T) []rule {
+		t.Helper()
+		listener, err := s.createBackendListener(nil, nil)
+		require.NoError(t, err)
+		hcm, _, err := findHCM(listener.FilterChains[0])
+		require.NoError(t, err)
+		i, filter := findHeaderToMetadataFilter(hcm.HttpFilters)
+		require.NotEqual(t, -1, i)
+		cfg := &htomv3.Config{}
+		require.NoError(t, filter.GetTypedConfig().UnmarshalTo(cfg))
+		rules := make([]rule, 0, len(cfg.RequestRules))
+		for _, r := range cfg.RequestRules {
+			rules = append(rules, rule{r.GetHeader(), r.GetOnHeaderPresent().GetKey(), r.GetRemove()})
+		}
+		return rules
+	}
+
+	got := rulesOf(t)
+	require.Equal(t, []rule{
+		{"x-ai-eg-mcp-backend", "mcp_backend", false},
+		{"x-ai-eg-mcp-metadata-method", "mcp_method", true},
+		{"x-ai-eg-mcp-metadata-request-id", "mcp_request_id", true},
+		{"x-ai-eg-mcp-metadata-resource-uri", "mcp_resource_uri", true},
+		{"x-ai-eg-mcp-metadata-tool-name", "mcp_tool_name", true},
+	}, got)
+
+	// Ranging a map is randomized per-iteration, so an unsorted build would differ across calls. An
+	// unstable order changes the serialized listener and makes Envoy drain it on every translation.
+	for range 20 {
+		require.Equal(t, got, rulesOf(t))
 	}
 }

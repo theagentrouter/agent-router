@@ -1,189 +1,218 @@
 /**
- * Any CSS included here will be global. The classic template
- * bundles Infima by default. Infima is a CSS framework designed to
- * work well for content-centric websites.
+ * Agent Router site chrome — the mapping layer from the vendored brand
+ * tokens (src/css/brand/tokens.css, loaded first) onto Infima variables.
+ *
+ * Brand rules encoded here (see src/css/brand/README.md):
+ *  - #FF5500 (Marquee 500) is a mark/display colour, never a text colour
+ *    and never a fill behind text. Interactive orange steps DOWN the ramp:
+ *    buttons are Marquee 600 with white text (4.20:1), hover 700 (5.86:1);
+ *    links are Marquee 700 on light (5.86:1), Marquee 400 on dark.
+ *  - Envoy magenta (--envoy-magenta) is transition-only: the rebrand
+ *    announcement bar and "formerly" badges.
  */
-@import url('https://fonts.googleapis.com/css?family=Nunito:400,700,800');
 
-/* You can override the default Infima variables here. */
 :root {
-  --ifm-color-primary: #6c1899;
-  --ifm-color-primary-dark: #50166f;
-  --ifm-color-primary-darker: #3a124f;
-  --ifm-color-primary-darkest: #29073b;
-  --ifm-color-primary-light: #8a20c4;
-  --ifm-color-primary-lighter: #a339dc;
-  --ifm-color-primary-lightest: #c257fc;
-  --ifm-navbar-link-hover-color: var(--ifm-color-primary-darker);
-  --ifm-code-font-size: 95%;
-  --ifm-code-font-family: "Nunito", "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --ifm-heading-font-family: "Nunito", "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --ifm-font-family-base: "Nunito", "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
-  --ifm-navbar-background-color: #b923ff;
-  --ifm-footer-background-color: #f8ebff;
-  --ifm-navbar-link-color: #fff;
-  --ifm-line-height-base: 1.5;
-  --ifm-container-width: 1340px;
-  --ifm-container-width-xl: 1520px;
-  --ifm-h1-font-size: 2.5rem;
-  --ifm-h2-font-size: 2rem;
-  --ifm-h3-font-size: 1.7rem;
-  --ifm-h4-font-size: 1.4rem;
-  --ifm-h5-font-size: 1.2rem;
+  /* primary ramp — anchored at the AA-safe text orange */
+  --ifm-color-primary: var(--ar-marquee-700);
+  --ifm-color-primary-dark: var(--ar-marquee-800);
+  --ifm-color-primary-darker: var(--ar-marquee-800);
+  --ifm-color-primary-darkest: var(--ar-marquee-900);
+  --ifm-color-primary-light: var(--ar-marquee-600);
+  --ifm-color-primary-lighter: var(--ar-marquee-500);
+  --ifm-color-primary-lightest: var(--ar-marquee-300);
+  --ifm-link-color: var(--ar-brand-text);
+
+  /* typography */
+  --ifm-font-family-base: var(--ar-font-ui);
+  --ifm-heading-font-family: var(--ar-font-display);
+  --ifm-font-family-monospace: var(--ar-font-mono);
+  --ifm-code-font-family: var(--ar-font-mono);
+  --ifm-code-font-size: 90%;
+  --ifm-font-color-base: var(--ar-fg);
+  --ifm-heading-color: var(--ar-fg);
+  --ifm-line-height-base: var(--ar-leading-body);
+  --ifm-heading-font-weight: 700;
+  --ifm-h1-font-size: var(--ar-text-3xl);
+  --ifm-h2-font-size: var(--ar-text-2xl);
+  --ifm-h3-font-size: var(--ar-text-xl);
+  --ifm-h4-font-size: 1.25rem;
+  --ifm-h5-font-size: 1.125rem;
   --ifm-h6-font-size: 1rem;
 
-  /* New custom variables */
-  --custom-content-line-height: 1.7;
+  /* grounds & surfaces */
+  --ifm-background-color: var(--ar-cream);
+  --ifm-background-surface-color: var(--ar-paper);
+  --ifm-navbar-background-color: var(--ar-cream);
+  --ifm-footer-background-color: var(--ar-ground-teal);
+  --ifm-code-background: var(--ar-bg-subtle);
+  --ifm-hr-border-color: var(--ar-cream-3);
+  --ifm-toc-border-color: var(--ar-cream-3);
+  --ifm-table-border-color: var(--ar-cream-3);
+  --docusaurus-highlighted-code-line-bg: rgba(255, 85, 0, 0.08);
+
+  /* status colours → admonitions */
+  --ifm-color-info: var(--ar-info);
+  --ifm-color-success: var(--ar-success);
+  --ifm-color-warning: var(--ar-warning);
+  --ifm-color-danger: var(--ar-danger);
+
+  /* nav & menu states */
+  --ifm-navbar-link-color: var(--ar-ink-600);
+  --ifm-navbar-link-hover-color: var(--ar-brand-text);
+  --ifm-menu-color-active: var(--ar-brand-text);
+  --ifm-breadcrumb-color-active: var(--ar-brand-text);
+  --ifm-tabs-color-active: var(--ar-brand-text);
+  --ifm-navbar-height: 5rem;
+
+  /* shape & layout */
+  --ifm-global-radius: var(--ar-radius-sm);
+  --ifm-card-border-radius: var(--ar-radius-lg);
+  --ifm-button-border-radius: 999px;
+  --ifm-container-width: 1340px;
+  --ifm-container-width-xl: 1520px;
+
+  /* retokenized legacy custom vars (api-field et al.) */
+  --custom-content-line-height: var(--ar-leading-body);
   --custom-paragraph-spacing: 1.5rem;
-  --custom-text-color: #2c3e50;
-  --custom-heading-color: #1a202c;
-  --custom-link-color: #6c1899;
-  --custom-link-hover-color: #8a20c4;
-  --custom-code-background: #f8f9fa;
-  /* Required field badge colors */
-  --custom-required-badge-bg: #fef2f2;
-  --custom-required-badge-border: #fecaca;
-  --custom-required-badge-text: #dc2626;
-
-
+  --custom-text-color: var(--ar-fg);
+  --custom-heading-color: var(--ar-fg);
+  --custom-link-color: var(--ar-brand-text);
+  --custom-link-hover-color: var(--ar-marquee-600);
+  --custom-code-background: var(--ar-bg-subtle);
+  --custom-required-badge-bg: var(--ar-raspberry-100);
+  --custom-required-badge-border: #EFB8D2;
+  --custom-required-badge-text: var(--ar-raspberry-700);
 }
 
-/* Index Header */
-.heroBanner {
-  font-family: "Nunito", "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  padding: 2rem 0rem 10rem 0rem;
-  text-align: center;
-  overflow: hidden;
-  background-color: #6c1899;
-  background-image: linear-gradient(0deg, #6c1899, #b923ff);
-  clip-path: polygon(0 0, 100% 0, 100% 80%, 0 100%);
-  color: #fff;
-  position: relative;
+/* dark / backstage — tokens.css re-derives the --ar-* semantics; this block
+   only re-points Infima at them and steps text UP the marquee ramp. */
+[data-theme='dark'] {
+  --ifm-color-primary: var(--ar-marquee-400);
+  --ifm-color-primary-dark: var(--ar-marquee-500);
+  --ifm-color-primary-darker: var(--ar-marquee-600);
+  --ifm-color-primary-darkest: var(--ar-marquee-700);
+  --ifm-color-primary-light: var(--ar-marquee-300);
+  --ifm-color-primary-lighter: var(--ar-marquee-200);
+  --ifm-color-primary-lightest: var(--ar-marquee-100);
+  --ifm-link-color: var(--ar-brand-text);
 
+  --ifm-background-color: var(--ar-ink-900);
+  --ifm-background-surface-color: var(--ar-ink-800);
+  --ifm-navbar-background-color: var(--ar-ink-900);
+  --ifm-footer-background-color: var(--ar-ground-teal);
+  --ifm-code-background: var(--ar-ink-800);
+  --ifm-hr-border-color: var(--ar-border);
+  --ifm-toc-border-color: var(--ar-border);
+  --ifm-table-border-color: var(--ar-border);
+  --docusaurus-highlighted-code-line-bg: rgba(255, 85, 0, 0.14);
 
-  .hero__subtitle{
-    max-width: 800px;
-    margin-left: auto;
-    margin-right: auto;
-  }
-  .heroImage{
-    max-height: 30vh;
-  }
-  .buttons{
-    display: flex;
-    justify-content: center;
-    gap: 1.5rem;
-    margin-top: 3rem;
-    .button{
-      background: linear-gradient(
-        135deg,
-        rgba(255, 255, 255, 0.1) 0%,
-        rgba(255, 20, 147, 0.1) 100%
-      );
-      backdrop-filter: blur(10px);
-      color: #fff;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      border-radius: 25px;
-      padding: 0.8rem 2rem;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      transition: all 0.3s ease;
-      text-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
-      box-shadow: 0 4px 15px rgba(108, 24, 153, 0.2);
-      position: relative;
+  --ifm-navbar-link-color: var(--ar-fg-muted);
+  --ifm-navbar-link-hover-color: var(--ar-brand-text);
+  --ifm-menu-color-active: var(--ar-brand-text);
+  --ifm-breadcrumb-color-active: var(--ar-brand-text);
+  --ifm-tabs-color-active: var(--ar-brand-text);
 
-      &::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: linear-gradient(
-          90deg,
-          rgba(255, 119, 0, 0.1) 0%,
-          rgba(255, 255, 255, 0.1) 100%
-        );
-        opacity: 0;
-        transition: opacity 0.3s ease;
-        border-radius: inherit;
-      }
-
-      &:hover {
-        background: linear-gradient(
-          90deg,
-          rgba(255, 255, 255, 0.15) 0%,
-          rgba(255, 20, 147, 0.15) 100%
-        );
-        border-color: rgba(255, 255, 255, 0.4);
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(108, 24, 153, 0.3);
-
-        &::before {
-          opacity: 1;
-          border-radius: inherit;
-        }
-      }
-
-      &:active {
-        transform: translateY(0);
-        box-shadow: 0 2px 10px rgba(108, 24, 153, 0.2);
-      }
-    }
-  }
+  --custom-text-color: var(--ar-fg);
+  --custom-heading-color: var(--ar-fg);
+  --custom-link-color: var(--ar-brand-text);
+  --custom-link-hover-color: var(--ar-marquee-300);
+  --custom-code-background: var(--ar-ink-800);
+  --custom-required-badge-bg: rgba(220, 24, 109, 0.14);
+  --custom-required-badge-border: rgba(225, 71, 138, 0.4);
+  --custom-required-badge-text: var(--ar-raspberry-300);
 }
 
-  @media screen and (max-width: 996px) {
-  .heroBanner {
-    padding: 2rem 0rem 10rem 0rem;
-    align-items: start;
-    clip-path: polygon(0 0, 100% 0, 100% 87%, 0 100%);
-
-    .hero__subtitle{
-      font-size: 1.2rem;
-    }
-
-    .buttons{
-      flex-direction: column-reverse;
-
-    }
-  }
-
-}
-  @media screen and (max-width: 500px) {
-    .heroBanner {
-      padding: 2rem 0rem 5rem 0rem;
-      align-items: start;
-      clip-path: polygon(0 0, 100% 0, 100% 90%, 0 100%);
-      .heroImage{
-        max-height: 15vh;
-      }
-    }
-  }
+/* ---------------------------------------------------------------- chrome */
 
 .navbar {
-    box-shadow: none;
+  border-bottom: 1px solid var(--ar-cream-3);
+  box-shadow: none;
+}
+[data-theme='dark'] .navbar { border-bottom-color: var(--ar-border); }
+.navbar__logo { height: 2.375rem; }
+.navbar-sidebar .menu__link { color: var(--ifm-font-color-base); }
+
+/* buttons — the proposed design-system update: white on Marquee 600/700 */
+.button--primary {
+  --ifm-button-background-color: var(--ar-marquee-600);
+  --ifm-button-border-color: var(--ar-marquee-600);
+  color: #FFFFFF;
+}
+.button--primary:hover, .button--primary:focus {
+  --ifm-button-background-color: var(--ar-marquee-700);
+  --ifm-button-border-color: var(--ar-marquee-700);
+  color: #FFFFFF;
+}
+.button--secondary {
+  --ifm-button-background-color: transparent;
+  --ifm-button-border-color: var(--ar-marquee-500);
+  color: var(--ar-brand-text);
+}
+.button--secondary:hover, .button--secondary:focus {
+  --ifm-button-background-color: var(--ar-marquee-050);
+  --ifm-button-border-color: var(--ar-marquee-600);
+  color: var(--ar-brand-text);
+}
+[data-theme='dark'] .button--secondary { color: var(--ar-marquee-300); }
+[data-theme='dark'] .button--secondary:hover,
+[data-theme='dark'] .button--secondary:focus {
+  --ifm-button-background-color: rgba(255, 85, 0, 0.10);
+  color: var(--ar-marquee-300);
 }
 
-.navbar-sidebar .menu__link{
-  color: #fff;
+/* announcement bar — transition magenta lives here and only here */
+div[class^='announcementBar'] {
+  border-bottom: 1px solid var(--ar-cream-3);
+  font-size: 0.875rem;
 }
-
-.buttons {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+[data-theme='dark'] div[class^='announcementBar'] {
+  background: var(--ar-ink-800) !important;
+  color: var(--ar-fg-muted) !important;
+  border-bottom-color: var(--ar-border);
 }
+.announceFormer { color: var(--envoy-magenta); font-weight: 600; }
 
-/* Word wrapping rules */
+/* footer — teal ground with the A-pattern rising from the bottom edge */
+.footer--dark {
+  --ifm-footer-color: rgba(230, 240, 237, 0.85);
+  --ifm-footer-link-color: rgba(230, 240, 237, 0.85);
+  --ifm-footer-title-color: rgba(230, 240, 237, 0.55);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.footer--dark::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: var(--ar-pattern-airy);
+  background-size: var(--ar-pattern-md);
+  opacity: 0.10;
+  -webkit-mask-image: linear-gradient(to top, #000, transparent 80%);
+          mask-image: linear-gradient(to top, #000, transparent 80%);
+}
+.footer--dark .footer__link-item:hover { color: var(--ar-marquee-300); }
+.footer__title {
+  font-family: var(--ar-font-ui);
+  font-size: var(--ar-text-xs);
+  letter-spacing: var(--ar-tracking-label);
+  text-transform: uppercase;
+}
+.footer__copyright { color: rgba(230, 240, 237, 0.45); font-size: var(--ar-text-sm); }
+
+/* headings track the display face */
+h1, h2, h3 { letter-spacing: -0.01em; }
+
+/* ---------------------------------------------------- word wrapping rules */
 .markdown {
+  line-height: var(--custom-content-line-height);
   overflow-wrap: break-word;
   word-wrap: break-word;
-  word-break: keep-all;
-  hyphens: none;
-  color: var(--custom-text-color);
-  line-height: var(--custom-content-line-height);
+  -webkit-hyphens: auto;
+  -ms-hyphens: auto;
+  hyphens: auto;
 }
 
 .markdown p {
@@ -192,53 +221,52 @@
 
 .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
   color: var(--custom-heading-color);
-  font-weight: 700;
-  margin-bottom: 1em;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
 }
 
 .markdown h3 {
-  color: var(--ifm-color-primary-light);
+  font-size: var(--ifm-h3-font-size);
 }
 
 /* Enhanced Links */
 .markdown a {
   color: var(--custom-link-color);
   text-decoration: none;
-  border-bottom: 1px solid transparent;
-  transition: border-color 0.2s ease;
+  transition: color 0.2s ease;
 }
 
 .markdown a:hover {
   color: var(--custom-link-hover-color);
-  border-bottom-color: currentColor;
+  text-decoration: underline;
 }
 
 .markdown table {
-  width: fit-content;
-  border-collapse: collapse;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid rgba(60, 60, 67, 0.15);
+  display: table;
+  width: 100%;
+  margin-bottom: var(--custom-paragraph-spacing);
 }
 
-/* API Field Component Styles */
+/* ------------------------------------------- API Field Component Styles */
 .api-field {
   display: flex;
   gap: 2rem;
   padding: 1.25rem;
   margin: 1rem 0;
-  border: 1px solid rgba(60, 60, 67, 0.15);
+  border: 1px solid var(--ar-cream-3);
   flex-wrap: wrap;
-  background-color: #ffffff;
+  background-color: var(--ar-bg);
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04), 0 0 1px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--ar-shadow-sm);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
+[data-theme='dark'] .api-field { border-color: var(--ar-border); }
 
 .api-field:hover {
-  border-color: rgba(60, 60, 67, 0.2);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.04), 0 0 2px rgba(0, 0, 0, 0.1);
+  border-color: var(--ar-ink-200);
+  box-shadow: var(--ar-shadow-md);
 }
+[data-theme='dark'] .api-field:hover { border-color: var(--ar-border); }
 
 /* Enum specific styling */
 .api-field[data-type="enum"] {
@@ -246,8 +274,9 @@
   padding: 0.75rem 1rem;
   margin: 0.5rem 0;
   border-radius: 6px;
-  border: 1px solid rgba(60, 60, 67, 0.12);
+  border: 1px solid var(--ar-cream-3);
 }
+[data-theme='dark'] .api-field[data-type="enum"] { border-color: var(--ar-border); }
 
 .api-field[data-type="enum"] .api-field__name {
   font-family: var(--ifm-font-family-monospace);
@@ -280,7 +309,7 @@
   font-size: 1rem;
   padding: 0.2rem 0.4rem;
   margin-right: 0.5rem;
-  background: var(--ifm-color-gray-100);
+  background: var(--custom-code-background);
   border-radius: 4px;
   display: inline-block;
   word-break: break-word;
@@ -314,7 +343,7 @@
   padding-right: 1.8rem;
   border-radius: 4px;
   background-color: var(--custom-code-background);
-  border: 1px solid rgba(60, 60, 67, 0.16);
+  border: 1px solid var(--ar-cream-3);
   transition: all 0.2s ease;
   position: relative;
   display: inline-block;
@@ -323,6 +352,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+[data-theme='dark'] .api-field__type a { border-color: var(--ar-border); }
 
 .api-field__type a::after {
   content: "→";
@@ -336,8 +366,8 @@
 
 .api-field__type a:hover {
   text-decoration: none;
-  background-color: var(--ifm-color-primary);
-  border-color: var(--ifm-color-primary-dark);
+  background-color: var(--ar-marquee-600);
+  border-color: var(--ar-marquee-700);
   color: white;
 }
 
@@ -366,10 +396,11 @@
 }
 
 .api-field__badge--optional {
-  color: var(--ifm-color-gray-600);
-  background: var(--ifm-color-gray-100);
-  border: 1px solid var(--ifm-color-gray-200);
+  color: var(--ar-fg-muted);
+  background: var(--custom-code-background);
+  border: 1px solid var(--ar-cream-3);
 }
+[data-theme='dark'] .api-field__badge--optional { border-color: var(--ar-border); }
 
 .api-field__default {
   right: 1rem;
@@ -379,10 +410,11 @@
   background: var(--custom-code-background);
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
-  border: 1px solid rgba(60, 60, 67, 0.12);
+  border: 1px solid var(--ar-cream-3);
   font-family: var(--ifm-font-family-monospace);
   margin-bottom: 0.5rem;
 }
+[data-theme='dark'] .api-field__default { border-color: var(--ar-border); }
 
 .api-field__default::before {
   content: "Default Value: ";
@@ -426,7 +458,7 @@
 }
 
 .api-field__description .prism-code {
-  background-color: rgb(246, 247, 248);
+  background-color: var(--custom-code-background);
   margin: 0;
   padding: 1rem;
   border-radius: var(--ifm-code-border-radius);
@@ -441,13 +473,15 @@
   overflow-x: auto;
   padding: 0;
   margin: 0;
-  color: rgb(57, 58, 52);
+  color: var(--ar-ink-800);
   width: 100%;
 }
+[data-theme='dark'] .api-field__description .codeBlock { color: var(--ar-fg); }
 
 .api-field__description .language-yaml .codeBlock {
-  color: rgb(57, 58, 52);
+  color: var(--ar-ink-800);
 }
+[data-theme='dark'] .api-field__description .language-yaml .codeBlock { color: var(--ar-fg); }
 
 .api-field__enum {
   margin-top: 1rem;
@@ -457,7 +491,7 @@
 .api-field__enum code {
   margin-right: 0.5rem;
   padding: 0.2rem 0.4rem;
-  background: var(--ifm-color-gray-100);
+  background: var(--custom-code-background);
   border-radius: 4px;
 }
 
@@ -498,3 +532,189 @@
 .theme-admonition-api-field tr:last-child {
   border-bottom: none;
 }
+
+/* ============================================================
+   Blog design lift — the blog takes the homepage's language:
+   peach ground on listings, card grid (src/theme/BlogPostItems),
+   display-type post titles, softened content images.
+   ============================================================ */
+
+/* listing pages (index, tags, authors) sit on the peach ground,
+   matching the homepage's Latest-from-the-project section */
+html.blog-list-page,
+html.blog-tags-post-list-page {
+  --ifm-background-color: var(--ar-ground-peach);
+}
+html[data-theme='dark'].blog-list-page,
+html[data-theme='dark'].blog-tags-post-list-page {
+  --ifm-background-color: var(--ar-ink-900);
+}
+
+/* give the card grid more room next to the sidebar (infima col--7 → 75%) */
+@media (min-width: 997px) {
+  html.blog-list-page main[class*='col--7'],
+  html.blog-tags-post-list-page main[class*='col--7'] {
+    --ifm-col-width: 75%;
+  }
+}
+
+/* post pages: display-face title, quiet meta line */
+html.blog-post-page article header h1 {
+  font: 800 clamp(2.1rem, 3.8vw, 3rem) / 1.1 var(--ar-font-display);
+  letter-spacing: var(--ar-tracking-display);
+}
+
+/* content images (heroes, diagrams, charts) get the card radius */
+html.blog-post-page .markdown img {
+  border-radius: var(--ar-radius-lg);
+  box-shadow: var(--ar-shadow-sm);
+}
+
+/* ============================================================
+   Docs design lift — the docs take the brand's quiet signatures:
+   lilac-tinted sidebar (the kit's docs ground), mono eyebrows on
+   breadcrumbs and the TOC, a hairline under page titles, and the
+   homepage card language for tiles and prev/next links.
+   ============================================================ */
+
+/* sidebar: a soft lilac panel with a hairline edge */
+.theme-doc-sidebar-container {
+  background: color-mix(in srgb, var(--ar-ground-lilac) 38%, var(--ar-ground-cream));
+  border-right: 1px solid var(--ar-cream-3) !important;
+}
+[data-theme='dark'] .theme-doc-sidebar-container {
+  background: var(--ar-ink-800);
+  border-right-color: var(--ar-border) !important;
+}
+.theme-doc-sidebar-menu {
+  font-size: var(--ar-text-sm);
+  padding: 0.5rem 0.25rem;
+}
+.theme-doc-sidebar-menu .menu__link { border-radius: var(--ar-radius-sm); }
+/* top-level entries read as section heads; deeper levels stay quiet */
+.theme-doc-sidebar-item-category-level-1 > .menu__list-item-collapsible > .menu__link,
+.theme-doc-sidebar-item-link-level-1 > .menu__link {
+  font-weight: 600;
+}
+/* current page: marquee pill (togglers keep text-only active state) */
+.theme-doc-sidebar-menu .menu__link--active:not(.menu__link--sublist) {
+  background: var(--ar-marquee-050);
+  font-weight: 600;
+}
+[data-theme='dark'] .theme-doc-sidebar-menu .menu__link--active:not(.menu__link--sublist) {
+  background: rgba(255, 85, 0, 0.12);
+}
+
+/* breadcrumbs: the mono eyebrow motif */
+.theme-doc-breadcrumbs .breadcrumbs__link {
+  font: 500 var(--ar-text-xs) / 1.4 var(--ar-font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* page title: display weight plus the brand hairline underscore */
+.theme-doc-markdown header h1,
+.theme-doc-markdown > h1:first-child {
+  font-size: clamp(2rem, 3vw, 2.6rem);
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: var(--ar-tracking-display);
+}
+.theme-doc-markdown header h1::after,
+.theme-doc-markdown > h1:first-child::after {
+  content: "";
+  display: block;
+  width: 72px;
+  height: 1px;
+  background: var(--ar-ink-200);
+  margin-top: 18px;
+}
+[data-theme='dark'] .theme-doc-markdown header h1::after,
+[data-theme='dark'] .theme-doc-markdown > h1:first-child::after {
+  background: var(--ar-border);
+}
+
+/* version badge: quiet lilac pill in the docs accent */
+.theme-doc-version-badge {
+  font: 600 10.5px / 1 var(--ar-font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--ar-ground-lilac);
+  color: var(--ar-ink-700);
+  border: none;
+  border-radius: 999px;
+  padding: 5px 10px;
+}
+[data-theme='dark'] .theme-doc-version-badge {
+  background: rgba(163, 172, 212, 0.16);
+  color: var(--ar-fg-muted);
+}
+
+/* table of contents: eyebrow label, marquee current item */
+.theme-doc-toc-desktop::before {
+  content: "On this page";
+  display: block;
+  font: 600 var(--ar-text-xs) / 1 var(--ar-font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ar-fg-subtle);
+  padding: 0.4rem 0 0.6rem 1rem;
+}
+.table-of-contents__link--active { font-weight: 600; }
+
+/* prev/next: the homepage card language instead of outlined boxes */
+.pagination-nav__link {
+  background: var(--ar-paper);
+  border: none;
+  border-radius: var(--ar-radius-lg);
+  box-shadow: var(--ar-shadow-sm);
+  transition: box-shadow 0.2s;
+}
+.pagination-nav__link:hover { box-shadow: var(--ar-shadow-md); }
+[data-theme='dark'] .pagination-nav__link { background: var(--ar-ink-800); }
+.pagination-nav__sublabel {
+  font: 500 var(--ar-text-xs) / 1 var(--ar-font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ar-fg-subtle);
+}
+.pagination-nav__label { font-family: var(--ar-font-display); }
+
+/* category tiles (DocCardList): paper cards with the corner glow */
+.theme-doc-markdown .card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--ar-paper);
+  border: none;
+  border-radius: var(--ar-radius-lg);
+  box-shadow: var(--ar-shadow-sm);
+  transition: box-shadow 0.2s;
+}
+[data-theme='dark'] .theme-doc-markdown .card { background: var(--ar-ink-800); }
+.theme-doc-markdown .card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    var(--ar-glow-corner),
+    rgba(255, 85, 0, var(--ar-glow-alpha)),
+    transparent 52%
+  );
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.theme-doc-markdown .card:hover {
+  box-shadow: var(--ar-shadow-md);
+}
+.theme-doc-markdown .card:hover::after { opacity: 1; }
+.theme-doc-markdown .card h2 { font-family: var(--ar-font-display); }
+
+/* tables: tinted header band */
+.markdown table th { background: var(--ar-cream-2); }
+[data-theme='dark'] .markdown table th { background: var(--ar-ink-800); }
+
+/* blockquotes carry a quiet marquee edge */
+.markdown blockquote { border-left: 3px solid var(--ar-marquee-300); }

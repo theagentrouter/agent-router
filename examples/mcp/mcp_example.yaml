@@ -28,22 +28,14 @@ spec:
         apiKey:
           secretRef:
             name: github-access-token
-    # TODO(nacx): Context7 started giving errors due to its certificate:
-    # time=2026-02-20T12:14:12.555+01:00 level=ERROR msg="failed to create MCP session" component=mcp-proxy backend=context7
-    # error="MCP initialize request failed with status code 503 and body=upstream connect error or disconnect/reset before headers.
-    # reset reason: remote connection failure, transport failure reason: TLS_error:|268435563:SSL routines:OPENSSL_internal:BAD_ECC_CERT:TLS_error_end"
-    #
-    # Until those are resolved or figure out, we're just adding kiwi to verify that we can connect to a public MCP server and call a tool.
-    # context7 can be enabled back when the certificate issue is sorted out.
-    #
-    # - name: context7
-    #   kind: Backend
-    #   group: gateway.envoyproxy.io
-    #   path: "/mcp"
-    - name: kiwi
+    - name: context7
       kind: Backend
       group: gateway.envoyproxy.io
-      path: "/"
+      path: "/mcp"
+    # - name: kiwi
+    #   kind: Backend
+    #   group: gateway.envoyproxy.io
+    #   path: "/"
 ---
 kind: Secret
 apiVersion: v1
@@ -72,7 +64,7 @@ spec:
         hostname: api.githubcopilot.com
         port: 443
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: github-tls
@@ -85,59 +77,59 @@ spec:
   validation:
     wellKnownCACertificates: "System"
     hostname: api.githubcopilot.com
----
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: Backend
-metadata:
-  name: kiwi
-  namespace: default
-spec:
-  endpoints:
-    - fqdn:
-        hostname: mcp.kiwi.com
-        port: 443
----
-apiVersion: gateway.networking.k8s.io/v1alpha3
-kind: BackendTLSPolicy
-metadata:
-  name: kiwi-tls
-  namespace: default
-spec:
-  targetRefs:
-    - group: "gateway.envoyproxy.io"
-      kind: Backend
-      name: kiwi
-  validation:
-    wellKnownCACertificates: "System"
-    hostname: mcp.kiwi.com
----
+# ---
 # apiVersion: gateway.envoyproxy.io/v1alpha1
 # kind: Backend
 # metadata:
-#   name: context7
+#   name: kiwi
 #   namespace: default
 # spec:
 #   endpoints:
 #     - fqdn:
-#         hostname: mcp.context7.com
+#         hostname: mcp.kiwi.com
 #         port: 443
 # ---
-# apiVersion: gateway.networking.k8s.io/v1alpha3
+# apiVersion: gateway.networking.k8s.io/v1
 # kind: BackendTLSPolicy
 # metadata:
-#   name: context7-tls
+#   name: kiwi-tls
 #   namespace: default
 # spec:
 #   targetRefs:
 #     - group: "gateway.envoyproxy.io"
 #       kind: Backend
-#       name: context7
+#       name: kiwi
 #   validation:
 #     wellKnownCACertificates: "System"
-#     hostname: mcp.context7.com
-#     subjectAltNames:
-#       - type: Hostname
-#         hostname: "*.context7.com"
+#     hostname: mcp.kiwi.com
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: context7
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: mcp.context7.com
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: context7-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: "gateway.envoyproxy.io"
+      kind: Backend
+      name: context7
+  validation:
+    wellKnownCACertificates: "System"
+    hostname: mcp.context7.com
+    subjectAltNames:
+      - type: Hostname
+        hostname: "*.context7.com"
 ---
 ###################################################################################
 ############################### Gateway Definitions ###############################

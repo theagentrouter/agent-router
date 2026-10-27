@@ -303,6 +303,41 @@ func (m *mockMetrics) RequireRequestSuccess(t *testing.T) {
 
 var _ metrics.Metrics = &mockMetrics{}
 
+// mockChatCompletionSpan implements [tracingapi.ChatCompletionSpan], recording how the span ended.
+type mockChatCompletionSpan struct {
+	endedOnErrorCount int
+	endedCount        int
+	errorStatusCode   int
+	errorBody         []byte
+}
+
+func (m *mockChatCompletionSpan) RecordResponseChunk(*openai.ChatCompletionResponseChunk) {}
+
+func (m *mockChatCompletionSpan) RecordResponse(*openai.ChatCompletionResponse) {}
+
+func (m *mockChatCompletionSpan) EndSpanOnError(statusCode int, body []byte) {
+	m.endedOnErrorCount++
+	m.errorStatusCode = statusCode
+	m.errorBody = body
+}
+
+func (m *mockChatCompletionSpan) EndSpan() { m.endedCount++ }
+
+var _ tracingapi.ChatCompletionSpan = &mockChatCompletionSpan{}
+
+// mockBackendChatCompletionSpan additionally implements [tracingapi.BackendSpan],
+// which only spans whose semantic convention records the resolved backend do.
+type mockBackendChatCompletionSpan struct {
+	mockChatCompletionSpan
+	backends []tracingapi.Backend
+}
+
+func (m *mockBackendChatCompletionSpan) RecordBackend(backend tracingapi.Backend) {
+	m.backends = append(m.backends, backend)
+}
+
+var _ tracingapi.BackendSpan = &mockBackendChatCompletionSpan{}
+
 // mockBackendAuthHandler implements [filterapi.BackendAuthHandler] for testing.
 type mockBackendAuthHandler struct{}
 

@@ -150,11 +150,11 @@ The speed at which tokens are consumed by an AI model during processing. This me
 **Related**: [Token](#token)
 
 :::note
-This glossary is continuously evolving as the field of GenAI traffic handling develops. If you'd like to contribute or suggest changes, please visit our [GitHub repository](https://github.com/envoyproxy/ai-gateway).
+This glossary is continuously evolving as the field of GenAI traffic handling develops. If you'd like to contribute or suggest changes, please visit our [GitHub repository](https://github.com/theagentrouter/agent-router).
 :::
 
 :::tip See Also
 
 - Check our [Getting Started](./getting-started/index.md) guide for practical examples
-- Join our [Community Slack](https://envoyproxy.slack.com/archives/C07Q4N24VAA) for discussions
+- Join our [Community Discord](https://discord.gg/xuxtPq43gZ) for discussions
   :::

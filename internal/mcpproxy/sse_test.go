@@ -62,6 +62,26 @@ func TestTryDecodeJSONRPCMessage(t *testing.T) {
 	})
 }
 
+func TestIsJSONContentType(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "plain JSON", value: "application/json", want: true},
+		{name: "JSON with charset", value: "application/json;charset=utf-8", want: true},
+		{name: "JSON with whitespace", value: " Application/JSON ; charset=utf-8 ", want: true},
+		{name: "SSE", value: "text/event-stream", want: false},
+		{name: "invalid media type", value: "not a media type", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isJSONContentType(tt.value))
+		})
+	}
+}
+
 func TestSSEEventParser_SingleEvent(t *testing.T) {
 	id, err := jsonrpc.MakeID("1")
 	require.NoError(t, err)

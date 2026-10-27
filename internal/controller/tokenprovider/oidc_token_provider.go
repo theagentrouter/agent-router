@@ -19,14 +19,30 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// SecretReferenceValidator authorizes a cross-namespace Secret reference, e.g. via a Gateway API
+// ReferenceGrant. It returns a non-nil error when the resource in fromNamespace is not permitted
+// to reference the Secret named secretName in toNamespace.
+type SecretReferenceValidator func(ctx context.Context, fromNamespace, toNamespace, secretName string) error
+
 // oidcTokenProvider is a provider implements TokenProvider interface for OIDC tokens.
 type oidcTokenProvider struct {
 	oidcConfig *egv1a1.OIDC
 	client     client.Client
+	// ownerNamespace is the namespace of the resource (e.g. BackendSecurityPolicy) that configured
+	// this OIDC client secret reference. It is used to authorize cross-namespace secret reads.
+	ownerNamespace string
+	// validateSecretRef authorizes a cross-namespace read of oidcConfig.ClientSecret. When nil, any
+	// reference where oidcConfig.ClientSecret.Namespace differs from ownerNamespace is rejected.
+	validateSecretRef SecretReferenceValidator
 }
 
 // NewOidcTokenProvider creates a new TokenProvider with the given OIDC configuration.
-func NewOidcTokenProvider(ctx context.Context, client client.Client, oidcConfig *egv1a1.OIDC) (TokenProvider, error) {
+//
+// ownerNamespace is the namespace of the resource that owns this OIDC configuration (e.g. the
+// BackendSecurityPolicy). validateSecretRef, when non-nil, is consulted to authorize a
+// cross-namespace read of oidcConfig.ClientSecret (e.g. via a Gateway API ReferenceGrant); when
+// nil, a cross-namespace reference is always rejected.
+func NewOidcTokenProvider(ctx context.Context, client client.Client, oidcConfig *egv1a1.OIDC, ownerNamespace string, validateSecretRef SecretReferenceValidator) (TokenProvider, error) {
 	if oidcConfig == nil {
 		return nil, fmt.Errorf("provided oidc config is nil")
 	}
@@ -74,7 +90,7 @@ func NewOidcTokenProvider(ctx context.Context, client client.Client, oidcConfig 
 		}
 	}
 	// Now OidcTokenProvider has all fields configured and is ready for caller to use by calling GetToken(ctx).
-	return &oidcTokenProvider{oidcConfig, client}, nil
+	return &oidcTokenProvider{oidcConfig, client, ownerNamespace, validateSecretRef}, nil
 }
 
 // GetToken implements TokenProvider.GetToken method to retrieve an OIDC token and its expiration time.
@@ -82,9 +98,20 @@ func (o *oidcTokenProvider) GetToken(ctx context.Context) (TokenExpiry, error) {
 	if o.oidcConfig.ClientSecret.Namespace == nil {
 		return TokenExpiry{}, fmt.Errorf("oidc client secret namespace is nil")
 	}
+	secretNamespace := string(*o.oidcConfig.ClientSecret.Namespace)
+	if secretNamespace != o.ownerNamespace {
+		if o.validateSecretRef == nil {
+			return TokenExpiry{}, fmt.Errorf(
+				"cross-namespace oidc client secret reference from namespace %s to namespace %s is not permitted",
+				o.ownerNamespace, secretNamespace)
+		}
+		if err := o.validateSecretRef(ctx, o.ownerNamespace, secretNamespace, string(o.oidcConfig.ClientSecret.Name)); err != nil {
+			return TokenExpiry{}, err
+		}
+	}
 	clientSecret, err := GetClientSecret(ctx, o.client, &corev1.SecretReference{
 		Name:      string(o.oidcConfig.ClientSecret.Name),
-		Namespace: string(*o.oidcConfig.ClientSecret.Namespace),
+		Namespace: secretNamespace,
 	})
 	if err != nil {
 		return TokenExpiry{}, err

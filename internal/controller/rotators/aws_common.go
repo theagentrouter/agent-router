@@ -108,13 +108,13 @@ type awsCredentialsFile struct {
 //   - Optional inclusion of session token
 func formatAWSCredentialsFile(file *awsCredentialsFile) string {
 	var builder strings.Builder
-	builder.WriteString(fmt.Sprintf("[%s]\n", file.creds.profile))
-	builder.WriteString(fmt.Sprintf("aws_access_key_id = %s\n", file.creds.accessKeyID))
-	builder.WriteString(fmt.Sprintf("aws_secret_access_key = %s\n", file.creds.secretAccessKey))
+	fmt.Fprintf(&builder, "[%s]\n", file.creds.profile)
+	fmt.Fprintf(&builder, "aws_access_key_id = %s\n", file.creds.accessKeyID)
+	fmt.Fprintf(&builder, "aws_secret_access_key = %s\n", file.creds.secretAccessKey)
 	if file.creds.sessionToken != "" {
-		builder.WriteString(fmt.Sprintf("aws_session_token = %s\n", file.creds.sessionToken))
+		fmt.Fprintf(&builder, "aws_session_token = %s\n", file.creds.sessionToken)
 	}
-	builder.WriteString(fmt.Sprintf("region = %s\n", file.creds.region))
+	fmt.Fprintf(&builder, "region = %s\n", file.creds.region)
 
 	return builder.String()
 }

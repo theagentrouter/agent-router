@@ -630,6 +630,7 @@ type sseMessageDeltaBody struct {
 }
 
 type sseOutputUsage struct {
+	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 }
 
@@ -697,7 +698,7 @@ func (s *openAIStreamToAnthropicState) processBuffer(out *[]byte, endOfStream bo
 func (s *openAIStreamToAnthropicState) processEventBlock(block []byte, out *[]byte) error {
 	var eventData []byte
 	for line := range bytes.SplitSeq(block, []byte("\n")) {
-		if after, ok := bytes.CutPrefix(line, sseDataPrefix); ok {
+		if after, ok := cutSSEDataPrefix(line); ok {
 			data := bytes.TrimSpace(after)
 			if len(data) > 0 {
 				eventData = data
@@ -738,6 +739,9 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 	if len(chunk.Choices) == 0 && chunk.Usage != nil {
 		s.inputTokens = chunk.Usage.PromptTokens
 		s.outputTokens = chunk.Usage.CompletionTokens
+		// OpenAI's cached_tokens/cache_write_tokens are a breakdown within
+		// prompt_tokens, not additive like Anthropic's native cache fields, so we don't
+		// forward them here to avoid double-counting.
 		s.tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
 			int64(s.inputTokens),
 			int64(s.outputTokens),
@@ -766,6 +770,15 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 		// Handle reasoning/thinking content (must come before text).
 		if delta.ReasoningContent != nil {
 			if err := s.handleReasoningDelta(delta.ReasoningContent, out); err != nil {
+				return err
+			}
+		}
+		// Signatures ride on thinking_blocks (reasoning_content is a plain string).
+		for i := range delta.ThinkingBlocks {
+			tb := &delta.ThinkingBlocks[i]
+			if err := s.handleReasoningDelta(&openai.StreamReasoningContent{
+				Text: tb.Thinking, Signature: tb.Signature,
+			}, out); err != nil {
 				return err
 			}
 		}
@@ -1050,11 +1063,14 @@ func (s *openAIStreamToAnthropicState) emitClosingEvents(out *[]byte) error {
 		stopReason = string(anthropic.StopReasonEndTurn)
 	}
 
-	// Emit message_delta with stop_reason and final output token count.
+	// Backfill input_tokens here (not message_start): OpenAI doesn't report it until now.
 	msgDeltaPayload := sseMessageDelta{
 		Type:  "message_delta",
 		Delta: sseMessageDeltaBody{StopReason: stopReason, StopSequence: nil},
-		Usage: sseOutputUsage{OutputTokens: s.outputTokens},
+		Usage: sseOutputUsage{
+			InputTokens:  s.inputTokens,
+			OutputTokens: s.outputTokens,
+		},
 	}
 	data, err := json.Marshal(msgDeltaPayload)
 	if err != nil {

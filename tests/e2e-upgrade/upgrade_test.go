@@ -23,6 +23,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/envoyproxy/ai-gateway/internal/controller"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/tests/internal/e2elib"
 	"github.com/envoyproxy/ai-gateway/tests/internal/testupstreamlib"
 )
@@ -304,18 +306,31 @@ func makeRequest(t *testing.T, ipAddress string, phase string) error {
 	return nil
 }
 
-// breakFilterConfig modifies the filter config secret to contain an invalid configuration, which should be
+// breakFilterConfig modifies a filter config bundle part to contain an invalid configuration, which should be
 // ignored by the running pods.
 func breakFilterConfig(t *testing.T) {
+	indexSecretName := controller.FilterConfigBundleIndexSecretName("upgrade-test", "default")
+	getIndexCmd := e2elib.Kubectl(t.Context(), "get", "secret", indexSecretName,
+		"-n", e2elib.EnvoyGatewayNamespace, "-o", "jsonpath={.data.index\\.yaml}")
+	getIndexCmd.Stdout = nil
+	getIndexCmd.Stderr = nil
+	indexEncoded, err := getIndexCmd.Output()
+	require.NoError(t, err, "failed to get filter config bundle index")
+	indexRaw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(indexEncoded)))
+	require.NoError(t, err, "failed to decode filter config bundle index")
+	index, err := filterapi.UnmarshalConfigBundleIndex(indexRaw)
+	require.NoError(t, err, "failed to unmarshal filter config bundle index")
+	require.NotEmpty(t, index.Parts, "filter config bundle has no parts")
+
 	newEncodedConfig := base64.StdEncoding.EncodeToString([]byte(`
 version: some-nonexistent-version # The version mismatch should cause the filter to ignore this config.
 foo: bar
 `))
 
-	// Patch the secret with the broken config.
-	patch := fmt.Sprintf(`{"data":{"filter-config.yaml":"%s"}}`, newEncodedConfig)
+	// Patch the first part without changing the index checksum. The watcher must reject the corrupt bundle.
+	patch := fmt.Sprintf(`{"data":{"chunk":"%s"}}`, newEncodedConfig)
 	patchCmd := e2elib.Kubectl(t.Context(), "patch", "secret",
-		"upgrade-test-default", // The name and namespace of the Gateway in testdata/manifest.yaml.
+		index.Parts[0].Name,
 		"-n", e2elib.EnvoyGatewayNamespace, "--type=merge", "-p", patch)
 	patchCmd.Stdout = nil
 	patchCmd.Stderr = nil

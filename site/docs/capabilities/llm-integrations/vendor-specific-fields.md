@@ -46,6 +46,14 @@ The following backends support extension fields:
 - **API Schema Name**: `GCPAnthropic`
 - **Supported Fields**:
   - `thinking`: Configuration for enabling Claude's extended thinking. [Anthropic Docs](https://docs.anthropic.com/en/api/messages#body-thinking)
+- **Supported Tool Fields** (set on an entry of `tools[].function`):
+  - `eager_input_streaming`: Stream a tool's input as the model generates it, instead of buffering and validating each parameter value first. [Anthropic Docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming)
+
+### AWS Anthropic
+
+- **API Schema Name**: `AWSAnthropic`
+- **Supported Tool Fields** (set on an entry of `tools[].function`):
+  - `eager_input_streaming`: Stream a tool's input as the model generates it, instead of buffering and validating each parameter value first. [Anthropic Docs](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming)
 
 ### AWS Bedrock
 
@@ -151,6 +159,42 @@ For Vertex AI, you can add filtering options:
   ]
 }
 ```
+
+### Using Eager Tool Input Streaming
+
+By default, Anthropic buffers each tool parameter value and validates it before emitting it to the stream. Setting `eager_input_streaming` on a tool makes the model stream that tool's input as it is generated, so `tool_calls[].function.arguments` fragments start arriving sooner. This matches the per-token streaming behavior of OpenAI and most other backends.
+
+```json
+{
+  "model": "gcp.claude-3-5-haiku",
+  "messages": [
+    {
+      "role": "user",
+      "content": "What's the weather in New York?"
+    }
+  ],
+  "stream": true,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "eager_input_streaming": true,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": { "type": "string" }
+          }
+        }
+      }
+    }
+  ]
+}
+```
+
+The field is a tri-state. Omitting it defaults to buffered streaming, `true` enables eager streaming for that tool, and an explicit `false` also buffers but holds that even when the deprecated `fine-grained-tool-streaming-2025-05-14` beta header is present, which otherwise turns unset tools on.
+
+How arguments are accumulated does not change: clients concatenate the `arguments` fragments exactly as before. What changes is the guarantee. With eager streaming the server no longer validates the fragments, so the accumulated string is not guaranteed to be valid JSON — a response ending with `finish_reason: "length"` can cut a parameter off midway. Guard the parse and handle failure rather than assuming it succeeds. See [Accumulating tool input deltas](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming#accumulating-tool-input-deltas).
 
 ### Field Conflicts
 

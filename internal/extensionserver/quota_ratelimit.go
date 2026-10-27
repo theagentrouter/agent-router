@@ -34,6 +34,7 @@ import (
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/controller"
 	"github.com/envoyproxy/ai-gateway/internal/ratelimit/translator"
 )
 
@@ -51,6 +52,10 @@ const (
 	// quotaCostMetadataKey is the dynamic metadata key where ext_proc stores
 	// the computed quota cost for the current request.
 	quotaCostMetadataKey = "quota_cost"
+	// aiServiceBackendGroup is the API group for AIServiceBackend resources.
+	aiServiceBackendGroup = "aigateway.envoyproxy.io"
+	// aiServiceBackendKind is the kind for AIServiceBackend resources.
+	aiServiceBackendKind = "AIServiceBackend"
 )
 
 // maybeInjectQuotaRateLimiting injects the rate limit HTTP filter into the HCM
@@ -69,6 +74,13 @@ func (s *Server) maybeInjectQuotaRateLimiting(
 			return clusters, nil
 		}
 		return clusters, fmt.Errorf("failed to list QuotaPolicies: %w", err)
+	}
+	if len(quotaPolicies) == 0 {
+		return clusters, nil
+	}
+	quotaPolicies, err = s.authorizedQuotaPolicies(ctx, quotaPolicies)
+	if err != nil {
+		return clusters, err
 	}
 	if len(quotaPolicies) == 0 {
 		return clusters, nil
@@ -130,6 +142,44 @@ func (s *Server) listQuotaPolicies(ctx context.Context) ([]aigv1a1.QuotaPolicy, 
 	return list.Items, nil
 }
 
+// authorizedQuotaPolicies returns policy copies containing only targetRefs
+// currently authorized by ReferenceGrant. Authorization is performed before
+// any downstream quota action or descriptor generation.
+func (s *Server) authorizedQuotaPolicies(
+	ctx context.Context,
+	policies []aigv1a1.QuotaPolicy,
+) ([]aigv1a1.QuotaPolicy, error) {
+	authorized := make([]aigv1a1.QuotaPolicy, 0, len(policies))
+	for i := range policies {
+		policy := policies[i]
+		targets := make([]gwapiv1a2.NamespacedPolicyTargetReference, 0, len(policy.Spec.TargetRefs))
+		seenTargets := make(map[string]struct{}, len(policy.Spec.TargetRefs))
+		for _, ref := range policy.Spec.TargetRefs {
+			if (ref.Group != "" && ref.Group != aiServiceBackendGroup) ||
+				(ref.Kind != "" && ref.Kind != aiServiceBackendKind) {
+				continue
+			}
+			targetNamespace := controller.TargetNamespace(ref, policy.Namespace)
+			targetKey := controller.NamespacedNameKey(targetNamespace, string(ref.Name))
+			if _, seen := seenTargets[targetKey]; seen {
+				continue
+			}
+			seenTargets[targetKey] = struct{}{}
+			if err := controller.ValidateQuotaPolicyAIServiceBackendReference(
+				ctx, s.k8sClient, policy.Namespace, targetNamespace, string(ref.Name)); err != nil {
+				continue
+			}
+			targets = append(targets, ref)
+		}
+		if len(targets) == 0 {
+			continue
+		}
+		policy.Spec.TargetRefs = targets
+		authorized = append(authorized, policy)
+	}
+	return authorized, nil
+}
+
 // buildQuotaBackendPolicies builds a map from "namespace/backendName" keys to the
 // QuotaPolicies that target each backend. This preserves the full QuotaPolicy data
 // (including PerModelQuotas, BucketRules, and ClientSelectors) so that downstream
@@ -138,8 +188,16 @@ func buildQuotaBackendPolicies(policies []aigv1a1.QuotaPolicy) map[string][]aigv
 	backends := make(map[string][]aigv1a1.QuotaPolicy)
 	for i := range policies {
 		policy := &policies[i]
+		// Skip QuotaPolicies that are being deleted. A terminating policy (non-zero DeletionTimestamp)
+		// is still returned by the cached List until its deletion fully propagates; injecting its
+		// descriptors here would re-add the deleted policy's rate_limits actions during the very
+		// re-translation that the controller's quota-policy-hash change triggers on deletion. Treating
+		// it as already absent keeps the data plane consistent with the control plane.
+		if !policy.DeletionTimestamp.IsZero() {
+			continue
+		}
 		for _, ref := range policy.Spec.TargetRefs {
-			key := policy.Namespace + "/" + string(ref.Name)
+			key := controller.NamespacedNameKey(controller.TargetNamespace(ref, policy.Namespace), string(ref.Name))
 			backends[key] = append(backends[key], *policy)
 		}
 	}
@@ -306,6 +364,7 @@ func (s *Server) patchRoutesWithQuotaRateLimits(
 
 			if err := enableQuotaRateLimitOnRoute(s.log, route, policies, modelInfo); err != nil {
 				s.log.Error(err, "failed to enable quota rate limit on route", "route", route.Name)
+				continue
 			}
 			patched = true
 		}
@@ -390,7 +449,7 @@ func (s *Server) clusterHasQuotaBackend(ctx context.Context, clusterName string,
 	}
 
 	for _, backendRef := range info.rule.BackendRefs {
-		key := info.namespace + "/" + backendRef.Name
+		key := controller.NamespacedNameKey(backendRef.GetNamespace(info.namespace), backendRef.Name)
 		if _, ok := quotaBackendPolicies[key]; ok {
 			return true
 		}
@@ -451,7 +510,8 @@ func (s *Server) backendKeysForCluster(ctx context.Context, clusterName string) 
 
 	var keys []string
 	for _, backendRef := range info.rule.BackendRefs {
-		keys = append(keys, info.namespace+"/"+backendRef.Name)
+		keys = append(keys, controller.NamespacedNameKey(
+			backendRef.GetNamespace(info.namespace), backendRef.Name))
 	}
 	return keys
 }
@@ -486,12 +546,13 @@ func (s *Server) resolveRouteModelInfo(ctx context.Context, route *routev3.Route
 
 		for _, br := range resolved.rule.BackendRefs {
 			if br.ModelNameOverride != "" {
-				if seen[br.Name] == nil {
-					seen[br.Name] = make(map[string]bool)
+				key := controller.NamespacedNameKey(br.GetNamespace(resolved.namespace), br.Name)
+				if seen[key] == nil {
+					seen[key] = make(map[string]bool)
 				}
-				if !seen[br.Name][br.ModelNameOverride] {
-					seen[br.Name][br.ModelNameOverride] = true
-					info.backendModels[br.Name] = append(info.backendModels[br.Name], br.ModelNameOverride)
+				if !seen[key][br.ModelNameOverride] {
+					seen[key][br.ModelNameOverride] = true
+					info.backendModels[key] = append(info.backendModels[key], br.ModelNameOverride)
 				}
 			}
 		}
@@ -521,10 +582,10 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 
 	// streamDoneActions collects the stream-done RateLimit entries built inline during
 	// the policy loop. They are appended to rateLimitActions at the end so all
-	// request-time entries come first. seenStreamDoneKeys deduplicates across policies
-	// that may produce the same descriptor key for the same model and rule index.
+	// request-time entries come first. Stream-done actions are deduplicated by
+	// descriptor path because they read the actual backend/model from metadata.
 	var streamDoneActions []*routev3.RateLimit
-	seenStreamDoneKeys := make(map[string]bool)
+	seenStreamDoneActions := make(map[string]*routev3.RateLimit)
 
 	var backendModels map[string][]string
 	if modelInfo != nil {
@@ -545,7 +606,8 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 			if modelInfo != nil {
 				matched := false
 				for _, target := range policy.Spec.TargetRefs {
-					targetName := string(target.Name)
+					targetName := controller.NamespacedNameKey(
+						controller.TargetNamespace(target, policy.Namespace), string(target.Name))
 					if overrides, ok := modelInfo.backendModels[targetName]; ok {
 						for _, override := range overrides {
 							if override == modelName {
@@ -564,26 +626,35 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 			}
 
 			if len(pmq.Quota.BucketRules) == 0 && pmq.Quota.DefaultBucket.Limit > 0 {
-				entries := buildSimpleModelEntries(modelName, policy.Namespace, policy.Spec.TargetRefs, backendModels)
+				entries := buildSimpleModelEntries(modelName, policy.Namespace, policy.Spec.TargetRefs, backendModels, &pmq.Quota.DefaultBucket)
 				rateLimitActions = append(rateLimitActions, entries...)
 				// Simple case: 2-level stream-done (backend_name + model_name_override).
-				// All simple entries are identical (metadata-only actions, same hits_addend).
 				const simpleStreamDoneKey = "_simple_"
-				if !seenStreamDoneKeys[simpleStreamDoneKey] {
-					seenStreamDoneKeys[simpleStreamDoneKey] = true
-					streamDoneActions = append(streamDoneActions, &routev3.RateLimit{
-						Actions:           baseDescriptorActions(),
-						HitsAddend:        quotaHitsAddend(),
-						ApplyOnStreamDone: true,
-					})
+				limitOverride := buildQuotaLimitOverride(&pmq.Quota.DefaultBucket)
+				if existing := seenStreamDoneActions[simpleStreamDoneKey]; existing != nil {
+					// A static model can share this action with a dynamic model:
+					// missing metadata makes Envoy use the static RLS baseline.
+					if existing.Limit == nil && limitOverride != nil {
+						existing.Limit = limitOverride
+					}
+					continue
 				}
+				action := &routev3.RateLimit{
+					Actions:           baseDescriptorActions(),
+					HitsAddend:        quotaHitsAddend(),
+					Limit:             limitOverride,
+					ApplyOnStreamDone: true,
+				}
+				seenStreamDoneActions[simpleStreamDoneKey] = action
+				streamDoneActions = append(streamDoneActions, action)
 			} else if len(pmq.Quota.BucketRules) > 0 {
 				bucketActions := buildBucketRuleLimitEntries(modelName, policy.Namespace, &pmq.Quota, policy.Spec.TargetRefs, backendModels)
 				rateLimitActions = append(rateLimitActions, bucketActions...)
 				// Bucket rules: one stream-done per unique rule/header structure.
 				// Stream-done actions read backend/model from dynamic metadata and
-				// hits_addend uses a single quota_cost key, so entries are identical
-				// regardless of target or model.
+				// hits_addend uses a single quota_cost key. Deduplicate by descriptor
+				// path so a response is charged once. A dynamic override is preferred
+				// over the static baseline when the same path is shared.
 				for rIdx, rule := range pmq.Quota.BucketRules {
 					headers := flattenAndSortClientSelectorHeaders(rule.ClientSelectors)
 					var dupKey string
@@ -593,23 +664,33 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 					if len(headers) == 0 {
 						dupKey += "|" + translator.BucketRuleDescriptorKey(rIdx, 0, "", "")
 					}
-					if !seenStreamDoneKeys[dupKey] {
-						seenStreamDoneKeys[dupKey] = true
+					limitOverride := buildQuotaLimitOverride(&rule.Quota)
+					if existing := seenStreamDoneActions[dupKey]; existing != nil {
+						if existing.Limit == nil && limitOverride != nil {
+							existing.Limit = limitOverride
+						}
+					} else {
 						clientActions := buildClientSelectorStreamDoneActions(rIdx, rule.ClientSelectors)
-						streamDoneActions = append(streamDoneActions, &routev3.RateLimit{
+						action := &routev3.RateLimit{
 							Actions:           append(baseDescriptorActions(), clientActions...),
 							HitsAddend:        quotaHitsAddend(),
+							Limit:             limitOverride,
 							ApplyOnStreamDone: true,
-						})
+						}
+						seenStreamDoneActions[dupKey] = action
+						streamDoneActions = append(streamDoneActions, action)
 					}
 				}
 				// Default bucket: 3-level stream-done with GenericKey (always fires).
 				if pmq.Quota.DefaultBucket.Limit > 0 {
 					defaultKey := translator.DefaultBucketDescriptorKey(len(pmq.Quota.BucketRules))
-					dupDefaultKey := defaultKey
-					if !seenStreamDoneKeys[dupDefaultKey] {
-						seenStreamDoneKeys[dupDefaultKey] = true
-						streamDoneActions = append(streamDoneActions, &routev3.RateLimit{
+					limitOverride := buildQuotaLimitOverride(&pmq.Quota.DefaultBucket)
+					if existing := seenStreamDoneActions[defaultKey]; existing != nil {
+						if existing.Limit == nil && limitOverride != nil {
+							existing.Limit = limitOverride
+						}
+					} else {
+						action := &routev3.RateLimit{
 							Actions: append(baseDescriptorActions(), &routev3.RateLimit_Action{
 								ActionSpecifier: &routev3.RateLimit_Action_GenericKey_{
 									GenericKey: &routev3.RateLimit_Action_GenericKey{
@@ -619,8 +700,11 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 								},
 							}),
 							HitsAddend:        quotaHitsAddend(),
+							Limit:             limitOverride,
 							ApplyOnStreamDone: true,
-						})
+						}
+						seenStreamDoneActions[defaultKey] = action
+						streamDoneActions = append(streamDoneActions, action)
 					}
 				}
 			}
@@ -695,18 +779,48 @@ func baseDescriptorActions() []*routev3.RateLimit_Action {
 // buildSimpleModelEntries creates RateLimit entries for a model with no bucket rules.
 // Produces 2-level descriptors (backend_name, model_name_override) matching the
 // translator's simple case where rate_limit is directly on the model descriptor.
-func buildSimpleModelEntries(modelName, policyNamespace string, targets []gwapiv1a2.LocalPolicyTargetReference, routeModelNames map[string][]string) []*routev3.RateLimit {
-	var entries []*routev3.RateLimit
+func buildSimpleModelEntries(modelName, policyNamespace string, targets []gwapiv1a2.NamespacedPolicyTargetReference, routeModelNames map[string][]string, quota *aigv1a1.QuotaValue) []*routev3.RateLimit {
+	entries := make([]*routev3.RateLimit, 0, len(targets))
+	limitOverride := buildQuotaLimitOverride(quota)
+	zeroHits := zeroQuotaHitsAddend()
 
 	// Request-time entries only. Stream-done is added once per model in enableQuotaRateLimitOnRoute.
 	for _, target := range targets {
-		resolvedModel := resolveModelName(string(target.Name), modelName, routeModelNames)
+		targetKey := controller.NamespacedNameKey(
+			controller.TargetNamespace(target, policyNamespace), string(target.Name))
+		targetNamespace := controller.TargetNamespace(target, policyNamespace)
+		resolvedModel := resolveModelName(targetKey, modelName, routeModelNames)
 		entries = append(entries, &routev3.RateLimit{
-			Actions: requestTimeBaseActions(policyNamespace, string(target.Name), resolvedModel),
+			Actions:    requestTimeBaseActions(targetNamespace, string(target.Name), resolvedModel),
+			HitsAddend: zeroHits,
+			Limit:      limitOverride,
 		})
 	}
 
 	return entries
+}
+
+// buildQuotaLimitOverride converts a QuotaPolicy metadata reference into Envoy's
+// per-request route rate-limit override. The referenced metadata value must be
+// a struct containing requests_per_unit and unit.
+func buildQuotaLimitOverride(quota *aigv1a1.QuotaValue) *routev3.RateLimit_Override {
+	if quota == nil || quota.FromMetadata == nil {
+		return nil
+	}
+	return &routev3.RateLimit_Override{
+		OverrideSpecifier: &routev3.RateLimit_Override_DynamicMetadata_{
+			DynamicMetadata: &routev3.RateLimit_Override_DynamicMetadata{
+				MetadataKey: &metadatav3.MetadataKey{
+					Key: quota.FromMetadata.Namespace,
+					Path: []*metadatav3.MetadataKey_PathSegment{{
+						Segment: &metadatav3.MetadataKey_PathSegment_Key{
+							Key: quota.FromMetadata.Key,
+						},
+					}},
+				},
+			},
+		},
+	}
 }
 
 // quotaHitsAddend returns the HitsAddend that reads the quota cost from dynamic
@@ -718,6 +832,15 @@ func quotaHitsAddend() *routev3.RateLimit_HitsAddend {
 	}
 }
 
+// zeroQuotaHitsAddend explicitly prevents the request-time rate-limit check
+// from charging the default one hit. The actual token cost is charged by the
+// stream-done entry after ext_proc has recorded it in dynamic metadata.
+func zeroQuotaHitsAddend() *routev3.RateLimit_HitsAddend {
+	return &routev3.RateLimit_HitsAddend{
+		Number: wrapperspb.UInt64(0),
+	}
+}
+
 // buildBucketRuleLimitEntries creates RateLimit entries for a model's bucket rules.
 // Each bucket rule and the default bucket produces one request-time entry per target
 // backend. The model_name_override descriptor uses the resolved ModelNameOverride
@@ -725,17 +848,34 @@ func quotaHitsAddend() *routev3.RateLimit_HitsAddend {
 //
 // Action order matches the translator's service config tree:
 // backend_name (Level 0) → model_name_override (Level 1) → bucket_rule_key (Level 2)
-func buildBucketRuleLimitEntries(modelName, policyNamespace string, quota *aigv1a1.QuotaDefinition, targets []gwapiv1a2.LocalPolicyTargetReference, routeModelNames map[string][]string) []*routev3.RateLimit {
+func buildBucketRuleLimitEntries(modelName, policyNamespace string, quota *aigv1a1.QuotaDefinition, targets []gwapiv1a2.NamespacedPolicyTargetReference, routeModelNames map[string][]string) []*routev3.RateLimit {
+	entryCapacity := len(targets) * len(quota.BucketRules)
 	var entries []*routev3.RateLimit
+	if entryCapacity > 0 {
+		entries = make([]*routev3.RateLimit, 0, entryCapacity)
+	}
+	zeroHits := zeroQuotaHitsAddend()
+	ruleOverrides := make([]*routev3.RateLimit_Override, len(quota.BucketRules))
+	for i := range quota.BucketRules {
+		ruleOverrides[i] = buildQuotaLimitOverride(&quota.BucketRules[i].Quota)
+	}
+	defaultOverride := buildQuotaLimitOverride(&quota.DefaultBucket)
 
 	for _, target := range targets {
-		resolvedModel := resolveModelName(string(target.Name), modelName, routeModelNames)
+		targetKey := controller.NamespacedNameKey(
+			controller.TargetNamespace(target, policyNamespace), string(target.Name))
+		targetNamespace := controller.TargetNamespace(target, policyNamespace)
+		resolvedModel := resolveModelName(targetKey, modelName, routeModelNames)
 
 		for rIdx, rule := range quota.BucketRules {
 			clientActions := buildClientSelectorActions(rIdx, rule.ClientSelectors)
-			actions := requestTimeBaseActions(policyNamespace, string(target.Name), resolvedModel)
+			actions := requestTimeBaseActions(targetNamespace, string(target.Name), resolvedModel)
 			actions = append(actions, clientActions...)
-			entries = append(entries, &routev3.RateLimit{Actions: actions})
+			entries = append(entries, &routev3.RateLimit{
+				Actions:    actions,
+				HitsAddend: zeroHits,
+				Limit:      ruleOverrides[rIdx],
+			})
 		}
 
 		if quota.DefaultBucket.Limit > 0 {
@@ -748,9 +888,13 @@ func buildBucketRuleLimitEntries(modelName, policyNamespace string, quota *aigv1
 					},
 				},
 			}
-			actions := requestTimeBaseActions(policyNamespace, string(target.Name), resolvedModel)
+			actions := requestTimeBaseActions(targetNamespace, string(target.Name), resolvedModel)
 			actions = append(actions, defaultAction)
-			entries = append(entries, &routev3.RateLimit{Actions: actions})
+			entries = append(entries, &routev3.RateLimit{
+				Actions:    actions,
+				HitsAddend: zeroHits,
+				Limit:      defaultOverride,
+			})
 		}
 	}
 
@@ -768,6 +912,15 @@ func resolveModelName(backendName, fallback string, routeModelNames map[string][
 			}
 		}
 	}
+	if slash := strings.LastIndexByte(backendName, '/'); slash >= 0 {
+		if models, ok := routeModelNames[backendName[slash+1:]]; ok {
+			for _, m := range models {
+				if m == fallback {
+					return m
+				}
+			}
+		}
+	}
 	return fallback
 }
 
@@ -780,7 +933,7 @@ func requestTimeBaseActions(namespace, backendName, modelName string) []*routev3
 			ActionSpecifier: &routev3.RateLimit_Action_GenericKey_{
 				GenericKey: &routev3.RateLimit_Action_GenericKey{
 					DescriptorKey:   translator.BackendNameDescriptorKey,
-					DescriptorValue: namespace + "/" + backendName,
+					DescriptorValue: controller.NamespacedNameKey(namespace, backendName),
 				},
 			},
 		},
@@ -826,8 +979,7 @@ func buildClientSelectorActions(
 }
 
 // buildClientSelectorStreamDoneActions is like buildClientSelectorActions but
-// always uses ExpectMatch=true on HeaderValueMatch actions. Distinct headers fall
-// back to GenericKey because per-value bucketing is not applicable at stream-done time.
+// always uses ExpectMatch=true on HeaderValueMatch actions.
 func buildClientSelectorStreamDoneActions(
 	ruleIndex int, selectors []egv1a1.RateLimitSelectCondition,
 ) []*routev3.RateLimit_Action {
@@ -869,18 +1021,21 @@ func flattenAndSortClientSelectorHeaders(selectors []egv1a1.RateLimitSelectCondi
 }
 
 // buildStreamDoneHeaderMatchAction is like buildHeaderMatchAction but always uses
-// ExpectMatch=true. Distinct headers are treated as GenericKey.
+// ExpectMatch=true, so an inverted match still reports the cost it incurred.
 func buildStreamDoneHeaderMatchAction(
 	ruleIndex, matchIndex int, header egv1a1.HeaderMatch,
 ) *routev3.RateLimit_Action {
 	descriptorKey := translator.BucketRuleDescriptorKey(ruleIndex, matchIndex, header.Name, headerMatchKeyValue(header))
 
+	// Must mirror buildHeaderMatchAction: a descriptor that doesn't match the
+	// request-time one lands the real cost in a different bucket from the
+	// pre-flight reservation it is meant to settle.
 	if header.Type != nil && *header.Type == egv1a1.HeaderMatchDistinct {
 		return &routev3.RateLimit_Action{
-			ActionSpecifier: &routev3.RateLimit_Action_GenericKey_{
-				GenericKey: &routev3.RateLimit_Action_GenericKey{
-					DescriptorKey:   descriptorKey,
-					DescriptorValue: descriptorKey,
+			ActionSpecifier: &routev3.RateLimit_Action_RequestHeaders_{
+				RequestHeaders: &routev3.RateLimit_Action_RequestHeaders{
+					HeaderName:    header.Name,
+					DescriptorKey: descriptorKey,
 				},
 			},
 		}

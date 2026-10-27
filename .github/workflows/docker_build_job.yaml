@@ -2,6 +2,11 @@ name: Docker Build Job
 
 on:
   workflow_call:
+    inputs:
+      tag:
+        description: Additional tag to push, e.g. a GitVersion-computed -dev version. Skipped if empty.
+        required: false
+        type: string
 
 jobs:
   docker_builds:
@@ -65,3 +70,10 @@ jobs:
           if [[ "$GITHUB_REF" != refs/tags/* ]]; then
             make docker-build.${{ matrix.command_name }} CMD_PATH_PREFIX=${{ matrix.cmd_path_prefix }} ENABLE_MULTI_PLATFORMS=true TAG="latest" DOCKER_BUILD_ARGS="--push"
           fi
+
+      # inputs.tag is the GitVersion-computed -dev version, additional to the SHA tag above
+      # which remains the documented way to pin to a specific commit.
+      - name: Build and Push Image Dev Version
+        if: ${{ inputs.tag != '' }}
+        run: |
+          make docker-build.${{ matrix.command_name }} CMD_PATH_PREFIX=${{ matrix.cmd_path_prefix }} ENABLE_MULTI_PLATFORMS=true TAG=${{ inputs.tag }} DOCKER_BUILD_ARGS="--push"

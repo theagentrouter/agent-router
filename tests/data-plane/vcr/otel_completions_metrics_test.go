@@ -132,8 +132,8 @@ func TestOtelOpenAICompletions_metrics_modelNameOverride(t *testing.T) {
 	requestModel := "babbage-002" // overridden model
 	responseModel := getSpanAttributeString(span.Attributes, "llm.model_name")
 
-	verifyTokenUsageMetricsWithOriginal(t, "completion", metrics, span, originalModel, requestModel, responseModel, false)
-	verifyRequestDurationMetricsWithOriginal(t, "completion", metrics, span, originalModel, requestModel, responseModel, false)
+	verifyTokenUsageMetricsWithProvider(t, "completion", "openai", "openai-completions-override", metrics, span, originalModel, requestModel, responseModel, false)
+	verifyRequestDurationMetricsWithProvider(t, "completion", "openai", "openai-completions-override", metrics, span, originalModel, requestModel, responseModel, false)
 }
 
 // verifyCompletionTimeToFirstTokenMetrics verifies the gen_ai.server.time_to_first_token metric for completions.
@@ -148,6 +148,7 @@ func verifyCompletionTimeToFirstTokenMetrics(t *testing.T, metrics *metricsv1.Sc
 	expectedAttrs := map[string]string{
 		"gen_ai.operation.name": "completion",
 		"gen_ai.provider.name":  "openai",
+		"gen_ai.backend":        "openai",
 		"gen_ai.original.model": originalModel,
 		"gen_ai.request.model":  requestModel,
 		"gen_ai.response.model": responseModel,
@@ -172,6 +173,7 @@ func verifyCompletionTimePerOutputTokenMetrics(t *testing.T, metrics *metricsv1.
 	expectedAttrs := map[string]string{
 		"gen_ai.operation.name": "completion",
 		"gen_ai.provider.name":  "openai",
+		"gen_ai.backend":        "openai",
 		"gen_ai.original.model": originalModel,
 		"gen_ai.request.model":  requestModel,
 		"gen_ai.response.model": responseModel,

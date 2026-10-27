@@ -1,0 +1,36 @@
+.row {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 56px;
+  flex-wrap: wrap;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pill svg {
+  color: var(--ar-brand-text);
+  flex: none;
+}
+
+.pill {
+  background: var(--ar-paper);
+  border-radius: 999px;
+  padding: 13px 24px;
+  font: 600 var(--ar-text-sm) / 1 var(--ar-font-ui);
+  color: var(--ar-fg);
+  text-decoration: none;
+  box-shadow: var(--ar-shadow-sm);
+  transition: box-shadow 0.2s, color 0.2s;
+}
+:global([data-theme='dark']) .pill { background: var(--ar-ink-800); }
+
+.pill:hover {
+  color: var(--ar-brand-text);
+  box-shadow: var(--ar-shadow-md);
+  text-decoration: none;
+}

@@ -149,7 +149,6 @@ spec:
   apiKey:
     secretRef:
       name: translation-testupstream-cool-model-backend-api-key
-      namespace: default
 ---
 apiVersion: v1
 kind: Secret

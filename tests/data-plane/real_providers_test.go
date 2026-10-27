@@ -80,6 +80,9 @@ func TestWithRealProviders(t *testing.T) {
 			{Name: "deepinfra", Schema: deepInfraSchema, Auth: &filterapi.BackendAuth{
 				APIKey: &filterapi.APIKeyAuth{Key: cc.DeepInfraAPIKey},
 			}},
+			{Name: "openrouter", Schema: openRouterSchema, Auth: &filterapi.BackendAuth{
+				APIKey: &filterapi.APIKeyAuth{Key: cc.OpenRouterAPIKey},
+			}},
 		},
 		Models: []filterapi.Model{
 			{
@@ -111,6 +114,7 @@ func TestWithRealProviders(t *testing.T) {
 				{name: "grok", modelName: internaltesting.GrokModelName, required: internaltesting.RequiredCredentialGrok},
 				{name: "sambanova", modelName: internaltesting.SambaNovaModelName, required: internaltesting.RequiredCredentialSambaNova},
 				{name: "deepinfra", modelName: internaltesting.DeepInfraModelName, required: internaltesting.RequiredCredentialDeepInfra},
+				{name: "openrouter", modelName: internaltesting.OpenRouterModelName, required: internaltesting.RequiredCredentialOpenRouter},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					cc.MaybeSkip(t, tc.required)

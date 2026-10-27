@@ -55,6 +55,7 @@ spec:
               gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
               gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
               gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
               session.id: "%DYNAMIC_METADATA(io.envoy.ai_gateway:session.id)%"
               # Common fields
               start_time: "%START_TIME%"
@@ -93,6 +94,8 @@ spec:
       type: InputToken
     - metadataKey: llm_output_token
       type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
     - metadataKey: llm_total_token
       type: TotalToken
   rules:

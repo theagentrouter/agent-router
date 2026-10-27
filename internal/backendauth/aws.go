@@ -31,7 +31,8 @@ type awsHandler struct {
 	region              string
 }
 
-func newAWSHandler(ctx context.Context, awsAuth *filterapi.AWSAuth) (filterapi.BackendAuthHandler, error) {
+// newAWSHandler returns the concrete type so awsCredentialOverrideHandler can reach signWith.
+func newAWSHandler(ctx context.Context, awsAuth *filterapi.AWSAuth) (*awsHandler, error) {
 	if awsAuth == nil {
 		return nil, fmt.Errorf("aws auth configuration is required")
 	}
@@ -83,8 +84,28 @@ func newAWSHandler(ctx context.Context, awsAuth *filterapi.AWSAuth) (filterapi.B
 // This assumes that during the transformation, the path is set in the header mutation as well as
 // the body in the body mutation.
 func (a *awsHandler) Do(ctx context.Context, requestHeaders map[string]string, mutatedBody []byte) ([]internalapi.Header, error) {
+	credentials, err := a.credentialsProvider.Retrieve(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cannot retrieve AWS credentials: %w", err)
+	}
+	return a.signWith(ctx, &credentials, requestHeaders, mutatedBody)
+}
+
+// signWith signs with the given credentials, from either the handler's own provider or a
+// per-request source. Only the credentials vary: host and region are resolved identically on both
+// paths, so a per-request credential still gets VPC endpoint and region self-correction.
+func (a *awsHandler) signWith(ctx context.Context, credentials *aws.Credentials, requestHeaders map[string]string, mutatedBody []byte) ([]internalapi.Header, error) {
 	method := requestHeaders[":method"]
 	path := requestHeaders[":path"]
+	host := a.signingHost(requestHeaders)
+	// Derive the SigV4 signing region from the resolved Bedrock host so a region/endpoint mismatch
+	// (e.g. a us-east-1 VPCE under a us-west-2 configured region) self-corrects; non-Bedrock hosts keep
+	// the configured region. This self-corrects only the signing scope — credential retrieval still uses
+	// the region the handler was built with, which is fine for Bedrock (SigV4 credentials are global).
+	region := a.region
+	if r := internalapi.AWSBedrockRegionFromHost(host); r != "" {
+		region = r
+	}
 
 	var body []byte
 	if len(mutatedBody) > 0 {
@@ -93,11 +114,12 @@ func (a *awsHandler) Do(ctx context.Context, requestHeaders map[string]string, m
 
 	payloadHash := sha256.Sum256(body)
 	req, err := http.NewRequest(method,
-		fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com%s", a.region, path),
+		fmt.Sprintf("https://%s%s", host, path),
 		bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("cannot create request: %w", err)
 	}
+	req.Host = host
 	// By setting the content length to -1, we can avoid the inclusion of the `Content-Length` header in the signature.
 	// https://github.com/aws/aws-sdk-go-v2/blob/755839b2eebb246c7eec79b65404aee105196d5b/aws/signer/v4/v4.go#L427-L431
 	//
@@ -107,13 +129,8 @@ func (a *awsHandler) Do(ctx context.Context, requestHeaders map[string]string, m
 	// https://github.com/envoyproxy/envoy/blob/60b2b5187cf99db79ecfc54675354997af4765ea/source/extensions/filters/http/ext_proc/processor_state.cc#L180-L183
 	req.ContentLength = -1
 
-	credentials, err := a.credentialsProvider.Retrieve(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("cannot retrieve AWS credentials: %w", err)
-	}
-
-	err = a.signer.SignHTTP(ctx, credentials, req,
-		hex.EncodeToString(payloadHash[:]), "bedrock", a.region, time.Now())
+	err = a.signer.SignHTTP(ctx, *credentials, req,
+		hex.EncodeToString(payloadHash[:]), "bedrock", region, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("cannot sign request: %w", err)
 	}
@@ -126,4 +143,17 @@ func (a *awsHandler) Do(ctx context.Context, requestHeaders map[string]string, m
 		}
 	}
 	return headers, nil
+}
+
+// signingHost resolves the host used to compute the SigV4 signature. It prefers the host resolved at
+// config-translation time and forwarded by the upstream ext_proc filter via
+// [internalapi.UpstreamHostHeader], and falls back to the region-based default Bedrock host when that
+// metadata is absent. It deliberately does not fall back to :authority or the host header: at signing
+// time those carry the downstream gateway authority, not the upstream endpoint, so signing over them
+// produces a silent 403.
+func (a *awsHandler) signingHost(requestHeaders map[string]string) string {
+	if host := requestHeaders[internalapi.UpstreamHostHeader]; host != "" {
+		return host
+	}
+	return fmt.Sprintf("bedrock-runtime.%s.amazonaws.com", a.region)
 }

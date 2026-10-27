@@ -5,7 +5,7 @@ title: Security
 
 # Security
 
-As Envoy AI Gateway is built on Envoy Gateway, you can leverage the Envoy Gateway Security Policy by attaching them to the Gateway and/or generated HTTPRoutes.
+As Agent Router is built on Envoy Gateway, you can leverage the Envoy Gateway Security Policy by attaching them to the Gateway and/or generated HTTPRoutes.
 
 :::tip
 View all **[Envoy Gateway Security Docs](https://gateway.envoyproxy.io/docs/tasks/security/)** to learn more what security configurations are available to you.

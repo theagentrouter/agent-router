@@ -15,8 +15,10 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -106,6 +108,9 @@ func BenchmarkMCP(b *testing.B) {
 				cs, err = mcpClient.Connect(b.Context(), &mcp.StreamableClientTransport{Endpoint: tc.TestAddr}, nil)
 				return err
 			}, 10*time.Second, 500*time.Millisecond, "failed to connect to MCP server at %s", tc.TestAddr)
+			// Close the session before the proxy is stopped, so its background stream
+			// doesn't reconnect to the next case's proxy with a stale session ID.
+			b.Cleanup(func() { _ = cs.Close() })
 
 			tools, err := cs.ListTools(b.Context(), &mcp.ListToolsParams{})
 			if err != nil {
@@ -142,10 +147,34 @@ func BenchmarkMCP(b *testing.B) {
 			}
 		})
 
-		if proxy != nil && proxy.Process != nil {
-			_ = syscall.Kill(-proxy.Process.Pid, syscall.SIGKILL)
+		if proxy != nil {
+			stopProxy(b, &tc, proxy)
 		}
 	}
+}
+
+// stopProxy kills the proxy process tree and waits until its listener port is released,
+// so the next case doesn't connect to the previous proxy while it is still shutting down.
+func stopProxy(b testing.TB, tc *MCPBenchCase, proxy *exec.Cmd) {
+	if proxy.Process == nil {
+		return
+	}
+	addr, err := url.Parse(tc.TestAddr)
+	require.NoError(b, err)
+
+	_ = syscall.Kill(-proxy.Process.Pid, syscall.SIGKILL)
+	_ = proxy.Wait()
+
+	// Envoy is a child of aigw in the same process group, and may hold the port briefly
+	// after aigw itself has exited.
+	require.Eventually(b, func() bool {
+		conn, dialErr := (&net.Dialer{}).DialContext(b.Context(), "tcp", addr.Host)
+		if dialErr != nil {
+			return true
+		}
+		_ = conn.Close()
+		return false
+	}, 30*time.Second, 200*time.Millisecond, "proxy %s did not shut down in time", tc.Name)
 }
 
 func startProxy(b testing.TB, tc *MCPBenchCase) *exec.Cmd {
@@ -153,15 +182,37 @@ func startProxy(b testing.TB, tc *MCPBenchCase) *exec.Cmd {
 	require.NoError(b, err)
 
 	cmd := exec.CommandContext(b.Context(), tc.ProxyBinary, tc.ProxyArgs...) // nolint: gosec
+	cmd.Env = append(os.Environ(), pinnedEnvoyVersionEnv(b))
+	// Keep proxy logs out of the timed request path, but dump them if setup or the
+	// benchmark fails so startup issues are still diagnosable.
+	logs := internaltesting.DumpLogsOnFail(b, tc.Name+" stdout", tc.Name+" stderr")
+	cmd.Stdout = logs[0]
+	cmd.Stderr = logs[1]
 	// put into new process group so we can kill the entire process tree (and children)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	require.NoError(b, cmd.Start())
 
-	// Wait until we can connect to the proxy
+	// Wait until we can connect to the proxy. The timeout is generous to cover a cold
+	// Envoy download on slow CI runners.
 	require.Eventually(b, func() bool {
-		_, err = (&net.Dialer{}).DialContext(b.Context(), "tcp", addr.Host)
-		return err == nil
-	}, 30*time.Second, 500*time.Millisecond, "proxy %s did not become ready in time", tc.Name)
+		conn, dialErr := (&net.Dialer{}).DialContext(b.Context(), "tcp", addr.Host)
+		if dialErr != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}, 2*time.Minute, 500*time.Millisecond, "proxy %s did not become ready in time", tc.Name)
 
 	return cmd
+}
+
+func pinnedEnvoyVersionEnv(b testing.TB) string {
+	b.Helper()
+
+	// Pin the same Envoy version used by the other data-plane tests so the cached
+	// binary is reused. `aigw run` consumes ENVOY_VERSION in both the file-backed
+	// config path (`./aigw.yaml`) and the inline `--mcp-json` autoconfig path.
+	envoyVersion, err := os.ReadFile(filepath.Join(internaltesting.FindProjectRoot(), ".envoy-version"))
+	require.NoError(b, err)
+	return "ENVOY_VERSION=" + strings.TrimSpace(string(envoyVersion))
 }

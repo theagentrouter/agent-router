@@ -1,0 +1,80 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# BackendTrafficPolicy overlay for dynamic_metadata_ratelimit.yaml.
+# This policy belongs only to Test_DynamicMetadataRateLimit. QuotaPolicy tests
+# apply the shared base fixture without this ordinary Envoy Gateway policy so
+# their assertions isolate AI Gateway quota enforcement.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: envoy-ai-gateway-dynamic-ratelimit-policy
+  namespace: default
+spec:
+  targetRefs:
+    - name: envoy-ai-gateway-dynamic-ratelimit
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rateLimit:
+    type: Global
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-id
+                  type: Distinct
+          limit:
+            requests: 100
+            unit: Hour
+            fromMetadata:
+              namespace: envoy.filters.http.ext_authz
+              key: input_limit
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_input_token
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-id
+                  type: Distinct
+          limit:
+            requests: 100
+            unit: Hour
+            fromMetadata:
+              namespace: envoy.filters.http.ext_authz
+              key: output_limit
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_output_token
+        - clientSelectors:
+            - headers:
+                - name: x-tenant-id
+                  type: Distinct
+          limit:
+            requests: 4
+            unit: Hour
+            fromMetadata:
+              namespace: envoy.filters.http.ext_authz
+              key: total_limit
+          cost:
+            request:
+              from: Number
+              number: 0
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_total_token

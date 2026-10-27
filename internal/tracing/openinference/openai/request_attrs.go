@@ -419,9 +419,9 @@ func buildResponsesRequestAttributes(req *openai.ResponseRequest, body []byte, c
 		}
 	}
 
-	// Add indexed attributes for each tool.
-	for i, tool := range req.Tools {
-		if toolJSON, err := json.Marshal(tool); err == nil {
+	// Add indexed attributes for each tool. Ranged by index to avoid copying ResponseToolUnion.
+	for i := range req.Tools {
+		if toolJSON, err := json.Marshal(&req.Tools[i]); err == nil {
 			attrs = append(attrs,
 				attribute.String(openinference.InputToolsAttribute(i), string(toolJSON)),
 			)

@@ -68,6 +68,13 @@ metadata:
   name: envoy-ai-gateway
   namespace: default
 spec:
+  # Pin the Envoy version (set by bench_test.go from .envoy-version) so the binary
+  # already cached by the other data-plane tests is reused instead of downloading
+  # EG's default version on every run.
+  provider:
+    type: Host
+    host:
+      envoyVersion: "${ENVOY_VERSION}"
   logging:
     level:
       default: error

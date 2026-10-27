@@ -32,6 +32,7 @@ static_resources:
                           mcp.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_backend)%"
                           mcp.method.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_method)%"
                           mcp.tool.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_tool_name)%"
+                          mcp.resource.uri: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_resource_uri)%"
                           jsonrpc.request.id: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_request_id)%"
                           method: "%REQ(:METHOD)%"
                           request.path: "%REQ(:PATH)%"
@@ -103,6 +104,7 @@ static_resources:
                           mcp.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_backend)%"
                           mcp.method.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_method)%"
                           mcp.tool.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_tool_name)%"
+                          mcp.resource.uri: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_resource_uri)%"
                           jsonrpc.request.id: "%DYNAMIC_METADATA(io.envoy.ai_gateway:mcp_request_id)%"
                           method: "%REQ(:METHOD)%"
                           request.path: "%REQ(:PATH)%"
@@ -211,6 +213,12 @@ static_resources:
                             key: mcp_request_id
                             type: STRING
                           remove: true
+                        - header: x-ai-eg-mcp-metadata-resource-uri
+                          on_header_present:
+                            metadata_namespace: io.envoy.ai_gateway
+                            key: mcp_resource_uri
+                            type: STRING
+                          remove: true
                         - header: agent-session-id
                           on_header_present:
                             metadata_namespace: io.envoy.ai_gateway
@@ -304,6 +312,12 @@ static_resources:
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
           auto_host_sni: true
+          # context7 serves an ECDSA P-384 certificate. With Envoy's default upstream TLS 1.2 max
+          # version, BoringSSL rejects it (BAD_ECC_CERT) since P-384 is not in the default curves.
+          # Envoy Gateway >= 1.8.3 already defaults to this.
+          common_tls_context:
+            tls_params:
+              tls_maximum_protocol_version: TLSv1_3
 
     - name: github
       connect_timeout: 30s
