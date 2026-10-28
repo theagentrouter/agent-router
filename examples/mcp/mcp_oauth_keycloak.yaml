@@ -44,6 +44,35 @@ spec:
       group: gateway.envoyproxy.io
       path: "/"
 ---
+# Same as mcp-route above, but with protectedResourceMetadata.resource omitted. The gateway
+# derives the resource identifier from the scheme, host and path each client uses, so this
+# route advertises http://127.0.0.1:1975/mcp-derived locally and the right URL on any other
+# hostname or port, without editing the config.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-route-derived-resource
+  namespace: default
+spec:
+  path: "/mcp-derived"
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  securityPolicy:
+    oauth:
+      issuer: "http://localhost:8080/realms/master"
+      jwks:
+        remoteJWKS:
+          uri: http://localhost:8080/realms/master/protocol/openid-connect/certs
+      protectedResourceMetadata:
+        scopesSupported: ["openid", "profile", "email"]
+  backendRefs:
+    - name: kiwi
+      kind: Backend
+      group: gateway.envoyproxy.io
+      path: "/"
+---
 ###################################################################################
 ############################### Backend Definitions ###############################
 ###################################################################################

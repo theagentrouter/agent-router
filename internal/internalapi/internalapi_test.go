@@ -12,6 +12,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOAuthProtectedResourceMetadataURL(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		resource string
+		want     string
+	}{
+		{
+			name:     "path component is appended after the well-known path",
+			resource: "https://api.example.com/mcp",
+			want:     "https://api.example.com/.well-known/oauth-protected-resource/mcp",
+		},
+		{
+			name:     "port is preserved in the authority",
+			resource: "https://api.example.com:8443/tenant/mcp",
+			want:     "https://api.example.com:8443/.well-known/oauth-protected-resource/tenant/mcp",
+		},
+		{
+			name:     "trailing slash is dropped",
+			resource: "https://api.example.com/mcp/",
+			want:     "https://api.example.com/.well-known/oauth-protected-resource/mcp",
+		},
+		{
+			name:     "no path component",
+			resource: "https://api.example.com",
+			want:     "https://api.example.com/.well-known/oauth-protected-resource",
+		},
+		{
+			name:     "root path",
+			resource: "http://api.example.com/",
+			want:     "http://api.example.com/.well-known/oauth-protected-resource",
+		},
+		{
+			name:     "no scheme",
+			resource: "api.example.com/mcp",
+			want:     "api.example.com/.well-known/oauth-protected-resource/mcp",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, OAuthProtectedResourceMetadataURL(tc.resource))
+		})
+	}
+}
+
 func TestParseEndpointPrefixes_Success(t *testing.T) {
 	in := "openai:/foo,cohere:/1/2/3,anthropic:/cat,typesafe:/ts"
 	ep, err := ParseEndpointPrefixes(in)

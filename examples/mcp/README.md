@@ -133,6 +133,10 @@ Then, add the MCP gateway to Claude:
 claude mcp add -t http mcp-gateway http://127.0.0.1:1975/mcp
 ```
 
+The same configuration also serves `http://127.0.0.1:1975/mcp-derived`, an MCPRoute that omits
+`protectedResourceMetadata.resource` so the gateway derives the resource identifier from each
+request instead of using a hardcoded URL.
+
 Open it inside Claude:
 
 ```
