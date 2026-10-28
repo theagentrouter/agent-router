@@ -297,6 +297,18 @@ func TestNewExtProcBuilder_MalformedInput(t *testing.T) {
 	require.Empty(t, b.extraEnvVars, "malformed env var must be skipped, not stored")
 }
 
+// TestBuildExtProcContainer_DefaultSecurityContext verifies the default context sets no UID or GID, so an assigned UID can apply.
+func TestBuildExtProcContainer_DefaultSecurityContext(t *testing.T) {
+	container := newTestBuilder().buildExtProcContainer(extProcContainerInput{})
+	require.Equal(t, &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr.To(false),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		Privileged:               ptr.To(false),
+		RunAsNonRoot:             ptr.To(true),
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}, container.SecurityContext)
+}
+
 // TestBuildExtProcContainer_GatewayConfigOverrides covers the GatewayConfig-driven
 // container fields that the drift hash must include: a SecurityContext override,
 // extra VolumeMounts, Resources, and the resolveExtProcImage default branch
