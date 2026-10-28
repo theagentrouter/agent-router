@@ -2930,3 +2930,26 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_NullContentBl
 	require.Contains(t, string(body), "Hello!")
 	require.Equal(t, tokenUsageFrom(10, -1, -1, 20, 30, -1), tokenUsage)
 }
+
+func TestBedrockStopReasonToOpenAIStopReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		stopReason *string
+		want       openai.ChatCompletionChoicesFinishReason
+	}{
+		{"missing stop reason", nil, openai.ChatCompletionChoicesFinishReasonStop},
+		{"end turn", ptr.To(awsbedrock.StopReasonEndTurn), openai.ChatCompletionChoicesFinishReasonStop},
+		{"stop sequence", ptr.To(awsbedrock.StopReasonStopSequence), openai.ChatCompletionChoicesFinishReasonStop},
+		{"max tokens", ptr.To(awsbedrock.StopReasonMaxTokens), openai.ChatCompletionChoicesFinishReasonLength},
+		{"tool use", ptr.To(awsbedrock.StopReasonToolUse), openai.ChatCompletionChoicesFinishReasonToolCalls},
+		{"content filtered", ptr.To(awsbedrock.StopReasonContentFiltered), openai.ChatCompletionChoicesFinishReasonContentFilter},
+		{"guardrail intervened", ptr.To(awsbedrock.StopReasonGuardrailIntervened), openai.ChatCompletionChoicesFinishReasonContentFilter},
+		{"unknown stop reason", ptr.To("something_new"), openai.ChatCompletionChoicesFinishReasonStop},
+	}
+	translator := &openAIToAWSBedrockTranslatorV1ChatCompletion{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, translator.bedrockStopReasonToOpenAIStopReason(tt.stopReason))
+		})
+	}
+}
