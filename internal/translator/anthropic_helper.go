@@ -92,7 +92,9 @@ func anthropicToOpenAIFinishReason(stopReason anthropic.StopReason) (openai.Chat
 	// TODO: "pause_turn" Used with server tools like web search when Claude needs to pause a long-running operation.
 	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
 		return openai.ChatCompletionChoicesFinishReasonStop, nil
-	case anthropic.StopReasonMaxTokens: // Claude stopped because it reached the max_tokens limit specified in your request.
+	case anthropic.StopReasonMaxTokens, anthropic.StopReason(anthropicschema.StopReasonModelContextWindowExceeded):
+		// Claude stopped because it reached the max_tokens limit specified in your request,
+		// or the model's context window.
 		// TODO: do we want to return an error? see: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use#handling-the-max-tokens-stop-reason
 		return openai.ChatCompletionChoicesFinishReasonLength, nil
 	case anthropic.StopReasonToolUse:
