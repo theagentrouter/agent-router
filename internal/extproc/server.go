@@ -18,7 +18,6 @@ import (
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
-	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -209,15 +208,10 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			if err != nil {
 				if errors.Is(err, errNoProcessor) {
 					path := headersMap[":path"]
-					_ = stream.Send(&extprocv3.ProcessingResponse{
-						Response: &extprocv3.ProcessingResponse_ImmediateResponse{
-							ImmediateResponse: &extprocv3.ImmediateResponse{
-								Status:     &typev3.HttpStatus{Code: typev3.StatusCode_NotFound},
-								Body:       fmt.Appendf(nil, "unsupported path: %s", path),
-								GrpcStatus: &extprocv3.GrpcStatus{Status: uint32(codes.NotFound)},
-							},
-						},
-					})
+					message := fmt.Sprintf("unsupported path: %s", path)
+					response := createUserFacingErrorResponse(404, "NotFound", message)
+					response.GetImmediateResponse().GrpcStatus.Status = uint32(codes.NotFound)
+					_ = stream.Send(response)
 					return status.Errorf(codes.NotFound, "unsupported path: %s", path)
 				}
 				s.logger.Error("cannot get processor", slog.String("error", err.Error()))

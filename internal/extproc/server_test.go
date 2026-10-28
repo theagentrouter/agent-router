@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"strconv"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/json"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 )
 
@@ -466,6 +468,48 @@ func TestSetAWSSigningAttributes(t *testing.T) {
 	}
 }
 
+type unsupportedPathErrorEnvelope struct {
+	Type  string `json:"type"`
+	Error struct {
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func expectedUnsupportedPathResponse(t *testing.T, path string) *extprocv3.ProcessingResponse {
+	t.Helper()
+
+	message := "unsupported path: " + path
+	body, err := json.MarshalForDeterministicTesting(unsupportedPathErrorEnvelope{
+		Type: "error",
+		Error: struct {
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}{
+			Type:    "NotFound",
+			Code:    "404",
+			Message: message,
+		},
+	})
+	require.NoError(t, err)
+
+	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ImmediateResponse{
+		ImmediateResponse: &extprocv3.ImmediateResponse{
+			Status: &typev3.HttpStatus{Code: typev3.StatusCode_NotFound},
+			Headers: &extprocv3.HeaderMutation{
+				SetHeaders: []*corev3.HeaderValueOption{
+					{Header: &corev3.HeaderValue{Key: "content-type", RawValue: []byte("application/json")}},
+					{Header: &corev3.HeaderValue{Key: "content-length", RawValue: []byte(strconv.Itoa(len(body)))}},
+				},
+			},
+			Body:       body,
+			GrpcStatus: &extprocv3.GrpcStatus{Status: uint32(codes.NotFound)},
+		},
+	}}
+}
+
 func TestServer_ProcessorSelection(t *testing.T) {
 	s, err := NewServer(slog.Default(), false)
 	require.NoError(t, err)
@@ -484,30 +528,35 @@ func TestServer_ProcessorSelection(t *testing.T) {
 		}, nil
 	})
 
-	t.Run("unknown path", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-		defer cancel()
+	for _, path := range []string{
+		"/unknown",
+		`/unknown?query="quoted"\path`,
+		"/unknown/雪/🌿",
+	} {
+		t.Run(path, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
 
-		req := &extprocv3.ProcessingRequest{
-			Request: &extprocv3.ProcessingRequest_RequestHeaders{
-				RequestHeaders: &extprocv3.HttpHeaders{
-					Headers: &corev3.HeaderMap{Headers: []*corev3.HeaderValue{{Key: ":path", Value: "/unknown"}}},
+			req := &extprocv3.ProcessingRequest{
+				Request: &extprocv3.ProcessingRequest_RequestHeaders{
+					RequestHeaders: &extprocv3.HttpHeaders{
+						Headers: &corev3.HeaderMap{Headers: []*corev3.HeaderValue{{Key: ":path", Value: path}}},
+					},
 				},
-			},
-		}
-		expResponse := &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ImmediateResponse{
-			ImmediateResponse: &extprocv3.ImmediateResponse{
-				Status:     &typev3.HttpStatus{Code: typev3.StatusCode_NotFound},
-				Body:       []byte("unsupported path: /unknown"),
-				GrpcStatus: &extprocv3.GrpcStatus{Status: uint32(codes.NotFound)},
-			},
-		}}
-		ms := &mockExternalProcessingStream{t: t, ctx: ctx, retRecv: req, expResponseOnSend: expResponse}
+			}
+			message := "unsupported path: " + path
+			ms := &mockExternalProcessingStream{
+				t:                 t,
+				ctx:               ctx,
+				retRecv:           req,
+				expResponseOnSend: expectedUnsupportedPathResponse(t, path),
+			}
 
-		err = s.Process(ms)
-		require.Equal(t, codes.NotFound, status.Convert(err).Code())
-		require.ErrorContains(t, err, "unsupported path: /unknown")
-	})
+			processErr := s.Process(ms)
+			require.Equal(t, codes.NotFound, status.Code(processErr))
+			require.ErrorContains(t, processErr, message)
+		})
+	}
 
 	t.Run("known path", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
