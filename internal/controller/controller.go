@@ -20,6 +20,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/kubernetes"
@@ -269,8 +270,8 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	}
 
 	// ReferenceGrant changes can authorize or revoke AIGatewayRoute,
-	// BackendSecurityPolicy, and QuotaPolicy references.
-	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan, quotaPolicyEventChan)
+	// BackendSecurityPolicy, QuotaPolicy, and MCPRoute references.
+	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan, quotaPolicyEventChan, mcpRouteEventChan)
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1b1.ReferenceGrant{}).
 		Complete(referenceGrantC); err != nil {
 		return fmt.Errorf("failed to create controller for ReferenceGrant: %w", err)
@@ -443,11 +444,26 @@ func mcpRouteToReferencedSecret(o client.Object) []string {
 }
 
 func httpRouteToOwnerMCPRouteIndexFunc(o client.Object) []string {
-	owner := metav1.GetControllerOf(o)
-	if owner == nil || owner.Kind != "MCPRoute" {
+	name, ok := controllingMCPRouteName(o)
+	if !ok {
 		return nil
 	}
-	return []string{namespacedNameIndexKey(owner.Name, o.GetNamespace())}
+	return []string{namespacedNameIndexKey(name, o.GetNamespace())}
+}
+
+// controllingMCPRouteName returns the name of the MCPRoute that is the controller owner of obj, and
+// whether there is one: the controller reference must name the MCPRoute kind of this API group. The
+// owned-HTTPRoute index and the per-backend cleanup share this identity, which is by name on purpose:
+// an object left behind by an earlier MCPRoute of the same name counts as the route's own.
+func controllingMCPRouteName(obj metav1.Object) (string, bool) {
+	owner := metav1.GetControllerOf(obj)
+	if owner == nil || owner.Kind != mcpRouteKind {
+		return "", false
+	}
+	if gv, err := schema.ParseGroupVersion(owner.APIVersion); err != nil || gv.Group != aigv1b1.GroupName {
+		return "", false
+	}
+	return owner.Name, true
 }
 
 func gatewayToGatewayConfigIndexFunc(o client.Object) []string {

@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -45,6 +46,9 @@ type MCPRouteController struct {
 	logger logr.Logger
 	// gatewayEventChan is a channel to send events to the gateway controller.
 	gatewayEventChan chan event.GenericEvent
+	// referenceGrantValidator authorizes cross-namespace apiKey.secretRef references via Gateway API
+	// ReferenceGrant.
+	referenceGrantValidator *referenceGrantValidator
 }
 
 // NewMCPRouteController creates a new reconcile.TypedReconciler[reconcile.Request] for the MCPRoute resource.
@@ -53,10 +57,11 @@ func NewMCPRouteController(
 	gatewayEventChan chan event.GenericEvent,
 ) *MCPRouteController {
 	return &MCPRouteController{
-		client:           client,
-		kube:             kube,
-		logger:           logger,
-		gatewayEventChan: gatewayEventChan,
+		client:                  client,
+		kube:                    kube,
+		logger:                  logger,
+		gatewayEventChan:        gatewayEventChan,
+		referenceGrantValidator: newReferenceGrantValidator(client),
 	}
 }
 
@@ -92,6 +97,21 @@ func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1
 		return nil
 	}
 
+	// A backend whose Secret reference is not permitted by a ReferenceGrant must not keep the credential
+	// the controller copied for it while a grant existed. Converge those backends first, sync the rest of
+	// the route as usual, and report the denial through the status at the end, the way
+	// BackendSecurityPolicy handles a denied grant. The denial is reported next to any error of the later
+	// steps: the denied backends' objects are already gone, and the status must say why.
+	denied, err := c.revokeDeniedSecretRefs(ctx, mcpRoute)
+	if err != nil {
+		return errors.Join(err, denied.err)
+	}
+	return errors.Join(c.syncMCPRouteResources(ctx, mcpRoute, denied), denied.err)
+}
+
+// syncMCPRouteResources creates or updates the resources of the MCPRoute, skipping the backends in
+// denied, which revokeDeniedSecretRefs has converged to the never-granted state.
+func (c *MCPRouteController) syncMCPRouteResources(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, denied deniedSecretRefs) error {
 	// Validate prefixMode=Never (whether set per-backend or inherited from the route-level
 	// default): each effectively-Never backend must declare toolSelector.include, and tool
 	// names must be unique across all effectively-Never backends on the route.
@@ -139,6 +159,12 @@ func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1
 	for i := range mcpRoute.Spec.BackendRefs {
 		ref := &mcpRoute.Spec.BackendRefs[i]
 		name := mcpPerBackendRefHTTPRouteName(mcpRoute.Name, ref.Name)
+		if denied.has(name) {
+			// Already converged to the never-granted state by revokeDeniedSecretRefs; keep it out of the
+			// orphan cleanup as well.
+			delete(existingPerBackendRoutes, name)
+			continue
+		}
 		httpRoute, existing := existingPerBackendRoutes[name]
 		if !existing {
 			httpRoute, err = c.newHTTPRoute(mcpRoute, name)
@@ -169,6 +195,87 @@ func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1
 		return fmt.Errorf("failed to sync gw pods: %w", err)
 	}
 	return nil
+}
+
+// deniedSecretRefs is what revokeDeniedSecretRefs found: the per-backend HTTPRoute names of the backends
+// whose Secret reference no ReferenceGrant permits, and their denials joined in spec order (nil when
+// nothing is denied).
+type deniedSecretRefs struct {
+	httpRouteNames map[string]struct{}
+	err            error
+}
+
+// has reports whether the backend with the given per-backend HTTPRoute name is denied.
+func (d deniedSecretRefs) has(httpRouteName string) bool {
+	_, ok := d.httpRouteNames[httpRouteName]
+	return ok
+}
+
+// revokeDeniedSecretRefs converges every backend whose apiKey.secretRef points at a Secret in another
+// namespace that no ReferenceGrant allows to the never-granted state: the per-backend HTTPRoute,
+// HTTPRouteFilter and credential Secret generated while a grant existed are deleted, so a revoked or
+// narrowed grant stops the data plane from injecting the copied credential. Any error other than a
+// denial aborts the sync so the next reconcile retries; the denials recorded before it are returned
+// with the error, because those backends' objects are already gone and the status must say why.
+//
+// This runs before the per-backend loop on purpose: that loop stops at its first error, so a backend
+// with an unrelated persistent error earlier in the spec must not keep a later backend's revoked
+// credential alive.
+func (c *MCPRouteController) revokeDeniedSecretRefs(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) (deniedSecretRefs, error) {
+	denied := deniedSecretRefs{httpRouteNames: make(map[string]struct{})}
+	var denials []error
+	omitted := 0
+	for i := range mcpRoute.Spec.BackendRefs {
+		ref := &mcpRoute.Spec.BackendRefs[i]
+		if ref.SecurityPolicy == nil || ref.SecurityPolicy.APIKey == nil {
+			continue
+		}
+		apiKey := ref.SecurityPolicy.APIKey
+		if apiKey.SecretRef == nil || ptr.Deref(apiKey.Inline, "") != "" {
+			continue // Inline keys never read a Secret, see readAPIKey.
+		}
+		secretNamespace := resolveAPIKeySecretNamespace(mcpRoute, apiKey.SecretRef)
+		err := c.referenceGrantValidator.validateMCPRouteSecretReference(ctx, mcpRoute.Namespace, secretNamespace, string(apiKey.SecretRef.Name))
+		if err == nil {
+			continue
+		}
+		var notPermitted *ReferenceNotPermittedError
+		if !errors.As(err, &notPermitted) {
+			denied.err = joinDenials(denials, omitted)
+			return denied, fmt.Errorf("failed to validate the Secret reference of backend %s: %w", ref.Name, err)
+		}
+		name := mcpPerBackendRefHTTPRouteName(mcpRoute.Name, ref.Name)
+		if err = c.deletePerBackendResources(ctx, mcpRoute, name); err != nil {
+			denied.err = joinDenials(denials, omitted)
+			return denied, fmt.Errorf("failed to delete the resources of backend %s: %w", ref.Name, err)
+		}
+		denied.httpRouteNames[name] = struct{}{}
+		if len(denials) <= maxReportedDenials {
+			denials = append(denials, fmt.Errorf("backend %s: %w", ref.Name, notPermitted))
+		} else {
+			omitted++
+		}
+	}
+	denied.err = joinDenials(denials, omitted)
+	return denied, nil
+}
+
+// maxReportedDenials bounds the denials listed in the status: the CRD caps a condition message at 32768
+// characters, one denial takes up to about 1 KiB with maximum-length names, and a route has up to 256
+// backends.
+const maxReportedDenials = 10
+
+// joinDenials joins the recorded denials in spec order. The sweep records up to maxReportedDenials+1 of
+// them and counts the rest as omitted; when any was omitted the status lists the first
+// maxReportedDenials and counts the others, so the count line always stands for at least two backends
+// and a route with exactly maxReportedDenials+1 denials lists them all.
+func joinDenials(denials []error, omitted int) error {
+	if omitted > 0 {
+		hidden := len(denials) - maxReportedDenials + omitted
+		denials = append(denials[:maxReportedDenials:maxReportedDenials],
+			fmt.Errorf("%d more backends have a Secret reference that is not permitted", hidden))
+	}
+	return errors.Join(denials...)
 }
 
 func mcpPerBackendRefHTTPRouteName(mcpRouteName string, backendName gwapiv1.ObjectName) string {
@@ -253,31 +360,111 @@ func (c *MCPRouteController) listExistingPerBackendHTTPRoutes(ctx context.Contex
 // deleteOrphanedPerBackendResources deletes per-backend HTTPRoutes and their corresponding
 // HTTPRouteFilters and credential Secrets that are no longer referenced by any backendRef in the MCPRoute spec.
 func (c *MCPRouteController) deleteOrphanedPerBackendResources(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, orphaned map[string]*gwapiv1.HTTPRoute) error {
-	for name, route := range orphaned {
-		c.logger.Info("Deleting orphaned per-backend HTTPRoute", "namespace", route.Namespace, "name", name)
-		if err := c.client.Delete(ctx, route); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete orphaned HTTPRoute %s: %w", name, err)
-		}
-
-		filterName := strings.Replace(name, internalapi.MCPPerBackendRefHTTPRoutePrefix, internalapi.MCPPerBackendHTTPRouteFilterPrefix, 1)
-		c.logger.Info("Deleting orphaned per-backend HTTPRouteFilter", "namespace", mcpRoute.Namespace, "name", filterName)
-		filter := &egv1a1.HTTPRouteFilter{ObjectMeta: metav1.ObjectMeta{Name: filterName, Namespace: mcpRoute.Namespace}}
-		if err := c.client.Delete(ctx, filter); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete orphaned HTTPRouteFilter %s: %w", filterName, err)
-		}
-
-		// Credential secrets are only created for backends with secretRef-based API keys, but we
-		// unconditionally attempt the delete to avoid an extra GET call.
-		credSecretName := internalapi.MCPPerBackendCredentialSecretPrefix + strings.TrimPrefix(name, internalapi.MCPPerBackendRefHTTPRoutePrefix)
-		if err := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, credSecretName, metav1.DeleteOptions{}); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("failed to delete orphaned credential secret %s: %w", credSecretName, err)
-			}
-		} else {
-			c.logger.Info("Deleted orphaned credential secret", "namespace", mcpRoute.Namespace, "name", credSecretName)
+	for name := range orphaned {
+		if err := c.deletePerBackendResources(ctx, mcpRoute, name); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// deletePerBackendResources deletes the per-backend HTTPRoute with the given name together with the
+// HTTPRouteFilter and credential Secret whose names derive from it. An object that does not exist is
+// not an error, so the call can be repeated and used for a backend that never had some of them; only
+// deletions that happened are logged.
+//
+// Derived names are not unique across MCPRoutes: route "a" with backend "b-c" and route "a-b" with
+// backend "c" share them. Each object is therefore read first and kept when another object controls
+// it, and deleted with a UID precondition so that a replacement created in between survives. The
+// controller always sets a controller reference on the objects it creates, so an object under these
+// names without one is a manual copy or had its reference stripped; it is deleted too, because keeping
+// it could keep a revoked credential alive (the write paths update such an object in place).
+func (c *MCPRouteController) deletePerBackendResources(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, httpRouteName string) error {
+	if err := c.deleteControlledPerBackendObject(ctx, mcpRoute, httpRouteName, &gwapiv1.HTTPRoute{}); err != nil {
+		return err
+	}
+	filterName := strings.Replace(httpRouteName, internalapi.MCPPerBackendRefHTTPRoutePrefix, internalapi.MCPPerBackendHTTPRouteFilterPrefix, 1)
+	if err := c.deleteControlledPerBackendObject(ctx, mcpRoute, filterName, &egv1a1.HTTPRouteFilter{}); err != nil {
+		return err
+	}
+
+	// A credential Secret exists only for secretRef API keys and inline keys with injectionPolicy
+	// IfNotPresent. Secrets go through the clientset, as everywhere else in this controller.
+	credSecretName := internalapi.MCPPerBackendCredentialSecretPrefix + strings.TrimPrefix(httpRouteName, internalapi.MCPPerBackendRefHTTPRoutePrefix)
+	secret, err := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Get(ctx, credSecretName, metav1.GetOptions{})
+	switch {
+	case apierrors.IsNotFound(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("failed to get credential secret %s: %w", credSecretName, err)
+	case controlledByAnotherOwner(secret, mcpRoute):
+		c.logger.Info("Keeping credential secret controlled by another object", "namespace", mcpRoute.Namespace, "name", credSecretName)
+		return nil
+	}
+	err = c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, credSecretName,
+		metav1.DeleteOptions{Preconditions: metav1.NewUIDPreconditions(string(secret.UID))})
+	if err == nil {
+		c.logger.Info("Deleted credential secret", "namespace", mcpRoute.Namespace, "name", credSecretName)
+	} else if err = ignoreGoneOrReplaced(err); err != nil {
+		return fmt.Errorf("failed to delete credential secret %s: %w", credSecretName, err)
+	}
+	return nil
+}
+
+// deleteControlledPerBackendObject deletes the named object in mcpRoute's namespace unless it does not
+// exist or another object controls it. See deletePerBackendResources.
+func (c *MCPRouteController) deleteControlledPerBackendObject(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, name string, obj client.Object) error {
+	kind := perBackendObjectKind(obj)
+	if err := c.client.Get(ctx, client.ObjectKey{Name: name, Namespace: mcpRoute.Namespace}, obj); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get %s %s: %w", kind, name, err)
+	}
+	if controlledByAnotherOwner(obj, mcpRoute) {
+		c.logger.Info("Keeping per-backend object controlled by another object", "kind", kind, "namespace", mcpRoute.Namespace, "name", name)
+		return nil
+	}
+	err := c.client.Delete(ctx, obj, client.Preconditions{UID: ptr.To(obj.GetUID())})
+	if err == nil {
+		c.logger.Info("Deleted per-backend object", "kind", kind, "namespace", mcpRoute.Namespace, "name", name)
+	} else if err = ignoreGoneOrReplaced(err); err != nil {
+		return fmt.Errorf("failed to delete %s %s: %w", kind, name, err)
+	}
+	return nil
+}
+
+// controlledByAnotherOwner reports whether obj has a controller reference to anything but mcpRoute:
+// another kind, an MCPRoute of another API group, or an MCPRoute of another name. See
+// controllingMCPRouteName for the identity, which the owned-HTTPRoute index shares.
+func controlledByAnotherOwner(obj metav1.Object, mcpRoute *aigv1b1.MCPRoute) bool {
+	if metav1.GetControllerOf(obj) == nil {
+		return false
+	}
+	name, ok := controllingMCPRouteName(obj)
+	return !ok || name != mcpRoute.Name
+}
+
+// perBackendObjectKind names the kind of a per-backend object for logs and errors.
+func perBackendObjectKind(obj client.Object) string {
+	switch obj.(type) {
+	case *gwapiv1.HTTPRoute:
+		return "HTTPRoute"
+	case *egv1a1.HTTPRouteFilter:
+		return "HTTPRouteFilter"
+	default:
+		return fmt.Sprintf("%T", obj)
+	}
+}
+
+// ignoreGoneOrReplaced turns the delete errors that mean "nothing of ours left to delete" into nil:
+// NotFound, and Conflict from the UID precondition when the object was replaced since it was read (the
+// next reconcile judges the replacement).
+func ignoreGoneOrReplaced(err error) error {
+	if apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
+		return nil
+	}
+	return err
 }
 
 // newMainHTTPRoute updates the main HTTPRoute with the MCPRoute.
@@ -688,7 +875,7 @@ func (c *MCPRouteController) mcpBackendRefToHTTPRouteRule(ctx context.Context, m
 			// Query parameter injection cannot use Envoy Gateway's credentialInjection filter;
 			// embed directly in the URL rewrite path. injectionPolicy does not apply here.
 			// TODO: evaluate alternatives to avoid embedding the secret in the HTTPRoute manifest.
-			apiKeyLiteral, err := c.readAPIKey(ctx, mcpRoute.Namespace, apiKey)
+			apiKeyLiteral, err := c.readAPIKey(ctx, mcpRoute, apiKey)
 			if err != nil {
 				return gwapiv1.HTTPRouteRule{}, fmt.Errorf("failed to read API key for backend %s: %w", ref.Name, err)
 			}
@@ -837,6 +1024,11 @@ func (c *MCPRouteController) ensureMCPBackendRefHTTPFilter(ctx context.Context, 
 			return fmt.Errorf("failed to create HTTPRouteFilter: %w", err)
 		}
 	} else {
+		// Same collision as for the credential Secret: the filter of another MCPRoute's backend must not be
+		// rewritten, and its credential Secret must not be deleted as "stale".
+		if controlledByAnotherOwner(&existingFilter, mcpRoute) {
+			return fmt.Errorf("HTTPRouteFilter %s is controlled by another MCPRoute whose backend derives the same object names; rename the backend", filterName)
+		}
 		previousCredentialSecretName := ""
 		if existingFilter.Spec.CredentialInjection != nil {
 			previousCredentialSecretName = string(existingFilter.Spec.CredentialInjection.Credential.ValueRef.Name)
@@ -863,7 +1055,7 @@ func (c *MCPRouteController) ensureMCPBackendRefHTTPFilter(ctx context.Context, 
 // value under the InjectedCredentialKey key. This secret is referenced by the HTTPRouteFilter's credentialInjection,
 // keeping the plaintext API key out of the HTTPRoute manifest.
 func (c *MCPRouteController) ensureCredentialSecret(ctx context.Context, secretName string, mcpRoute *aigv1b1.MCPRoute, apiKey *aigv1b1.MCPBackendAPIKey) error {
-	apiKeyLiteral, err := c.readAPIKey(ctx, mcpRoute.Namespace, apiKey)
+	apiKeyLiteral, err := c.readAPIKey(ctx, mcpRoute, apiKey)
 	if err != nil {
 		return fmt.Errorf("failed to read API key: %w", err)
 	}
@@ -902,6 +1094,12 @@ func (c *MCPRouteController) ensureCredentialSecret(ctx context.Context, secretN
 		return nil
 	}
 
+	// Per-backend object names derive from the route and backend names and can collide across MCPRoutes
+	// ("a"/"b-c" and "a-b"/"c"); never rewrite another route's credential.
+	if controlledByAnotherOwner(existing, mcpRoute) {
+		return fmt.Errorf("credential secret %s is controlled by another MCPRoute whose backend derives the same object names; rename the backend", secretName)
+	}
+
 	// Update if the credential value changed.
 	if string(existing.Data[egv1a1.InjectedCredentialKey]) != credentialValue {
 		existing.Data = desired.Data
@@ -913,10 +1111,24 @@ func (c *MCPRouteController) ensureCredentialSecret(ctx context.Context, secretN
 	return nil
 }
 
-func (c *MCPRouteController) readAPIKey(ctx context.Context, namespace string, apiKey *aigv1b1.MCPBackendAPIKey) (string, error) {
+// readAPIKey returns the API key configured for a backend, reading the referenced Secret when the
+// key is not inline. The Secret lives in secretRef.namespace when that is set, otherwise in the
+// MCPRoute's namespace; a Secret in another namespace is only read when a ReferenceGrant in that
+// namespace allows the MCPRoute to reference it.
+func (c *MCPRouteController) readAPIKey(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, apiKey *aigv1b1.MCPBackendAPIKey) (string, error) {
 	key := ptr.Deref(apiKey.Inline, "")
 	if key == "" {
 		secretRef := apiKey.SecretRef
+		if secretRef == nil {
+			// The CRD requires exactly one of inline and secretRef but admits an empty inline value.
+			return "", errors.New("apiKey has neither a non-empty inline value nor a secretRef")
+		}
+		namespace := resolveAPIKeySecretNamespace(mcpRoute, secretRef)
+		// The grant check must run before the Secret is read: the controller can read every Secret
+		// in the cluster, so an ungranted reference must never reach the API server.
+		if err := c.referenceGrantValidator.validateMCPRouteSecretReference(ctx, mcpRoute.Namespace, namespace, string(secretRef.Name)); err != nil {
+			return "", err
+		}
 		secret, err := c.kube.CoreV1().Secrets(namespace).Get(ctx, string(secretRef.Name), metav1.GetOptions{})
 		if err != nil {
 			return "", fmt.Errorf("failed to get secret for API key: %w", err)
@@ -928,6 +1140,15 @@ func (c *MCPRouteController) readAPIKey(ctx context.Context, namespace string, a
 		}
 	}
 	return key, nil
+}
+
+// resolveAPIKeySecretNamespace returns the namespace of the Secret an apiKey.secretRef points at:
+// secretRef.namespace when set, otherwise the MCPRoute's own namespace.
+func resolveAPIKeySecretNamespace(mcpRoute *aigv1b1.MCPRoute, secretRef *gwapiv1.SecretObjectReference) string {
+	if secretRef.Namespace != nil && *secretRef.Namespace != "" {
+		return string(*secretRef.Namespace)
+	}
+	return mcpRoute.Namespace
 }
 
 // validatePerBackendPrefixMode checks that prefixMode=Never is used correctly, whether it is

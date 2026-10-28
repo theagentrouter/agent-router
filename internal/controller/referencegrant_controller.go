@@ -22,8 +22,9 @@ import (
 
 // ReferenceGrantController implements [reconcile.TypedReconciler] for ReferenceGrant.
 //
-// This controller watches ReferenceGrant resources and triggers reconciliation of
-// affected AIGatewayRoutes and BackendSecurityPolicies when grants are created, updated, or deleted.
+// This controller watches ReferenceGrant resources and triggers reconciliation of affected
+// AIGatewayRoutes, BackendSecurityPolicies, QuotaPolicies and MCPRoutes when grants are created,
+// updated, or deleted.
 //
 // Exported for testing purposes.
 type ReferenceGrantController struct {
@@ -32,6 +33,7 @@ type ReferenceGrantController struct {
 	aiGatewayRouteChan        chan event.GenericEvent
 	backendSecurityPolicyChan chan event.GenericEvent
 	quotaPolicyChan           chan event.GenericEvent
+	mcpRouteChan              chan event.GenericEvent
 }
 
 // NewReferenceGrantController creates a new [reconcile.TypedReconciler] for ReferenceGrant.
@@ -41,6 +43,7 @@ func NewReferenceGrantController(
 	aiGatewayRouteChan chan event.GenericEvent,
 	backendSecurityPolicyChan chan event.GenericEvent,
 	quotaPolicyChan chan event.GenericEvent,
+	mcpRouteChan chan event.GenericEvent,
 ) *ReferenceGrantController {
 	return &ReferenceGrantController{
 		client:                    c,
@@ -48,6 +51,7 @@ func NewReferenceGrantController(
 		aiGatewayRouteChan:        aiGatewayRouteChan,
 		backendSecurityPolicyChan: backendSecurityPolicyChan,
 		quotaPolicyChan:           quotaPolicyChan,
+		mcpRouteChan:              mcpRouteChan,
 	}
 }
 
@@ -81,8 +85,8 @@ func (c *ReferenceGrantController) Reconcile(ctx context.Context, req reconcile.
 	return ctrl.Result{}, nil
 }
 
-// triggerAffectedReconciles triggers reconciliation of every AIGatewayRoute, BackendSecurityPolicy and QuotaPolicy
-// that a ReferenceGrant in grantNamespace may affect, whether it was just created, updated, or is about to be deleted.
+// triggerAffectedReconciles triggers reconciliation of every AIGatewayRoute, BackendSecurityPolicy, QuotaPolicy and
+// MCPRoute that a ReferenceGrant in grantNamespace may affect, whether it was just created, updated, or is about to be deleted.
 //
 // The set of affected resources is derived from the grant's namespace rather than its current spec: when a grant is narrowed
 // (e.g. a "from" entry is removed), the resources that just lost access are no longer described by the new spec, but they still
@@ -132,6 +136,22 @@ func (c *ReferenceGrantController) triggerAffectedReconciles(ctx context.Context
 			c.logger.Info("Triggering reconciliation for affected QuotaPolicy",
 				"quotapolicy_namespace", policy.Namespace, "quotapolicy_name", policy.Name, "grant_namespace", grantNamespace)
 			err = c.enqueueEvent(ctx, c.quotaPolicyChan, policy, "QuotaPolicy", grantNamespace)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	if c.mcpRouteChan != nil {
+		affectedMCPRoutes, err := c.getAffectedMCPRoutes(ctx, grantNamespace)
+		if err != nil {
+			c.logger.Error(err, "failed to get affected MCPRoutes", "grant_namespace", grantNamespace)
+			return err
+		}
+		for _, route := range affectedMCPRoutes {
+			c.logger.Info("Triggering reconciliation for affected MCPRoute",
+				"mcproute_namespace", route.Namespace, "mcproute_name", route.Name, "grant_namespace", grantNamespace)
+			err = c.enqueueEvent(ctx, c.mcpRouteChan, route, "MCPRoute", grantNamespace)
 			if err != nil {
 				return err
 			}
@@ -255,6 +275,39 @@ func (c *ReferenceGrantController) backendSecurityPolicyReferencesNamespace(bsp 
 	}
 	if oidc := getBackendSecurityPolicyAuthOIDC(&bsp.Spec); oidc != nil && oidc.ClientSecret.Namespace != nil {
 		return string(*oidc.ClientSecret.Namespace) == namespace
+	}
+	return false
+}
+
+// getAffectedMCPRoutes returns all MCPRoutes in a namespace other than grantNamespace whose backend
+// apiKey.secretRef points at a Secret in grantNamespace, i.e. every route whose access a
+// ReferenceGrant in grantNamespace may grant or revoke.
+func (c *ReferenceGrantController) getAffectedMCPRoutes(ctx context.Context, grantNamespace string) ([]*aigv1b1.MCPRoute, error) {
+	var routes aigv1b1.MCPRouteList
+	if err := c.client.List(ctx, &routes); err != nil {
+		return nil, fmt.Errorf("failed to list MCPRoutes: %w", err)
+	}
+
+	var affected []*aigv1b1.MCPRoute
+	for i := range routes.Items {
+		route := &routes.Items[i]
+		if route.Namespace != grantNamespace && c.mcpRouteReferencesSecretNamespace(route, grantNamespace) {
+			affected = append(affected, route)
+		}
+	}
+	return affected, nil
+}
+
+// mcpRouteReferencesSecretNamespace checks if an MCPRoute has an apiKey.secretRef to a Secret in a
+// specific namespace.
+func (c *ReferenceGrantController) mcpRouteReferencesSecretNamespace(route *aigv1b1.MCPRoute, namespace string) bool {
+	for _, ref := range route.Spec.BackendRefs {
+		if ref.SecurityPolicy == nil || ref.SecurityPolicy.APIKey == nil || ref.SecurityPolicy.APIKey.SecretRef == nil {
+			continue
+		}
+		if ns := ref.SecurityPolicy.APIKey.SecretRef.Namespace; ns != nil && string(*ns) == namespace {
+			return true
+		}
 	}
 	return false
 }
