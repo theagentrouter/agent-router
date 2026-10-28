@@ -510,6 +510,70 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_HeaderValueFilter(t *test
 	}
 }
 
+// Bedrock sends ping events while a large tool call is still being generated.
+// They must reach the client, otherwise the stream is silent for minutes.
+func TestAnthropicToAWSAnthropicTranslator_ResponseBody_Ping(t *testing.T) {
+	const sse = `event: message_start
+data: {"type":"message_start","message":{"model":"claude-opus-5-5","id":"msg_bdrk_01","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_bdrk_01","name":"write_file","input":{}}}
+
+event: ping
+data: {"type":"ping"}
+
+event: ping
+data: {"type":"ping"}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"/tmp/a\"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":15}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+	stream, err := wrapAnthropicSSEInEventStream(sse)
+	require.NoError(t, err)
+
+	translator := NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+	translator.(*anthropicToAWSAnthropicTranslator).stream = true
+
+	var got []byte
+	var tokenUsage metrics.TokenUsage
+	for i := range stream {
+		var body []byte
+		_, body, tokenUsage, _, err = translator.ResponseBody(nil, bytes.NewReader(stream[i:i+1]), i == len(stream)-1, nil)
+		require.NoError(t, err)
+		got = append(got, body...)
+	}
+
+	require.Equal(t, sse, string(got))
+	inputTokens, ok := tokenUsage.InputTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(10), inputTokens)
+	outputTokens, ok := tokenUsage.OutputTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(15), outputTokens)
+}
+
+// The frame is a ping captured from a live Bedrock InvokeModelWithResponseStream response.
+func TestAnthropicToAWSAnthropicTranslator_ResponseBody_PingRealFrame(t *testing.T) {
+	frame, err := base64.StdEncoding.DecodeString("AAAAjwAAAEu3mmAyCzpldmVudC10eXBlBwAFY2h1bmsNOmNvbnRlbnQtdHlwZQcAEGFwcGxpY2F0aW9uL2pzb24NOm1lc3NhZ2UtdHlwZQcABWV2ZW50eyJieXRlcyI6ImV5SjBlWEJsSWpvaWNHbHVaeUo5IiwicCI6ImFiY2RlZmdoaWprbG0ifSWey0A=")
+	require.NoError(t, err)
+
+	translator := NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+	translator.(*anthropicToAWSAnthropicTranslator).stream = true
+	_, body, _, _, err := translator.ResponseBody(nil, bytes.NewReader(frame), false, nil)
+	require.NoError(t, err)
+	require.Equal(t, "event: ping\ndata: {\"type\":\"ping\"}\n\n", string(body))
+}
+
 func TestAnthropicToAWSAnthropicTranslator_ResponseBody(t *testing.T) {
 	t.Run("non-streaming response", func(t *testing.T) {
 		// This is mostly for the coverage as it's the same as AnthropicToAnthropicTranslator.ResponseBody.
