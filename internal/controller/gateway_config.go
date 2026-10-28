@@ -55,7 +55,9 @@ func (c *GatewayConfigController) Reconcile(ctx context.Context, req reconcile.R
 	if err := c.client.Get(ctx, req.NamespacedName, &gatewayConfig); err != nil {
 		if apierrors.IsNotFound(err) {
 			c.logger.Info("Deleting GatewayConfig", "namespace", req.Namespace, "name", req.Name)
-			return ctrl.Result{}, nil
+			gatewayConfig.Name = req.Name
+			gatewayConfig.Namespace = req.Namespace
+			return ctrl.Result{}, c.syncGatewayConfig(ctx, &gatewayConfig)
 		}
 		return ctrl.Result{}, err
 	}
