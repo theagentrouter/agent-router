@@ -1295,12 +1295,27 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		}
 
 	case string(constant.ValueOf[constant.ContentBlockStop]()):
-		// This event is for state cleanup, no chunk is sent.
+		// This event cleans up the tool call state; a chunk is sent only for a tool call that streamed no arguments.
 		var event anthropic.ContentBlockStopEvent
 		if err := json.Unmarshal(data, &event); err != nil {
 			return nil, fmt.Errorf("unmarshal content_block_stop: %w", err)
 		}
+		tool, ok := p.activeToolCalls[p.toolIndex]
 		delete(p.activeToolCalls, p.toolIndex)
+		if ok && tool.inputJSON == "" {
+			// A tool without parameters streams no arguments (or one empty
+			// partial_json), so the arguments a client concatenates would be an
+			// empty string instead of JSON. Send an empty object.
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{
+				ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+					{
+						Index:    p.toolIndex,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{Arguments: "{}"},
+					},
+				},
+			}
+			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
+		}
 		return nil, nil
 
 	case string(constant.ValueOf[constant.MessageStop]()):
