@@ -1567,7 +1567,7 @@ func TestExtractToolCallsFromGeminiPartsStream(t *testing.T) {
 				call := calls[0]
 				return call.ID != nil && *call.ID != "" &&
 					call.Function.Name == "nil_args_func" &&
-					call.Function.Arguments == `null` &&
+					call.Function.Arguments == `{}` &&
 					call.Index == 0 // Single tool call should have index 0
 			},
 		},
