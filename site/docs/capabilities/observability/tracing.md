@@ -53,6 +53,9 @@ kubectl wait --timeout=5m -n envoy-ai-gateway-system \
   pods -l app=phoenix --for=condition=Ready
 ```
 
+This turns off Phoenix authentication to keep the walkthrough short. To keep it
+on, see [Authenticating to Phoenix](#authenticating-to-phoenix).
+
 ### Configure AI Gateway with OpenTelemetry
 
 Upgrade your AI Gateway installation with [OpenTelemetry configuration][otel-config]:
@@ -103,6 +106,87 @@ kubectl port-forward -n envoy-ai-gateway-system svc/phoenix-svc 6006:6006
 ```
 
 Then open http://localhost:6006 in your browser to explore the traces.
+
+## Authenticating to Phoenix
+
+The Phoenix Helm chart turns authentication on by default, and the walkthrough
+above turns it off. With authentication on, Phoenix only accepts traces that
+include an API key, so the external processor has to send one in an
+`authorization` header.
+
+The `extProc.extraEnvVars` Helm value only takes literal values, which would
+leave the API key in plain text in your Helm values. Instead, store the header
+in a Secret and load it with a [`GatewayConfig`](../gateway-config.md):
+
+1. Install Phoenix without `--set auth.enableAuth=false`:
+
+   ```shell
+   helm install phoenix oci://registry-1.docker.io/arizephoenix/phoenix-helm \
+     --namespace envoy-ai-gateway-system \
+     --set server.port=6006
+   ```
+
+2. Open the Phoenix UI as described in [Access Phoenix UI](#access-phoenix-ui),
+   log in as an admin, and create a system API key under **Settings**. See
+   [Phoenix authentication][phoenix-auth] for the initial admin login.
+
+3. Create a Secret holding the header in the namespace where the Envoy proxy
+   pods run, which is `envoy-gateway-system` by default:
+
+   ```shell
+   kubectl create secret generic phoenix-otlp-headers \
+     --namespace envoy-gateway-system \
+     --from-literal=headers='authorization=Bearer%20<your-phoenix-api-key>'
+   ```
+
+   [`OTEL_EXPORTER_OTLP_HEADERS`][otel-headers] is a comma-separated list of
+   `key=value` pairs whose values are URL-decoded, so the space after `Bearer`
+   is written as `%20`.
+
+4. Point the Gateway at a `GatewayConfig` named `phoenix-auth`. Do this before
+   you create the `GatewayConfig` in the next step: the controller rolls out the
+   Gateway's Envoy pods when a `GatewayConfig` that the Gateway references is
+   created or changed, but adding the annotation on its own doesn't trigger a
+   rollout.
+
+   ```shell
+   kubectl annotate gateway envoy-ai-gateway-basic -n default \
+     aigateway.envoyproxy.io/gateway-config=phoenix-auth
+   ```
+
+5. Create the `GatewayConfig` in the same namespace as the Gateway, loading the
+   header from the Secret:
+
+   ```yaml
+   apiVersion: aigateway.envoyproxy.io/v1beta1
+   kind: GatewayConfig
+   metadata:
+     name: phoenix-auth
+     namespace: default
+   spec:
+     extProc:
+       kubernetes:
+         env:
+           - name: OTEL_EXPORTER_OTLP_HEADERS
+             valueFrom:
+               secretKeyRef:
+                 name: phoenix-otlp-headers
+                 key: headers
+   ```
+
+   Variables from a `GatewayConfig` are added to the ones set through Helm, so
+   the endpoint from
+   [Configure AI Gateway with OpenTelemetry](#configure-ai-gateway-with-opentelemetry)
+   still applies.
+
+Kubernetes only reads `secretKeyRef` values when a container starts, so if you
+later rotate the API key in the Secret, restart the pods yourself. Run the same
+command if you annotated the Gateway after creating the `GatewayConfig`:
+
+```shell
+kubectl rollout restart deployment -n envoy-gateway-system \
+  -l gateway.envoyproxy.io/owning-gateway-name=envoy-ai-gateway-basic
+```
 
 ## Semantic Conventions
 
@@ -364,3 +448,5 @@ on `GatewayConfig` usage, including environment variable precedence and shared c
 [phoenix-evals]: https://arize.com/docs/phoenix/evaluation/llm-evals
 [otel-session]: https://opentelemetry.io/docs/specs/semconv/registry/attributes/session/
 [phoenix-session]: https://arize.com/docs/phoenix/tracing/llm-traces/sessions
+[phoenix-auth]: https://arize.com/docs/phoenix/self-hosting/features/authentication
+[otel-headers]: https://opentelemetry.io/docs/specs/otel/protocol/exporter/#specifying-headers-via-environment-variables

@@ -282,6 +282,7 @@ focused on retrieval and semantic analysis.
   - `OTEL_EXPORTER_OTLP_ENDPOINT`: Collector endpoint (e.g., `http://phoenix:6006`)
   - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`: Override traces endpoint separately
   - `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`: Override metrics endpoint separately
+  - `OTEL_EXPORTER_OTLP_HEADERS`: Headers sent with each export (e.g., `authorization=Bearer%20<api-key>` for [Phoenix with authentication][phoenix-auth])
   - `OTEL_TRACES_EXPORTER`: Traces exporter type (e.g., `console`, `otlp`, `none`)
   - `OTEL_METRICS_EXPORTER`: Metrics exporter type (e.g., `console`, `otlp`, `none`)
   - `OTEL_BSP_SCHEDULE_DELAY`: Batch span processor delay (default: 5000ms)
@@ -381,3 +382,4 @@ Custom run IDs:
 [docker-compose-otel.yaml]: https://github.com/theagentrouter/agent-router/blob/main/cmd/aigw/docker-compose-otel.yaml
 [session-tracking]: ../capabilities/observability/tracing.md#session-tracking
 [tracing]: ../capabilities/observability/tracing.md#semantic-conventions
+[phoenix-auth]: ../capabilities/observability/tracing.md#authenticating-to-phoenix
