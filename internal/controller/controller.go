@@ -106,6 +106,14 @@ type Options struct {
 	MCPFallbackSessionEncryptionSeed string
 	// MCPFallbackSessionEncryptionIterations is the number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.
 	MCPFallbackSessionEncryptionIterations int
+	// FileIDEncryptionSeed is the seed used to derive the encryption key for Files/Batch API ids.
+	FileIDEncryptionSeed string
+	// FileIDEncryptionIterations is the number of PBKDF2 iterations for Files/Batch API id encryption.
+	FileIDEncryptionIterations int
+	// FileIDFallbackEncryptionSeed is the optional fallback seed used for Files/Batch API id key rotation.
+	FileIDFallbackEncryptionSeed string
+	// FileIDFallbackEncryptionIterations is the number of PBKDF2 iterations for the fallback seed.
+	FileIDFallbackEncryptionIterations int
 	// EndpointPrefixes is the comma-separated key-value pairs for endpoint prefixes.
 	EndpointPrefixes string
 	// RateLimitRunner is the xDS runner that serves rate limit configs to the rate limit service.

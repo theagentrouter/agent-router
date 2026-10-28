@@ -163,6 +163,17 @@ func AIServiceBackendName(perRouteRuleRefBackendName string) string {
 	return perRouteRuleRefBackendName
 }
 
+// NamespaceAndNameFromBackendName parses the AIServiceBackend namespace and name from a
+// composite backend name produced by PerRouteRuleRefBackendName ("<ns>/<name>/route/...").
+// It returns ok=false if the input is not in the expected form.
+func NamespaceAndNameFromBackendName(backendName string) (namespace, name string, ok bool) {
+	parts := strings.SplitN(backendName, "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
 // awsBedrockHostRE matches an AWS Bedrock runtime host — public, FIPS, PrivateLink (VPCE), or the
 // newer api.aws domain — and captures the region, e.g. bedrock-runtime.us-east-1.amazonaws.com,
 // bedrock-runtime-fips.us-east-1.amazonaws.com, vpce-<id>.bedrock-runtime.us-east-1.vpce.amazonaws.com,

@@ -11,6 +11,7 @@ import (
 	stdjson "encoding/json" //nolint: depguard // the webhook and reconciler need byte-stable hashing; sonic does not guarantee stable field order.
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -75,6 +76,10 @@ func newExtProcBuilder(options *Options, extProcAsSideCar bool, logger logr.Logg
 		mcpSessionEncryptionIterations:         options.MCPSessionEncryptionIterations,
 		mcpFallbackSessionEncryptionSeed:       options.MCPFallbackSessionEncryptionSeed,
 		mcpFallbackSessionEncryptionIterations: options.MCPFallbackSessionEncryptionIterations,
+		fileIDEncryptionSeed:                   options.FileIDEncryptionSeed,
+		fileIDEncryptionIterations:             options.FileIDEncryptionIterations,
+		fileIDFallbackEncryptionSeed:           options.FileIDFallbackEncryptionSeed,
+		fileIDFallbackEncryptionIterations:     options.FileIDFallbackEncryptionIterations,
 	}
 }
 
@@ -105,6 +110,11 @@ type extProcBuilder struct {
 	mcpSessionEncryptionIterations         int
 	mcpFallbackSessionEncryptionSeed       string
 	mcpFallbackSessionEncryptionIterations int
+
+	fileIDEncryptionSeed               string
+	fileIDEncryptionIterations         int
+	fileIDFallbackEncryptionSeed       string
+	fileIDFallbackEncryptionIterations int
 }
 
 // extProcContainerInput is the per-gateway input for extproc injection.
@@ -227,44 +237,52 @@ type extProcConfigDigest struct {
 	LogLevel        string
 	// LogFormat is omitted when it is the default, so deployments that never asked for JSON keep
 	// the same hash as before this field existed and are not rolled on upgrade.
-	LogFormat                      string `json:",omitempty"`
-	EnableRedaction                bool
-	UDSPath                        string
-	RequestHeaderAttributes        *string
-	SpanRequestHeaderAttributes    *string
-	MetricsRequestHeaderAttributes *string
-	LogRequestHeaderAttributes     *string
-	RootPrefix                     string
-	EndpointPrefixes               string
-	ExtraEnvVars                   []corev1.EnvVar
-	ImagePullSecrets               []corev1.LocalObjectReference
-	MaxRecvMsgSize                 int
-	ExtProcAsSideCar               bool
-	NeedMCP                        bool
-	GatewayConfigExtProc           *aigv1b1.GatewayConfigExtProc
+	LogFormat                          string `json:",omitempty"`
+	EnableRedaction                    bool
+	UDSPath                            string
+	RequestHeaderAttributes            *string
+	SpanRequestHeaderAttributes        *string
+	MetricsRequestHeaderAttributes     *string
+	LogRequestHeaderAttributes         *string
+	RootPrefix                         string
+	EndpointPrefixes                   string
+	ExtraEnvVars                       []corev1.EnvVar
+	ImagePullSecrets                   []corev1.LocalObjectReference
+	MaxRecvMsgSize                     int
+	ExtProcAsSideCar                   bool
+	FileIDEncryptionSeed               string
+	FileIDEncryptionIterations         int
+	FileIDFallbackEncryptionSeed       string
+	FileIDFallbackEncryptionIterations int
+	NeedMCP                            bool
+	GatewayConfigExtProc               *aigv1b1.GatewayConfigExtProc
 }
 
 // extProcContainerHash returns a stable hash of the extproc injection inputs.
 func (b *extProcBuilder) extProcContainerHash(input extProcContainerInput) string {
 	digest := extProcConfigDigest{
-		Image:                          b.extProcImage(input),
-		ImagePullPolicy:                b.imagePullPolicy,
-		LogLevel:                       b.logLevel,
-		LogFormat:                      b.nonDefaultLogFormat(),
-		EnableRedaction:                b.enableRedaction,
-		UDSPath:                        b.udsPath,
-		RequestHeaderAttributes:        b.requestHeaderAttributes,
-		SpanRequestHeaderAttributes:    b.spanRequestHeaderAttributes,
-		MetricsRequestHeaderAttributes: b.metricsRequestHeaderAttributes,
-		LogRequestHeaderAttributes:     b.logRequestHeaderAttributes,
-		RootPrefix:                     b.rootPrefix,
-		EndpointPrefixes:               b.endpointPrefixes,
-		ExtraEnvVars:                   b.extraEnvVars,
-		ImagePullSecrets:               b.imagePullSecrets,
-		MaxRecvMsgSize:                 b.maxRecvMsgSize,
-		ExtProcAsSideCar:               b.extProcAsSideCar,
-		NeedMCP:                        input.needMCP,
-		GatewayConfigExtProc:           extProcSpecFromInput(input),
+		Image:                              b.extProcImage(input),
+		ImagePullPolicy:                    b.imagePullPolicy,
+		LogLevel:                           b.logLevel,
+		LogFormat:                          b.nonDefaultLogFormat(),
+		EnableRedaction:                    b.enableRedaction,
+		UDSPath:                            b.udsPath,
+		RequestHeaderAttributes:            b.requestHeaderAttributes,
+		SpanRequestHeaderAttributes:        b.spanRequestHeaderAttributes,
+		MetricsRequestHeaderAttributes:     b.metricsRequestHeaderAttributes,
+		LogRequestHeaderAttributes:         b.logRequestHeaderAttributes,
+		RootPrefix:                         b.rootPrefix,
+		EndpointPrefixes:                   b.endpointPrefixes,
+		ExtraEnvVars:                       b.extraEnvVars,
+		ImagePullSecrets:                   b.imagePullSecrets,
+		MaxRecvMsgSize:                     b.maxRecvMsgSize,
+		ExtProcAsSideCar:                   b.extProcAsSideCar,
+		FileIDEncryptionSeed:               b.fileIDEncryptionSeed,
+		FileIDEncryptionIterations:         b.fileIDEncryptionIterations,
+		FileIDFallbackEncryptionSeed:       b.fileIDFallbackEncryptionSeed,
+		FileIDFallbackEncryptionIterations: b.fileIDFallbackEncryptionIterations,
+		NeedMCP:                            input.needMCP,
+		GatewayConfigExtProc:               extProcSpecFromInput(input),
 	}
 	marshaled, _ := stdjson.Marshal(digest)
 	sum := sha256.Sum256(marshaled)
@@ -303,6 +321,18 @@ func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {
 		"-adminPort", fmt.Sprintf("%d", extProcAdminPort),
 		"-rootPrefix", b.rootPrefix,
 		"-maxRecvMsgSize", fmt.Sprintf("%d", b.maxRecvMsgSize),
+	}
+	if b.fileIDEncryptionSeed != "" {
+		args = append(args,
+			"-fileIDEncryptionSeed", b.fileIDEncryptionSeed,
+			"-fileIDEncryptionIterations", strconv.Itoa(b.fileIDEncryptionIterations),
+		)
+		if b.fileIDFallbackEncryptionSeed != "" {
+			args = append(args,
+				"-fileIDFallbackEncryptionSeed", b.fileIDFallbackEncryptionSeed,
+				"-fileIDFallbackEncryptionIterations", strconv.Itoa(b.fileIDFallbackEncryptionIterations),
+			)
+		}
 	}
 	if f := b.nonDefaultLogFormat(); f != "" {
 		args = append(args, "-logFormat", f)
