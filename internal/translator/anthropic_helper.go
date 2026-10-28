@@ -452,8 +452,7 @@ func openAIMessageToAnthropicMessageRoleAssistant(openAiMessage *openai.ChatComp
 			return
 		}
 		var input map[string]any
-		if err = json.Unmarshal([]byte(toolCall.Function.Arguments), &input); err != nil {
-			err = fmt.Errorf("failed to unmarshal tool call arguments: %w", err)
+		if input, err = unmarshalToolCallArguments(toolCall.Function.Arguments); err != nil {
 			return
 		}
 		toolUse := anthropic.ToolUseBlockParam{
