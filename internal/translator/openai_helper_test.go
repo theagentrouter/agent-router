@@ -685,8 +685,71 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens(t *testing.T) {
 
 	total, ok := state.tokenUsage.InputTokens()
 	require.True(t, ok)
-	assert.LessOrEqual(t, total, uint32(promptTokens),
-		"internal TokenUsage must not inflate the input token count beyond the real prompt size")
+	assert.Equal(t, uint32(promptTokens), total,
+		"internal TokenUsage must report the real prompt size")
+
+	// The cache read and the cache write are reported as such, to the client
+	// and to the token usage that request costs and quotas are computed from.
+	assert.Equal(t, int64(cachedTokens), msg.Usage.CacheReadInputTokens)
+	assert.Equal(t, int64(cacheCreationTokens), msg.Usage.CacheCreationInputTokens)
+	assert.Equal(t, int64(promptTokens-cachedTokens-cacheCreationTokens), msg.Usage.InputTokens)
+	cached, ok := state.tokenUsage.CachedInputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(cachedTokens), cached)
+	written, ok := state.tokenUsage.CacheCreationInputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(cacheCreationTokens), written)
+}
+
+func TestSplitPromptTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		prompt                int
+		details               *openai.PromptTokensDetails
+		uncached, read, write int
+	}{
+		{name: "no details", prompt: 100, uncached: 100},
+		{name: "nothing cached", prompt: 100, details: &openai.PromptTokensDetails{}, uncached: 100},
+		{name: "cache read", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: 96}, uncached: 4, read: 96},
+		{name: "cache write", prompt: 100, details: &openai.PromptTokensDetails{CacheWriteTokens: 30}, uncached: 70, write: 30},
+		{name: "legacy cache write field", prompt: 100, details: &openai.PromptTokensDetails{CacheCreationTokens: 30}, uncached: 70, write: 30},
+		{name: "read and write", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: 60, CacheWriteTokens: 30}, uncached: 10, read: 60, write: 30},
+		{name: "all of the prompt", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: 70, CacheWriteTokens: 30}, read: 70, write: 30},
+		{name: "more than the prompt is ignored", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: 70, CacheWriteTokens: 31}, uncached: 100},
+		{name: "negative read is taken as 0", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: -1, CacheWriteTokens: 30}, uncached: 70, write: 30},
+		{name: "negative write is taken as 0", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: 60, CacheWriteTokens: -1}, uncached: 40, read: 60},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			uncached, read, write := splitPromptTokens(tc.prompt, tc.details)
+			assert.Equal(t, tc.uncached, uncached)
+			assert.Equal(t, tc.read, read)
+			assert.Equal(t, tc.write, write)
+			assert.Equal(t, tc.prompt, uncached+read+write)
+		})
+	}
+}
+
+func TestOpenAIResponseToAnthropic_CachedTokens(t *testing.T) {
+	content := "Hi"
+	resp := &openai.ChatCompletionResponse{
+		Choices: []openai.ChatCompletionResponseChoice{{
+			FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+			Message:      openai.ChatCompletionResponseChoiceMessage{Content: &content, Role: "assistant"},
+		}},
+		Usage: openai.Usage{
+			PromptTokens:        100,
+			CompletionTokens:    20,
+			PromptTokensDetails: &openai.PromptTokensDetails{CachedTokens: 60, CacheWriteTokens: 30},
+		},
+	}
+	result := openAIResponseToAnthropic(resp, "test-model")
+	require.NotNil(t, result.Usage)
+	// Anthropic counts a cache read and a cache write next to input_tokens,
+	// so the three add up to OpenAI's prompt_tokens.
+	assert.Equal(t, float64(10), result.Usage.InputTokens)
+	assert.Equal(t, float64(60), result.Usage.CacheReadInputTokens)
+	assert.Equal(t, float64(30), result.Usage.CacheCreationInputTokens)
+	assert.Equal(t, float64(20), result.Usage.OutputTokens)
 }
 
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_ToolCallStreaming(t *testing.T) {
