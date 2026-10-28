@@ -23,6 +23,8 @@ const (
 	mimeTypeTextPlain       = "text/plain"
 	mimeTypeApplicationJSON = "application/json"
 	mimeTypeApplicationEnum = "text/x.enum"
+	mimeTypeAudioWAV        = "audio/wav"
+	mimeTypeAudioMP3        = "audio/mp3"
 )
 
 var (
