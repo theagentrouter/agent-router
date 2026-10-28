@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"strconv"
 	"testing"
 	"unsafe"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/propagation"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
@@ -73,6 +75,133 @@ func TestNewFactory(t *testing.T) {
 		require.Equal(t, headers, upstream.requestHeaders)
 		require.IsType(t, &mockMetrics{}, upstream.metrics)
 	})
+}
+
+type testUserFacingErrorEnvelope struct {
+	Type  string                     `json:"type"`
+	Error testUserFacingErrorDetails `json:"error"`
+}
+
+type testUserFacingErrorDetails struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func Test_formatUserFacingErrorJSON(t *testing.T) {
+	tests := []struct {
+		name       string
+		errorType  string
+		statusCode int
+		message    string
+		wantJSON   string
+	}{
+		{
+			name:       "ordinary text",
+			errorType:  "BadRequest",
+			statusCode: 400,
+			message:    "request failed",
+			wantJSON:   `{"type":"error","error":{"type":"BadRequest","code":"400","message":"request failed"}}`,
+		},
+		{
+			name:       "quoted type and message",
+			errorType:  `Bad"Request`,
+			statusCode: 400,
+			message:    `message says "hello"`,
+			wantJSON:   `{"type":"error","error":{"type":"Bad\"Request","code":"400","message":"message says \"hello\""}}`,
+		},
+		{
+			name:       "backslashes",
+			errorType:  `Bad\Request`,
+			statusCode: 422,
+			message:    `path C:\temp`,
+			wantJSON:   `{"type":"error","error":{"type":"Bad\\Request","code":"422","message":"path C:\\temp"}}`,
+		},
+		{
+			name:       "newline tab and NUL characters",
+			errorType:  "BadRequest",
+			statusCode: 400,
+			message:    "line one\nline two\ttab\x00nul",
+			wantJSON:   `{"type":"error","error":{"type":"BadRequest","code":"400","message":"line one\nline two\ttab\u0000nul"}}`,
+		},
+		{
+			name:       "Unicode",
+			errorType:  "BadRequest",
+			statusCode: 422,
+			message:    "temperature 雪 🌡️",
+			wantJSON:   `{"type":"error","error":{"type":"BadRequest","code":"422","message":"temperature 雪 🌡️"}}`,
+		},
+		{
+			name:       "empty strings",
+			errorType:  "",
+			statusCode: 400,
+			message:    "",
+			wantJSON:   `{"type":"error","error":{"type":"","code":"400","message":""}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := formatUserFacingErrorJSON(tt.errorType, tt.statusCode, tt.message)
+			require.JSONEq(t, tt.wantJSON, string(body))
+
+			var got testUserFacingErrorEnvelope
+			require.NoError(t, json.Unmarshal(body, &got))
+			require.Equal(t, testUserFacingErrorEnvelope{
+				Type: "error",
+				Error: testUserFacingErrorDetails{
+					Type:    tt.errorType,
+					Code:    strconv.Itoa(tt.statusCode),
+					Message: tt.message,
+				},
+			}, got)
+		})
+	}
+}
+
+func Test_createUserFacingErrorResponse(t *testing.T) {
+	for _, tt := range []struct {
+		statusCode     int
+		wantHTTPStatus typev3.StatusCode
+	}{
+		{statusCode: 400, wantHTTPStatus: typev3.StatusCode(400)},
+		{statusCode: 422, wantHTTPStatus: typev3.StatusCode(422)},
+	} {
+		t.Run(strconv.Itoa(tt.statusCode), func(t *testing.T) {
+			message := `temperature "bad" at 20°C ☃`
+			response := createUserFacingErrorResponse(tt.statusCode, "BadRequest", message)
+			immediateResponse, ok := response.Response.(*extprocv3.ProcessingResponse_ImmediateResponse)
+			require.True(t, ok)
+			require.NotNil(t, immediateResponse.ImmediateResponse)
+
+			immediate := immediateResponse.ImmediateResponse
+			require.Equal(t, tt.wantHTTPStatus, immediate.Status.Code)
+			require.Equal(t, uint32(codes.InvalidArgument), immediate.GetGrpcStatus().GetStatus())
+
+			body := immediate.Body
+			responseHeaders := make(map[string]string, len(immediate.Headers.SetHeaders))
+			for _, header := range immediate.Headers.SetHeaders {
+				responseHeaders[header.Header.Key] = string(header.Header.RawValue)
+			}
+			require.Equal(t, map[string]string{
+				"content-type":   "application/json",
+				"content-length": strconv.Itoa(len(body)),
+			}, responseHeaders)
+
+			expectedJSON := fmt.Sprintf(`{"type":"error","error":{"type":"BadRequest","code":%q,"message":"temperature \"bad\" at 20°C ☃"}}`, strconv.Itoa(tt.statusCode))
+			require.JSONEq(t, expectedJSON, string(body))
+			var got testUserFacingErrorEnvelope
+			require.NoError(t, json.Unmarshal(body, &got))
+			require.Equal(t, testUserFacingErrorEnvelope{
+				Type: "error",
+				Error: testUserFacingErrorDetails{
+					Type:    "BadRequest",
+					Code:    strconv.Itoa(tt.statusCode),
+					Message: message,
+				},
+			}, got)
+		})
+	}
 }
 
 type (
@@ -2313,6 +2442,36 @@ func Test_transcriptionProcessorRouterFilter_ProcessRequestBody_MultipartDispatc
 	require.GreaterOrEqual(t, len(setHeaders), 1)
 	require.Equal(t, internalapi.ModelNameHeaderKeyDefault, setHeaders[0].Header.Key)
 	require.Equal(t, "whisper-1", string(setHeaders[0].Header.RawValue))
+}
+
+func Test_transcriptionProcessorRouterFilter_ProcessRequestBody_InvalidTemperatureJSON(t *testing.T) {
+	body, ct := buildTestMultipartBody(t, map[string]string{
+		"model":       "whisper-1",
+		"temperature": "bad",
+	}, "test.mp3", []byte("fake-audio-data"))
+	p := &transcriptionProcessorRouterFilter{
+		config:         &filterapi.RuntimeConfig{},
+		requestHeaders: map[string]string{":path": "/v1/audio/transcriptions", "content-type": ct},
+		logger:         slog.Default(),
+		tracer:         tracingapi.NoopTracer[openai.TranscriptionRequest, openai.TranscriptionResponse, openai.TranscriptionStreamEvent]{},
+	}
+
+	resp, err := p.ProcessRequestBody(t.Context(), &extprocv3.HttpBody{Body: body})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	response, ok := resp.Response.(*extprocv3.ProcessingResponse_ImmediateResponse)
+	require.True(t, ok)
+	require.Equal(t, typev3.StatusCode(400), response.ImmediateResponse.Status.Code)
+
+	responseBody := response.ImmediateResponse.Body
+	require.JSONEq(t, `{"type":"error","error":{"type":"BadRequest","code":"400","message":"malformed request: invalid temperature value \"bad\": strconv.ParseFloat: parsing \"bad\": invalid syntax"}}`, string(responseBody))
+
+	var got testUserFacingErrorEnvelope
+	require.NoError(t, json.Unmarshal(responseBody, &got))
+	require.Equal(t, "BadRequest", got.Error.Type)
+	require.Equal(t, "400", got.Error.Code)
+	require.Contains(t, got.Error.Message, `invalid temperature value "bad"`)
+	require.Contains(t, got.Error.Message, `strconv.ParseFloat: parsing "bad": invalid syntax`)
 }
 
 func Test_transcriptionProcessorUpstreamFilter_SetBackend_ContentTypeSetter(t *testing.T) {
