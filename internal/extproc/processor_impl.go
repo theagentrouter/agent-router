@@ -193,9 +193,32 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespons
 
 // formatUserFacingErrorJSON formats a user-facing error as a JSON response body.
 // Returns JSON in format: {"type":"error","error":{"type":"<errorType>","code":"<statusCode>","message":"<message>"}}
+// The values are JSON-encoded, so messages that quote user input (e.g. a malformed parameter) stay valid JSON.
 func formatUserFacingErrorJSON(errorType string, statusCode int, message string) []byte {
-	return fmt.Appendf(nil, `{"type":"error","error":{"type":"%s","code":"%d","message":"%s"}}`,
-		errorType, statusCode, message)
+	body, err := json.Marshal(userFacingError{
+		Type: "error",
+		Error: userFacingErrorDetail{
+			Type:    errorType,
+			Code:    strconv.Itoa(statusCode),
+			Message: message,
+		},
+	})
+	if err != nil {
+		// Marshalling plain strings cannot fail; fall back to a fixed body rather than an invalid one.
+		return []byte(`{"type":"error","error":{"type":"internal_error","code":"500","message":"failed to format error"}}`)
+	}
+	return body
+}
+
+type userFacingError struct {
+	Type  string                `json:"type"`
+	Error userFacingErrorDetail `json:"error"`
+}
+
+type userFacingErrorDetail struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // respondLocally answers the request from the gateway itself instead of dispatching it upstream.
