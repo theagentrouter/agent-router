@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/idcodec"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 )
@@ -1246,4 +1247,103 @@ func TestServer_ProcessorForPath_QueryParameterStripping(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServer_ProcessorForPath_Prefix(t *testing.T) {
+	s, err := NewServer(slog.Default(), false)
+	require.NoError(t, err)
+	s.config = &filterapi.RuntimeConfig{}
+
+	exactProc, filesProc, nestedProc := &mockProcessor{}, &mockProcessor{}, &mockProcessor{}
+	factory := func(p Processor) ProcessorFactory {
+		return func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
+			return p, nil
+		}
+	}
+	s.Register("/v1/files/special", factory(exactProc))
+	s.RegisterPrefix("/v1/files", factory(filesProc))
+	// A longer, nested prefix registered after a shorter one must still win.
+	s.RegisterPrefix("/v1/files/batch", factory(nestedProc))
+
+	tests := []struct {
+		name       string
+		headers    map[string]string
+		isUpstream bool
+		exp        Processor
+	}{
+		{name: "prefix itself", headers: map[string]string{":path": "/v1/files"}, exp: filesProc},
+		{name: "prefix with trailing slash", headers: map[string]string{":path": "/v1/files/"}, exp: filesProc},
+		{name: "nested id", headers: map[string]string{":path": "/v1/files/file-abc"}, exp: filesProc},
+		{name: "nested id content", headers: map[string]string{":path": "/v1/files/file-abc/content"}, exp: filesProc},
+		{name: "query stripped", headers: map[string]string{":path": "/v1/files?model=m1&after=x"}, exp: filesProc},
+		{name: "exact registration wins over prefix", headers: map[string]string{":path": "/v1/files/special"}, exp: exactProc},
+		{name: "longest prefix wins", headers: map[string]string{":path": "/v1/files/batch/file-1"}, exp: nestedProc},
+		{name: "longest prefix exact", headers: map[string]string{":path": "/v1/files/batch"}, exp: nestedProc},
+		{name: "segment boundary is respected", headers: map[string]string{":path": "/v1/files/batchx"}, exp: filesProc},
+		{
+			name:       "upstream filter uses original path",
+			headers:    map[string]string{":path": "/v1/files/native-1", originalPathHeader: "/v1/files/file-gw?x=1"},
+			isUpstream: true,
+			exp:        filesProc,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, pErr := s.processorForPath(tt.headers, tt.isUpstream, slog.Default())
+			require.NoError(t, pErr)
+			require.Same(t, tt.exp, p)
+		})
+	}
+
+	// Paths that merely share the prefix string, but not on a segment boundary, do not match.
+	for _, path := range []string{"/v1/filesx", "/v1/file", "/v2/files", "/prefix/v1/filesx/1"} {
+		t.Run("no match "+path, func(t *testing.T) {
+			p, pErr := s.processorForPath(map[string]string{":path": path}, false, slog.Default())
+			require.ErrorIs(t, pErr, errNoProcessor)
+			require.Nil(t, p)
+		})
+	}
+
+	// The upstream filter must not fall back to :path when the original path header is absent.
+	p, err := s.processorForPath(map[string]string{":path": "/v1/files"}, true, slog.Default())
+	require.ErrorIs(t, err, errNoProcessor)
+	require.Nil(t, p)
+}
+
+func TestServer_ProcessorForPath_FilesAndBatches(t *testing.T) {
+	s, err := NewServer(slog.Default(), false)
+	require.NoError(t, err)
+	s.config = &filterapi.RuntimeConfig{}
+	codec, err := idcodec.NewCodec("server-test-seed", 4096, "", 0)
+	require.NoError(t, err)
+	s.RegisterPrefix("/root/v1/files", NewFilesProcessorFactory(codec))
+	s.RegisterPrefix("/root/v1/batches", NewBatchesProcessorFactory(codec))
+
+	for _, tc := range []struct {
+		path     string
+		wantType Processor
+	}{
+		{"/root/v1/files", &filesProcessor{}},
+		{"/root/v1/files/file-x/content", &filesProcessor{}},
+		{"/root/v1/batches", &batchesProcessor{}},
+		{"/root/v1/batches?model=m&limit=2", &batchesProcessor{}},
+		{"/root/v1/batches/batch-x", &batchesProcessor{}},
+		{"/root/v1/batches/batch-x/cancel", &batchesProcessor{}},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			p, pErr := s.processorForPath(map[string]string{":path": tc.path}, false, slog.Default())
+			require.NoError(t, pErr)
+			require.IsType(t, tc.wantType, p)
+		})
+	}
+
+	// Upstream filter resolves the batches processor from the original (gateway) path.
+	p, err := s.processorForPath(map[string]string{
+		":path": "/root/v1/batches/batch_native", originalPathHeader: "/root/v1/batches/batch-gw",
+	}, true, slog.Default())
+	require.NoError(t, err)
+	require.IsType(t, &batchesProcessor{}, p)
+
+	_, err = s.processorForPath(map[string]string{":path": "/root/v1/batchesx"}, false, slog.Default())
+	require.ErrorIs(t, err, errNoProcessor)
 }

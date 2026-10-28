@@ -17,6 +17,7 @@ Support for various Large Language Model providers:
 - **[Supported Endpoints](./llm-integrations/supported-endpoints.md)**: Available API endpoints and operations
 - **[Vendor-Specific Fields](./llm-integrations/vendor-specific-fields.md)**: Use backend-specific parameters and access provider-unique capabilities in your OpenAI-compatible requests
 - **[Prompt Caching](./llm-integrations/prompt-caching.md)**: Provider-agnostic prompt caching using unified cache_control API
+- **[Files API](./llm-integrations/files-api.md)**: Upload, list, retrieve, download, and delete files with backend-sticky routing
 
 ## Inference Optimization
 

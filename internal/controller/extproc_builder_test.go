@@ -7,6 +7,7 @@ package controller
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -37,6 +38,10 @@ func newTestBuilder() *extProcBuilder {
 		MCPSessionEncryptionIterations:         100,
 		MCPFallbackSessionEncryptionSeed:       "fallback",
 		MCPFallbackSessionEncryptionIterations: 200,
+		FileIDEncryptionSeed:                   "file-seed",
+		FileIDEncryptionIterations:             100,
+		FileIDFallbackEncryptionSeed:           "file-fallback",
+		FileIDFallbackEncryptionIterations:     200,
 	}
 	return newExtProcBuilder(opts, false, ctrl.Log)
 }
@@ -81,7 +86,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	input := extProcContainerInput{}
 	baseHash := base.extProcContainerHash(input)
 	require.NotEmpty(t, baseHash)
-	require.Equal(t, 20, reflect.TypeOf(extProcBuilder{}).NumField(),
+	require.Equal(t, 24, reflect.TypeOf(extProcBuilder{}).NumField(),
 		"update drift coverage when extProcBuilder fields change")
 
 	// Helper: mutate a copy of the builder, recompute, expect a different hash.
@@ -93,6 +98,26 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 		})
 	}
 
+	assertDrifts("fileIDEncryptionSeed", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.fileIDEncryptionSeed = "rotated"
+		return b
+	}())
+	assertDrifts("fileIDEncryptionIterations", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.fileIDEncryptionIterations = 7
+		return b
+	}())
+	assertDrifts("fileIDFallbackEncryptionSeed", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.fileIDFallbackEncryptionSeed = "older"
+		return b
+	}())
+	assertDrifts("fileIDFallbackEncryptionIterations", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.fileIDFallbackEncryptionIterations = 7
+		return b
+	}())
 	assertDrifts("extraEnvVars", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.extraEnvVars = []corev1.EnvVar{{Name: "OTEL_SERVICE_NAME", Value: "ai-gateway"}}
@@ -409,4 +434,18 @@ func TestExtProcBuilder_mcpSessionEncryption(t *testing.T) {
 			FallbackIterations: 200,
 		}, b.mcpSessionEncryption())
 	})
+}
+
+// TestBuildExtProcBaseArgs_FileIDEncryption verifies the file id seed flags reach the extproc
+// container regardless of MCP, so every replica decodes ids issued by the others.
+func TestBuildExtProcBaseArgs_FileIDEncryption(t *testing.T) {
+	b := newTestBuilder()
+	args := strings.Join(b.buildExtProcBaseArgs(false), " ")
+	require.Contains(t, args, "-fileIDEncryptionSeed file-seed -fileIDEncryptionIterations 100")
+	require.Contains(t, args, "-fileIDFallbackEncryptionSeed file-fallback -fileIDFallbackEncryptionIterations 200")
+
+	b.fileIDFallbackEncryptionSeed = ""
+	args = strings.Join(b.buildExtProcBaseArgs(false), " ")
+	require.Contains(t, args, "-fileIDEncryptionSeed file-seed")
+	require.NotContains(t, args, "-fileIDFallbackEncryptionSeed")
 }

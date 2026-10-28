@@ -173,7 +173,8 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 
 	// At least for the endpoints we want to support, all requests should have a Content-Length header
 	// and should not use chunked transfer encoding.
-	if r.Header.Get("Content-Length") == "" {
+	// Bodiless requests (e.g. GET/DELETE, or POST /v1/batches/{id}/cancel) legitimately omit it.
+	if r.Header.Get("Content-Length") == "" && len(requestBody) > 0 {
 		// Endpoint pickers mutate the request body by sending them back to the client (due to the use of DUPLEX mode),
 		// and it will clear the Content-Length header. It should be fine to assume that these locally hosted endpoints
 		// are capable of reading the chunked transfer encoding unlike the GCP Anthropic.
