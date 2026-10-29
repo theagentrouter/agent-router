@@ -51,6 +51,10 @@ type MessagesRequest struct {
 	// https://docs.claude.com/en/api/messages#body-metadata
 	Metadata *MessagesMetadata `json:"metadata,omitempty"`
 
+	// OutputConfig configures the response format and reasoning effort.
+	// https://docs.claude.com/en/api/messages#body-output-config
+	OutputConfig *OutputConfig `json:"output_config,omitempty"`
+
 	// ServiceTier indicates the service tier for the request.
 	// https://docs.claude.com/en/api/messages#body-service-tier
 	ServiceTier *MessageServiceTier `json:"service_tier,omitempty"`
@@ -86,6 +90,32 @@ type MessagesRequest struct {
 
 	// TopK is the number of highest probability vocabulary tokens to keep for top-k-filtering.
 	TopK *int `json:"top_k,omitempty"`
+}
+
+// OutputConfig configures the format and reasoning effort of a Messages API response.
+type OutputConfig struct {
+	// Effort constrains the reasoning effort used for the response.
+	Effort OutputConfigEffort `json:"effort,omitempty"`
+
+	// Format constrains the response to the supplied JSON schema.
+	Format *JSONOutputFormat `json:"format,omitempty"`
+}
+
+// OutputConfigEffort is an Anthropic output effort level.
+type OutputConfigEffort string
+
+const (
+	OutputConfigEffortLow    OutputConfigEffort = "low"
+	OutputConfigEffortMedium OutputConfigEffort = "medium"
+	OutputConfigEffortHigh   OutputConfigEffort = "high"
+	OutputConfigEffortXhigh  OutputConfigEffort = "xhigh"
+	OutputConfigEffortMax    OutputConfigEffort = "max"
+)
+
+// JSONOutputFormat constrains a response to a JSON schema.
+type JSONOutputFormat struct {
+	Type   string          `json:"type"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 // MessageParam represents a single message in the Anthropic Messages API.
@@ -1435,6 +1465,9 @@ type MessagesResponse struct {
 	// StopSequence is the stop sequence that was encountered.
 	// https://docs.claude.com/en/api/messages#response-stop-sequence
 	StopSequence *string `json:"stop_sequence,omitempty"`
+	// StopDetails contains structured information about a refusal.
+	// https://platform.claude.com/docs/en/api/messages#response-stop-details
+	StopDetails *RefusalStopDetails `json:"stop_details,omitempty"`
 	// Usage contains token usage information for the response.
 	// https://docs.claude.com/en/api/messages#response-usage
 	Usage *Usage `json:"usage,omitempty"`
@@ -1445,6 +1478,19 @@ type ConstantMessagesResponseTypeMessages string
 
 // ConstantMessagesResponseRoleAssistant is the constant role for MessagesResponse, which is always "assistant".
 type ConstantMessagesResponseRoleAssistant string
+
+// RefusalStopDetails contains structured information about a refusal.
+type RefusalStopDetails struct {
+	// Type is always "refusal".
+	Type ConstantRefusalStopDetailsTypeRefusal `json:"type"`
+	// Category is the policy category that triggered the refusal, when available.
+	Category *string `json:"category"`
+	// Explanation is a human-readable description of the refusal, when available.
+	Explanation *string `json:"explanation"`
+}
+
+// ConstantRefusalStopDetailsTypeRefusal is the constant type for refusal stop details.
+type ConstantRefusalStopDetailsTypeRefusal string
 
 type (
 	// MessagesContentBlock represents a block of content in the Anthropic Messages API response.

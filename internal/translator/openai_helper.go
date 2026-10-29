@@ -22,9 +22,11 @@ import (
 
 // The following are helper functions for creating an OpenAI ChatCompletionRequest from an Anthropic MessagesRequest
 
+const anthropicOutputFormatName = "structured_output"
+
 // buildOpenAIChatCompletionRequest converts an Anthropic MessagesRequest into an OpenAI ChatCompletionRequest.
 // It handles model override, system prompts, message conversion, tools, and tool choice.
-func buildOpenAIChatCompletionRequest(body *anthropic.MessagesRequest, modelNameOverride internalapi.ModelNameOverride) *openai.ChatCompletionRequest {
+func buildOpenAIChatCompletionRequest(body *anthropic.MessagesRequest, modelNameOverride internalapi.ModelNameOverride) (*openai.ChatCompletionRequest, error) {
 	model := cmp.Or(modelNameOverride, body.Model)
 	messages := anthropicMessagesToOpenAI(body)
 	tools := anthropicToolsToOpenAI(body.Tools)
@@ -58,7 +60,61 @@ func buildOpenAIChatCompletionRequest(body *anthropic.MessagesRequest, modelName
 		req.Thinking = anthropicThinkingToOpenAI(body.Thinking)
 	}
 
-	return req
+	if body.OutputConfig != nil {
+		var err error
+		req.ReasoningEffort, err = anthropicEffortToOpenAI(body.OutputConfig.Effort)
+		if err != nil {
+			return nil, err
+		}
+		if body.OutputConfig.Format != nil {
+			if body.OutputConfig.Format.Type != "json_schema" {
+				return nil, fmt.Errorf("%w: unsupported output_config.format.type %q (supported: json_schema)", internalapi.ErrInvalidRequestBody, body.OutputConfig.Format.Type)
+			}
+			var schema map[string]any
+			if err = json.Unmarshal(body.OutputConfig.Format.Schema, &schema); err != nil {
+				return nil, fmt.Errorf("%w: output_config.format.schema must be a JSON object: %w", internalapi.ErrInvalidRequestBody, err)
+			}
+			if schema == nil {
+				return nil, fmt.Errorf("%w: output_config.format.schema is required", internalapi.ErrInvalidRequestBody)
+			}
+			// OpenAI strict mode requires every object property to be listed in
+			// "required", but Anthropic allows properties to be optional. Keep strict
+			// mode disabled so the schema can be forwarded without changing optional
+			// properties into required nullable properties.
+			req.ResponseFormat = &openai.ChatCompletionResponseFormatUnion{
+				OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+					Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
+					JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+						Name:   anthropicOutputFormatName,
+						Schema: body.OutputConfig.Format.Schema,
+					},
+				},
+			}
+		}
+	}
+
+	return req, nil
+}
+
+func anthropicEffortToOpenAI(effort anthropic.OutputConfigEffort) (openai.ReasoningEffort, error) {
+	switch effort {
+	case "":
+		return "", nil
+	case anthropic.OutputConfigEffortLow:
+		return openai.ReasoningEffortLow, nil
+	case anthropic.OutputConfigEffortMedium:
+		return openai.ReasoningEffortMedium, nil
+	case anthropic.OutputConfigEffortHigh:
+		return openai.ReasoningEffortHigh, nil
+	case anthropic.OutputConfigEffortXhigh:
+		return openai.ReasoningEffortXhigh, nil
+	case anthropic.OutputConfigEffortMax:
+		// "max" is not part of the OpenAI spec, but OpenAI-compatible servers such as
+		// vLLM accept it, so forward it and let the backend decide.
+		return openai.ReasoningEffortMax, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported output_config.effort %q (supported: low, medium, high, xhigh, max)", internalapi.ErrInvalidRequestBody, effort)
+	}
 }
 
 // anthropicThinkingToOpenAI converts an Anthropic Thinking config to OpenAI ThinkingUnion.
@@ -376,6 +432,7 @@ func anthropicToolChoiceToOpenAI(tc anthropic.ToolChoice, hasTools bool) *openai
 func openAIResponseToAnthropic(resp *openai.ChatCompletionResponse, model string) *anthropic.MessagesResponse {
 	var content []anthropic.MessagesContentBlock
 	var stopReason *anthropic.StopReason
+	var stopDetails *anthropic.RefusalStopDetails
 
 	if len(resp.Choices) > 0 {
 		choice := &resp.Choices[0]
@@ -390,7 +447,6 @@ func openAIResponseToAnthropic(resp *openai.ChatCompletionResponse, model string
 				Text: &anthropic.TextBlock{Type: "text", Text: *msg.Content},
 			})
 		}
-
 		// Convert tool calls to tool_use content blocks.
 		for _, tc := range msg.ToolCalls {
 			var input map[string]any
@@ -417,6 +473,17 @@ func openAIResponseToAnthropic(resp *openai.ChatCompletionResponse, model string
 		}
 
 		sr := openAIFinishReasonToAnthropic(choice.FinishReason)
+		if msg.Refusal != nil && *msg.Refusal != "" {
+			sr = anthropic.StopReasonRefusal
+		}
+		if sr == anthropic.StopReasonRefusal {
+			stopDetails = &anthropic.RefusalStopDetails{
+				Type: anthropic.ConstantRefusalStopDetailsTypeRefusal("refusal"),
+			}
+			if msg.Refusal != nil && *msg.Refusal != "" {
+				stopDetails.Explanation = msg.Refusal
+			}
+		}
 		stopReason = &sr
 	}
 
@@ -426,13 +493,14 @@ func openAIResponseToAnthropic(resp *openai.ChatCompletionResponse, model string
 	}
 
 	return &anthropic.MessagesResponse{
-		ID:         resp.ID,
-		Type:       anthropic.ConstantMessagesResponseTypeMessages("message"),
-		Role:       anthropic.ConstantMessagesResponseRoleAssistant("assistant"),
-		Content:    content,
-		Model:      model,
-		StopReason: stopReason,
-		Usage:      usage,
+		ID:          resp.ID,
+		Type:        anthropic.ConstantMessagesResponseTypeMessages("message"),
+		Role:        anthropic.ConstantMessagesResponseRoleAssistant("assistant"),
+		Content:     content,
+		Model:       model,
+		StopReason:  stopReason,
+		StopDetails: stopDetails,
+		Usage:       usage,
 	}
 }
 
@@ -625,8 +693,9 @@ type sseMessageDelta struct {
 }
 
 type sseMessageDeltaBody struct {
-	StopReason   string `json:"stop_reason"`
-	StopSequence any    `json:"stop_sequence"`
+	StopReason   string                        `json:"stop_reason"`
+	StopSequence any                           `json:"stop_sequence"`
+	StopDetails  *anthropic.RefusalStopDetails `json:"stop_details,omitempty"`
 }
 
 type sseOutputUsage struct {
@@ -648,6 +717,7 @@ type openAIStreamToAnthropicState struct {
 	messageID        string
 	model            string
 	stopReason       string // Anthropic stop_reason, mapped from OpenAI finish_reason
+	refusal          strings.Builder
 	inputTokens      int
 	outputTokens     int
 	tokenUsage       metrics.TokenUsage
@@ -802,6 +872,14 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 			}
 		}
 
+		// OpenAI emits structured-output refusal explanations separately from content.
+		// Preserve any content already emitted and include the explanation in the final
+		// Anthropic message_delta stop_details object.
+		if delta.Refusal != nil && *delta.Refusal != "" {
+			s.refusal.WriteString(*delta.Refusal)
+			s.stopReason = string(anthropic.StopReasonRefusal)
+		}
+
 		// Handle tool call deltas.
 		for i := range delta.ToolCalls {
 			if err := s.handleToolCallDelta(&delta.ToolCalls[i], out); err != nil {
@@ -811,7 +889,7 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 	}
 
 	// Store finish_reason for use in the closing events.
-	if choice.FinishReason != "" {
+	if choice.FinishReason != "" && s.stopReason != string(anthropic.StopReasonRefusal) {
 		s.stopReason = string(openAIFinishReasonToAnthropic(choice.FinishReason))
 	}
 
@@ -1062,11 +1140,21 @@ func (s *openAIStreamToAnthropicState) emitClosingEvents(out *[]byte) error {
 	if stopReason == "" {
 		stopReason = string(anthropic.StopReasonEndTurn)
 	}
+	var stopDetails *anthropic.RefusalStopDetails
+	if stopReason == string(anthropic.StopReasonRefusal) {
+		stopDetails = &anthropic.RefusalStopDetails{
+			Type: anthropic.ConstantRefusalStopDetailsTypeRefusal("refusal"),
+		}
+		if s.refusal.Len() > 0 {
+			explanation := s.refusal.String()
+			stopDetails.Explanation = &explanation
+		}
+	}
 
 	// Backfill input_tokens here (not message_start): OpenAI doesn't report it until now.
 	msgDeltaPayload := sseMessageDelta{
 		Type:  "message_delta",
-		Delta: sseMessageDeltaBody{StopReason: stopReason, StopSequence: nil},
+		Delta: sseMessageDeltaBody{StopReason: stopReason, StopSequence: nil, StopDetails: stopDetails},
 		Usage: sseOutputUsage{
 			InputTokens:  s.inputTokens,
 			OutputTokens: s.outputTokens,

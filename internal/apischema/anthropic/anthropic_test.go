@@ -57,6 +57,25 @@ func TestMessageContent_UnmarshalJSON(t *testing.T) {
 	}
 }
 
+func TestMessagesRequest_UnmarshalOutputConfig(t *testing.T) {
+	var req MessagesRequest
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"model":"claude-sonnet-4-5",
+		"messages":[{"role":"user","content":"Return an object"}],
+		"max_tokens":100,
+		"output_config":{
+			"effort":"high",
+			"format":{"type":"json_schema","schema":{"type":"object","properties":{"answer":{"type":"string"}}}}
+		}
+	}`), &req))
+
+	require.NotNil(t, req.OutputConfig)
+	require.Equal(t, OutputConfigEffortHigh, req.OutputConfig.Effort)
+	require.NotNil(t, req.OutputConfig.Format)
+	require.Equal(t, "json_schema", req.OutputConfig.Format.Type)
+	require.JSONEq(t, `{"type":"object","properties":{"answer":{"type":"string"}}}`, string(req.OutputConfig.Format.Schema))
+}
+
 func TestMessageContent_MessagesStreamChunk(t *testing.T) {
 	tests := []struct {
 		name    string
