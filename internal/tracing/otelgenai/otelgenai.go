@@ -91,6 +91,7 @@ const (
 	OperationRerank          Operation = "rerank"
 	OperationSystemOne       Operation = "systemone"
 	OperationDecisions       Operation = "decisions"
+	OperationFal             Operation = "fal"
 	OperationTokenize        Operation = "tokenize"
 )
 
@@ -109,4 +110,5 @@ const (
 	ProviderAnthropic    Provider = "anthropic"
 	ProviderCohere       Provider = "cohere"
 	ProviderTypeSafe     Provider = "typesafe"
+	ProviderFal          Provider = "fal"
 )

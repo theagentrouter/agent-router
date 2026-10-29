@@ -822,6 +822,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	if setter, ok := u.translator.(translator.ContentTypeSetter); ok {
 		setter.SetContentType(rp.requestHeaders["content-type"])
 	}
+	if s, ok := u.translator.(translator.ClientRequestHeadersSetter); ok {
+		s.SetClientRequestHeaders(rp.requestHeaders)
+	}
 	rp.upstreamFilter = u // Only assign after translator is confirmed valid
 
 	if headerSetter, ok := u.translator.(translator.RequestHeadersSetter); ok {
@@ -991,7 +994,8 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 		out, _ := costs.OutputTokens()
 		total, _ := costs.TotalTokens()
 		reasoning, _ := costs.ReasoningTokens()
-		cost, err = llmcostcel.EvaluateProgram(
+		units, _ := costs.BillableUnits()
+		cost, err = llmcostcel.EvaluateProgramWithBillableUnits(
 			celProg,
 			requestHeaders[internalapi.ModelNameHeaderKeyDefault],
 			backendName,
@@ -1002,6 +1006,7 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 			out,
 			total,
 			reasoning,
+			units,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("failed to evaluate CEL expression: %w", err)
