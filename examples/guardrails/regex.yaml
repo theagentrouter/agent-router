@@ -1,0 +1,38 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GuardrailPolicy
+metadata:
+  name: local-content-guardrails
+spec:
+  maxRequestBodyBytes: 10485760
+  maxResponseBodyBytes: 10485760
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: openai
+  rules:
+    - name: block-sensitive-request
+      phase: Request
+      provider:
+        type: Regex
+        pattern: "(?i)password|social security number"
+        action: Block
+        message: Request contains sensitive content
+    - name: block-sensitive-response
+      phase: Response
+      provider:
+        type: Regex
+        pattern: "(?i)internal[- ]only"
+        action: Block
+        message: Response contains restricted content
+    - name: mask-email-addresses
+      phase: Response
+      provider:
+        type: Regex
+        pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+        action: Mask
+        maskReplacement: "[EMAIL REDACTED]"
