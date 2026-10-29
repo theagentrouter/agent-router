@@ -214,6 +214,7 @@ following variables are available in a `costExpression`:
 | `cached_input_tokens`         | uint   | Input tokens served from the provider's cache.   |
 | `cache_creation_input_tokens` | uint   | Input tokens charged for writing to the cache.   |
 | `reasoning_tokens`            | uint   | Reasoning tokens (for reasoning-capable models). |
+| `search_units`                | uint   | Billed search units (Cohere rerank).             |
 | `model`                       | string | The resolved model name.                         |
 | `backend`                     | string | The serving backend name.                        |
 | `route_name`                  | string | The route name.                                  |
@@ -238,6 +239,9 @@ The token variables are **unsigned integers**, so numeric literals must carry a 
 example `output_tokens * 6u`) and the expression must evaluate to a non-negative integer. Integer
 division truncates (`cached_input_tokens / 10u`); for an exact fractional weight, cast through
 floating point — for example `uint(double(cached_input_tokens) * 0.1)`.
+
+Cohere bills rerank in search units and reports no tokens, so the default `total_tokens` cost is
+always 0 for Cohere rerank models. Use `costExpression: "search_units"` for them instead.
 :::
 
 ### Bucket Mode

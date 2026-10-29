@@ -129,12 +129,13 @@ func TestCohereToCohereTranslatorV2Rerank_ResponseHeaders(t *testing.T) {
 
 func TestCohereToCohereTranslatorV2Rerank_ResponseBody(t *testing.T) {
 	for _, tc := range []struct {
-		name           string
-		responseBody   string
-		expectedInput  int32
-		expectedOutput int32
-		expectedTotal  int32
-		expError       bool
+		name                string
+		responseBody        string
+		expectedInput       int32
+		expectedOutput      int32
+		expectedTotal       int32
+		expectedSearchUnits int32
+		expError            bool
 	}{
 		{
 			name: "valid_response_input_only",
@@ -143,9 +144,10 @@ func TestCohereToCohereTranslatorV2Rerank_ResponseBody(t *testing.T) {
 "id": "rr-123",
 "meta": {"tokens": {"input_tokens": 25}}
 }`,
-			expectedInput:  25,
-			expectedOutput: -1,
-			expectedTotal:  25,
+			expectedInput:       25,
+			expectedOutput:      -1,
+			expectedTotal:       25,
+			expectedSearchUnits: -1,
 		},
 		{
 			name: "valid_response_with_output_tokens",
@@ -154,9 +156,55 @@ func TestCohereToCohereTranslatorV2Rerank_ResponseBody(t *testing.T) {
 "id": "rr-456",
 "meta": {"tokens": {"input_tokens": 10, "output_tokens": 2}}
 }`,
-			expectedInput:  10,
-			expectedOutput: 2,
-			expectedTotal:  12,
+			expectedInput:       10,
+			expectedOutput:      2,
+			expectedTotal:       12,
+			expectedSearchUnits: -1,
+		},
+		{
+			// The example response of https://docs.cohere.com/reference/rerank. Cohere bills rerank
+			// in search units and does not return meta.tokens.
+			name: "cohere_documented_response_search_units_only",
+			responseBody: `{
+  "results": [
+    {"index": 3, "relevance_score": 0.999071},
+    {"index": 4, "relevance_score": 0.7867867},
+    {"index": 0, "relevance_score": 0.32713068}
+  ],
+  "id": "07734bd2-2473-4f07-94e1-0d9f0e6843cf",
+  "meta": {
+    "api_version": {"version": "2", "is_experimental": false},
+    "billed_units": {"search_units": 1}
+  }
+}`,
+			expectedInput:       -1,
+			expectedOutput:      -1,
+			expectedTotal:       -1,
+			expectedSearchUnits: 1,
+		},
+		{
+			name: "tokens_and_search_units",
+			responseBody: `{
+"results": [{"index": 0, "relevance_score": 0.8}],
+"id": "rr-789",
+"meta": {"billed_units": {"search_units": 2}, "tokens": {"input_tokens": 42}}
+}`,
+			expectedInput:       42,
+			expectedOutput:      -1,
+			expectedTotal:       42,
+			expectedSearchUnits: 2,
+		},
+		{
+			name: "billed_units_without_search_units",
+			responseBody: `{
+"results": [{"index": 0, "relevance_score": 0.8}],
+"id": "rr-012",
+"meta": {"billed_units": {}}
+}`,
+			expectedInput:       -1,
+			expectedOutput:      -1,
+			expectedTotal:       -1,
+			expectedSearchUnits: -1,
 		},
 		{
 			name:         "invalid_json",
@@ -181,6 +229,9 @@ func TestCohereToCohereTranslatorV2Rerank_ResponseBody(t *testing.T) {
 
 			require.NoError(t, err)
 			expected := tokenUsageFrom(tc.expectedInput, -1, -1, tc.expectedOutput, tc.expectedTotal, -1)
+			if tc.expectedSearchUnits >= 0 {
+				expected.SetSearchUnits(uint32(tc.expectedSearchUnits))
+			}
 			require.Equal(t, expected, tokenUsage)
 			require.Equal(t, "rerank-english-v3", responseModel)
 			require.Nil(t, headerMutation)

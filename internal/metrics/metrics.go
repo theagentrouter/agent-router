@@ -137,7 +137,8 @@ func NewMetricsFactory(meter metric.Meter, requestHeaderLabelMapping map[string]
 	return &metricsImplFactory{metrics: newGenAI(meter), requestHeaderAttributeMapping: requestHeaderLabelMapping, operation: string(operation)}
 }
 
-// TokenUsage represents the token usage reported usually by the backend API in the response body.
+// TokenUsage represents the token usage reported usually by the backend API in the response body,
+// along with billed units that are not tokens, such as Cohere's rerank search units.
 //
 // Fields are not exported to control the optionality of each field via the accompanying boolean flags.
 type TokenUsage struct {
@@ -153,8 +154,10 @@ type TokenUsage struct {
 	cacheCreationInputTokens uint32
 	// ReasoningTokens is the number of reasoning tokens consumed.
 	reasoningTokens uint32
+	// SearchUnits is the number of billed search units, which Cohere reports for rerank instead of tokens.
+	searchUnits uint32
 
-	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet, reasoningTokenSet bool
+	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet, reasoningTokenSet, searchUnitSet bool
 }
 
 // InputTokens returns the number of input tokens and whether it was set.
@@ -223,6 +226,17 @@ func (u *TokenUsage) SetReasoningTokens(tokens uint32) {
 	u.reasoningTokenSet = true
 }
 
+// SearchUnits returns the number of billed search units and whether it was set.
+func (u *TokenUsage) SearchUnits() (uint32, bool) {
+	return u.searchUnits, u.searchUnitSet
+}
+
+// SetSearchUnits sets the number of billed search units and marks the field as set.
+func (u *TokenUsage) SetSearchUnits(units uint32) {
+	u.searchUnits = units
+	u.searchUnitSet = true
+}
+
 // AddInputTokens increments the recorded input tokens and marks the field as set.
 func (u *TokenUsage) AddInputTokens(tokens uint32) {
 	u.inputTokenSet = true
@@ -253,10 +267,10 @@ func (u *TokenUsage) AddReasoningTokens(tokens uint32) {
 	u.reasoningTokens += tokens
 }
 
-// IsZero reports whether no token usage field has been set.
+// IsZero reports whether no usage field has been set.
 func (u *TokenUsage) IsZero() bool {
 	return !u.inputTokenSet && !u.outputTokenSet && !u.totalTokenSet &&
-		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet
+		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet && !u.searchUnitSet
 }
 
 // Override updates the TokenUsage fields with values from another TokenUsage instance.
@@ -285,6 +299,10 @@ func (u *TokenUsage) Override(other TokenUsage) {
 	if other.reasoningTokenSet {
 		u.reasoningTokens = other.reasoningTokens
 		u.reasoningTokenSet = true
+	}
+	if other.searchUnitSet {
+		u.searchUnits = other.searchUnits
+		u.searchUnitSet = true
 	}
 }
 

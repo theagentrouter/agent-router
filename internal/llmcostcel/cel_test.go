@@ -28,11 +28,11 @@ func TestNewProgram(t *testing.T) {
 	t.Run("variables", func(t *testing.T) {
 		prog, err := NewProgram("model == 'cool_model' ?  (input_tokens - cached_input_tokens - cache_creation_input_tokens) * output_tokens  : total_tokens")
 		require.NoError(t, err)
-		v, err := EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 200, 100, 1, 2, 3, 0)
+		v, err := EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 200, 100, 1, 2, 3, 0, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(198), v)
 
-		v, err = EvaluateProgram(prog, "not_cool_model", "cool_backend", "cool_route", 200, 100, 1, 2, 3, 0)
+		v, err = EvaluateProgram(prog, "not_cool_model", "cool_backend", "cool_route", 200, 100, 1, 2, 3, 0, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(3), v)
 	})
@@ -59,21 +59,28 @@ func TestEvaluateProgram(t *testing.T) {
 	t.Run("signed integer negative", func(t *testing.T) {
 		prog, err := NewProgram("int(input_tokens) - int(output_tokens)")
 		require.NoError(t, err)
-		_, err = EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 100, 0, 0, 2000, 3, 0)
+		_, err = EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 100, 0, 0, 2000, 3, 0, 0)
 		require.ErrorContains(t, err, "CEL expression result is negative (-1900)")
 	})
 	t.Run("unsigned integer overflow", func(t *testing.T) {
 		prog, err := NewProgram("input_tokens - output_tokens")
 		require.NoError(t, err)
-		_, err = EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 100, 0, 0, 2000, 3, 0)
+		_, err = EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 100, 0, 0, 2000, 3, 0, 0)
 		require.ErrorContains(t, err, "failed to evaluate CEL expression: unsigned integer overflow")
 	})
 	t.Run("reasoning_tokens variable", func(t *testing.T) {
 		prog, err := NewProgram("output_tokens + reasoning_tokens")
 		require.NoError(t, err)
-		v, err := EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 0, 0, 0, 100, 0, 50)
+		v, err := EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 0, 0, 0, 100, 0, 50, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(150), v)
+	})
+	t.Run("search_units variable", func(t *testing.T) {
+		prog, err := NewProgram("total_tokens + search_units * 1000u")
+		require.NoError(t, err)
+		v, err := EvaluateProgram(prog, "rerank-v3.5", "cool_backend", "cool_route", 0, 0, 0, 0, 0, 0, 3)
+		require.NoError(t, err)
+		require.Equal(t, uint64(3000), v)
 	})
 	t.Run("ensure concurrency safety", func(t *testing.T) {
 		prog, err := NewProgram("model == 'cool_model' ?  input_tokens * output_tokens : total_tokens")
@@ -83,7 +90,7 @@ func TestEvaluateProgram(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			for range 100 {
 				go func() {
-					v, err := EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 100, 0, 0, 2, 3, 0)
+					v, err := EvaluateProgram(prog, "cool_model", "cool_backend", "cool_route", 100, 0, 0, 2, 3, 0, 0)
 					require.NoError(t, err)
 					require.Equal(t, uint64(200), v)
 				}()
