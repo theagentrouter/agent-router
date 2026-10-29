@@ -1,0 +1,17 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GatewayConfig
+metadata:
+  name: bad-no-proxy
+  namespace: default
+spec:
+  forwardProxy:
+    address: proxy.corp:3128
+    noProxy:
+      - "*.internal.corp"
+      - "has space.corp"
+      - "example.com:8080"

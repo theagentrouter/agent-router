@@ -142,6 +142,13 @@ spec:
   forwardProxy:
     # host:port of the HTTP CONNECT proxy (host may be a hostname or IP; port is required).
     address: proxy.corp:3128
+    # Optional destinations that must bypass the proxy and egress directly,
+    # the equivalent of the no_proxy environment variable.
+    noProxy:
+      - "internal.corp" # domain: matches internal.corp and any subdomain of it
+      - "10.0.0.0/8" # CIDR range: matches literal IP endpoints
+      - "192.168.1.10" # exact IP
+      - "fd00::/8" # IPv6 CIDR range
 ```
 
 Under the hood, each upstream cluster's transport socket is wrapped in Envoy's `http_11_proxy` transport socket, which opens an HTTP/1.1 `CONNECT` tunnel to the proxy and then establishes the upstream connection through it. The upstream TLS session is preserved end-to-end inside the tunnel, so the proxy sees only the `CONNECT` and the encrypted bytes — not the request contents.
@@ -149,6 +156,18 @@ Under the hood, each upstream cluster's transport socket is wrapped in Envoy's `
 :::note
 The forward proxy applies to all AI Gateway upstream (LLM) clusters for Gateways that reference this `GatewayConfig`. InferencePool backends, which use in-cluster endpoints, are not proxied.
 :::
+
+#### Forward Proxy NoProxy
+
+`spec.forwardProxy.noProxy` lists upstream destinations that bypass the proxy and connect directly, the equivalent of the `no_proxy` environment variable. Each entry is one of:
+
+- `"*"`: all upstream traffic bypasses the proxy.
+- An IP address or CIDR range, e.g. `10.1.2.3`, `10.0.0.0/8`, `fd00::/8`: matches endpoints whose upstream address is a literal IP inside the range.
+- A domain name, e.g. `example.com`, with an optional leading dot (`.example.com`): matches endpoints whose hostname is the domain or any subdomain of it; a leading dot is equivalent to no dot. Matching is case-insensitive and always ends at a label boundary, so `ample.com` does not match `api.example.com`. The common `*.example.com` glob form is rejected: write `example.com` or `.example.com` instead — a domain entry already matches the domain and all of its subdomains.
+
+IP/CIDR entries only match IP-literal endpoints known at translation time, such as a `fqdn:` destination using an IP literal. `ip:` and Service endpoints arrive through EDS in both Kubernetes and standalone modes, so there is nothing at translation time to match: their clusters stay on the proxy regardless of those entries. The gateway does not resolve DNS to check domain entries against IP ranges; a bare IP never matches a domain entry, but an endpoint with both an IP address and the Backend's optional `hostname` matches either type. `"*"` is the exception to the EDS limitation and bypasses every cluster.
+
+Invalid entries (such as `10.0.0.0/33`) are ignored, so their traffic stays proxied as well.
 
 :::warning
 Proxy authentication (for example, `Proxy-Authorization`) and a TLS connection to the proxy itself are not currently supported. The proxy is expected to be reachable over plaintext HTTP and to authorize the gateway by network policy (for example, an IP allowlist).
