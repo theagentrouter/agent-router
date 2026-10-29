@@ -2080,10 +2080,8 @@ data:{"type":"message_stop"}
 }
 
 // TestAnthropicStreamParser_ThinkingDelta asserts that extended thinking
-// content reaches the OpenAI stream. text_delta and thinking_delta are
-// separate variants of RawContentBlockDeltaUnion and carry their payload
-// in different fields, so reading .Text for both streams every thinking
-// token as an empty string.
+// streams as a plain-string reasoning_content, kept apart from content, and
+// that signatures and redacted thinking round-trip via thinking_blocks.
 func TestAnthropicStreamParser_ThinkingDelta(t *testing.T) {
 	p := newAnthropicStreamParser("claude-sonnet-4-5")
 
@@ -2106,13 +2104,19 @@ event: content_block_stop
 data: {"type":"content_block_stop","index":0}
 
 event: content_block_start
-data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
-
-event: content_block_delta
-data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"4"}}
+data: {"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"cmVkYWN0ZWQ="}}
 
 event: content_block_stop
 data: {"type":"content_block_stop","index":1}
+
+event: content_block_start
+data: {"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"4"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":2}
 
 event: message_delta
 data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":16}}
@@ -2125,19 +2129,33 @@ data: {"type":"message_stop"}
 	_, body, _, _, err := p.Process(strings.NewReader(stream), true, nil)
 	require.NoError(t, err)
 
-	contents := streamedContent(t, body)
-	require.Equal(t, []string{
-		"Let me work through it. ",
-		"Two plus two is four.",
-		"4",
-	}, contents, "thinking content is dropped: every thinking_delta arrives as an empty string")
+	deltas := streamedDeltas(t, body)
+	require.NotEmpty(t, deltas)
+	require.Equal(t, openai.ChatMessageRoleAssistant, deltas[0].Role)
+
+	var contents, reasoning []string
+	var thinkingBlocks []openai.ThinkingBlock
+	for _, delta := range deltas {
+		if delta.Content != nil {
+			contents = append(contents, *delta.Content)
+		}
+		if delta.ReasoningContent != nil {
+			reasoning = append(reasoning, delta.ReasoningContent.Text)
+		}
+		thinkingBlocks = append(thinkingBlocks, delta.ThinkingBlocks...)
+	}
+	require.Equal(t, []string{"4"}, contents)
+	require.Equal(t, []string{"Let me work through it. ", "Two plus two is four."}, reasoning)
+	require.Equal(t, []openai.ThinkingBlock{
+		{Type: "thinking", Signature: "c2ln"},
+		{Type: "redacted_thinking", Data: "cmVkYWN0ZWQ="},
+	}, thinkingBlocks)
 }
 
-// streamedContent collects the non-empty delta.content values from an
-// OpenAI SSE stream, in order.
-func streamedContent(t *testing.T, body []byte) []string {
+// streamedDeltas collects the choice deltas from an OpenAI SSE stream, in order.
+func streamedDeltas(t *testing.T, body []byte) []*openai.ChatCompletionResponseChunkChoiceDelta {
 	t.Helper()
-	var out []string
+	var out []*openai.ChatCompletionResponseChunkChoiceDelta
 	for line := range strings.SplitSeq(string(body), "\n") {
 		payload, ok := strings.CutPrefix(line, "data: ")
 		if !ok || payload == "[DONE]" {
@@ -2146,8 +2164,8 @@ func streamedContent(t *testing.T, body []byte) []string {
 		var chunk openai.ChatCompletionResponseChunk
 		require.NoError(t, json.Unmarshal([]byte(payload), &chunk), "payload: %s", payload)
 		for _, c := range chunk.Choices {
-			if c.Delta != nil && c.Delta.Content != nil && *c.Delta.Content != "" {
-				out = append(out, *c.Delta.Content)
+			if c.Delta != nil {
+				out = append(out, c.Delta)
 			}
 		}
 	}
