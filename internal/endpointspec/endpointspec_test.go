@@ -1897,6 +1897,80 @@ func TestTokenizeEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 		require.NotContains(t, out, marker)
 		require.Contains(t, out, "[REDACTED")
 	})
+
+	t.Run("chat template kwargs", func(t *testing.T) {
+		const markerTmpl = "tokenize-template-kwarg-marker"
+		body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"chat_template_kwargs":{"documents":["` + markerTmpl + `"]}}`
+		_, req, _, _, err := TokenizeEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := TokenizeEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, markerTmpl)
+		require.Contains(t, out, "[REDACTED")
+		require.Contains(t, mustMarshal(t, req), markerTmpl, "original must not be mutated")
+	})
+}
+
+func TestResponsesInputTokensEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("instructions/user/string input", func(t *testing.T) {
+		const markerInstr = "marker-instructions"
+		const markerUser = "user-pii-123"
+		const markerInput = "marker-input-text"
+		body := `{"model":"gpt-4o","instructions":"` + markerInstr + `","user":"` + markerUser + `","input":"` + markerInput + `"}`
+		_, req, _, _, err := ResponsesInputTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesInputTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, markerInstr)
+		require.NotContains(t, out, markerUser)
+		require.NotContains(t, out, markerInput)
+		require.Contains(t, out, "[REDACTED")
+		require.Contains(t, mustMarshal(t, req), markerInstr, "original must not be mutated")
+	})
+
+	t.Run("input as item array", func(t *testing.T) {
+		const marker = "marker-array-input-content"
+		body := `{"model":"gpt-4o","input":[{"type":"message","role":"user","content":"` + marker + `"}]}`
+		_, req, _, _, err := ResponsesInputTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesInputTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+	})
+}
+
+func TestMessagesCountTokensEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("string content + string system", func(t *testing.T) {
+		const markerContent = "marker-user-message"
+		const markerSystem = "marker-system-prompt"
+		body := `{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"` + markerContent + `"}],"system":"` + markerSystem + `"}`
+		_, req, _, _, err := MessagesCountTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesCountTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, markerContent)
+		require.NotContains(t, out, markerSystem)
+		require.Contains(t, out, "[REDACTED")
+		require.Equal(t, "claude-3-5-sonnet", redacted.Model)
+		require.Contains(t, mustMarshal(t, req), markerContent, "original must not be mutated")
+	})
+
+	t.Run("array content blocks", func(t *testing.T) {
+		const marker = "marker-block-text"
+		body := `{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":[{"type":"text","text":"` + marker + `"}]}]}`
+		_, req, _, _, err := MessagesCountTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesCountTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+	})
 }
 
 // mustMarshal marshals v and returns its string form, failing the test on error.
