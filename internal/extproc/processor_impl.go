@@ -829,6 +829,10 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) mergeWithTok
 // This is needed since the content length header is unconditionally cleared by Envoy as we use REPLACE_AND_CONTINUE
 // processing mode in the request headers phase at upstream filter. This is sort of a workaround, and it is necessary
 // for now.
+//
+// The value is stored as a decimal string rather than a number: Envoy renders a number in shortest double form when
+// substituting %DYNAMIC_METADATA%, so a round length such as 100000 would be emitted as "1e+05" and rejected by strict
+// HTTP parsers.
 func buildContentLengthDynamicMetadataOnRequest(contentLength int) *structpb.Struct {
 	metadata := &structpb.Struct{
 		Fields: map[string]*structpb.Value{
@@ -836,9 +840,7 @@ func buildContentLengthDynamicMetadataOnRequest(contentLength int) *structpb.Str
 				Kind: &structpb.Value_StructValue{
 					StructValue: &structpb.Struct{
 						Fields: map[string]*structpb.Value{
-							"content_length": {
-								Kind: &structpb.Value_NumberValue{NumberValue: float64(contentLength)},
-							},
+							"content_length": structpb.NewStringValue(strconv.Itoa(contentLength)),
 						},
 					},
 				},
