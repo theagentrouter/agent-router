@@ -1860,6 +1860,167 @@ func TestMessagesEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 	})
 }
 
+// TestRedactSensitiveInfoFromRequest_EndUserIdentifiers verifies that end-user identifiers and
+// free-form caller annotations are redacted even though the application, not the end user, sets them.
+func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
+	const marker = "end-user-marker@example.com"
+
+	t.Run("chat completions user", func(t *testing.T) {
+		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"user":"`+marker+`"}`), false)
+		require.NoError(t, err)
+		redacted, err := ChatCompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotContains(t, mustMarshal(t, redacted), marker)
+		require.Equal(t, redaction.RedactString(marker), redacted.User)
+		require.Contains(t, mustMarshal(t, req), marker, "original must not be mutated")
+	})
+
+	t.Run("chat completions message name and assistant refusal", func(t *testing.T) {
+		const refusalMarker = "I cannot help with the marker request"
+		body := `{"model":"m","messages":[` +
+			`{"role":"system","name":"sys-` + marker + `","content":"s"},` +
+			`{"role":"developer","name":"dev-` + marker + `","content":"d"},` +
+			`{"role":"user","name":"user-` + marker + `","content":"u"},` +
+			`{"role":"assistant","name":"asst-` + marker + `","refusal":"` + refusalMarker + `"}]}`
+		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ChatCompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.NotContains(t, out, refusalMarker)
+		require.Equal(t, redaction.RedactString("sys-"+marker), redacted.Messages[0].OfSystem.Name)
+		require.Equal(t, redaction.RedactString("dev-"+marker), redacted.Messages[1].OfDeveloper.Name)
+		require.Equal(t, redaction.RedactString("user-"+marker), redacted.Messages[2].OfUser.Name)
+		require.Equal(t, redaction.RedactString("asst-"+marker), redacted.Messages[3].OfAssistant.Name)
+		require.Equal(t, redaction.RedactString(refusalMarker), redacted.Messages[3].OfAssistant.Refusal)
+		require.Contains(t, mustMarshal(t, req), refusalMarker, "original must not be mutated")
+	})
+
+	t.Run("chat completions assistant thinking_blocks", func(t *testing.T) {
+		const thinkingMarker = "The user asked about account marker-12345"
+		const signatureMarker = "sig-marker"
+		const dataMarker = "ZGF0YS1tYXJrZXI="
+		body := `{"model":"m","messages":[{"role":"user","content":"u"},` +
+			`{"role":"assistant","content":"a","thinking_blocks":[` +
+			`{"type":"thinking","thinking":"` + thinkingMarker + `","signature":"` + signatureMarker + `"},` +
+			`{"type":"redacted_thinking","data":"` + dataMarker + `"}]}]}`
+		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ChatCompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, thinkingMarker)
+		require.NotContains(t, out, signatureMarker)
+		require.NotContains(t, out, dataMarker)
+		require.Equal(t, []openai.ThinkingBlock{
+			{Type: "thinking", Thinking: redaction.RedactString(thinkingMarker), Signature: redaction.RedactString(signatureMarker)},
+			{Type: "redacted_thinking", Data: redaction.RedactString(dataMarker)},
+		}, redacted.Messages[1].OfAssistant.ThinkingBlocks)
+		require.Contains(t, mustMarshal(t, req), thinkingMarker, "original must not be mutated")
+	})
+
+	t.Run("chat completions audio_url and video_url parts", func(t *testing.T) {
+		const audioMarker = "https://example.com/audio-marker.wav"
+		const videoMarker = "data:video/mp4;base64,dmlkZW8tbWFya2Vy"
+		body := `{"model":"m","messages":[{"role":"user","content":[` +
+			`{"type":"audio_url","audio_url":{"url":"` + audioMarker + `"}},` +
+			`{"type":"video_url","video_url":{"url":"` + videoMarker + `"}}]}]}`
+		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ChatCompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, audioMarker)
+		require.NotContains(t, out, videoMarker)
+		require.Contains(t, out, redaction.RedactString(audioMarker))
+		require.Contains(t, out, redaction.RedactString(videoMarker))
+		require.Contains(t, mustMarshal(t, req), audioMarker, "original must not be mutated")
+	})
+
+	t.Run("completions user", func(t *testing.T) {
+		_, req, _, _, err := CompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","prompt":"hi","user":"`+marker+`"}`), false)
+		require.NoError(t, err)
+		redacted, err := CompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotContains(t, mustMarshal(t, redacted), marker)
+		require.Equal(t, redaction.RedactString(marker), redacted.User)
+		require.Contains(t, mustMarshal(t, req), marker, "original must not be mutated")
+	})
+
+	for _, tc := range []struct {
+		name string
+		stop string
+	}{
+		{name: "completions stop string", stop: `"stop-marker-1"`},
+		{name: "completions stop array", stop: `["stop-marker-1","stop-marker-2"]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, req, _, _, err := CompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","prompt":"hi","stop":`+tc.stop+`}`), false)
+			require.NoError(t, err)
+			redacted, err := CompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+			require.NoError(t, err)
+			out := mustMarshal(t, redacted)
+			require.NotContains(t, out, "stop-marker")
+			require.Contains(t, out, redaction.RedactString("stop-marker-1"))
+			require.Contains(t, mustMarshal(t, req), "stop-marker-1", "original must not be mutated")
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "embeddings completion user", body: `{"model":"m","input":"hi","user":"` + marker + `"}`},
+		{name: "embeddings chat user", body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"user":"` + marker + `"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(tc.body), false)
+			require.NoError(t, err)
+			redacted, err := EmbeddingsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+			require.NoError(t, err)
+			out := mustMarshal(t, redacted)
+			require.NotContains(t, out, marker)
+			require.Contains(t, out, redaction.RedactString(marker))
+			require.Contains(t, mustMarshal(t, req), marker, "original must not be mutated")
+		})
+	}
+
+	t.Run("image generation user", func(t *testing.T) {
+		req := &openai.ImageGenerationRequest{Model: "m", Prompt: "p", User: marker}
+		redacted, err := ImageGenerationEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.Equal(t, redaction.RedactString(marker), redacted.User)
+		require.Equal(t, marker, req.User, "original must not be mutated")
+	})
+
+	t.Run("responses safety_identifier and metadata", func(t *testing.T) {
+		const metadataMarker = "tenant-marker-42"
+		body := `{"model":"m","input":"hi","safety_identifier":"` + marker + `","metadata":{"tenant":"` + metadataMarker + `"}}`
+		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.NotContains(t, out, metadataMarker)
+		require.Equal(t, redaction.RedactString(marker), redacted.SafetyIdentifier)
+		require.Equal(t, map[string]string{"tenant": redaction.RedactString(metadataMarker)}, redacted.Metadata, "keys are kept, values redacted")
+		require.Contains(t, mustMarshal(t, req), metadataMarker, "original must not be mutated")
+	})
+
+	t.Run("anthropic messages metadata.user_id", func(t *testing.T) {
+		body := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"` + marker + `"}}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotContains(t, mustMarshal(t, redacted), marker)
+		require.Equal(t, redaction.RedactString(marker), *redacted.Metadata.UserID)
+		require.Equal(t, marker, *req.Metadata.UserID, "original must not be mutated")
+	})
+}
+
 func TestRerankEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 	const markerQ = "marker-query"
 	const markerDoc = "marker-document-content"

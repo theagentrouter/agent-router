@@ -79,6 +79,24 @@ type (
 		// The returned request preserves the structure but removes actual sensitive data, making it
 		// safe to include in logs. It should NOT be used for actual AI provider requests.
 		//
+		// What to redact: the redacted request is written to debug logs, which are typically
+		// readable by more people and retained longer than the request itself, so the question is
+		// not whether the gateway may see a value but whether it may be persisted in logs. Classify
+		// each field by what its value is, not by who sets it:
+		// * Redact caller content: prompts, messages, instructions, documents, media, tool call
+		//   arguments and results.
+		// * Redact end-user identifiers and free-form caller annotations, even when the application
+		//   (not the end user) sets them: `user`, `safety_identifier`, `metadata` values. The
+		//   gateway cannot tell whether the application hashed them, so it must assume raw PII.
+		//   The placeholder hash is deterministic, so requests from the same user can still be
+		//   correlated in logs.
+		// * Keep model and format configuration that describes how to call the model rather than
+		//   who is calling or what they said: model, sampling parameters, tool definitions,
+		//   response_format and other schemas.
+		//
+		// Fields not named by an implementation are logged as sent, so a new request field must be
+		// classified explicitly when it is added.
+		//
 		// Parameters:
 		// * req: The original request to redact.
 		//
@@ -240,6 +258,9 @@ func (ChatCompletionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Ch
 		redacted.PredictionContent = &redactedPrediction
 	}
 
+	// User is an end-user identifier set by the application — redact it.
+	redacted.User = redaction.RedactString(req.User)
+
 	// Tool definitions (name, description, parameters) are developer-authored schema metadata,
 	// not user data — kept as-is.
 	// Response format schemas and guided_json are developer-authored — kept as-is.
@@ -281,6 +302,12 @@ func (CompletionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Comple
 	// JSON-tree redactor rather than enumerating every union variant.
 	redacted := *req
 	redacted.Prompt = openai.PromptUnion{Value: redactInterfaceValue(req.Prompt.Value)}
+	// User is an end-user identifier set by the application — redact it.
+	redacted.User = redaction.RedactString(req.User)
+	// Stop sequences are caller-chosen text (string or []string) that can quote the prompt.
+	if req.Stop != nil {
+		redacted.Stop = redactInterfaceValue(req.Stop)
+	}
 	return &redacted, nil
 }
 
@@ -325,6 +352,7 @@ func (EmbeddingsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Embeddi
 		// Input is user-supplied text (string / []string / objects) in a bare-any union.
 		redactedOfCompletion := *req.OfCompletion
 		redactedOfCompletion.Input = openai.EmbeddingRequestInput{Value: redactInterfaceValue(req.OfCompletion.Input.Value)}
+		redactedOfCompletion.User = redactOptionalString(req.OfCompletion.User)
 		redacted.OfCompletion = &redactedOfCompletion
 		redacted.OfChat = nil
 	case req.OfChat != nil:
@@ -334,9 +362,13 @@ func (EmbeddingsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Embeddi
 		for i, msg := range req.OfChat.Messages {
 			redactedOfChat.Messages[i] = redactMessage(msg)
 		}
+		redactedOfChat.User = redactOptionalString(req.OfChat.User)
 		redacted.OfChat = &redactedOfChat
 		redacted.OfCompletion = nil
 	}
+	// User is an end-user identifier set by the application. It is marshaled from whichever
+	// variant is set (or from the base fields if neither is), so redact every copy.
+	redacted.User = redactOptionalString(req.User)
 	return &redacted, nil
 }
 
@@ -371,6 +403,8 @@ func (ImageGenerationEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Im
 	// The prompt is user-supplied text describing the desired image; redact it.
 	redacted := *req
 	redacted.Prompt = redaction.RedactString(req.Prompt)
+	// User is an end-user identifier set by the application — redact it.
+	redacted.User = redaction.RedactString(req.User)
 	return &redacted, nil
 }
 
@@ -411,6 +445,10 @@ func (ResponsesEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Response
 	// Instructions and User are user-supplied text / PII.
 	redacted.Instructions = redaction.RedactString(req.Instructions)
 	redacted.User = redaction.RedactString(req.User)
+	// SafetyIdentifier identifies the end user; Metadata is a free-form client map that can hold
+	// user IDs or similar. Metadata keys are kept and only the values are redacted.
+	redacted.SafetyIdentifier = redaction.RedactString(req.SafetyIdentifier)
+	redacted.Metadata = redactUnionField(req.Metadata)
 	// Input and Prompt are JSON unions holding conversation items / content — redact every
 	// nested string leaf via the generic redactor so user content inside any item type is caught.
 	redacted.Input = redactUnionField(req.Input)
@@ -516,6 +554,12 @@ func (MessagesEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, m
 func (MessagesEndpointSpec) RedactSensitiveInfoFromRequest(req *anthropic.MessagesRequest) (redactedReq *anthropic.MessagesRequest, err error) {
 	redacted := *req
 	redacted.Messages, redacted.System = redactAnthropicMessagesAndSystem(req.Messages, req.System)
+	// metadata.user_id is an end-user identifier set by the application — redact it.
+	if req.Metadata != nil {
+		redactedMetadata := *req.Metadata
+		redactedMetadata.UserID = redactOptionalString(req.Metadata.UserID)
+		redacted.Metadata = &redactedMetadata
+	}
 	return &redacted, nil
 }
 
@@ -534,6 +578,14 @@ func redactAnthropicMessagesAndSystem(msgs []anthropic.MessageParam, system *ant
 		redactedSystem = ptr.To(redactUnionField(*system))
 	}
 	return redactedMsgs, redactedSystem
+}
+
+// redactOptionalString returns a pointer to the redacted value of s, or nil if s is nil.
+func redactOptionalString(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	return ptr.To(redaction.RedactString(*s))
 }
 
 // ParseBody implements [EndpointSpec.ParseBody].
@@ -775,6 +827,8 @@ func redactMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatComple
 func redactUserMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfUser
 	redactedMsg.Content = redactStringOrUserRoleContentUnion(msg.OfUser.Content)
+	// Name identifies the participant, typically the end user — redact it.
+	redactedMsg.Name = redaction.RedactString(msg.OfUser.Name)
 	return openai.ChatCompletionMessageParamUnion{OfUser: &redactedMsg}
 }
 
@@ -782,6 +836,9 @@ func redactUserMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCo
 func redactAssistantMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfAssistant
 	redactedMsg.Content = redactStringOrAssistantRoleContentUnion(msg.OfAssistant.Content)
+	// Name identifies the participant; Refusal is model-generated text, redacted like refusal content parts.
+	redactedMsg.Name = redaction.RedactString(msg.OfAssistant.Name)
+	redactedMsg.Refusal = redaction.RedactString(msg.OfAssistant.Refusal)
 	// Redact tool call arguments (may contain data derived from user messages).
 	// Function name is kept — it is the tool API name, not user data.
 	if len(msg.OfAssistant.ToolCalls) > 0 {
@@ -792,6 +849,20 @@ func redactAssistantMessage(msg openai.ChatCompletionMessageParamUnion) openai.C
 			redactedMsg.ToolCalls[i] = redactedToolCall
 		}
 	}
+	// Thinking blocks echoed back by the client carry the model's previous reasoning, which often
+	// restates the user's prompt. Only the block type is structural; the text, signature and
+	// encrypted data are redacted.
+	if len(msg.OfAssistant.ThinkingBlocks) > 0 {
+		redactedMsg.ThinkingBlocks = make([]openai.ThinkingBlock, len(msg.OfAssistant.ThinkingBlocks))
+		for i, tb := range msg.OfAssistant.ThinkingBlocks {
+			redactedMsg.ThinkingBlocks[i] = openai.ThinkingBlock{
+				Type:      tb.Type,
+				Thinking:  redaction.RedactString(tb.Thinking),
+				Signature: redaction.RedactString(tb.Signature),
+				Data:      redaction.RedactString(tb.Data),
+			}
+		}
+	}
 	return openai.ChatCompletionMessageParamUnion{OfAssistant: &redactedMsg}
 }
 
@@ -799,6 +870,8 @@ func redactAssistantMessage(msg openai.ChatCompletionMessageParamUnion) openai.C
 func redactSystemMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfSystem
 	redactedMsg.Content = redactContentUnion(msg.OfSystem.Content)
+	// Name identifies the participant — redact it.
+	redactedMsg.Name = redaction.RedactString(msg.OfSystem.Name)
 	return openai.ChatCompletionMessageParamUnion{OfSystem: &redactedMsg}
 }
 
@@ -806,6 +879,8 @@ func redactSystemMessage(msg openai.ChatCompletionMessageParamUnion) openai.Chat
 func redactDeveloperMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfDeveloper
 	redactedMsg.Content = redactContentUnion(msg.OfDeveloper.Content)
+	// Name identifies the participant — redact it.
+	redactedMsg.Name = redaction.RedactString(msg.OfDeveloper.Name)
 	return openai.ChatCompletionMessageParamUnion{OfDeveloper: &redactedMsg}
 }
 
@@ -910,6 +985,18 @@ func redactUserContentPart(part openai.ChatCompletionContentPartUserUnionParam) 
 		redactedAudio := *part.OfInputAudio
 		redactedAudio.InputAudio.Data = redaction.RedactString(part.OfInputAudio.InputAudio.Data)
 		redacted.OfInputAudio = &redactedAudio
+	}
+
+	// Redact audio and video URLs (may be data URLs with embedded base64 media)
+	if part.OfAudioURL != nil {
+		redactedAudioURL := *part.OfAudioURL
+		redactedAudioURL.AudioURL.URL = redaction.RedactString(part.OfAudioURL.AudioURL.URL)
+		redacted.OfAudioURL = &redactedAudioURL
+	}
+	if part.OfVideoURL != nil {
+		redactedVideoURL := *part.OfVideoURL
+		redactedVideoURL.VideoURL.URL = redaction.RedactString(part.OfVideoURL.VideoURL.URL)
+		redacted.OfVideoURL = &redactedVideoURL
 	}
 
 	// Redact file attachments (may contain sensitive documents or data)
