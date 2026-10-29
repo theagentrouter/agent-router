@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -70,14 +71,17 @@ func newGCPHandler(ctx context.Context, gcpAuth *filterapi.GCPAuth) (filterapi.B
 func (g *gcpHandler) Do(_ context.Context, requestHeaders map[string]string, _ []byte) ([]internalapi.Header, error) {
 	// Build the GCP URL prefix using the configured region and project name.
 	prefixPath := fmt.Sprintf("/v1/projects/%s/locations/%s", g.projectName, g.region)
-	// Find and update the ":path" header by prepending the prefix.
-	path := requestHeaders[":path"]
+	// Find and update the ":path" header by prepending the prefix. path.Join
+	// tolerates a suffix that already starts with "/", as the OpenAI translators
+	// emit for an OpenAI-compatible backend such as a self-deployed Vertex AI
+	// endpoint, so the result never carries a double slash.
+	suffix := requestHeaders[":path"]
 
-	if path == "" {
+	if suffix == "" {
 		return nil, fmt.Errorf("missing ':path' header in the request")
 	}
 
-	newPath := fmt.Sprintf("%s/%s", prefixPath, path)
+	newPath := path.Join(prefixPath, suffix)
 
 	// Get the access token
 	var accessToken string
