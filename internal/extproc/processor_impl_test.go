@@ -458,6 +458,34 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 		mm.RequireRequestFailure(t)
 		require.Zero(t, mm.inputTokenCount)
 	})
+	t.Run("error translation records response model", func(t *testing.T) {
+		mm := &mockMetrics{}
+		mt := &mockTranslator{t: t, retResponseModel: "some_model", retErr: errors.New("test error")}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator:      mt,
+			metrics:         mm,
+			parent:          &chatCompletionProcessorRouterFilter{},
+			responseHeaders: map[string]string{":status": "200"},
+		}
+		_, err := p.ProcessResponseBody(t.Context(), &extprocv3.HttpBody{})
+		require.ErrorContains(t, err, "test error")
+		mm.RequireRequestFailure(t)
+		require.Equal(t, "some_model", mm.responseModel)
+	})
+	t.Run("error translation keeps earlier response model", func(t *testing.T) {
+		mm := &mockMetrics{responseModel: "earlier_model"}
+		mt := &mockTranslator{t: t, retErr: errors.New("test error")}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator:      mt,
+			metrics:         mm,
+			parent:          &chatCompletionProcessorRouterFilter{},
+			responseHeaders: map[string]string{":status": "200"},
+		}
+		_, err := p.ProcessResponseBody(t.Context(), &extprocv3.HttpBody{})
+		require.ErrorContains(t, err, "test error")
+		mm.RequireRequestFailure(t)
+		require.Equal(t, "earlier_model", mm.responseModel)
+	})
 	t.Run("ok", func(t *testing.T) {
 		inBody := &extprocv3.HttpBody{Body: []byte("some-body"), EndOfStream: true}
 		mm := &mockMetrics{}
