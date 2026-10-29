@@ -69,6 +69,7 @@ See [Technical Gap between Envoy’s Extension vs the Protocol](#technical-gap-b
 Sessions are initialized by sending an "initialize" request to each **matching** upstream MCP server.
 All session IDs are encoded into a single (ASCII) session ID, which is then encrypted to avoid leaking details.
 See [Future Work & Notes](#future-work--notes) for more on this approach.
+An opt-in alternative that keeps session state in an external store is explored separately in [proposal 013](../013-mcp-external-session-state/proposal.md); the header-encoded scheme described here remains the default.
 
 ### Notification & Reconnection Handling
 
@@ -137,6 +138,7 @@ In short, native C++ extensions would require hacky workarounds in addition to h
 - Encoding all session information into a session-id header is not ideal. We could use Redis or another external cache to store session state, simplifying and strengthening the implementation.
   - Envoy (AI) Gateway deployments already commonly use Redis for rate limiting, which makes this approach practical.
   - In practice, the number of matching backends per MCPRoute (per session) will likely remain small (e.g., Goose recommends limiting tools to 25: [block/goose#2927]), making the current approach workable.
+  - [Proposal 013](../013-mcp-external-session-state/proposal.md) works this idea through as an opt-in mode, including what the gateway can and cannot guarantee once session state stops being self-describing.
 - Switching from the MCP Proxy approach to a normal Envoy filter extension could be considered later.
   - Native C++ extensions are out of scope due to complexity, maintenance burden, and difficulty attracting contributors. This leaves ExtProc/DynamicModules/Wasm/Lua as future options.
   - Each requires non-trivial upstream Envoy changes to be feasible.
