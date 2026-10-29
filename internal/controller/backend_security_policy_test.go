@@ -776,6 +776,10 @@ func TestBackendSecurityPolicyController_Reconcile_StaticCredentialCrossNamespac
 			Type:            aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey,
 			AnthropicAPIKey: &aigv1b1.BackendSecurityPolicyAnthropicAPIKey{SecretRef: secretRef},
 		}},
+		{name: "FalAPIKey", spec: aigv1b1.BackendSecurityPolicySpec{
+			Type:      aigv1b1.BackendSecurityPolicyTypeFalAPIKey,
+			FalAPIKey: &aigv1b1.BackendSecurityPolicyFalAPIKey{SecretRef: secretRef},
+		}},
 		{name: "AWSCredentialsFile", spec: aigv1b1.BackendSecurityPolicySpec{
 			Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
 			AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
