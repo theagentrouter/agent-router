@@ -205,3 +205,240 @@ func TestResponsesSystemInstructions(t *testing.T) {
 		})
 	}
 }
+
+func TestResponsesInputMessages(t *testing.T) {
+	items := func(items ...openai.ResponseInputItemUnionParam) *openai.ResponseRequest {
+		return &openai.ResponseRequest{Input: openai.ResponseNewParamsInputUnion{OfInputItemList: items}}
+	}
+	tests := []struct {
+		name     string
+		req      *openai.ResponseRequest
+		expected string
+	}{
+		{name: "no input", req: &openai.ResponseRequest{}, expected: ""},
+		{
+			name:     "string input is a user message",
+			req:      &openai.ResponseRequest{Input: openai.ResponseNewParamsInputUnion{OfString: ptr("hi")}},
+			expected: `[{"role":"user","parts":[{"type":"text","content":"hi"}]}]`,
+		},
+		{
+			name:     "empty string input records nothing",
+			req:      &openai.ResponseRequest{Input: openai.ResponseNewParamsInputUnion{OfString: ptr("")}},
+			expected: "",
+		},
+		{
+			name: "message with string content",
+			req: items(openai.ResponseInputItemUnionParam{OfMessage: &openai.EasyInputMessageParam{
+				Role:    "user",
+				Content: openai.EasyInputMessageContentUnionParam{OfString: ptr("hi")},
+			}}),
+			expected: `[{"role":"user","parts":[{"type":"text","content":"hi"}]}]`,
+		},
+		{
+			name: "message with empty content records nothing",
+			req: items(openai.ResponseInputItemUnionParam{OfMessage: &openai.EasyInputMessageParam{
+				Role:    "user",
+				Content: openai.EasyInputMessageContentUnionParam{OfString: ptr("")},
+			}}),
+			expected: "",
+		},
+		{
+			// Images are recorded by type only, as on the chat path.
+			name: "message with content list",
+			req: items(openai.ResponseInputItemUnionParam{OfMessage: &openai.EasyInputMessageParam{
+				Role: "user",
+				Content: openai.EasyInputMessageContentUnionParam{OfInputItemContentList: []openai.ResponseInputContentUnionParam{
+					{OfInputText: &openai.ResponseInputTextParam{Text: "look"}},
+					{OfInputImage: &openai.ResponseInputImageParam{}},
+				}},
+			}}),
+			expected: `[{"role":"user","parts":[{"type":"text","content":"look"},{"type":"image"}]}]`,
+		},
+		{
+			name: "message without a role defaults to user",
+			req: items(openai.ResponseInputItemUnionParam{OfMessage: &openai.EasyInputMessageParam{
+				Content: openai.EasyInputMessageContentUnionParam{OfString: ptr("hi")},
+			}}),
+			expected: `[{"role":"user","parts":[{"type":"text","content":"hi"}]}]`,
+		},
+		{
+			// System messages occupy a position in the conversation, as on the
+			// chat path, rather than being split into system instructions.
+			name: "system message stays in the conversation",
+			req: items(openai.ResponseInputItemUnionParam{OfMessage: &openai.EasyInputMessageParam{
+				Role:    "system",
+				Content: openai.EasyInputMessageContentUnionParam{OfString: ptr("be brief")},
+			}}),
+			expected: `[{"role":"system","parts":[{"type":"text","content":"be brief"}]}]`,
+		},
+		{
+			name: "empty replayed output message records nothing",
+			req: items(openai.ResponseInputItemUnionParam{OfOutputMessage: &openai.ResponseOutputMessage{
+				Role: "assistant",
+			}}),
+			expected: "",
+		},
+		{
+			name: "input message keeps its role",
+			req: items(openai.ResponseInputItemUnionParam{OfInputMessage: &openai.ResponseInputItemMessageParam{
+				Role:    "developer",
+				Content: []openai.ResponseInputContentUnionParam{{OfInputText: &openai.ResponseInputTextParam{Text: "be brief"}}},
+			}}),
+			expected: `[{"role":"developer","parts":[{"type":"text","content":"be brief"}]}]`,
+		},
+		{
+			// A prior turn is replayed as consecutive output items and folds
+			// into one assistant message, as it was recorded on the response side.
+			name: "replayed turn folds into one assistant message",
+			req: items(
+				openai.ResponseInputItemUnionParam{OfReasoning: &openai.ResponseReasoningItem{}},
+				openai.ResponseInputItemUnionParam{OfOutputMessage: &openai.ResponseOutputMessage{
+					Role: "assistant",
+					Content: openai.ResponseOutputMessageContentUnion{OfContentArray: []openai.ResponseOutputMessageContentArrayUnion{{
+						OfOutputText: &openai.ResponseOutputTextParam{Text: "earlier"},
+					}}},
+				}},
+				openai.ResponseInputItemUnionParam{OfFunctionCall: &openai.ResponseFunctionToolCall{
+					CallID: "call_1", Name: "get_weather", Arguments: `{}`,
+				}},
+			),
+			expected: `[{"role":"assistant","parts":[{"type":"reasoning"},{"type":"text","content":"earlier"},` +
+				`{"type":"tool_call","id":"call_1","name":"get_weather","arguments":"{}"}]}]`,
+		},
+		{
+			name: "tool output closes the assistant turn",
+			req: items(
+				openai.ResponseInputItemUnionParam{OfFunctionCall: &openai.ResponseFunctionToolCall{CallID: "call_1", Name: "f", Arguments: `{}`}},
+				openai.ResponseInputItemUnionParam{OfFunctionCallOutput: &openai.ResponseInputItemFunctionCallOutputParam{
+					CallID: "call_1", Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: ptr("ok")},
+				}},
+				openai.ResponseInputItemUnionParam{OfOutputMessage: &openai.ResponseOutputMessage{
+					Content: openai.ResponseOutputMessageContentUnion{OfString: ptr("done")},
+				}},
+			),
+			expected: `[{"role":"assistant","parts":[{"type":"tool_call","id":"call_1","name":"f","arguments":"{}"}]},` +
+				`{"role":"tool","parts":[{"type":"tool_call_response","id":"call_1","content":"ok"}]},` +
+				`{"role":"assistant","parts":[{"type":"text","content":"done"}]}]`,
+		},
+		{
+			name:     "replayed image generation recorded by type only",
+			req:      items(openai.ResponseInputItemUnionParam{OfImageGenerationCall: &openai.ResponseInputItemImageGenerationCallParam{}}),
+			expected: `[{"role":"assistant","parts":[{"type":"image"}]}]`,
+		},
+		{
+			name: "function call",
+			req: items(openai.ResponseInputItemUnionParam{OfFunctionCall: &openai.ResponseFunctionToolCall{
+				CallID: "call_1", Name: "get_weather", Arguments: `{"city":"Berlin"}`,
+			}}),
+			expected: `[{"role":"assistant","parts":[{"type":"tool_call","id":"call_1",` +
+				`"name":"get_weather","arguments":"{\"city\":\"Berlin\"}"}]}]`,
+		},
+		{
+			name: "function call output",
+			req: items(openai.ResponseInputItemUnionParam{OfFunctionCallOutput: &openai.ResponseInputItemFunctionCallOutputParam{
+				CallID: "call_1",
+				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: ptr("72F")},
+			}}),
+			expected: `[{"role":"tool","parts":[{"type":"tool_call_response","id":"call_1","content":"72F"}]}]`,
+		},
+		{
+			// Mirrors the chat path, which records the first text block of a tool result.
+			name: "function call output array records its first text",
+			req: items(openai.ResponseInputItemUnionParam{OfFunctionCallOutput: &openai.ResponseInputItemFunctionCallOutputParam{
+				CallID: "call_1",
+				Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{
+					OfResponseFunctionCallOutputItemArray: []openai.ResponseInputItemFunctionCallOutputItemUnionParam{
+						{OfInputText: &openai.ResponseInputTextContentParam{Text: "72F"}},
+						{OfInputImage: &openai.ResponseInputImageContentParam{}},
+						{OfInputText: &openai.ResponseInputTextContentParam{Text: "sunny"}},
+					},
+				},
+			}}),
+			expected: `[{"role":"tool","parts":[{"type":"tool_call_response","id":"call_1","content":"72F"}]}]`,
+		},
+		{
+			name:     "reasoning recorded by type only",
+			req:      items(openai.ResponseInputItemUnionParam{OfReasoning: &openai.ResponseReasoningItem{}}),
+			expected: `[{"role":"assistant","parts":[{"type":"reasoning"}]}]`,
+		},
+		{
+			name:     "unmapped items are skipped",
+			req:      items(openai.ResponseInputItemUnionParam{OfWebSearchCall: &openai.ResponseFunctionWebSearch{}}),
+			expected: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			attrs := messagesAttr(InputMessages, responsesInputMessages(tc.req))
+			if tc.expected == "" {
+				require.Empty(t, attrs)
+				return
+			}
+			require.Len(t, attrs, 1)
+			require.JSONEq(t, tc.expected, attrs[0].Value.AsString())
+		})
+	}
+}
+
+func TestResponsesFoldChunks(t *testing.T) {
+	created := &openai.ResponseStreamEventUnion{OfResponseCreated: &openai.ResponseCreatedEvent{
+		Response: openai.Response{ID: "resp_1", Model: "gpt-5"},
+	}}
+	completed := &openai.ResponseStreamEventUnion{OfResponseCompleted: &openai.ResponseCompletedEvent{
+		Response: openai.Response{ID: "resp_1", Model: "gpt-5", Usage: &openai.ResponseUsage{InputTokens: 3, OutputTokens: 2}},
+	}}
+	incomplete := &openai.ResponseStreamEventUnion{OfResponseIncomplete: &openai.ResponseIncompleteEvent{
+		Response: openai.Response{ID: "resp_1", Usage: &openai.ResponseUsage{OutputTokens: 9}},
+	}}
+	failed := &openai.ResponseStreamEventUnion{OfResponseFailed: &openai.ResponseFailedEvent{
+		Response: openai.Response{ID: "resp_1"},
+	}}
+
+	tests := []struct {
+		name     string
+		chunks   []*openai.ResponseStreamEventUnion
+		expected *openai.Response
+	}{
+		{name: "completed wins over created", chunks: []*openai.ResponseStreamEventUnion{created, completed}, expected: &completed.OfResponseCompleted.Response},
+		{name: "incomplete carries the response", chunks: []*openai.ResponseStreamEventUnion{created, incomplete}, expected: &incomplete.OfResponseIncomplete.Response},
+		{name: "failed carries the response", chunks: []*openai.ResponseStreamEventUnion{created, failed}, expected: &failed.OfResponseFailed.Response},
+		{name: "last terminal event wins", chunks: []*openai.ResponseStreamEventUnion{completed, incomplete}, expected: &incomplete.OfResponseIncomplete.Response},
+		{name: "no terminal event yields an empty response", chunks: []*openai.ResponseStreamEventUnion{created}, expected: &openai.Response{}},
+		{name: "nil chunks are skipped", chunks: []*openai.ResponseStreamEventUnion{nil, completed, nil}, expected: &completed.OfResponseCompleted.Response},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, responsesFoldChunks(tc.chunks))
+		})
+	}
+}
+
+// TestResponsesInputMessages_replayMatchesOutput pins that a prior response
+// replayed on the next request is recorded exactly as it was on the response
+// side, so a conversation reads the same across turns.
+func TestResponsesInputMessages_replayMatchesOutput(t *testing.T) {
+	resp := &openai.Response{Output: []openai.ResponseOutputItemUnion{
+		{OfReasoning: &openai.ResponseReasoningItem{}},
+		{OfOutputMessage: &openai.ResponseOutputMessage{
+			Role: "assistant",
+			Content: openai.ResponseOutputMessageContentUnion{OfContentArray: []openai.ResponseOutputMessageContentArrayUnion{{
+				OfOutputText: &openai.ResponseOutputTextParam{Text: "checking"},
+			}}},
+		}},
+		{OfFunctionCall: &openai.ResponseFunctionToolCall{CallID: "call_1", Name: "get_weather", Arguments: `{"city":"Berlin"}`}},
+		{OfImageGenerationCall: &openai.ResponseOutputItemImageGenerationCall{}},
+	}}
+	replay := &openai.ResponseRequest{Input: openai.ResponseNewParamsInputUnion{OfInputItemList: []openai.ResponseInputItemUnionParam{
+		{OfReasoning: resp.Output[0].OfReasoning},
+		{OfOutputMessage: resp.Output[1].OfOutputMessage},
+		{OfFunctionCall: resp.Output[2].OfFunctionCall},
+		{OfImageGenerationCall: &openai.ResponseInputItemImageGenerationCallParam{}},
+	}}}
+
+	want := messagesAttr(OutputMessages, responsesOutputMessages(resp))
+	got := messagesAttr(InputMessages, responsesInputMessages(replay))
+	require.Len(t, want, 1)
+	require.Len(t, got, 1)
+	require.JSONEq(t, want[0].Value.AsString(), got[0].Value.AsString())
+}

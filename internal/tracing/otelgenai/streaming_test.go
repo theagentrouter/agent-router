@@ -324,4 +324,62 @@ func TestChunkRecording_boundaries(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("responses", func(t *testing.T) {
+		r := NewResponsesRecorder(cfg)
+		for _, chunks := range [][]*openai.ResponseStreamEventUnion{
+			nil, {}, {nil}, {{}},
+		} {
+			require.NotPanics(t, func() {
+				testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+					r.RecordResponseChunks(span, chunks)
+					return false
+				})
+			})
+		}
+	})
+}
+
+// TestResponsesStreamingMatchesUnary pins the same property for the Responses
+// API: the terminal event carries the assembled response, so a streamed
+// exchange must produce exactly the span its unary equivalent does.
+func TestResponsesStreamingMatchesUnary(t *testing.T) {
+	unary := &openai.Response{
+		ID:    "resp_1",
+		Model: "gpt-5",
+		Usage: &openai.ResponseUsage{
+			InputTokens:         10,
+			OutputTokens:        4,
+			InputTokensDetails:  openai.ResponseUsageInputTokensDetails{CachedTokens: 2},
+			OutputTokensDetails: openai.ResponseUsageOutputTokensDetails{ReasoningTokens: 1},
+		},
+		Output: []openai.ResponseOutputItemUnion{{
+			OfOutputMessage: &openai.ResponseOutputMessage{
+				Role: "assistant",
+				Content: openai.ResponseOutputMessageContentUnion{OfContentArray: []openai.ResponseOutputMessageContentArrayUnion{{
+					OfOutputText: &openai.ResponseOutputTextParam{Text: "hello world"},
+				}}},
+			},
+		}},
+	}
+
+	chunks := []*openai.ResponseStreamEventUnion{
+		{OfResponseCreated: &openai.ResponseCreatedEvent{Response: openai.Response{ID: "resp_1", Model: "gpt-5"}}},
+		{OfResponseTextDelta: &openai.ResponseTextDeltaEvent{Delta: "hello "}},
+		{OfResponseTextDelta: &openai.ResponseTextDeltaEvent{Delta: "world"}},
+		{OfResponseCompleted: &openai.ResponseCompletedEvent{Response: *unary}},
+	}
+
+	r := NewResponsesRecorder(&Config{CaptureMessageContent: true})
+
+	unarySpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+		r.RecordResponse(span, unary)
+		return false
+	})
+	streamSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+		r.RecordResponseChunks(span, chunks)
+		return false
+	})
+
+	testotel.RequireAttributesEqual(t, unarySpan.Attributes, streamSpan.Attributes)
 }
