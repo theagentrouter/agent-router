@@ -26,6 +26,7 @@ import (
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/controller/rotators"
 	"github.com/envoyproxy/ai-gateway/internal/controller/tokenprovider"
+	"github.com/envoyproxy/ai-gateway/internal/inferencepool"
 )
 
 const (
@@ -34,9 +35,9 @@ const (
 	// aiServiceBackendKind is the kind for AIServiceBackend resources.
 	aiServiceBackendKind = "AIServiceBackend"
 	// inferencePoolGroup is the API group for InferencePool resources.
-	inferencePoolGroup = "inference.networking.k8s.io"
+	inferencePoolGroup = inferencepool.Group
 	// inferencePoolKind is the kind for InferencePool resources.
-	inferencePoolKind = "InferencePool"
+	inferencePoolKind = inferencepool.Kind
 )
 
 const (

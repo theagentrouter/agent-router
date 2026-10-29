@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	gie "sigs.k8s.io/gateway-api-inference-extension/conformance"
+	inferenceconfig "sigs.k8s.io/gateway-api-inference-extension/conformance/utils/config"
 	v1 "sigs.k8s.io/gateway-api/conformance/apis/v1"
 	"sigs.k8s.io/gateway-api/conformance/utils/config"
 	"sigs.k8s.io/gateway-api/conformance/utils/flags"
@@ -50,12 +51,15 @@ func TestGatewayAPIInferenceExtension(t *testing.T) {
 	defaultTimeoutConfig.HTTPRouteMustHaveCondition = 10 * time.Second
 	defaultTimeoutConfig.HTTPRouteMustNotHaveParents = 10 * time.Second
 	defaultTimeoutConfig.GatewayMustHaveCondition = 10 * time.Second
+	// GatewayWeightedAcrossTwoInferencePools warms up each pod with a request pinned to it, but
+	// Envoy still makes the 70/30 weighted pick across the pools first, so a request pinned to a
+	// secondary pod only succeeds ~30% of the time. Getting the required consecutive successes
+	// takes ~50 attempts on average, well past the Gateway API default of 30s, so use the
+	// inference extension's own default instead.
+	defaultTimeoutConfig.MaxTimeToConsistency = inferenceconfig.DefaultInferenceExtensionTimeoutConfig().MaxTimeToConsistency
 	config.SetupTimeoutConfig(&defaultTimeoutConfig)
 	options.TimeoutConfig = defaultTimeoutConfig
 	options.GatewayClassName = "inference-pool"
-	options.SkipTests = []string{
-		"GatewayWeightedAcrossTwoInferencePools", // TODO: fix me
-	}
 
 	// Setup cleanup to print report even if test fails
 	t.Cleanup(func() {

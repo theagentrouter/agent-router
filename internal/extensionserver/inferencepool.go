@@ -7,6 +7,7 @@ package extensionserver
 
 import (
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ import (
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	upstreamsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -31,6 +33,7 @@ import (
 	"k8s.io/utils/ptr"
 	gwaiev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 
+	"github.com/envoyproxy/ai-gateway/internal/inferencepool"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
@@ -69,7 +72,7 @@ func (s *Server) constructInferencePoolsFrom(extensionResources []*egextension.E
 		// Check if this is an InferencePool resource from the Gateway API Inference Extension.
 		// We only process InferencePool resources; other extension resources are ignored.
 		if unstructuredObj.GetAPIVersion() == "inference.networking.k8s.io/v1" &&
-			unstructuredObj.GetKind() == "InferencePool" {
+			unstructuredObj.GetKind() == inferencepool.Kind {
 			// Convert unstructured object to strongly-typed InferencePool.
 			// This allows us to access the InferencePool's spec fields safely.
 			var pool gwaiev1.InferencePool
@@ -85,23 +88,74 @@ func (s *Server) constructInferencePoolsFrom(extensionResources []*egextension.E
 	return inferencePools
 }
 
-// getInferencePoolByMetadata returns the InferencePool from the cluster metadata.
-func getInferencePoolByMetadata(meta *corev3.Metadata) *gwaiev1.InferencePool {
-	var metadata string
-	if meta != nil && meta.FilterMetadata != nil {
-		m, ok := meta.FilterMetadata[internalapi.InternalEndpointMetadataNamespace]
-		if ok && m.Fields != nil {
-			v, ok := m.Fields[internalMetadataInferencePoolKey]
-			if ok {
-				metadata = v.GetStringValue()
-			}
+// poolsWithoutEndpointPicker returns the namespace/name of each of pools that doesn't configure
+// spec.endpointPickerRef. The field is optional as of Gateway API Inference Extension v1.5.0, but
+// routing traffic without an endpoint picker isn't supported, so a rule referencing such a pool
+// is rejected (rejectInferencePoolRoute).
+//
+// TODO(inferencepool-no-epp): support InferencePools without an endpoint picker, e.g. by
+// load-balancing across the pool's selected Pods directly, instead of rejecting the rule.
+func poolsWithoutEndpointPicker(pools []*gwaiev1.InferencePool) []string {
+	var missing []string
+	for _, pool := range pools {
+		if pool.Spec.EndpointPickerRef == nil {
+			missing = append(missing, inferencePoolKey(pool.Namespace, pool.Name))
 		}
 	}
+	return missing
+}
 
-	result := strings.Split(metadata, "/")
-	if len(result) != 6 {
+// inferencePoolKey returns the namespace/name identity of an InferencePool.
+func inferencePoolKey(namespace, name string) string {
+	return namespace + "/" + name
+}
+
+// rejectInferencePoolRoute makes route answer every request with a 500 and drops its InferencePool
+// metadata, so no endpoint picker runs for it. It is used for rules this extension doesn't support,
+// failing only that rule rather than the whole translation of the gateway.
+func rejectInferencePoolRoute(route *routev3.Route) {
+	route.Action = &routev3.Route_DirectResponse{DirectResponse: &routev3.DirectResponseAction{Status: http.StatusInternalServerError}}
+	buildEPPMetadataForRoute(route, nil)
+}
+
+// getInferencePoolsByMetadata returns the InferencePools stored in the given cluster or route
+// metadata. A cluster references exactly one InferencePool, but a route references every
+// InferencePool of its rule, since a rule can be weighted across several of them.
+func getInferencePoolsByMetadata(meta *corev3.Metadata) []*gwaiev1.InferencePool {
+	if meta == nil || meta.FilterMetadata == nil {
 		return nil
 	}
+	m, ok := meta.FilterMetadata[internalapi.InternalEndpointMetadataNamespace]
+	if !ok || m.Fields == nil {
+		return nil
+	}
+	v, ok := m.Fields[internalMetadataInferencePoolKey]
+	if !ok {
+		return nil
+	}
+	list := v.GetListValue()
+	if list == nil {
+		return nil
+	}
+	pools := make([]*gwaiev1.InferencePool, 0, len(list.Values))
+	for _, item := range list.Values {
+		if pool := parseInferencePoolMetadataString(item.GetStringValue()); pool != nil {
+			pools = append(pools, pool)
+		}
+	}
+	return pools
+}
+
+// parseInferencePoolMetadataString parses a single InferencePool reference encoded by
+// buildEPPMetadata as "namespace/name/serviceName/port/bodyMode/allowModeOverride/appProtocol".
+// The appProtocol segment is last because its value can itself contain "/" (e.g.
+// "kubernetes.io/h2c"), and is empty when the pool doesn't set one.
+func parseInferencePoolMetadataString(metadata string) *gwaiev1.InferencePool {
+	result := strings.SplitN(metadata, "/", 7)
+	if len(result) != 7 {
+		return nil
+	}
+	appProtocol := gwaiev1.AppProtocol(result[6])
 	ns := result[0]
 	name := result[1]
 	serviceName := result[2]
@@ -121,6 +175,7 @@ func getInferencePoolByMetadata(meta *corev3.Metadata) *gwaiev1.InferencePool {
 			},
 		},
 		Spec: gwaiev1.InferencePoolSpec{
+			AppProtocol: appProtocol,
 			EndpointPickerRef: &gwaiev1.EndpointPickerRef{
 				Name: gwaiev1.ObjectName(serviceName),
 				Port: ptr.To(gwaiev1.Port{Number: gwaiev1.PortNumber(port)}),
@@ -129,27 +184,27 @@ func getInferencePoolByMetadata(meta *corev3.Metadata) *gwaiev1.InferencePool {
 	}
 }
 
-// buildMetadataForInferencePool adds InferencePool metadata to the cluster for reference by other components.
-// encoded as a string in the format: "namespace/name/serviceName/port/bodyMode/allowModeOverride".
-func buildEPPMetadataForCluster(cluster *clusterv3.Cluster, inferencePool *gwaiev1.InferencePool) {
+// buildEPPMetadataForCluster adds InferencePool metadata to the cluster for reference by other components.
+func buildEPPMetadataForCluster(cluster *clusterv3.Cluster, inferencePools []*gwaiev1.InferencePool) {
 	// Initialize cluster metadata structure if not present.
 	if cluster.Metadata == nil {
 		cluster.Metadata = &corev3.Metadata{}
 	}
-	buildEPPMetadata(cluster.Metadata, inferencePool)
+	buildEPPMetadata(cluster.Metadata, inferencePools)
 }
 
-// buildMetadataForInferencePool adds InferencePool metadata to the route for reference by other components.
-func buildEPPMetadataForRoute(route *routev3.Route, inferencePool *gwaiev1.InferencePool) {
+// buildEPPMetadataForRoute adds InferencePool metadata to the route for reference by other components.
+func buildEPPMetadataForRoute(route *routev3.Route, inferencePools []*gwaiev1.InferencePool) {
 	// Initialize route metadata structure if not present.
 	if route.Metadata == nil {
 		route.Metadata = &corev3.Metadata{}
 	}
-	buildEPPMetadata(route.Metadata, inferencePool)
+	buildEPPMetadata(route.Metadata, inferencePools)
 }
 
-// buildEPPMetadata adds InferencePool metadata to the given metadata structure.
-func buildEPPMetadata(metadata *corev3.Metadata, inferencePool *gwaiev1.InferencePool) {
+// buildEPPMetadata adds a reference to every given InferencePool to the given metadata structure,
+// one encoded string per pool, so getInferencePoolsByMetadata can recover the full set later.
+func buildEPPMetadata(metadata *corev3.Metadata, inferencePools []*gwaiev1.InferencePool) {
 	if metadata.FilterMetadata == nil {
 		metadata.FilterMetadata = make(map[string]*structpb.Struct)
 	}
@@ -164,31 +219,42 @@ func buildEPPMetadata(metadata *corev3.Metadata, inferencePool *gwaiev1.Inferenc
 		m.Fields = make(map[string]*structpb.Value)
 	}
 
-	// Read processing body mode from annotations, default to "duplex" (FULL_DUPLEX_STREAMED)
-	processingBodyMode := getProcessingBodyModeStringFromAnnotations(inferencePool)
-	// Read allow mode override from annotations, default to false
-	allowModeOverride := getAllowModeOverrideStringFromAnnotations(inferencePool)
-
-	// Store InferencePool reference as metadata for later retrieval.
-	// The reference includes all information needed to build EPP clusters and filters.
-	m.Fields[internalMetadataInferencePoolKey] = structpb.NewStringValue(
-		clusterRefInferencePool(
-			inferencePool.Namespace,
-			inferencePool.Name,
-			string(inferencePool.Spec.EndpointPickerRef.Name),
-			portForInferencePool(inferencePool),
-			processingBodyMode,
-			allowModeOverride,
-		),
-	)
+	// Store a reference to each InferencePool as metadata for later retrieval.
+	// Each reference includes all information needed to build EPP clusters and filters.
+	values := make([]*structpb.Value, 0, len(inferencePools))
+	for _, inferencePool := range inferencePools {
+		// Read processing body mode from annotations, default to "duplex" (FULL_DUPLEX_STREAMED)
+		processingBodyMode := getProcessingBodyModeStringFromAnnotations(inferencePool)
+		// Read allow mode override from annotations, default to false
+		allowModeOverride := getAllowModeOverrideStringFromAnnotations(inferencePool)
+		values = append(values, structpb.NewStringValue(
+			clusterRefInferencePool(
+				inferencePool.Namespace,
+				inferencePool.Name,
+				string(inferencePool.Spec.EndpointPickerRef.Name),
+				portForInferencePool(inferencePool),
+				processingBodyMode,
+				allowModeOverride,
+				string(inferencePool.Spec.AppProtocol),
+			),
+		))
+	}
+	m.Fields[internalMetadataInferencePoolKey] = structpb.NewListValue(&structpb.ListValue{Values: values})
 }
 
 // buildClustersForInferencePoolEndpointPickers builds and returns a "STRICT_DNS" cluster
-// for each InferencePool's endpoint picker service.
+// for each distinct InferencePool's endpoint picker service referenced by the given clusters,
+// deduplicated by cluster name, since two different clusters can reference the same pool.
 func buildClustersForInferencePoolEndpointPickers(clusters []*clusterv3.Cluster) ([]*clusterv3.Cluster, error) {
 	result := make([]*clusterv3.Cluster, 0, len(clusters))
+	seen := make(map[string]struct{})
 	for _, cluster := range clusters {
-		if pool := getInferencePoolByMetadata(cluster.Metadata); pool != nil {
+		for _, pool := range getInferencePoolsByMetadata(cluster.Metadata) {
+			name := clusterNameForInferencePool(pool)
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
 			c, err := buildExtProcClusterForInferencePoolEndpointPicker(pool)
 			if err != nil {
 				return nil, err
@@ -265,7 +331,7 @@ func buildExtProcClusterForInferencePoolEndpointPicker(pool *gwaiev1.InferencePo
 		return nil, fmt.Errorf("failed to build HTTP2 options for InferencePool cluster %s: %w", name, err)
 	}
 	c.TypedExtensionProtocolOptions = map[string]*anypb.Any{
-		"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": anyHTTP2,
+		httpProtocolOptionsKey: anyHTTP2,
 	}
 
 	return c, nil
@@ -300,7 +366,6 @@ func httpProtocolOptionsForInferencePoolBackend(pool *gwaiev1.InferencePool) (ma
 		return nil, fmt.Errorf("failed to build HTTP protocol options for InferencePool %s/%s: %w",
 			pool.Namespace, pool.Name, err)
 	}
-	const httpProtocolOptionsKey = "envoy.extensions.upstreams.http.v3.HttpProtocolOptions"
 	return map[string]*anypb.Any{httpProtocolOptionsKey: poAny}, nil
 }
 
@@ -395,12 +460,12 @@ func getProcessingBodyModeStringFromAnnotations(pool *gwaiev1.InferencePool) str
 		return "duplex" // default to duplex
 	}
 
-	mode, exists := annotations[processingBodyModeAnnotation]
-	if !exists {
-		return "duplex" // default to duplex
+	// Only encode the values getProcessingBodyModeFromAnnotations understands, so a raw annotation
+	// value can't add a "/" to the encoded metadata (see parseInferencePoolMetadataString).
+	if annotations[processingBodyModeAnnotation] == "buffered" {
+		return "buffered"
 	}
-
-	return mode
+	return "duplex"
 }
 
 // getAllowModeOverrideStringFromAnnotations reads the allow mode override setting from InferencePool annotations.
@@ -410,12 +475,12 @@ func getAllowModeOverrideStringFromAnnotations(pool *gwaiev1.InferencePool) stri
 		return "false" // default to false
 	}
 
-	value, exists := annotations[allowModeOverrideAnnotation]
-	if !exists {
-		return "false" // default to false
+	// Only encode the values getAllowModeOverrideFromAnnotations understands, so a raw annotation
+	// value can't add a "/" to the encoded metadata (see parseInferencePoolMetadataString).
+	if annotations[allowModeOverrideAnnotation] == "true" {
+		return "true"
 	}
-
-	return value
+	return "false"
 }
 
 // authorityForInferencePool formats the gRPC authority based on the given InferencePool.
@@ -484,4 +549,285 @@ func searchInferencePoolInFilterChain(pool *gwaiev1.InferencePool, chain []*http
 		}
 	}
 	return nil, -1, nil
+}
+
+// --- Weighted routing across multiple InferencePools ---
+//
+// A single HTTPRoute rule may list 2+ backendRefs, of which one or more are InferencePools (see
+// site/docs/capabilities/inference/httproute-inferencepool.md's "Weighted Routing Across Multiple
+// InferencePools" section for the user-facing behavior). Envoy Gateway translates such a rule into
+// a WeightedClusters route action with one cluster per backendRef, carrying the backendRef weights,
+// and drops the zero-weight backendRefs (envoyproxy/gateway#10270). Its extension hooks see:
+//   - PostClusterModify, once per InferencePool cluster, with only that cluster's own pool, so each
+//     cluster is set up for its own pool (handleInferencePoolCluster). Clusters of other backend
+//     kinds, such as a Service, don't get the hook at all.
+//   - PostRouteModify, once for the route, with every pool of the rule, so the route metadata names
+//     all of them and patchVirtualHostWithInferencePool leaves every one of their EPP filters
+//     enabled on the route.
+//
+// Left as is, every pool's endpoint picker would run on every request of the route, with whichever
+// runs last deciding the endpoint regardless of the cluster Envoy picked. setInferencePoolClusterWeightFilters
+// disables, on each ClusterWeight, the EPP filter of every pool of the route other than the
+// cluster's own, so only the picked pool's endpoint picker scores and forwards the request. Envoy
+// resolves a ClusterWeight's TypedPerFilterConfig as more specific than the Route's once it has
+// picked a weighted cluster. The ClusterWeight's own pool gets no entry, since ExtProcPerRoute's
+// "disabled" oneof is proto-constrained to only ever be true: there is no "force-enabled" override.
+
+// setInferencePoolClusterWeightFilters disables, on every ClusterWeight of every route whose
+// metadata names InferencePools, the EPP ext_proc filter of each of those pools that the
+// ClusterWeight's cluster doesn't belong to. The pool of a cluster is read from the metadata
+// PostClusterModify stamped on it (buildEPPMetadataForCluster); a cluster without one, such as a
+// Service's or Envoy Gateway's "invalid-backend-cluster", gets every pool's filter disabled.
+func setInferencePoolClusterWeightFilters(routeConfigs []*routev3.RouteConfiguration, clusters []*clusterv3.Cluster) {
+	clusterPoolFilters := make(map[string]map[string]struct{})
+	for _, c := range clusters {
+		for _, pool := range getInferencePoolsByMetadata(c.Metadata) {
+			if clusterPoolFilters[c.Name] == nil {
+				clusterPoolFilters[c.Name] = make(map[string]struct{})
+			}
+			clusterPoolFilters[c.Name][httpFilterNameForInferencePool(pool)] = struct{}{}
+		}
+	}
+
+	for _, rc := range routeConfigs {
+		for _, vh := range rc.VirtualHosts {
+			for _, route := range vh.Routes {
+				wc := route.GetRoute().GetWeightedClusters()
+				if wc == nil {
+					continue
+				}
+				routePools := getInferencePoolsByMetadata(route.Metadata)
+				if len(routePools) == 0 {
+					continue
+				}
+				for _, cw := range wc.Clusters {
+					own := clusterPoolFilters[cw.Name]
+					for _, pool := range routePools {
+						filterName := httpFilterNameForInferencePool(pool)
+						if _, ok := own[filterName]; ok {
+							// This ClusterWeight's own pool: leave its filter enabled by omitting an entry.
+							continue
+						}
+						if cw.TypedPerFilterConfig == nil {
+							cw.TypedPerFilterConfig = make(map[string]*anypb.Any, len(routePools))
+						}
+						cw.TypedPerFilterConfig[filterName] = disabledExtProcPerRoute()
+					}
+				}
+			}
+		}
+	}
+}
+
+// maybeModifyListenerAndRoutes modifies listeners and routes to support InferencePool backends.
+// This function performs the following operations:
+// 1. Identifies listeners and routes that use InferencePool backends
+// 2. Adds endpoint picker (EPP) external processor filters to relevant listeners
+// 3. Configures per-route filters to disable EPP processing for non-InferencePool routes
+// This ensures that only routes targeting InferencePool backends go through the endpoint picker.
+func (s *Server) maybeModifyListenerAndRoutes(listeners []*listenerv3.Listener, routes []*routev3.RouteConfiguration) error {
+	listenerNameToRouteNames := make(map[string][]string)
+	listenerNameToListener := make(map[string]*listenerv3.Listener)
+	for _, listener := range listeners {
+		// Skips two special listeners used for stats and readiness probes created by Envoy Gateway.
+		// https://github.com/envoyproxy/gateway/blob/e7c0e3430f20fd104454dc62f51b5352cde3b26a/internal/xds/bootstrap/bootstrap.yaml.tpl#L89
+		// https://github.com/envoyproxy/gateway/blob/e7c0e3430f20fd104454dc62f51b5352cde3b26a/internal/xds/translator/listener_ready.go#L76
+		//
+		// This assumes that EG keeps the same naming convention, but even if not, the latest EG e2e test will catch any issue.
+		//
+		// The "normal" user-created listeners will have "${gateway obj namespace}-${gateway obj name}-..." format.
+		if strings.HasPrefix(listener.Name, "envoy-gateway-proxy-stats-") || strings.HasPrefix(listener.Name, "envoy-gateway-proxy-ready-") {
+			continue
+		}
+		listenerNameToRouteNames[listener.Name] = findListenerRouteConfigs(listener)
+		listenerNameToListener[listener.Name] = listener
+	}
+
+	// inferencePoolRoutes builds a matrix of route configs and the inference pools they use.
+	routeNameToRoute := make(map[string]*routev3.RouteConfiguration)
+	// The pools of each route configuration, in route order, so the listener's EPP filters come
+	// out in the same order on every translation and don't cause needless listener updates.
+	routeNameToInferencePools := make(map[string][][]*gwaiev1.InferencePool)
+	for _, routeCfg := range routes {
+		routeNameToRoute[routeCfg.Name] = routeCfg
+		for _, vh := range routeCfg.VirtualHosts {
+			for _, route := range vh.Routes {
+				if pools := getInferencePoolsByMetadata(route.Metadata); len(pools) > 0 {
+					routeNameToInferencePools[routeCfg.Name] = append(routeNameToInferencePools[routeCfg.Name], pools)
+				}
+			}
+		}
+	}
+
+	// listenerToInferencePools builds a matrix of listeners and the inference pools they use.
+	// routeNameToInferencePools has an entry per route match, so a pool reached by
+	// several matches appears several times. A pool needs exactly one ext proc filter per
+	// listener, so deduplicate here.
+	listenerToInferencePools := make(map[string][]*gwaiev1.InferencePool)
+	for listener, routeCfgNames := range listenerNameToRouteNames {
+		seen := make(map[string]struct{})
+		for _, name := range routeCfgNames {
+			if routeNameToRoute[name] == nil {
+				continue
+			}
+			for _, pools := range routeNameToInferencePools[name] {
+				for _, pool := range pools {
+					key := httpFilterNameForInferencePool(pool)
+					if _, ok := seen[key]; ok {
+						continue
+					}
+					seen[key] = struct{}{}
+					listenerToInferencePools[listener] = append(listenerToInferencePools[listener], pool)
+				}
+			}
+		}
+	}
+
+	// patch the listeners, the route configs and the virtual hosts with inference pool filters.
+	for listener, pools := range listenerToInferencePools {
+		s.log.Info("patching listener with inference pool filters", "listener", listener)
+		s.patchListenerWithInferencePoolFilters(listenerNameToListener[listener], pools)
+		routeCfgNames := listenerNameToRouteNames[listener]
+		for _, routeCfgName := range routeCfgNames {
+			routeCfg := routeNameToRoute[routeCfgName]
+			if routeCfg == nil {
+				continue
+			}
+			for _, vh := range routeCfg.VirtualHosts {
+				s.log.Info("patching virtual host with inference pool filters", "listener", listener, "virtual_host", vh.Name)
+				s.patchVirtualHostWithInferencePool(vh, pools)
+			}
+		}
+	}
+
+	for _, ln := range listeners {
+		var enabled bool
+		for _, name := range listenerNameToRouteNames[ln.Name] {
+			routeCfg := routeNameToRoute[name]
+			if routeCfg == nil {
+				s.log.Info("skipping patching of non-existent route config", "route_config", name)
+				continue
+			}
+			_enabled, err := s.enableRouterLevelAIGatewayExtProcOnRoute(routeCfg)
+			if err != nil {
+				return fmt.Errorf("failed to enable router level AI Gateway extproc on route config %s: %w", name, err)
+			}
+			enabled = enabled || _enabled
+		}
+		if enabled {
+			s.log.Info("inserting AI Gateway extproc filter into listener", "listener", ln.Name)
+			if err := s.insertRouterLevelAIGatewayExtProc(ln); err != nil {
+				return fmt.Errorf("failed to insert AI Gateway extproc filter into listener %s: %w", ln.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// patchListenerWithInferencePoolFilters adds the necessary HTTP filters to the listener to support InferencePool backends.
+func (s *Server) patchListenerWithInferencePoolFilters(listener *listenerv3.Listener, inferencePools []*gwaiev1.InferencePool) {
+	// First, get the filter chains from the listener.
+	filterChains := listener.GetFilterChains()
+	defaultFC := listener.DefaultFilterChain
+	if defaultFC != nil {
+		filterChains = append(filterChains, defaultFC)
+	}
+	// Go over all of the chains, and add the endpoint picker external processor filters.
+	for _, currChain := range filterChains {
+		httpConManager, hcmIndex, err := findHCM(currChain)
+		if err != nil {
+			s.log.Error(err, "failed to find an HCM in the current chain")
+			continue
+		}
+		var poolFilters []*httpconnectionmanagerv3.HttpFilter
+		// poolFilters is spliced into httpConManager.HttpFilters only after this loop, so the
+		// search below cannot see what the loop already added. Track those names separately.
+		added := make(map[string]struct{})
+		for _, pool := range inferencePools {
+			filterName := httpFilterNameForInferencePool(pool)
+			if _, ok := added[filterName]; ok {
+				continue
+			}
+			_, baIndex, searchErr := searchInferencePoolInFilterChain(pool, httpConManager.HttpFilters)
+			if searchErr != nil {
+				s.log.Error(searchErr, "failed to find an inference pool ext proc filter")
+				continue
+			}
+			if baIndex == -1 {
+				s.log.Info("adding inference pool ext proc filter", "pool", pool.Name)
+				var eppExtProc *httpconnectionmanagerv3.HttpFilter
+				eppExtProc, err = buildInferencePoolHTTPFilter(pool)
+				if err != nil {
+					s.log.Error(err, "failed to build inference pool ext proc filter", "pool", pool.Name)
+					continue
+				}
+				added[filterName] = struct{}{}
+				poolFilters = append(poolFilters, eppExtProc)
+			}
+		}
+		if len(poolFilters) != 0 {
+			length := len(httpConManager.HttpFilters)
+			router := httpConManager.HttpFilters[length-1]
+			httpConManager.HttpFilters = httpConManager.HttpFilters[:length-1]
+			httpConManager.HttpFilters = append(httpConManager.HttpFilters, poolFilters...)
+			httpConManager.HttpFilters = append(httpConManager.HttpFilters, router)
+		}
+
+		// Write the updated HCM back to the filter chain.
+		hcmAny, err := toAny(httpConManager)
+		if err != nil {
+			s.log.Error(err, "failed to marshal updated HCM to Any")
+			continue
+		}
+		currChain.Filters[hcmIndex].ConfigType = &listenerv3.Filter_TypedConfig{TypedConfig: hcmAny}
+	}
+}
+
+// disabledExtProcPerRouteValue is the marshaled ExtProcPerRoute that disables an ext_proc filter.
+// It never changes, so it is marshaled once rather than for every route of every translation.
+var disabledExtProcPerRouteValue = func() []byte {
+	b, err := proto.Marshal(&extprocv3.ExtProcPerRoute{Override: &extprocv3.ExtProcPerRoute_Disabled{Disabled: true}})
+	if err != nil {
+		panic(fmt.Sprintf("failed to marshal disabled ExtProcPerRoute: %v", err))
+	}
+	return b
+}()
+
+// disabledExtProcPerRoute returns a new Any holding the ExtProcPerRoute that disables an ext_proc
+// filter. Each call returns its own Any, so no proto is shared across translations.
+func disabledExtProcPerRoute() *anypb.Any {
+	return &anypb.Any{
+		TypeUrl: "type.googleapis.com/" + string((&extprocv3.ExtProcPerRoute{}).ProtoReflect().Descriptor().FullName()),
+		Value:   disabledExtProcPerRouteValue,
+	}
+}
+
+// patchVirtualHostWithInferencePool adds the necessary per-route configuration to disable.
+func (s *Server) patchVirtualHostWithInferencePool(vh *routev3.VirtualHost, inferencePools []*gwaiev1.InferencePool) {
+	inferenceMatrix := make(map[string]*gwaiev1.InferencePool)
+	for _, pool := range inferencePools {
+		inferenceMatrix[httpFilterNameForInferencePool(pool)] = pool
+	}
+	for _, route := range vh.Routes {
+		var overrideAny *anypb.Any
+		routePools := getInferencePoolsByMetadata(route.Metadata)
+		routePoolKeys := make(map[string]struct{}, len(routePools))
+		for _, pool := range routePools {
+			routePoolKeys[httpFilterNameForInferencePool(pool)] = struct{}{}
+		}
+		for key, pool := range inferenceMatrix {
+			if _, ok := routePoolKeys[key]; ok {
+				// This route is one of the pools using this filter: leave it enabled.
+				continue
+			}
+			s.log.Info("disabling inference pool filter", "route", route.Name, "filter", key, "pool", pool.Name)
+			if route.TypedPerFilterConfig == nil {
+				route.TypedPerFilterConfig = make(map[string]*anypb.Any)
+			}
+			if overrideAny == nil {
+				overrideAny = disabledExtProcPerRoute()
+			}
+			route.TypedPerFilterConfig[key] = overrideAny
+		}
+	}
 }

@@ -17,6 +17,12 @@
 #   -f ../../manifests/envoy-gateway-values.yaml \
 #   -f ../token_ratelimit/envoy-gateway-values-addon.yaml \
 #   -f envoy-gateway-values-addon.yaml
+global:
+  images:
+    envoyGateway:
+      # TODO: remove this once there's a new release from upstream, xref: https://github.com/envoyproxy/gateway/pull/10328
+      image: ghcr.io/zirain/gateway-dev:zirain-dev
+      pullPolicy: IfNotPresent
 
 config:
   envoyGateway:
