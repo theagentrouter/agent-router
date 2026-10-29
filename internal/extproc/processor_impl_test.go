@@ -136,19 +136,17 @@ func Test_chatCompletionProcessorRouterFilter_ProcessRequestBody(t *testing.T) {
 		require.NotNil(t, re)
 		require.NotNil(t, re.RequestBody)
 		setHeaders := re.RequestBody.GetResponse().GetHeaderMutation().SetHeaders
-		require.Len(t, setHeaders, 3)
+		require.Len(t, setHeaders, 2)
 		require.Equal(t, internalapi.ModelNameHeaderKeyDefault, setHeaders[0].Header.Key)
 		require.Equal(t, "some-model", string(setHeaders[0].Header.RawValue))
 		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, setHeaders[0].AppendAction)
 		require.Equal(t, internalapi.OriginalPathHeader, setHeaders[1].Header.Key)
 		require.Equal(t, "/foo", string(setHeaders[1].Header.RawValue))
-		require.Equal(t, internalapi.EnvoyOriginalPathHeader, setHeaders[2].Header.Key)
-		require.Equal(t, "/foo", string(setHeaders[2].Header.RawValue))
 	})
 
-	t.Run("original path headers overwrite pre-existing values", func(t *testing.T) {
+	t.Run("original path header overwrites pre-existing value and reserved header is not set", func(t *testing.T) {
 		// A client-supplied or pre-existing original-path header must not shadow the
-		// gateway's own value: extproc is the authoritative writer of these headers.
+		// gateway's own value: extproc is the authoritative writer of this header.
 		headers := map[string]string{
 			":path":                             "/foo",
 			internalapi.OriginalPathHeader:      "/client-supplied",
@@ -165,15 +163,14 @@ func Test_chatCompletionProcessorRouterFilter_ProcessRequestBody(t *testing.T) {
 		re, ok := resp.Response.(*extprocv3.ProcessingResponse_RequestBody)
 		require.True(t, ok)
 		setHeaders := re.RequestBody.GetResponse().GetHeaderMutation().SetHeaders
-		require.Len(t, setHeaders, 3)
+		require.Len(t, setHeaders, 2)
 		require.Equal(t, internalapi.OriginalPathHeader, setHeaders[1].Header.Key)
 		require.Equal(t, "/foo", string(setHeaders[1].Header.RawValue))
 		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, setHeaders[1].AppendAction)
-		require.Equal(t, internalapi.EnvoyOriginalPathHeader, setHeaders[2].Header.Key)
-		require.Equal(t, "/foo", string(setHeaders[2].Header.RawValue))
-		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, setHeaders[2].AppendAction)
-		// The in-place request header map is updated too, not just the mutation.
-		require.Equal(t, "/foo", headers[internalapi.EnvoyOriginalPathHeader])
+		for _, h := range setHeaders {
+			require.NotEqual(t, internalapi.EnvoyOriginalPathHeader, h.Header.Key,
+				"extproc must not set the reserved x-envoy-original-path header")
+		}
 	})
 
 	t.Run("model header overwrites pre-existing value", func(t *testing.T) {

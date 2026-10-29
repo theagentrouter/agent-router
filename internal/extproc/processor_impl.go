@@ -296,7 +296,7 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		Header:       &corev3.HeaderValue{Key: internalapi.ModelNameHeaderKeyDefault, RawValue: []byte(originalModel)},
 	})
 	originalPath := r.requestHeaders[":path"]
-	// These original-path headers are owned by extproc, so set them unconditionally.
+	// This original-path header is owned by extproc, so set it unconditionally.
 	// A client-supplied or pre-existing value must not shadow the gateway's own value,
 	// as downstream logic (e.g. processor lookup on retry) keys off it.
 	r.requestHeaders[originalPathHeader] = originalPath
@@ -304,11 +304,6 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		// Overwrite unconditionally so a client-supplied or pre-existing value is replaced, not appended.
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		Header:       &corev3.HeaderValue{Key: originalPathHeader, RawValue: []byte(originalPath)},
-	})
-	r.requestHeaders[internalapi.EnvoyOriginalPathHeader] = originalPath
-	additionalHeaders = append(additionalHeaders, &corev3.HeaderValueOption{
-		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		Header:       &corev3.HeaderValue{Key: internalapi.EnvoyOriginalPathHeader, RawValue: []byte(originalPath)},
 	})
 	r.originalModel = originalModel
 	r.originalRequestBody = body
