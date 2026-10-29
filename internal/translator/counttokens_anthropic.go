@@ -8,7 +8,9 @@ package translator
 import (
 	"fmt"
 	"io"
+	"path"
 	"strconv"
+	"strings"
 
 	"github.com/tidwall/sjson"
 
@@ -20,12 +22,18 @@ import (
 )
 
 // NewCountTokensToAnthropicTranslator creates a passthrough translator for Anthropic count_tokens.
-func NewCountTokensToAnthropicTranslator(modelNameOverride internalapi.ModelNameOverride) AnthropicCountTokensTranslator {
-	return &countTokensToAnthropicTranslator{modelNameOverride: modelNameOverride}
+// The prefix defaults to "v1" via schemaToFilterAPI, producing "/v1/messages/count_tokens".
+func NewCountTokensToAnthropicTranslator(prefix string, modelNameOverride internalapi.ModelNameOverride) AnthropicCountTokensTranslator {
+	return &countTokensToAnthropicTranslator{
+		modelNameOverride: modelNameOverride,
+		path:              path.Join("/", prefix, "messages", "count_tokens"),
+	}
 }
 
 type countTokensToAnthropicTranslator struct {
 	modelNameOverride internalapi.ModelNameOverride
+	path              string
+	rawQuery          string
 }
 
 // RequestBody implements [AnthropicCountTokensTranslator.RequestBody].
@@ -43,11 +51,21 @@ func (t *countTokensToAnthropicTranslator) RequestBody(original []byte, _ *anthr
 		newBody = original
 	}
 
-	newHeaders = []internalapi.Header{{pathHeaderName, anthropicCountTokensPath}}
+	newPath := t.path
+	if t.rawQuery != "" {
+		newPath += "?" + t.rawQuery
+	}
+	newHeaders = []internalapi.Header{{pathHeaderName, newPath}}
 	if len(newBody) > 0 {
 		newHeaders = append(newHeaders, internalapi.Header{contentLengthHeaderName, strconv.Itoa(len(newBody))})
 	}
 	return
+}
+
+// SetRequestHeaders implements [RequestHeadersSetter].
+// It keeps the query string of the original request so that it is forwarded with the rewritten path.
+func (t *countTokensToAnthropicTranslator) SetRequestHeaders(headers map[string]string) {
+	_, t.rawQuery, _ = strings.Cut(headers[internalapi.OriginalPathHeader], "?")
 }
 
 // ResponseHeaders implements [AnthropicCountTokensTranslator.ResponseHeaders].

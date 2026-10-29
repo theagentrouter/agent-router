@@ -555,7 +555,7 @@ func (MessagesCountTokensEndpointSpec) GetTranslator(schema filterapi.VersionedA
 	case filterapi.APISchemaAWSAnthropic, filterapi.APISchemaAWSBedrock:
 		return translator.NewCountTokensToAWSAnthropicTranslator(schema.Version, modelNameOverride), nil
 	case filterapi.APISchemaAnthropic:
-		return translator.NewCountTokensToAnthropicTranslator(modelNameOverride), nil
+		return translator.NewCountTokensToAnthropicTranslator(schema.AnthropicPrefix(), modelNameOverride), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported API schema for /v1/messages/count_tokens: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}

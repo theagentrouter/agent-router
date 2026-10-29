@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/ptr"
 
+	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
@@ -1981,4 +1982,26 @@ func TestMessagesCountTokensEndpointSpec_GetTranslator(t *testing.T) {
 
 	_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
 	require.ErrorContains(t, err, "unsupported")
+}
+
+func TestMessagesCountTokensEndpointSpec_GetTranslator_AnthropicPrefix(t *testing.T) {
+	spec := MessagesCountTokensEndpointSpec{}
+	for _, tc := range []struct {
+		name    string
+		prefix  string
+		expPath string
+	}{
+		{name: "default prefix", prefix: "", expPath: "/v1/messages/count_tokens"},
+		{name: "custom prefix", prefix: "gateway/v1", expPath: "/gateway/v1/messages/count_tokens"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAnthropic, Prefix: tc.prefix}, "")
+			require.NoError(t, err)
+			headers, _, err := tr.RequestBody([]byte(`{"model":"claude-opus-4-6"}`), &anthropic.CountTokensRequest{Model: "claude-opus-4-6"}, false)
+			require.NoError(t, err)
+			require.NotEmpty(t, headers)
+			require.Equal(t, ":path", headers[0].Key())
+			require.Equal(t, tc.expPath, headers[0].Value())
+		})
+	}
 }
