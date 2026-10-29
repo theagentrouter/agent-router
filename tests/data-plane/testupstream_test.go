@@ -1737,12 +1737,13 @@ const (
 }`
 )
 
-// TestStreamingUsageInclusionWithCosts tests that streaming responses include usage
-// when LLM request costs are configured (both global and route-scoped).
+// TestStreamingUsageInclusionWithCosts tests that streaming /v1/chat/completions and /v1/completions
+// responses include usage when LLM request costs are configured (both global and route-scoped).
 func TestStreamingUsageInclusionWithCosts(t *testing.T) {
 	// Test cases that verify usage is forced to be included when costs are configured
 	type testCase struct {
 		name            string
+		path            string
 		backend         string
 		requestBody     string
 		expRequestBody  string
@@ -1753,6 +1754,7 @@ func TestStreamingUsageInclusionWithCosts(t *testing.T) {
 	testCases := []testCase{
 		{
 			name:           "streaming - forced to include usage",
+			path:           "/v1/chat/completions",
 			backend:        "openai",
 			requestBody:    `{"model":"something","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true, "stream_options": {"include_usage": false}}`,
 			expRequestBody: `{"model":"something","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true,"stream_options":{"include_usage": true}}`,
@@ -1771,6 +1773,7 @@ data: [DONE]
 		},
 		{
 			name:           "streaming - forced to include usage without stream_options",
+			path:           "/v1/chat/completions",
 			backend:        "openai",
 			requestBody:    `{"model":"something","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true}`,
 			expRequestBody: `{"model":"something","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true,"stream_options":{"include_usage":true}}`,
@@ -1789,6 +1792,7 @@ data: [DONE]
 		},
 		{
 			name:           "streaming - model override forced to include usage",
+			path:           "/v1/chat/completions",
 			backend:        "modelname-override",
 			requestBody:    `{"model":"requested-model","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true, "stream_options": {"include_usage": false}}`,
 			expRequestBody: `{"model":"override-model","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true,"stream_options":{"include_usage": true}}`,
@@ -1807,6 +1811,7 @@ data: [DONE]
 		},
 		{
 			name:           "streaming - model override without stream_options forced to include usage",
+			path:           "/v1/chat/completions",
 			backend:        "modelname-override",
 			requestBody:    `{"model":"requested-model","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true}`,
 			expRequestBody: `{"model":"override-model","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true,"stream_options":{"include_usage":true}}`,
@@ -1818,6 +1823,82 @@ data: [DONE]
 			expResponseBody: `data: {"id":"chatcmpl-foo","object":"chat.completion.chunk","created":1731618222,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0ba0d124f1","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
 
 data: {"id":"chatcmpl-foo","object":"chat.completion.chunk","created":1731618222,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0ba0d124f1","choices":[],"usage":{"prompt_tokens":13,"completion_tokens":12,"total_tokens":25,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}}
+
+data: [DONE]
+
+`,
+		},
+		{
+			name:           "completions streaming - forced to include usage",
+			path:           "/v1/completions",
+			backend:        "openai",
+			requestBody:    `{"model":"something","prompt":"Say this is a test", "stream": true, "stream_options": {"include_usage": false}}`,
+			expRequestBody: `{"model":"something","prompt":"Say this is a test", "stream": true,"stream_options":{"include_usage": true}}`,
+			responseBody: `
+{"id":"cmpl-foo","object":"text_completion","created":1759118173,"choices":[{"text":" This is a test.","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"babbage:2023-07-21-v2","usage":null}
+{"id":"cmpl-foo","object":"text_completion","created":1759118173,"model":"babbage:2023-07-21-v2","usage":{"prompt_tokens":5,"completion_tokens":5,"total_tokens":10},"choices":[]}
+[DONE]
+`,
+			expResponseBody: `data: {"id":"cmpl-foo","object":"text_completion","created":1759118173,"choices":[{"text":" This is a test.","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"babbage:2023-07-21-v2","usage":null}
+
+data: {"id":"cmpl-foo","object":"text_completion","created":1759118173,"model":"babbage:2023-07-21-v2","usage":{"prompt_tokens":5,"completion_tokens":5,"total_tokens":10},"choices":[]}
+
+data: [DONE]
+
+`,
+		},
+		{
+			name:           "completions streaming - forced to include usage without stream_options",
+			path:           "/v1/completions",
+			backend:        "openai",
+			requestBody:    `{"model":"something","prompt":"Say this is a test", "stream": true}`,
+			expRequestBody: `{"model":"something","prompt":"Say this is a test", "stream": true,"stream_options":{"include_usage":true}}`,
+			responseBody: `
+{"id":"cmpl-foo","object":"text_completion","created":1759118173,"choices":[{"text":" This is a test.","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"babbage:2023-07-21-v2","usage":null}
+{"id":"cmpl-foo","object":"text_completion","created":1759118173,"model":"babbage:2023-07-21-v2","usage":{"prompt_tokens":5,"completion_tokens":5,"total_tokens":10},"choices":[]}
+[DONE]
+`,
+			expResponseBody: `data: {"id":"cmpl-foo","object":"text_completion","created":1759118173,"choices":[{"text":" This is a test.","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"babbage:2023-07-21-v2","usage":null}
+
+data: {"id":"cmpl-foo","object":"text_completion","created":1759118173,"model":"babbage:2023-07-21-v2","usage":{"prompt_tokens":5,"completion_tokens":5,"total_tokens":10},"choices":[]}
+
+data: [DONE]
+
+`,
+		},
+		{
+			name:           "completions streaming - model override forced to include usage",
+			path:           "/v1/completions",
+			backend:        "modelname-override",
+			requestBody:    `{"model":"requested-model","prompt":"Say this is a test", "stream": true, "stream_options": {"include_usage": false}}`,
+			expRequestBody: `{"model":"override-model","prompt":"Say this is a test", "stream": true,"stream_options":{"include_usage": true}}`,
+			responseBody: `
+{"id":"cmpl-foo","object":"text_completion","created":1759118173,"choices":[{"text":" This is a test.","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"babbage:2023-07-21-v2","usage":null}
+{"id":"cmpl-foo","object":"text_completion","created":1759118173,"model":"babbage:2023-07-21-v2","usage":{"prompt_tokens":5,"completion_tokens":5,"total_tokens":10},"choices":[]}
+[DONE]
+`,
+			expResponseBody: `data: {"id":"cmpl-foo","object":"text_completion","created":1759118173,"choices":[{"text":" This is a test.","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"babbage:2023-07-21-v2","usage":null}
+
+data: {"id":"cmpl-foo","object":"text_completion","created":1759118173,"model":"babbage:2023-07-21-v2","usage":{"prompt_tokens":5,"completion_tokens":5,"total_tokens":10},"choices":[]}
+
+data: [DONE]
+
+`,
+		},
+		{
+			name:           "completions streaming - model override without stream_options forced to include usage",
+			path:           "/v1/completions",
+			backend:        "modelname-override",
+			requestBody:    `{"model":"requested-model","prompt":"Say this is a test", "stream": true}`,
+			expRequestBody: `{"model":"override-model","prompt":"Say this is a test", "stream": true,"stream_options":{"include_usage":true}}`,
+			responseBody: `
+{"id":"cmpl-foo","object":"text_completion","created":1759118173,"choices":[{"text":" This is a test.","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"babbage:2023-07-21-v2","usage":null}
+{"id":"cmpl-foo","object":"text_completion","created":1759118173,"model":"babbage:2023-07-21-v2","usage":{"prompt_tokens":5,"completion_tokens":5,"total_tokens":10},"choices":[]}
+[DONE]
+`,
+			expResponseBody: `data: {"id":"cmpl-foo","object":"text_completion","created":1759118173,"choices":[{"text":" This is a test.","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"babbage:2023-07-21-v2","usage":null}
+
+data: {"id":"cmpl-foo","object":"text_completion","created":1759118173,"model":"babbage:2023-07-21-v2","usage":{"prompt_tokens":5,"completion_tokens":5,"total_tokens":10},"choices":[]}
 
 data: [DONE]
 
@@ -1866,11 +1947,11 @@ data: [DONE]
 			for _, tc := range testCases {
 				t.Run(tc.name, func(t *testing.T) {
 					listenerAddress := fmt.Sprintf("http://localhost:%d", listenerPort)
-					req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, listenerAddress+"/v1/chat/completions", strings.NewReader(tc.requestBody))
+					req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, listenerAddress+tc.path, strings.NewReader(tc.requestBody))
 					require.NoError(t, err)
 					req.Header.Set("x-test-backend", tc.backend)
 					req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(tc.responseBody)))
-					req.Header.Set(testupstreamlib.ExpectedPathHeaderKey, base64.StdEncoding.EncodeToString([]byte("/v1/chat/completions")))
+					req.Header.Set(testupstreamlib.ExpectedPathHeaderKey, base64.StdEncoding.EncodeToString([]byte(tc.path)))
 					req.Header.Set(testupstreamlib.ResponseTypeKey, "sse")
 
 					if tc.expRequestBody != "" {
