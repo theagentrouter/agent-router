@@ -80,6 +80,10 @@ func anthropicThinkingToOpenAI(t *anthropic.Thinking) *openai.ThinkingUnion {
 		return &openai.ThinkingUnion{OfAdaptive: &openai.ThinkingAdaptive{
 			Type: "adaptive",
 		}}
+	case t.BetweenTools != nil:
+		return &openai.ThinkingUnion{OfBetweenTools: &openai.ThinkingBetweenTools{
+			Type: "between_tools",
+		}}
 	default:
 		return nil
 	}

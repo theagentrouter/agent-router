@@ -622,6 +622,9 @@ func getThinkingConfigParamUnion(tu *openai.ThinkingUnion) *anthropic.ThinkingCo
 			Type:    constant.Adaptive(tu.OfAdaptive.Type),
 			Display: anthropic.ThinkingConfigAdaptiveDisplay(tu.OfAdaptive.Display),
 		}
+	case tu.OfBetweenTools != nil:
+		// anthropic-sdk-go has no between_tools variant, so serialize it through an override.
+		*result = anthropicParam.Override[anthropic.ThinkingConfigParamUnion](map[string]any{"type": "between_tools"})
 	}
 
 	return result

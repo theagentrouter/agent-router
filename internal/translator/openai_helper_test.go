@@ -1041,6 +1041,19 @@ func TestBuildOpenAIChatCompletionRequest_ThinkingConfig(t *testing.T) {
 		assert.Equal(t, "adaptive", req.Thinking.OfAdaptive.Type)
 	})
 
+	t.Run("thinking between_tools", func(t *testing.T) {
+		body := &anthropic.MessagesRequest{
+			Model:     "claude-3",
+			MaxTokens: 100,
+			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
+			Thinking:  &anthropic.Thinking{BetweenTools: &anthropic.ThinkingBetweenTools{Type: "between_tools"}},
+		}
+		req := buildOpenAIChatCompletionRequest(body, "")
+		require.NotNil(t, req.Thinking)
+		require.NotNil(t, req.Thinking.OfBetweenTools)
+		assert.Equal(t, "between_tools", req.Thinking.OfBetweenTools.Type)
+	})
+
 	t.Run("no thinking config", func(t *testing.T) {
 		body := &anthropic.MessagesRequest{
 			Model:     "claude-3",

@@ -929,9 +929,10 @@ type WebSearchLocation struct {
 
 // ThinkingConfig contains thinking config for reasoning models
 type ThinkingUnion struct {
-	OfEnabled  *ThinkingEnabled  `json:",omitzero,inline"`
-	OfDisabled *ThinkingDisabled `json:",omitzero,inline"`
-	OfAdaptive *ThinkingAdaptive `json:",omitzero,inline"`
+	OfEnabled      *ThinkingEnabled      `json:",omitzero,inline"`
+	OfDisabled     *ThinkingDisabled     `json:",omitzero,inline"`
+	OfAdaptive     *ThinkingAdaptive     `json:",omitzero,inline"`
+	OfBetweenTools *ThinkingBetweenTools `json:",omitzero,inline"`
 }
 
 type ThinkingEnabled struct {
@@ -960,6 +961,13 @@ type ThinkingAdaptive struct {
 	Display string `json:"display,omitempty"`
 }
 
+// ThinkingBetweenTools turns off up-front thinking while keeping progress updates between tool calls.
+// It takes no other field. Only Claude Sonnet 5.5 accepts it, at effort high or below.
+// https://platform.claude.com/docs/en/build-with-claude/thinking
+type ThinkingBetweenTools struct {
+	Type string `json:"type"`
+}
+
 // MarshalJSON implements the json.Marshaler interface for ThinkingUnion.
 func (t *ThinkingUnion) MarshalJSON() ([]byte, error) {
 	if t.OfEnabled != nil {
@@ -970,6 +978,9 @@ func (t *ThinkingUnion) MarshalJSON() ([]byte, error) {
 	}
 	if t.OfAdaptive != nil {
 		return json.Marshal(t.OfAdaptive)
+	}
+	if t.OfBetweenTools != nil {
+		return json.Marshal(t.OfBetweenTools)
 	}
 	// If both are nil, return an empty object or an error, depending on your desired behavior.
 	return []byte(`{}`), nil
@@ -1005,6 +1016,12 @@ func (t *ThinkingUnion) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		t.OfAdaptive = &adaptive
+	case "between_tools":
+		var betweenTools ThinkingBetweenTools
+		if err := json.Unmarshal(data, &betweenTools); err != nil {
+			return err
+		}
+		t.OfBetweenTools = &betweenTools
 	default:
 		return fmt.Errorf("invalid thinking union type: %s", typeVal)
 	}

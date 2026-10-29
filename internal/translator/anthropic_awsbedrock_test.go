@@ -792,6 +792,59 @@ func TestAnthropicToAWSBedrockTranslator_RequestBody_Thinking(t *testing.T) {
 		assert.Equal(t, "disabled", thinkingMap["type"])
 	})
 
+	t.Run("thinking adaptive", func(t *testing.T) {
+		translator := NewAnthropicToAWSBedrockTranslator("")
+		req := &anthropicschema.MessagesRequest{
+			Model:     "test-model",
+			MaxTokens: 100,
+			Thinking: &anthropicschema.Thinking{
+				Adaptive: &anthropicschema.ThinkingAdaptive{Type: "adaptive", Display: "summarized"},
+			},
+			Messages: []anthropicschema.MessageParam{
+				{Role: anthropicschema.MessageRoleUser, Content: anthropicschema.MessageContent{Text: "Hello"}},
+			},
+		}
+		rawBody, _ := json.Marshal(req)
+		_, body, err := translator.RequestBody(rawBody, req, false)
+		require.NoError(t, err)
+
+		var bedrockReq awsbedrock.ConverseInput
+		err = json.Unmarshal(body, &bedrockReq)
+		require.NoError(t, err)
+		require.NotNil(t, bedrockReq.AdditionalModelRequestFields)
+		thinking, ok := bedrockReq.AdditionalModelRequestFields["thinking"]
+		require.True(t, ok)
+		thinkingMap, ok := thinking.(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "adaptive", thinkingMap["type"])
+		assert.Equal(t, "summarized", thinkingMap["display"])
+	})
+
+	t.Run("thinking between_tools", func(t *testing.T) {
+		translator := NewAnthropicToAWSBedrockTranslator("")
+		req := &anthropicschema.MessagesRequest{
+			Model:     "test-model",
+			MaxTokens: 100,
+			Thinking: &anthropicschema.Thinking{
+				BetweenTools: &anthropicschema.ThinkingBetweenTools{Type: "between_tools"},
+			},
+			Messages: []anthropicschema.MessageParam{
+				{Role: anthropicschema.MessageRoleUser, Content: anthropicschema.MessageContent{Text: "Hello"}},
+			},
+		}
+		rawBody, _ := json.Marshal(req)
+		_, body, err := translator.RequestBody(rawBody, req, false)
+		require.NoError(t, err)
+
+		var bedrockReq awsbedrock.ConverseInput
+		err = json.Unmarshal(body, &bedrockReq)
+		require.NoError(t, err)
+		require.NotNil(t, bedrockReq.AdditionalModelRequestFields)
+		thinking, ok := bedrockReq.AdditionalModelRequestFields["thinking"]
+		require.True(t, ok)
+		assert.Equal(t, map[string]any{"type": "between_tools"}, thinking)
+	})
+
 	t.Run("top_k in additional fields", func(t *testing.T) {
 		translator := NewAnthropicToAWSBedrockTranslator("")
 		topK := 40
