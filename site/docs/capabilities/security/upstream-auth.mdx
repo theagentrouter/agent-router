@@ -69,6 +69,31 @@ For providers that support long lived access credentials, the Agent Router contr
 Learn more about connecting to [OpenAI](/docs/getting-started/connect-providers/openai) and adding your API key to the secret. You can use the same approach for other providers that support long lived credentials.
 :::
 
+#### fal API Key
+
+A `BackendSecurityPolicy` of type `FalAPIKey` reads the key from the `apiKey` field of the referenced secret and sends it as `Authorization: Key <key>`, the [header fal expects](https://fal.ai/docs/model-apis/model-endpoints/queue). Target both the `fal.run` and `queue.fal.run` backends with one policy:
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: fal-apikey
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: fal-run
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: fal-queue
+  type: FalAPIKey
+  falAPIKey:
+    secretRef:
+      name: fal-apikey
+```
+
+See `examples/basic/fal.yaml` for the full manifest.
+
 ## Per-Request Credential Override
 
 By default, a `BackendSecurityPolicy` attaches one credential to every request. The optional

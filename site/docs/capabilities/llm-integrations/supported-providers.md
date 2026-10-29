@@ -38,6 +38,7 @@ Below is a table of currently supported providers and their respective configura
 | [Paxa Labs](https://paxalabs.com/docs/openai-compatibility)                                               |                                   `{"name":"OpenAI","prefix":"/v1"}`                                   |                         [API Key]                         |   ✅   | Audio only: `/v1/audio/speech` and `/v1/audio/transcriptions`, with Paxa model and voice ids. Endpoint host: `api.paxalabs.com`                        |
 | Self-hosted-models                                                                                        |                                   `{"name":"OpenAI","prefix":"/v1"}`                                   |                            N/A                            |   ⚠️   | Depending on the API schema spoken by self-hosted servers. For example, [vLLM] speaks the OpenAI format. Also, API Key auth can be configured as well. |
 | [Anthropic](https://docs.claude.com/en/home)                                                              |                                         `{"name":"Anthropic"}`                                         |                    [Anthropic API Key]                    |   ✅   | Support only Native Anthropic messages endpoint                                                                                                        |
+| [fal](https://fal.ai/docs/model-apis/model-endpoints)                                                     |                                            `{"name":"Fal"}`                                            |                       [fal API Key]                       |   ✅   | Native fal run (`/fal/run/...`) and queue (`/fal/queue/...`) APIs. One backend per host: `fal.run` and `queue.fal.run`.                                |
 
 [AIServiceBackend]: api/api.mdx#aiservicebackendspec
 [BackendSecurityPolicy]: api/api.mdx#backendsecuritypolicyspec
@@ -47,4 +48,5 @@ Below is a table of currently supported providers and their respective configura
 [Azure Credentials]: api/api.mdx#backendsecuritypolicyazurecredentials
 [Azure API Key]: api/api.mdx#backendsecuritypolicyazureapikey
 [Anthropic API Key]: api/api.mdx#backendsecuritypolicyanthropicapikey
+[fal API Key]: api/api.mdx#backendsecuritypolicyfalapikey
 [vLLM]: https://docs.vllm.ai/en/v0.8.3/serving/openai_compatible_server.html
