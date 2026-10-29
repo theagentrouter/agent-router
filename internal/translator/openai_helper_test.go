@@ -187,6 +187,27 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 		assert.False(t, req.ResponseFormat.OfJSONSchema.JSONSchema.Strict)
 	})
 
+	t.Run("output config effort maps to reasoning effort", func(t *testing.T) {
+		tests := []struct {
+			effort anthropic.OutputConfigEffort
+			want   openai.ReasoningEffort
+		}{
+			{"", ""},
+			{anthropic.OutputConfigEffortLow, openai.ReasoningEffortLow},
+			{anthropic.OutputConfigEffortMedium, openai.ReasoningEffortMedium},
+			{anthropic.OutputConfigEffortHigh, openai.ReasoningEffortHigh},
+			{anthropic.OutputConfigEffortXhigh, openai.ReasoningEffortXhigh},
+			{anthropic.OutputConfigEffortMax, openai.ReasoningEffortMax},
+		}
+		for _, tt := range tests {
+			t.Run(string(tt.effort), func(t *testing.T) {
+				got, err := anthropicEffortToOpenAI(tt.effort)
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			})
+		}
+	})
+
 	t.Run("invalid output config is rejected", func(t *testing.T) {
 		tests := []struct {
 			name         string
@@ -213,11 +234,6 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 					Format: &anthropic.JSONOutputFormat{Type: "json_schema", Schema: json.RawMessage(`[]`)},
 				},
 				wantError: "output_config.format.schema must be a JSON object",
-			},
-			{
-				name:         "max effort is unsupported by OpenAI",
-				outputConfig: &anthropic.OutputConfig{Effort: anthropic.OutputConfigEffortMax},
-				wantError:    `unsupported output_config.effort "max"`,
 			},
 			{
 				name:         "unknown effort",

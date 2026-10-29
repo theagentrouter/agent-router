@@ -72,7 +72,7 @@ func buildOpenAIChatCompletionRequest(body *anthropic.MessagesRequest, modelName
 			}
 			var schema map[string]any
 			if err = json.Unmarshal(body.OutputConfig.Format.Schema, &schema); err != nil {
-				return nil, fmt.Errorf("%w: output_config.format.schema must be a JSON object: %v", internalapi.ErrInvalidRequestBody, err)
+				return nil, fmt.Errorf("%w: output_config.format.schema must be a JSON object: %w", internalapi.ErrInvalidRequestBody, err)
 			}
 			if schema == nil {
 				return nil, fmt.Errorf("%w: output_config.format.schema is required", internalapi.ErrInvalidRequestBody)
@@ -108,8 +108,12 @@ func anthropicEffortToOpenAI(effort anthropic.OutputConfigEffort) (openai.Reason
 		return openai.ReasoningEffortHigh, nil
 	case anthropic.OutputConfigEffortXhigh:
 		return openai.ReasoningEffortXhigh, nil
+	case anthropic.OutputConfigEffortMax:
+		// "max" is not part of the OpenAI spec, but OpenAI-compatible servers such as
+		// vLLM accept it, so forward it and let the backend decide.
+		return openai.ReasoningEffortMax, nil
 	default:
-		return "", fmt.Errorf("%w: unsupported output_config.effort %q for an OpenAI backend (supported: low, medium, high, xhigh)", internalapi.ErrInvalidRequestBody, effort)
+		return "", fmt.Errorf("%w: unsupported output_config.effort %q (supported: low, medium, high, xhigh, max)", internalapi.ErrInvalidRequestBody, effort)
 	}
 }
 
