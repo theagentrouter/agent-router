@@ -3525,3 +3525,43 @@ func TestMapReasoningEffortToThinkingLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildGCPGeminiPathSuffix(t *testing.T) {
+	tests := []struct {
+		name        string
+		model       string
+		queryParams []string
+		want        string
+		wantErr     bool
+	}{
+		{name: "publisher model", model: "gemini-3.5-flash", want: "publishers/google/models/gemini-3.5-flash:generateContent"},
+		{name: "publisher model with query params", model: "gemini-3.5-flash", queryParams: []string{"alt=sse"}, want: "publishers/google/models/gemini-3.5-flash:generateContent?alt=sse"},
+		{name: "endpoint resource", model: "endpoints/1234567890", want: "endpoints/1234567890:generateContent"},
+		{name: "endpoint resource with query params", model: "endpoints/1234567890", queryParams: []string{"alt=sse"}, want: "endpoints/1234567890:generateContent?alt=sse"},
+		{name: "missing endpoint ID", model: "endpoints/", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := buildGCPGeminiPathSuffix(tc.model, gcpMethodGenerateContent, tc.queryParams...)
+			if tc.wantErr {
+				require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestGCPEndpointFeatureModel pins the request features enabled for an endpoint resource, so that tightening a
+// model-name check does not silently drop them again.
+func TestGCPEndpointFeatureModel(t *testing.T) {
+	require.Equal(t, "gemini-3.5-flash", gcpFeatureModel("gemini-3.5-flash"))
+	model := gcpFeatureModel("endpoints/1234567890")
+	require.Equal(t, gcpEndpointFeatureModel, model)
+	require.True(t, responseJSONSchemaAvailable(model))
+	require.True(t, reasoningEffortAvailable(model))
+	require.True(t, mediaResolutionAvailable(model))
+	require.True(t, isGeminiFlashModel(model))
+	require.True(t, supportsMediumThinkingLevel(model))
+}

@@ -215,6 +215,27 @@ spec:
         - name: envoy-ai-gateway-basic-gcp
 ```
 
+## Tuned Gemini Models
+
+A tuned Gemini model is served from a Vertex AI endpoint instead of a publisher model. To route chat completions to it, set `modelNameOverride` to `endpoints/<ENDPOINT_ID>` on the backend reference:
+
+```yaml
+rules:
+  - matches:
+      - headers:
+          - type: Exact
+            name: x-ai-eg-model
+            value: my-tuned-model
+    backendRefs:
+      - name: envoy-ai-gateway-basic-gcp
+        modelNameOverride: endpoints/1234567890
+```
+
+The request is sent to `/v1/projects/<PROJECT>/locations/<REGION>/endpoints/<ENDPOINT_ID>:generateContent`, with the project and region of the `BackendSecurityPolicy`.
+
+- A tuned Gemini endpoint may be served from a multi-region location such as `eu` or `us` rather than a single region. Set `region` in the `BackendSecurityPolicy` to the location of the endpoint, and point the `Backend` at `aiplatform.<REGION>.rep.googleapis.com`.
+- An endpoint ID does not say which model it serves, so features that depend on the model, such as `reasoning_effort`, `response_format` with a JSON schema and image `detail`, are enabled as for a current Gemini Flash model. If the tuned model does not support one of them, Vertex AI may reject the request.
+
 [AIGatewayRouteRule]: ../../api/api.mdx#aigatewayrouterule
 [model ID]: https://cloud.google.com/vertex-ai/generative-ai/docs/models
 [Anthropic Claude]: https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude

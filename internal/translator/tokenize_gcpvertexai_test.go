@@ -19,6 +19,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/gcp"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
@@ -849,4 +850,80 @@ func BenchmarkToGCPVertexAIV1Tokenize_ResponseBody(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func TestToGCPVertexAIV1Tokenize_RequestBody_EndpointResource(t *testing.T) {
+	const reqJSON = `{
+  "model": "client-model",
+  "messages": [{"role": "user", "content": "ping"}],
+  "tools": [{
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}, "additionalProperties": false}}
+  }]
+}`
+
+	tests := []struct {
+		name               string
+		model              string
+		wantPath           string
+		wantToolJSONSchema bool
+	}{
+		{
+			name:               "endpoint resource",
+			model:              "endpoints/1234567890",
+			wantPath:           "endpoints/1234567890:countTokens",
+			wantToolJSONSchema: true,
+		},
+		{
+			name:               "publisher model keeps the publisher path",
+			model:              "gemini-3.5-flash",
+			wantPath:           "publishers/google/models/gemini-3.5-flash:countTokens",
+			wantToolJSONSchema: true,
+		},
+		{
+			name:               "publisher model without feature support is unchanged",
+			model:              "gemini-1.5-pro",
+			wantPath:           "publishers/google/models/gemini-1.5-pro:countTokens",
+			wantToolJSONSchema: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var chatReq tokenize.ChatRequest
+			require.NoError(t, json.Unmarshal([]byte(reqJSON), &chatReq))
+
+			headers, body, err := NewTokenizeToGCPVertexAITranslator(tc.model).RequestBody(nil, &tokenize.RequestUnion{ChatRequest: &chatReq}, false)
+			require.NoError(t, err)
+
+			var gotPath string
+			for _, h := range headers {
+				if h.Key() == pathHeaderName {
+					gotPath = h.Value()
+				}
+			}
+			require.Equal(t, tc.wantPath, gotPath)
+
+			var got struct {
+				Tools []struct {
+					FunctionDeclarations []map[string]any `json:"functionDeclarations"`
+				} `json:"tools"`
+			}
+			require.NoError(t, json.Unmarshal(body, &got))
+			_, hasToolJSONSchema := got.Tools[0].FunctionDeclarations[0]["parametersJsonSchema"]
+			require.Equal(t, tc.wantToolJSONSchema, hasToolJSONSchema)
+		})
+	}
+
+	t.Run("missing endpoint ID", func(t *testing.T) {
+		_, _, err := NewTokenizeToGCPVertexAITranslator("endpoints/").RequestBody(nil, &tokenize.RequestUnion{
+			ChatRequest: &tokenize.ChatRequest{
+				Model: "client-model",
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{OfUser: &openai.ChatCompletionUserMessageParam{Role: openai.ChatMessageRoleUser, Content: openai.StringOrUserRoleContentUnion{Value: "ping"}}},
+				},
+			},
+		}, false)
+		require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+	})
 }

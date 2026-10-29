@@ -31,6 +31,12 @@ const (
 	gcpMethodStreamGenerateContent = "streamGenerateContent"
 	gcpMethodCountTokens           = "countTokens"
 	gcpMethodRawPredict            = "rawPredict"
+
+	// gcpEndpointResourcePrefix marks a model as a Vertex AI endpoint resource, such as a tuned model deployed to an endpoint.
+	gcpEndpointResourcePrefix = "endpoints/"
+	// gcpEndpointFeatureModel is the model name used to decide which request features to enable for an endpoint
+	// resource, since an endpoint ID does not say which model it serves.
+	gcpEndpointFeatureModel = "gemini-3-flash"
 )
 
 // dummyThoughtSignature is Google's documented compatibility escape for clients that cannot echo
@@ -1065,10 +1071,36 @@ func geminiLogprobsToOpenAILogprobs(logprobsResult genai.LogprobsResult) openai.
 
 // buildGCPModelPathSuffix constructs a path Suffix with an optional queryParams where each string is in the form of "%s=%s".
 func buildGCPModelPathSuffix(publisher, model, gcpMethod string, queryParams ...string) string {
-	pathSuffix := fmt.Sprintf("publishers/%s/models/%s:%s", publisher, model, gcpMethod)
+	return withGCPQueryParams(fmt.Sprintf("publishers/%s/models/%s:%s", publisher, model, gcpMethod), queryParams)
+}
 
+// buildGCPGeminiPathSuffix constructs the path suffix for a Gemini request model: the publisher path for a model name,
+// or the endpoint path for an endpoint resource ("endpoints/<id>"). queryParams have the same format as buildGCPModelPathSuffix.
+func buildGCPGeminiPathSuffix(model internalapi.RequestModel, gcpMethod string, queryParams ...string) (string, error) {
+	if !isGCPEndpointResource(model) {
+		return buildGCPModelPathSuffix(gcpModelPublisherGoogle, model, gcpMethod, queryParams...), nil
+	}
+	if model == gcpEndpointResourcePrefix {
+		return "", fmt.Errorf("%w: missing endpoint ID in model %q", internalapi.ErrInvalidRequestBody, model)
+	}
+	return withGCPQueryParams(fmt.Sprintf("%s:%s", model, gcpMethod), queryParams), nil
+}
+
+func withGCPQueryParams(pathSuffix string, queryParams []string) string {
 	if len(queryParams) > 0 {
 		pathSuffix += "?" + strings.Join(queryParams, "&")
 	}
 	return pathSuffix
+}
+
+func isGCPEndpointResource(model internalapi.RequestModel) bool {
+	return strings.HasPrefix(model, gcpEndpointResourcePrefix)
+}
+
+// gcpFeatureModel returns the model name that decides which request features are enabled.
+func gcpFeatureModel(model internalapi.RequestModel) internalapi.RequestModel {
+	if isGCPEndpointResource(model) {
+		return gcpEndpointFeatureModel
+	}
+	return model
 }
