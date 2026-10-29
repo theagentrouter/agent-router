@@ -1227,6 +1227,48 @@ func TestChatCompletionRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "prompt cache key and retention",
+			jsonStr: `{
+				"model": "gpt-5",
+				"messages": [{"role": "user", "content": "Hello!"}],
+				"prompt_cache_key": "user-123-session",
+				"prompt_cache_retention": "24h"
+			}`,
+			expected: &ChatCompletionRequest{
+				Model: "gpt-5",
+				Messages: []ChatCompletionMessageParamUnion{
+					{
+						OfUser: &ChatCompletionUserMessageParam{
+							Role:    ChatMessageRoleUser,
+							Content: StringOrUserRoleContentUnion{Value: "Hello!"},
+						},
+					},
+				},
+				PromptCacheKey:       "user-123-session",
+				PromptCacheRetention: "24h",
+			},
+		},
+		{
+			name: "prompt cache retention in_memory",
+			jsonStr: `{
+				"model": "gpt-5",
+				"messages": [{"role": "user", "content": "Hello!"}],
+				"prompt_cache_retention": "in_memory"
+			}`,
+			expected: &ChatCompletionRequest{
+				Model: "gpt-5",
+				Messages: []ChatCompletionMessageParamUnion{
+					{
+						OfUser: &ChatCompletionUserMessageParam{
+							Role:    ChatMessageRoleUser,
+							Content: StringOrUserRoleContentUnion{Value: "Hello!"},
+						},
+					},
+				},
+				PromptCacheRetention: "in_memory",
+			},
+		},
+		{
 			name: "Anthropic web search tool",
 			jsonStr: `{
 				"model": "claude-sonnet-4-6",
