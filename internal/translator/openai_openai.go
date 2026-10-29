@@ -299,6 +299,12 @@ func redactResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) open
 		redactedMsg.ReasoningContent = redactReasoningContent(msg.ReasoningContent)
 	}
 
+	// Redact reasoning from backends that name the field "reasoning" (vLLM)
+	if msg.Reasoning != nil {
+		redactedReasoning := redaction.RedactString(*msg.Reasoning)
+		redactedMsg.Reasoning = &redactedReasoning
+	}
+
 	return redactedMsg
 }
 

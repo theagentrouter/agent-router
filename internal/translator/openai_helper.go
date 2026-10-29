@@ -458,6 +458,12 @@ func appendThinkingBlocks(content []anthropic.MessagesContentBlock, msg *openai.
 
 	// Fall back to ReasoningContent (used by AWS Bedrock, Gemini, Qwen, DeepSeek).
 	if msg.ReasoningContent == nil {
+		// vLLM names the field "reasoning" and no longer emits "reasoning_content".
+		if msg.Reasoning != nil && *msg.Reasoning != "" {
+			content = append(content, anthropic.MessagesContentBlock{
+				Thinking: &anthropic.ThinkingBlock{Type: "thinking", Thinking: *msg.Reasoning},
+			})
+		}
 		return content
 	}
 	// Some models (Qwen, DeepSeek) return reasoning content as a plain string.
@@ -770,6 +776,11 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 		// Handle reasoning/thinking content (must come before text).
 		if delta.ReasoningContent != nil {
 			if err := s.handleReasoningDelta(delta.ReasoningContent, out); err != nil {
+				return err
+			}
+		} else if delta.Reasoning != nil && *delta.Reasoning != "" {
+			// vLLM names the field "reasoning" and no longer emits "reasoning_content".
+			if err := s.handleReasoningDelta(&openai.StreamReasoningContent{Text: *delta.Reasoning}, out); err != nil {
 				return err
 			}
 		}

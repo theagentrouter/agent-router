@@ -1212,6 +1212,46 @@ func TestOpenAIResponseToAnthropic_ThinkingBeforeText(t *testing.T) {
 	require.NotNil(t, result.Content[2].Text)
 }
 
+func TestOpenAIResponseToAnthropic_VLLMReasoning(t *testing.T) {
+	// vLLM sends reasoning as "reasoning" and no longer emits "reasoning_content" (vllm-project/vllm#27752).
+	var resp openai.ChatCompletionResponse
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id":"chatcmpl-vllm",
+		"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"323","reasoning":"17*19 = 340-17"}}],
+		"usage":{"prompt_tokens":10,"completion_tokens":20}
+	}`), &resp))
+	result := openAIResponseToAnthropic(&resp, "qwen")
+
+	require.Len(t, result.Content, 2)
+	require.NotNil(t, result.Content[0].Thinking)
+	assert.Equal(t, "thinking", result.Content[0].Thinking.Type)
+	assert.Equal(t, "17*19 = 340-17", result.Content[0].Thinking.Thinking)
+	require.NotNil(t, result.Content[1].Text)
+	assert.Equal(t, "323", result.Content[1].Text.Text)
+}
+
+func TestOpenAIResponseToAnthropic_ReasoningContentPreferredOverReasoning(t *testing.T) {
+	content := "323"
+	reasoning := "from reasoning"
+	resp := &openai.ChatCompletionResponse{
+		Choices: []openai.ChatCompletionResponseChoice{
+			{
+				FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+				Message: openai.ChatCompletionResponseChoiceMessage{
+					Content:          &content,
+					ReasoningContent: &openai.ReasoningContentUnion{Value: "from reasoning_content"},
+					Reasoning:        &reasoning,
+				},
+			},
+		},
+	}
+	result := openAIResponseToAnthropic(resp, "model")
+
+	require.Len(t, result.Content, 2)
+	require.NotNil(t, result.Content[0].Thinking)
+	assert.Equal(t, "from reasoning_content", result.Content[0].Thinking.Thinking)
+}
+
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingStreaming(t *testing.T) {
 	state := &openAIStreamToAnthropicState{
 		activeTools:  make(map[int64]*streamToolCall),
@@ -1243,6 +1283,55 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingStreaming(t *testing
 	assert.Contains(t, events[1].data, `"thinking"`)
 	assert.Equal(t, "content_block_delta", events[2].eventType)
 	assert.Contains(t, events[2].data, `"thinking_delta"`)
+}
+
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_VLLMReasoningThenText(t *testing.T) {
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "qwen",
+	}
+
+	// vLLM streams reasoning as delta.reasoning (vllm-project/vllm#27752), then the answer as delta.content.
+	input := `data: {"id":"chatcmpl-vllm","choices":[{"index":0,"delta":{"role":"assistant","reasoning":"17*19"}}],"model":"qwen"}` + "\n\n" +
+		`data: {"id":"chatcmpl-vllm","choices":[{"index":0,"delta":{"reasoning":" = 323"}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-vllm","choices":[{"index":0,"delta":{"content":"323"}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-vllm","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-vllm","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	state.buffer.WriteString(input)
+
+	var out []byte
+	err := state.processBuffer(&out, true)
+	require.NoError(t, err)
+
+	events := parseSSEEventsFromBytes(out)
+	var blockStartTypes, thinkingDeltas []string
+	for _, e := range events {
+		if e.eventType == "content_block_start" {
+			var ev struct {
+				ContentBlock struct {
+					Type string `json:"type"`
+				} `json:"content_block"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(e.data), &ev))
+			blockStartTypes = append(blockStartTypes, ev.ContentBlock.Type)
+		}
+		if e.eventType == "content_block_delta" {
+			var ev struct {
+				Delta struct {
+					Type     string `json:"type"`
+					Thinking string `json:"thinking"`
+				} `json:"delta"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(e.data), &ev))
+			if ev.Delta.Type == "thinking_delta" {
+				thinkingDeltas = append(thinkingDeltas, ev.Delta.Thinking)
+			}
+		}
+	}
+	require.Equal(t, []string{"thinking", "text"}, blockStartTypes)
+	require.Equal(t, []string{"17*19", " = 323"}, thinkingDeltas)
 }
 
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingThenText(t *testing.T) {

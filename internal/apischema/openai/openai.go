@@ -1516,6 +1516,11 @@ type ChatCompletionResponseChoiceMessage struct {
 	// like "reasoningContent" from AWS Bedrock.
 	ReasoningContent *ReasoningContentUnion `json:"reasoning_content,omitempty"`
 
+	// Reasoning holds the chain of thought from backends that name the field "reasoning" instead of
+	// "reasoning_content" (vLLM since vllm-project/vllm#27752). It is kept as a separate field so that
+	// responses passed through to OpenAI clients keep the field name the backend used.
+	Reasoning *string `json:"reasoning,omitempty"`
+
 	// ThinkingBlocks holds structured thinking metadata (signatures, redacted content) from providers
 	// that expose it (Anthropic, Bedrock, Gemini). This preserves full fidelity without breaking
 	// clients that expect reasoning_content to be a plain string.
@@ -1694,6 +1699,9 @@ type ChatCompletionResponseChunkChoiceDelta struct {
 	Annotations *[]Annotation                            `json:"annotations,omitempty"`
 	// ReasoningContent serializes as a plain string; see StreamReasoningContent.
 	ReasoningContent *StreamReasoningContent `json:"reasoning_content,omitempty"`
+	// Reasoning carries reasoning deltas from backends that name the field "reasoning"
+	// (vLLM since vllm-project/vllm#27752); see ChatCompletionResponseChoiceMessage.Reasoning.
+	Reasoning *string `json:"reasoning,omitempty"`
 	// ThinkingBlocks carries provider-specific reasoning metadata (signatures, redacted
 	// content) that cannot be represented in the plain-string reasoning_content,
 	// following the LiteLLM convention also used on the non-streaming Message.
