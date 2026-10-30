@@ -350,6 +350,8 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 		rerankMetricsFactory, tracing.RerankTracer(), endpointspec.RerankEndpointSpec{}))
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.TypeSafe, "/v1/systemone"), extproc.NewFactory(
 		systemOneMetricsFactory, tracing.SystemOneTracer(), endpointspec.SystemOneEndpointSpec{}))
+	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Cohere, "/v2/embed"), extproc.NewFactory(
+		embeddingsMetricsFactory, tracing.EmbedTracer(), endpointspec.EmbedEndpointSpec{}))
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/models"), extproc.NewModelsProcessor)
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/models"), extproc.NewAnthropicModelsProcessor)
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/messages"), extproc.NewFactory(
