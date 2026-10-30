@@ -512,7 +512,9 @@ func (a *anthropicToAWSBedrockTranslator) ResponseBody(_ map[string]string, body
 				tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(usage.InputTokens, usage.OutputTokens,
 					usage.CacheReadInputTokens, usage.CacheWriteInputTokens)
 			}
+			emitted := len(newBody)
 			a.convertEventToAnthropicSSE(event, &newBody)
+			recordStreamedChunks(span, newBody[emitted:])
 		}
 		return
 	}
@@ -797,6 +799,25 @@ func (a *anthropicToAWSBedrockTranslator) flushPendingBlockStart(blockType strin
 		"content_block": contentBlock,
 	}
 	a.writeSSEEvent("content_block_start", cbStart, out)
+}
+
+// recordStreamedChunks records the Anthropic SSE events in sse on the span, so that the span ends with the
+// streamed output, stop reason and token usage as it does for the other Anthropic backends.
+func recordStreamedChunks(span tracingapi.MessageSpan, sse []byte) {
+	if span == nil {
+		return
+	}
+	for line := range bytes.SplitSeq(sse, []byte("\n")) {
+		data, ok := bytes.CutPrefix(line, sseDataPrefixSpace)
+		if !ok {
+			continue
+		}
+		var chunk anthropicschema.MessagesStreamChunk
+		if err := json.Unmarshal(data, &chunk); err != nil {
+			continue
+		}
+		span.RecordResponseChunk(&chunk)
+	}
 }
 
 func (a *anthropicToAWSBedrockTranslator) writeSSEEvent(eventType string, data any, out *[]byte) {
