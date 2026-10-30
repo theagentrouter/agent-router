@@ -317,6 +317,7 @@ func (m *mockSpeechSpan) RecordResponseChunk(chunk *openai.SpeechStreamChunk) {
 
 func (m *mockSpeechSpan) EndSpanOnError(int, []byte) {}
 func (m *mockSpeechSpan) EndSpan()                   {}
+func (m *mockSpeechSpan) EndSpanOnCancel()           {}
 
 type errorReader struct{}
 

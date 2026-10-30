@@ -422,6 +422,7 @@ func (m *mockEmbeddingsSpan) RecordResponse(resp *openai.EmbeddingResponse) {
 }
 func (m *mockEmbeddingsSpan) EndSpanOnError(_ int, _ []byte) {}
 func (m *mockEmbeddingsSpan) EndSpan()                       {}
+func (m *mockEmbeddingsSpan) EndSpanOnCancel()               {}
 
 var _ tracingapi.EmbeddingsSpan = (*mockEmbeddingsSpan)(nil)
 
