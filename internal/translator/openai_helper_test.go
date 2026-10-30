@@ -69,6 +69,59 @@ func accumulateAnthropicMessage(t *testing.T, sse []byte) anthropicsdk.Message {
 	return msg
 }
 
+// deltaTypeToBlockType maps an Anthropic content_block_delta type to the one content block type
+// it is valid for. Clients reject a delta addressed to a block of any other type.
+var deltaTypeToBlockType = map[string]string{
+	"text_delta":       "text",
+	"citations_delta":  "text",
+	"input_json_delta": "tool_use",
+	"thinking_delta":   "thinking",
+	"signature_delta":  "thinking",
+}
+
+// requireConsistentBlockDeltas asserts the core invariant that every content_block_delta targets
+// an index whose content_block_start declared a compatible block type and which has not been
+// closed yet, and no block is left open at the end of the stream.
+func requireConsistentBlockDeltas(t *testing.T, events []sseEvent) {
+	t.Helper()
+	openTypes := map[int]string{}
+	for _, e := range events {
+		switch e.eventType {
+		case "content_block_start":
+			var ev struct {
+				Index        int `json:"index"`
+				ContentBlock struct {
+					Type string `json:"type"`
+				} `json:"content_block"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(e.data), &ev))
+			require.NotContains(t, openTypes, ev.Index, "content_block_start for index %d already open", ev.Index)
+			openTypes[ev.Index] = ev.ContentBlock.Type
+		case "content_block_delta":
+			var ev struct {
+				Index int `json:"index"`
+				Delta struct {
+					Type string `json:"type"`
+				} `json:"delta"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(e.data), &ev))
+			blockType, open := openTypes[ev.Index]
+			require.True(t, open, "%s targets index %d, which is not an open block", ev.Delta.Type, ev.Index)
+			want, known := deltaTypeToBlockType[ev.Delta.Type]
+			require.True(t, known, "unknown delta type %q", ev.Delta.Type)
+			require.Equal(t, want, blockType, "%s targets index %d, which is %q", ev.Delta.Type, ev.Index, blockType)
+		case "content_block_stop":
+			var ev struct {
+				Index int `json:"index"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(e.data), &ev))
+			require.Contains(t, openTypes, ev.Index, "content_block_stop for index %d, which is not open", ev.Index)
+			delete(openTypes, ev.Index)
+		}
+	}
+	require.Empty(t, openTypes, "content blocks left open at end-of-stream")
+}
+
 func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 	t.Run("basic model and message", func(t *testing.T) {
 		body := &anthropic.MessagesRequest{
@@ -813,9 +866,9 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_MalformedChunkSkipped(t *tes
 
 func TestOpenAIStreamToAnthropicState_handleToolCallDelta_OpenBlock(t *testing.T) {
 	state := &openAIStreamToAnthropicState{
-		activeTools:  make(map[int64]*streamToolCall),
-		hasOpenBlock: true,
-		blockIndex:   0,
+		activeTools: make(map[int64]*streamToolCall),
+		openBlock:   blockKindText,
+		blockIndex:  0,
 	}
 	toolID := "test_id"
 	toolCall := &openai.ChatCompletionChunkChoiceDeltaToolCall{
@@ -1290,7 +1343,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingThenText(t *testing.
 
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingThenToolCall(t *testing.T) {
 	// Verify that a thinking block is properly closed when a tool call arrives,
-	// and that hasThinkingBlock is reset so subsequent text doesn't corrupt state.
+	// and that the open-block kind is reset so subsequent text doesn't corrupt state.
 	state := &openAIStreamToAnthropicState{
 		activeTools:  make(map[int64]*streamToolCall),
 		requestModel: "claude-3",
@@ -1330,6 +1383,47 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingThenToolCall(t *test
 	}
 	assert.Equal(t, []string{"thinking", "tool_use"}, blockStartTypes)
 	assert.Equal(t, 2, blockStopCount, "should have exactly 2 content_block_stop events (thinking + tool)")
+}
+
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_ToolCallThenText(t *testing.T) {
+	// A backend that finishes a tool call then sends text (vLLM tool parsers emit trailing content
+	// after the tool call arguments) used to have its text_delta addressed to the still-open tool_use
+	// block, which clients reject with "Content block is not a text block".
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "claude-3",
+	}
+
+	input := `data: {"id":"chatcmpl-tct","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call-1","function":{"name":"get_weather","arguments":""},"type":"function"}]}}],"model":"gpt-4o"}` + "\n\n" +
+		`data: {"id":"chatcmpl-tct","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"function":{"name":"","arguments":"{\"city\":\"NYC\"}"}}]}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-tct","choices":[{"index":0,"delta":{"content":"text after tool calls"}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-tct","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-tct","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	state.buffer.WriteString(input)
+
+	var out []byte
+	err := state.processBuffer(&out, true)
+	require.NoError(t, err)
+
+	events := parseSSEEventsFromBytes(out)
+	requireConsistentBlockDeltas(t, events)
+
+	var blockStartTypes []string
+	for _, e := range events {
+		if e.eventType != "content_block_start" {
+			continue
+		}
+		var ev struct {
+			ContentBlock struct {
+				Type string `json:"type"`
+			} `json:"content_block"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(e.data), &ev))
+		blockStartTypes = append(blockStartTypes, ev.ContentBlock.Type)
+	}
+	assert.Equal(t, []string{"tool_use", "text"}, blockStartTypes)
 }
 
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_TextThenReasoning(t *testing.T) {
