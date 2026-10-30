@@ -109,7 +109,8 @@ func (c *BackendSecurityPolicyController) reconcile(ctx context.Context, bsp *ai
 	// Determine if credential rotation is needed
 	requiresRotation := bsp.Spec.Type != aigv1b1.BackendSecurityPolicyTypeAPIKey &&
 		bsp.Spec.Type != aigv1b1.BackendSecurityPolicyTypeAzureAPIKey &&
-		bsp.Spec.Type != aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey
+		bsp.Spec.Type != aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey &&
+		bsp.Spec.Type != aigv1b1.BackendSecurityPolicyTypeFalAPIKey
 
 	// Skip rotation for AWS when neither credentials file nor OIDC exchange is configured
 	// This allows IRSA/Pod Identity to work via the default credential chain
@@ -140,13 +141,14 @@ func (c *BackendSecurityPolicyController) reconcile(ctx context.Context, bsp *ai
 }
 
 // validateStaticCredentialSecretRef checks that a ReferenceGrant allows the Secret of an APIKey,
-// AzureAPIKey, AnthropicAPIKey or AWS credentialsFile policy when it is in another namespace. The
+// AzureAPIKey, AnthropicAPIKey, FalAPIKey or AWS credentialsFile policy when it is in another namespace. The
 // other credential types check their Secret references while rotating credentials.
 func (c *BackendSecurityPolicyController) validateStaticCredentialSecretRef(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy) error {
 	switch bsp.Spec.Type {
 	case aigv1b1.BackendSecurityPolicyTypeAPIKey,
 		aigv1b1.BackendSecurityPolicyTypeAzureAPIKey,
 		aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey,
+		aigv1b1.BackendSecurityPolicyTypeFalAPIKey,
 		aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
 	default:
 		return nil
@@ -509,7 +511,8 @@ func getBSPGeneratedSecretName(bsp *aigv1b1.BackendSecurityPolicy) string {
 		}
 	case aigv1b1.BackendSecurityPolicyTypeAPIKey,
 		aigv1b1.BackendSecurityPolicyTypeAzureAPIKey,
-		aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
+		aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey,
+		aigv1b1.BackendSecurityPolicyTypeFalAPIKey:
 		return "" // APIKey does not require rotation.
 	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
 		// The exchanged access token is always stored in a generated secret.

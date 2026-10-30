@@ -318,6 +318,14 @@ static_resources:
                                   exact: aws-dynmd-cred
                           route:
                             cluster: testupstream-aws-dynmd-cred
+                        - match:
+                            prefix: "/"
+                            headers:
+                              - name: x-test-backend
+                                string_match:
+                                  exact: fal
+                          route:
+                            cluster: testupstream-fal
                 http_filters:
                   # Stand-in for a trusted credential-resolving filter (e.g. ext_authz): turns the
                   # x-test-dynmd-api-key request header into dynamic metadata and removes the
@@ -518,6 +526,68 @@ static_resources:
                   filter_metadata:
                     aigateway.envoy.io:
                       per_route_rule_backend_name: "testupstream-anthropic"
+    - name: testupstream-fal
+      connect_timeout: 0.25s
+      type: STATIC
+      per_connection_buffer_limit_bytes: 52428800
+      lb_policy: ROUND_ROBIN
+      outlier_detection:
+        consecutive_5xx: 1
+        interval: 1s
+        base_ejection_time: 2s # Must be smaller than the require.Eventually's interval. Otherwise, the tests may pass without going through the fallback since the always-failing backend could be ejected by the time when require.Eventually retries due to the previous request IF the retry is not configured.
+        max_ejection_percent: 100
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http_protocol_options: {}
+          http_filters:
+            - name: upstream_extproc
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                allow_mode_override: true
+                request_attributes:
+                  - xds.upstream_host_metadata.filter_metadata['aigateway.envoy.io']['per_route_rule_backend_name']
+                processing_mode:
+                  request_header_mode: "SEND"
+                  request_body_mode: "NONE"
+                  response_header_mode: "SKIP"
+                  response_body_mode: "NONE"
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: extproc_cluster
+                  timeout: 30s
+                message_timeout: 60s
+                metadataOptions:
+                  receivingNamespaces:
+                    untyped:
+                      - io.envoy.ai_gateway
+            - name: envoy.filters.http.header_mutation
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.header_mutation.v3.HeaderMutation
+                mutations:
+                  request_mutations:
+                    - append:
+                        append_action: ADD_IF_ABSENT
+                        header:
+                          key: content-length
+                          value: "%DYNAMIC_METADATA(io.envoy.ai_gateway:content_length)%"
+            - name: envoy.filters.http.upstream_codec
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.upstream_codec.v3.UpstreamCodec
+      load_assignment:
+        cluster_name: testupstream-fal
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: 127.0.0.1
+                      port_value: 8080
+                metadata:
+                  filter_metadata:
+                    aigateway.envoy.io:
+                      per_route_rule_backend_name: "testupstream-fal"
     - name: testupstream-modelname-override-and-fallback
       connect_timeout: 0.25s
       type: STATIC

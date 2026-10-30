@@ -333,6 +333,7 @@ spec:
                     - AWSAnthropic
                     - AWSOpenAI
                     - TypeSafe
+                    - Fal
                     type: string
                   prefix:
                     description: |-
@@ -803,6 +804,7 @@ spec:
                     - AWSAnthropic
                     - AWSOpenAI
                     - TypeSafe
+                    - Fal
                     type: string
                   prefix:
                     description: |-

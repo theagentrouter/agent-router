@@ -477,3 +477,21 @@ func TestTokenUsage_IsZero(t *testing.T) {
 	u.SetOutputTokens(1)
 	require.False(t, u.IsZero())
 }
+
+func TestTokenUsage_BillableUnits(t *testing.T) {
+	var u TokenUsage
+	u.SetBillableUnits(1.5)
+	v, ok := u.BillableUnits()
+	require.True(t, ok)
+	require.InDelta(t, 1.5, v, 0)
+	require.False(t, u.IsZero())
+
+	var dst TokenUsage
+	dst.SetInputTokens(7)
+	dst.Override(u)
+	v, ok = dst.BillableUnits()
+	require.True(t, ok)
+	require.InDelta(t, 1.5, v, 0)
+	in, _ := dst.InputTokens()
+	require.Equal(t, uint32(7), in)
+}

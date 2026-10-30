@@ -108,6 +108,9 @@ type Options struct {
 	MCPFallbackSessionEncryptionIterations int
 	// EndpointPrefixes is the comma-separated key-value pairs for endpoint prefixes.
 	EndpointPrefixes string
+	// ExtProcFalURLScheme is the scheme of the gateway URLs that replace fal URLs in responses, "https" or "http".
+	// Empty means the scheme of each request.
+	ExtProcFalURLScheme string
 	// RateLimitRunner is the xDS runner that serves rate limit configs to the rate limit service.
 	RateLimitRunner *runner.Runner
 	// EnvoyGatewayNamespace is the namespace where Envoy Gateway is deployed.
@@ -542,6 +545,8 @@ func backendSecurityPolicySecretRef(bsp *aigv1b1.BackendSecurityPolicy) (name, n
 		secretRef = bsp.Spec.AzureAPIKey.SecretRef
 	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
 		secretRef = bsp.Spec.AnthropicAPIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeFalAPIKey:
+		secretRef = bsp.Spec.FalAPIKey.SecretRef
 	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
 		if bsp.Spec.AzureCredentials.ClientSecretRef != nil {
 			secretRef = bsp.Spec.AzureCredentials.ClientSecretRef

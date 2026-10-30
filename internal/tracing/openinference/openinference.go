@@ -53,6 +53,8 @@ const (
 	LLMSystemAnthropic = "anthropic"
 	// LLMSystemTypeSafe for TypeSafe AI systems.
 	LLMSystemTypeSafe = "typesafe"
+	// LLMSystemFal for fal systems.
+	LLMSystemFal = "fal"
 )
 
 // Input/Output constants.

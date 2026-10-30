@@ -15,7 +15,7 @@ package v1alpha1
 type VersionedAPISchema struct {
 	// Name is the name of the API schema of the AIGatewayRoute or AIServiceBackend.
 	//
-	// +kubebuilder:validation:Enum=OpenAI;Cohere;AWSBedrock;AzureOpenAI;GCPVertexAI;GCPAnthropic;Anthropic;AWSAnthropic;AWSOpenAI;TypeSafe
+	// +kubebuilder:validation:Enum=OpenAI;Cohere;AWSBedrock;AzureOpenAI;GCPVertexAI;GCPAnthropic;Anthropic;AWSAnthropic;AWSOpenAI;TypeSafe;Fal
 	Name APISchema `json:"name"`
 
 	// Version is the version of the API schema.
@@ -96,6 +96,11 @@ const (
 	//
 	// https://docs.typesafe.ai/api.md
 	APISchemaTypeSafe APISchema = "TypeSafe"
+	// APISchemaFal is the native fal schema. Requests to the fal run and queue endpoints are passed
+	// through unchanged, and the model is the fal endpoint ID taken from the request path.
+	//
+	// https://docs.fal.ai/model-apis
+	APISchemaFal APISchema = "Fal"
 )
 
 const (

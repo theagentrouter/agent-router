@@ -129,6 +129,21 @@ func ValidateLogFormat(format string) error {
 }
 
 const (
+	// FalURLSchemeHTTPS forces https for the gateway URLs that replace fal URLs in responses.
+	FalURLSchemeHTTPS = "https"
+	// FalURLSchemeHTTP forces http for the gateway URLs that replace fal URLs in responses.
+	FalURLSchemeHTTP = "http"
+)
+
+// ValidateFalURLScheme checks that scheme is empty, meaning the request's scheme, or a supported override.
+func ValidateFalURLScheme(scheme string) error {
+	if scheme != "" && scheme != FalURLSchemeHTTPS && scheme != FalURLSchemeHTTP {
+		return fmt.Errorf("invalid fal URL scheme: %q, must be empty, %q or %q", scheme, FalURLSchemeHTTPS, FalURLSchemeHTTP)
+	}
+	return nil
+}
+
+const (
 	// EndpointPickerHeaderKey is the header key used to specify the target backend endpoint.
 	// This is the default header name in the reference implementation:
 	// https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/2b5b337b45c3289e5f9367b2c19deef021722fcd/pkg/epp/server/runserver.go#L63
@@ -278,6 +293,8 @@ type EndpointPrefixes struct {
 	Anthropic string
 	// TypeSafe defaults to "/typesafe"
 	TypeSafe string
+	// Fal defaults to "/fal"
+	Fal string
 }
 
 // ParseEndpointPrefixes parses a comma-separated list of key:value pairs to populate EndpointPrefixes.
@@ -287,10 +304,11 @@ type EndpointPrefixes struct {
 //   - cohere
 //   - anthropic
 //   - typesafe
+//   - fal
 //
 // Format example:
 //
-//	"openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe"
+//	"openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe,fal:/fal"
 //
 // Unknown keys cause an error; values must be non-empty.
 func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
@@ -299,6 +317,7 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 		Cohere:    "/cohere",
 		Anthropic: "/anthropic",
 		TypeSafe:  "/typesafe",
+		Fal:       "/fal",
 	}
 	if s == "" {
 		return out, nil
@@ -328,8 +347,10 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 			out.Anthropic = value
 		case "typesafe":
 			out.TypeSafe = value
+		case "fal":
+			out.Fal = value
 		default:
-			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic, typesafe)", key, i+1)
+			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic, typesafe, fal)", key, i+1)
 		}
 	}
 	return out, nil

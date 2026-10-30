@@ -67,6 +67,9 @@ spec:
             - --extProcImagePullPolicy={{ .Values.extProc.imagePullPolicy }}
             - --extProcLogLevel={{ .Values.extProc.logLevel }}
             - --extProcLogFormat={{ .Values.extProc.logFormat }}
+            {{- with .Values.extProc.falURLScheme }}
+            - --extProcFalURLScheme={{ . }}
+            {{- end }}
             - --envoyGatewayNamespace={{ .Values.envoyGateway.namespace }}
             {{- if .Values.extProc.enableRedaction }}
             - --extProcEnableRedaction=true
@@ -102,6 +105,10 @@ spec:
             {{- if hasKey .Values.endpointConfig "typesafe" -}}
               {{- $typesafe := .Values.endpointConfig.typesafe -}}
               {{- $endpointPrefixes = append $endpointPrefixes (printf "typesafe:%s" $typesafe) -}}
+            {{- end -}}
+            {{- if hasKey .Values.endpointConfig "fal" -}}
+              {{- $fal := .Values.endpointConfig.fal -}}
+              {{- $endpointPrefixes = append $endpointPrefixes (printf "fal:%s" $fal) -}}
             {{- end -}}
             {{- if $endpointPrefixes }}
             - "--endpointPrefixes={{ join "," $endpointPrefixes }}"

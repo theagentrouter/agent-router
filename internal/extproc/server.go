@@ -62,6 +62,7 @@ type Server struct {
 	enableRedaction               bool
 	config                        *filterapi.RuntimeConfig
 	processorFactories            map[string]ProcessorFactory
+	prefixProcessorFactories      []prefixProcessorFactory
 	routerProcessorsPerReqID      map[string]Processor
 	routerProcessorsPerReqIDMutex sync.RWMutex
 	uuidFn                        func() string
@@ -97,10 +98,24 @@ func (s *Server) Register(path string, newProcessor ProcessorFactory) {
 	s.processorFactories[path] = newProcessor
 }
 
+type prefixProcessorFactory struct {
+	prefix  string
+	factory ProcessorFactory
+}
+
+// RegisterPrefix registers a new processor for every request path starting with the given prefix.
+// An exact path registered with [Server.Register] takes precedence, then the longest prefix.
+func (s *Server) RegisterPrefix(prefix string, newProcessor ProcessorFactory) {
+	s.logger.Info("Registering prefix processor", slog.String("prefix", prefix))
+	s.prefixProcessorFactories = append(s.prefixProcessorFactories, prefixProcessorFactory{prefix: prefix, factory: newProcessor})
+	slices.SortStableFunc(s.prefixProcessorFactories, func(a, b prefixProcessorFactory) int {
+		return len(b.prefix) - len(a.prefix)
+	})
+}
+
 var errNoProcessor = errors.New("no processor registered for the given path")
 
 // processorForPath returns the processor for the given path.
-// Only exact path matching is supported currently.
 func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFilter bool, logger *slog.Logger) (Processor, error) {
 	pathHeader := ":path"
 	if isUpstreamFilter {
@@ -114,6 +129,14 @@ func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFi
 	}
 
 	newProcessor, ok := s.processorFactories[path]
+	if !ok {
+		for _, p := range s.prefixProcessorFactories {
+			if strings.HasPrefix(path, p.prefix) {
+				newProcessor, ok = p.factory, true
+				break
+			}
+		}
+	}
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", errNoProcessor, path)
 	}

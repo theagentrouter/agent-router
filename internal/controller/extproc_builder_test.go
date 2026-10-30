@@ -81,7 +81,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	input := extProcContainerInput{}
 	baseHash := base.extProcContainerHash(input)
 	require.NotEmpty(t, baseHash)
-	require.Equal(t, 20, reflect.TypeOf(extProcBuilder{}).NumField(),
+	require.Equal(t, 21, reflect.TypeOf(extProcBuilder{}).NumField(),
 		"update drift coverage when extProcBuilder fields change")
 
 	// Helper: mutate a copy of the builder, recompute, expect a different hash.
@@ -116,6 +116,11 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	assertDrifts("endpointPrefixes", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.endpointPrefixes = "openai:/,cohere:/cohere"
+		return b
+	}())
+	assertDrifts("falURLScheme", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.falURLScheme = internalapi.FalURLSchemeHTTP
 		return b
 	}())
 	assertDrifts("enableRedaction", func() *extProcBuilder {
@@ -277,6 +282,31 @@ func TestBuildExtProcBaseArgs_LogFormat(t *testing.T) {
 		args := b.buildExtProcBaseArgs(false)
 		require.Equal(t, []string{"-logFormat", internalapi.LogFormatJSON}, args[len(args)-2:])
 	})
+}
+
+func TestBuildExtProcBaseArgs_FalURLScheme(t *testing.T) {
+	tests := []struct {
+		name    string
+		scheme  string
+		expArgs []string
+	}{
+		{name: "unset", scheme: ""},
+		{name: "https", scheme: internalapi.FalURLSchemeHTTPS, expArgs: []string{"-falURLScheme", "https"}},
+		{name: "http", scheme: internalapi.FalURLSchemeHTTP, expArgs: []string{"-falURLScheme", "http"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newTestBuilder()
+			b.falURLScheme = tt.scheme
+			args := b.buildExtProcBaseArgs(false)
+			if tt.expArgs == nil {
+				require.NotContains(t, args, "-falURLScheme")
+				require.Equal(t, newTestBuilder().extProcContainerHash(extProcContainerInput{}), b.extProcContainerHash(extProcContainerInput{}))
+				return
+			}
+			require.Equal(t, tt.expArgs, args[len(args)-2:])
+		})
+	}
 }
 
 // TestNewExtProcBuilder_MalformedInput covers the defensive parse-error log

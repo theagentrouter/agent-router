@@ -10730,6 +10730,7 @@ spec:
                           Defaults to the x-aigw-* header for the configured auth type:
                             APIKey          → x-aigw-api-key
                             AnthropicAPIKey → x-aigw-anthropic-api-key
+                            FalAPIKey       → x-aigw-fal-api-key
                             AzureAPIKey     → x-aigw-azure-api-key
                             AzureCredentials → x-aigw-azure-access-token
                             GCPCredentials  → x-aigw-gcp-access-token
@@ -10747,6 +10748,59 @@ spec:
                           access key on the wire is a worse leak than an API key.
                         type: string
                     type: object
+                type: object
+              falAPIKey:
+                description: |-
+                  FalAPIKey is a mechanism to access fal backend(s). The API key will be injected into the
+                  Authorization header as "Key <key>".
+                  https://docs.fal.ai/model-apis/authentication
+                properties:
+                  secretRef:
+                    description: |-
+                      SecretRef is the reference to the secret containing the fal API key.
+                      ai-gateway must be given the permission to read this secret.
+                      The key of the secret should be "apiKey".
+                    properties:
+                      group:
+                        default: ""
+                        description: |-
+                          Group is the group of the referent. For example, "gateway.networking.k8s.io".
+                          When unspecified or empty string, core API group is inferred.
+                        maxLength: 253
+                        pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                      kind:
+                        default: Secret
+                        description: Kind is kind of the referent. For example "Secret".
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
+                        type: string
+                      name:
+                        description: Name is the name of the referent.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is the namespace of the referenced object. When unspecified, the local
+                          namespace is inferred.
+
+                          Note that when a namespace different than the local namespace is specified,
+                          a ReferenceGrant object is required in the referent namespace to allow that
+                          namespace's owner to accept the reference. See the ReferenceGrant
+                          documentation for details.
+
+                          Support: Core
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - secretRef
                 type: object
               gcpCredentials:
                 description: GCPCredentials is a mechanism to access a backend(s).
@@ -14953,6 +15007,7 @@ spec:
                 - GCPCredentials
                 - AnthropicAPIKey
                 - OpenAICredentials
+                - FalAPIKey
                 type: string
             required:
             - type
@@ -14961,41 +15016,48 @@ spec:
             - message: When type is APIKey, only apiKey field should be set
               rule: 'self.type == ''APIKey'' ? (has(self.apiKey) && !has(self.awsCredentials)
                 && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials)
-                && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true'
+                && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.falAPIKey))
+                : true'
             - message: When type is AWSCredentials, only awsCredentials field should
                 be set
               rule: 'self.type == ''AWSCredentials'' ? (has(self.awsCredentials) &&
                 !has(self.apiKey) && !has(self.azureAPIKey) && !has(self.azureCredentials)
-                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials))
-                : true'
+                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)
+                && !has(self.falAPIKey)) : true'
             - message: When type is AzureAPIKey, only azureAPIKey field should be
                 set
               rule: 'self.type == ''AzureAPIKey'' ? (has(self.azureAPIKey) && !has(self.apiKey)
                 && !has(self.awsCredentials) && !has(self.azureCredentials) && !has(self.gcpCredentials)
-                && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true'
+                && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.falAPIKey))
+                : true'
             - message: When type is AzureCredentials, only azureCredentials field
                 should be set
               rule: 'self.type == ''AzureCredentials'' ? (has(self.azureCredentials)
                 && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
-                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials))
-                : true'
+                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)
+                && !has(self.falAPIKey)) : true'
             - message: When type is GCPCredentials, only gcpCredentials field should
                 be set
               rule: 'self.type == ''GCPCredentials'' ? (has(self.gcpCredentials) &&
                 !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
-                && !has(self.azureCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials))
-                : true'
+                && !has(self.azureCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)
+                && !has(self.falAPIKey)) : true'
             - message: When type is AnthropicAPIKey, only anthropicAPIKey field should
                 be set
               rule: 'self.type == ''AnthropicAPIKey'' ? (has(self.anthropicAPIKey)
                 && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
-                && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.openAICredentials))
-                : true'
+                && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.openAICredentials)
+                && !has(self.falAPIKey)) : true'
             - message: When type is OpenAICredentials, only openAICredentials field
                 should be set
               rule: 'self.type == ''OpenAICredentials'' ? (has(self.openAICredentials)
                 && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
-                && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey))
+                && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey)
+                && !has(self.falAPIKey)) : true'
+            - message: When type is FalAPIKey, only falAPIKey field should be set
+              rule: 'self.type == ''FalAPIKey'' ? (has(self.falAPIKey) && !has(self.apiKey)
+                && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials)
+                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials))
                 : true'
           status:
             description: Status defines the status details of the BackendSecurityPolicy.

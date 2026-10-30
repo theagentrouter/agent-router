@@ -1247,3 +1247,49 @@ func TestServer_ProcessorForPath_QueryParameterStripping(t *testing.T) {
 		})
 	}
 }
+
+func TestServer_ProcessorForPath_Prefix(t *testing.T) {
+	s, err := NewServer(slog.Default(), false)
+	require.NoError(t, err)
+	s.config = &filterapi.RuntimeConfig{}
+
+	factory := func(p Processor) ProcessorFactory {
+		return func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
+			return p, nil
+		}
+	}
+	exact, run, root, exactUnderPrefix := &mockProcessor{}, &mockProcessor{}, &mockProcessor{}, &mockProcessor{}
+	s.Register("/v1/chat/completions", factory(exact))
+	s.RegisterPrefix("/models/", factory(root))
+	s.RegisterPrefix("/models/run/", factory(run))
+	s.Register("/models/run/vendor/router/v1/chat/completions", factory(exactUnderPrefix))
+
+	tests := []struct {
+		name       string
+		headers    map[string]string
+		isUpstream bool
+		exp        Processor
+		expErr     string
+	}{
+		{name: "exact path", headers: map[string]string{":path": "/v1/chat/completions"}, exp: exact},
+		{name: "longest prefix wins", headers: map[string]string{":path": "/models/run/owner/app"}, exp: run},
+		{name: "shorter prefix", headers: map[string]string{":path": "/models/queue/owner/app/requests/abc"}, exp: root},
+		{name: "query stripped before prefix match", headers: map[string]string{":path": "/models/run/owner/app?x=1"}, exp: run},
+		{name: "exact beats prefix", headers: map[string]string{":path": "/models/run/vendor/router/v1/chat/completions"}, exp: exactUnderPrefix},
+		{name: "upstream uses original path", headers: map[string]string{originalPathHeader: "/models/run/owner/app", ":path": "/owner/app"}, isUpstream: true, exp: run},
+		{name: "prefix without trailing segment", headers: map[string]string{":path": "/models"}, expErr: "no processor registered for the given path: /models"},
+		{name: "exact path is not a prefix", headers: map[string]string{":path": "/v1/chat/completions/extra"}, expErr: "no processor registered"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := s.processorForPath(tt.headers, tt.isUpstream, slog.Default())
+			if tt.expErr != "" {
+				require.ErrorContains(t, err, tt.expErr)
+				require.Nil(t, p)
+				return
+			}
+			require.NoError(t, err)
+			require.Same(t, tt.exp, p)
+		})
+	}
+}

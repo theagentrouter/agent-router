@@ -10,6 +10,7 @@ import (
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/fal"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
@@ -328,6 +329,34 @@ func NewSystemOneRecorder(config *Config) tracingapi.SystemOneRecorder {
 }
 
 func systemOneResponseAttrs(resp *typesafe.SystemOneResponse) []attribute.KeyValue {
+	attrs := responseIdentityAttrs("", resp.Model)
+	if resp.Usage != nil {
+		var in, out int
+		if resp.Usage.InputTokens != nil {
+			in = *resp.Usage.InputTokens
+		}
+		if resp.Usage.OutputTokens != nil {
+			out = *resp.Usage.OutputTokens
+		}
+		attrs = append(attrs, usageAttrs(in, out)...)
+	}
+	return attrs
+}
+
+// NewFalRecorder creates a tracingapi.FalRecorder.
+//
+// fal runs arbitrary apps, so it is a custom operation. The model is in the
+// path rather than the body, so it is recorded from the response.
+func NewFalRecorder(config *Config) tracingapi.FalRecorder {
+	return &recorder[fal.Request, fal.Response, struct{}]{
+		operation:     OperationFal,
+		config:        configOrEnv(config),
+		requestModel:  func(*fal.Request) string { return "" },
+		responseAttrs: falResponseAttrs,
+	}
+}
+
+func falResponseAttrs(resp *fal.Response) []attribute.KeyValue {
 	attrs := responseIdentityAttrs("", resp.Model)
 	if resp.Usage != nil {
 		var in, out int

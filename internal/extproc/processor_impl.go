@@ -59,12 +59,14 @@ var LogRequestHeaderAttributes map[string]string
 func NewFactory[ReqT any, RespT any, RespChunkT any, EndpointSpecT endpointspec.Spec[ReqT, RespT, RespChunkT]](
 	f metrics.Factory,
 	tracer tracingapi.RequestTracer[ReqT, RespT, RespChunkT],
-	_ EndpointSpecT, // This is a type marker to bind EndpointSpecT without specifying ReqT, RespT, RespChunkT explicitly.
+	eh EndpointSpecT, // The endpoint spec, which may carry configuration. It also binds EndpointSpecT without specifying ReqT, RespT, RespChunkT explicitly.
 ) ProcessorFactory {
 	return func(config *filterapi.RuntimeConfig, requestHeaders map[string]string, logger *slog.Logger, isUpstreamFilter bool, enableRedaction bool) (Processor, error) {
 		logger = logger.With("isUpstreamFilter", fmt.Sprintf("%v", isUpstreamFilter))
 		if !isUpstreamFilter {
-			return newRouterProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](config, requestHeaders, logger, tracer, enableRedaction), nil
+			p := newRouterProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](config, requestHeaders, logger, tracer, enableRedaction)
+			p.eh = eh
+			return p, nil
 		}
 		return newUpstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](requestHeaders, f.NewMetrics(), logger), nil
 	}
@@ -232,6 +234,58 @@ func createUserFacingErrorResponse(statusCode int, errorType string, message str
 	}
 }
 
+// ProcessRequestHeaders implements [Processor.ProcessRequestHeaders].
+//
+// It is a pass-through unless the endpoint spec implements [endpointspec.PathModelExtractor].
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequestHeaders(ctx context.Context, headers *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {
+	extractor, ok := any(r.eh).(endpointspec.PathModelExtractor)
+	if !ok {
+		return r.passThroughProcessor.ProcessRequestHeaders(ctx, headers)
+	}
+	model, stream, ok := extractor.ModelFromPath(r.requestHeaders[":path"])
+	if !ok {
+		// Answered here, before routing, so a path the spec refused is never routed on headers the client sent.
+		r.logger.Debug("unsupported path for a path-model endpoint", slog.String("path", r.requestHeaders[":path"]))
+		return createUserFacingErrorResponse(404, "NotFound", "unsupported path"), nil
+	}
+	r.originalModel = model
+	r.stream = stream
+	return &extprocv3.ProcessingResponse{
+		Response: &extprocv3.ProcessingResponse_RequestHeaders{
+			RequestHeaders: &extprocv3.HeadersResponse{
+				Response: &extprocv3.CommonResponse{
+					HeaderMutation:  &extprocv3.HeaderMutation{SetHeaders: r.setRoutingHeaders(model)},
+					ClearRouteCache: true,
+				},
+			},
+		},
+	}, nil
+}
+
+// setRoutingHeaders records the model and original-path headers in requestHeaders and returns their mutations.
+// extproc owns these headers, so client-supplied values are overwritten, never appended to or kept: downstream
+// logic (e.g. processor lookup on retry) keys off the original path.
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) setRoutingHeaders(model internalapi.OriginalModel) []*corev3.HeaderValueOption {
+	originalPath := r.requestHeaders[":path"]
+	r.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = model
+	r.requestHeaders[originalPathHeader] = originalPath
+	r.requestHeaders[internalapi.EnvoyOriginalPathHeader] = originalPath
+	return []*corev3.HeaderValueOption{
+		{
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			Header:       &corev3.HeaderValue{Key: internalapi.ModelNameHeaderKeyDefault, RawValue: []byte(model)},
+		},
+		{
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			Header:       &corev3.HeaderValue{Key: originalPathHeader, RawValue: []byte(originalPath)},
+		},
+		{
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			Header:       &corev3.HeaderValue{Key: internalapi.EnvoyOriginalPathHeader, RawValue: []byte(originalPath)},
+		},
+	}
+}
+
 // ProcessRequestBody implements [Processor.ProcessRequestBody].
 func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequestBody(ctx context.Context, rawBody *extprocv3.HttpBody) (*extprocv3.ProcessingResponse, error) {
 	var (
@@ -286,33 +340,15 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		r.originalRequestBodyRaw = rawBody.Body
 	}
 
-	r.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = originalModel
-
-	var additionalHeaders []*corev3.HeaderValueOption
-	additionalHeaders = append(additionalHeaders, &corev3.HeaderValueOption{
-		// Set the original model to the request header with the key `x-ai-eg-model`.
-		// This header is owned by the gateway, so overwrite any client-supplied value instead of appending.
-		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		Header:       &corev3.HeaderValue{Key: internalapi.ModelNameHeaderKeyDefault, RawValue: []byte(originalModel)},
-	})
-	originalPath := r.requestHeaders[":path"]
-	// These original-path headers are owned by extproc, so set them unconditionally.
-	// A client-supplied or pre-existing value must not shadow the gateway's own value,
-	// as downstream logic (e.g. processor lookup on retry) keys off it.
-	r.requestHeaders[originalPathHeader] = originalPath
-	additionalHeaders = append(additionalHeaders, &corev3.HeaderValueOption{
-		// Overwrite unconditionally so a client-supplied or pre-existing value is replaced, not appended.
-		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		Header:       &corev3.HeaderValue{Key: originalPathHeader, RawValue: []byte(originalPath)},
-	})
-	r.requestHeaders[internalapi.EnvoyOriginalPathHeader] = originalPath
-	additionalHeaders = append(additionalHeaders, &corev3.HeaderValueOption{
-		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		Header:       &corev3.HeaderValue{Key: internalapi.EnvoyOriginalPathHeader, RawValue: []byte(originalPath)},
-	})
+	// The spec's ParseBody decides whether the body names a model; when it returns none, the model taken
+	// from the path at the request headers phase stands.
+	if originalModel == "" {
+		originalModel = r.originalModel
+	}
+	additionalHeaders := r.setRoutingHeaders(originalModel)
 	r.originalModel = originalModel
 	r.originalRequestBody = body
-	r.stream = stream
+	r.stream = r.stream || stream
 
 	// Tracing may need to inject headers, so create a header mutation here.
 	headerMutation := &extprocv3.HeaderMutation{
@@ -407,6 +443,11 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	// earlier ext_proc filter in the chain.
 	mutatorHasMutations := u.bodyMutator != nil && u.bodyMutator.HasMutations()
 	wantBodyReplace := bodyMutation != nil || forceBodyMutation || mutatorHasMutations
+	if u.parent.originalRequestBody == nil {
+		// The router never saw a body: the request was routed from its path with none (GET, HEAD), so a
+		// backend body mutation or a retry must not synthesize one.
+		wantBodyReplace = bodyMutation != nil
+	}
 
 	if wantBodyReplace {
 		// Apply body mutations from the route and also restore original body on retry.
@@ -781,6 +822,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	if setter, ok := u.translator.(translator.ContentTypeSetter); ok {
 		setter.SetContentType(rp.requestHeaders["content-type"])
 	}
+	if s, ok := u.translator.(translator.ClientRequestHeadersSetter); ok {
+		s.SetClientRequestHeaders(rp.requestHeaders)
+	}
 	rp.upstreamFilter = u // Only assign after translator is confirmed valid
 
 	if headerSetter, ok := u.translator.(translator.RequestHeadersSetter); ok {
@@ -950,7 +994,8 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 		out, _ := costs.OutputTokens()
 		total, _ := costs.TotalTokens()
 		reasoning, _ := costs.ReasoningTokens()
-		cost, err = llmcostcel.EvaluateProgram(
+		units, _ := costs.BillableUnits()
+		cost, err = llmcostcel.EvaluateProgramWithBillableUnits(
 			celProg,
 			requestHeaders[internalapi.ModelNameHeaderKeyDefault],
 			backendName,
@@ -961,6 +1006,7 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 			out,
 			total,
 			reasoning,
+			units,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("failed to evaluate CEL expression: %w", err)

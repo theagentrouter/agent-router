@@ -1599,6 +1599,17 @@ func TestGatewayController_bspToFilterAPIBackendAuth_CrossNamespaceSecret(t *tes
 			cred: func(auth *filterapi.BackendAuth) string { return auth.AnthropicAPIKey.Key },
 		},
 		{
+			name:    "FalAPIKey",
+			dataKey: apiKeyInSecret,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type:      aigv1b1.BackendSecurityPolicyTypeFalAPIKey,
+					FalAPIKey: &aigv1b1.BackendSecurityPolicyFalAPIKey{SecretRef: ref},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.FalAPIKey.Key },
+		},
+		{
 			name:    "AWSCredentialsFile",
 			dataKey: rotators.AwsCredentialsKey,
 			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
@@ -1728,6 +1739,18 @@ func TestResolveCredentialOverride(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, "x-aigw-anthropic-api-key", result.HeaderName)
+	})
+
+	t.Run("fromRequestHeaders default header for FalAPIKey", func(t *testing.T) {
+		result, err := resolveCredentialOverride(
+			aigv1b1.BackendSecurityPolicyTypeFalAPIKey,
+			&aigv1b1.BackendSecurityPolicyCredentialOverride{
+				FromRequestHeaders: &aigv1b1.CredentialOverrideFromRequestHeaders{},
+			},
+			true,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "x-aigw-fal-api-key", result.HeaderName)
 	})
 
 	t.Run("fromDynamicMetadata", func(t *testing.T) {

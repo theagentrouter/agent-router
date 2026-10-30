@@ -61,6 +61,7 @@ var (
 	deepInfraSchema      = filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "v1/openai"}
 	openRouterSchema     = filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "api/v1"}
 	anthropicSchema      = filterapi.VersionedAPISchema{Name: filterapi.APISchemaAnthropic}
+	falSchema            = filterapi.VersionedAPISchema{Name: filterapi.APISchemaFal, Version: "v1"}
 
 	// awsCredentialOverrideHeaders are derived from the default prefix, as the controller does.
 	awsCredentialOverrideHeaders = func() []string {
@@ -127,6 +128,22 @@ var (
 	}}}
 	testUpstreamAWSAnthropicBackend = filterapi.Backend{Name: "testupstream-aws-anthropic", Schema: awsAnthropicSchema}
 	alwaysFailingBackend            = filterapi.Backend{Name: "always-failing-backend", Schema: openAISchema}
+
+	// testUpstreamFalBackend is shaped as the controller shapes a FalAPIKey policy with a per-request
+	// override under an operator-chosen header name: read by the handler and removed upstream.
+	testUpstreamFalBackend = filterapi.Backend{
+		Name:   "testupstream-fal",
+		Schema: falSchema,
+		Auth: &filterapi.BackendAuth{
+			FalAPIKey: &filterapi.FalAPIKeyAuth{Key: "fal-api-key"},
+			CredentialOverride: &filterapi.CredentialOverride{
+				HeaderName:           "x-fal-key",
+				FallbackToConfigured: true,
+				InputHeadersToRemove: []string{"x-fal-key"},
+			},
+		},
+		HeaderMutation: &filterapi.HTTPHeaderMutation{Remove: []string{"x-fal-key"}},
+	}
 
 	// testUpstreamOpenAIRequiringPerRequestCredential reuses the "openai" route but requires a
 	// per-request credential, so a request without it is answered with a 401 by the gateway itself.
@@ -218,10 +235,10 @@ func TestMain(m *testing.M) {
 	os.Exit(res)
 }
 
-func startTestEnvironment(t testing.TB, extprocConfig string, okToDumpLogOnFailure, extProcInProcess bool) *dataplaneenv.TestEnvironment {
+func startTestEnvironment(t testing.TB, extprocConfig string, okToDumpLogOnFailure, extProcInProcess bool, extprocArgs ...string) *dataplaneenv.TestEnvironment {
 	return dataplaneenv.StartTestEnvironment(t,
 		requireUpstream, map[string]int{"upstream": 8080},
-		extprocConfig, nil, envoyConfig, okToDumpLogOnFailure, extProcInProcess, 120*time.Second,
+		extprocConfig, nil, envoyConfig, okToDumpLogOnFailure, extProcInProcess, 120*time.Second, extprocArgs...,
 	)
 }
 

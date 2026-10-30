@@ -97,6 +97,7 @@ func TestAIServiceBackends(t *testing.T) {
 		{name: "anthropic-schema.yaml"},
 		{name: "basic-eg-backend-aws.yaml"},
 		{name: "aws-openai-schema.yaml"},
+		{name: "fal-schema.yaml"},
 		{name: "basic-eg-backend-azure.yaml"},
 		{
 			name:   "unknown_schema.yaml",
@@ -265,6 +266,7 @@ func TestBackendSecurityPolicies(t *testing.T) {
 			name:   "apikey_with_openai_credentials.yaml",
 			expErr: "When type is APIKey, only apiKey field should be set",
 		},
+		{name: "fal-apikey.yaml"},
 		{name: "targetrefs_basic.yaml"},
 		{name: "targetrefs_multiple.yaml"},
 		{name: "targetrefs_inferencepool.yaml"},

@@ -185,6 +185,8 @@ const (
 	APISchemaAWSOpenAI APISchemaName = "AWSOpenAI"
 	// APISchemaTypeSafe represents the native TypeSafe AI System One API schema (Jev).
 	APISchemaTypeSafe APISchemaName = "TypeSafe"
+	// APISchemaFal represents the native fal run and queue API schema.
+	APISchemaFal APISchemaName = "Fal"
 )
 
 // RouteRuleName is the name of the route rule.
@@ -222,6 +224,8 @@ type BackendAuth struct {
 	AzureAPIKey *AzureAPIKeyAuth `json:"azureAPIKey,omitempty"`
 	// AnthropicAPIKey is the Anthropic API key.
 	AnthropicAPIKey *AnthropicAPIKeyAuth `json:"anthropicAPIKey,omitempty"`
+	// FalAPIKey is the fal API key.
+	FalAPIKey *FalAPIKeyAuth `json:"falAPIKey,omitempty"`
 	// AzureAuth specifies the location of Azure access token file.
 	AzureAuth *AzureAuth `json:"azure,omitempty"`
 	// GCPAuth specifies the location of GCP credential file.
@@ -303,6 +307,17 @@ type AnthropicAPIKeyAuth struct {
 
 // LogValue implements slog.LogValuer for AnthropicAPIKeyAuth to redact sensitive information.
 func (a AnthropicAPIKeyAuth) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("key", "[REDACTED]"))
+}
+
+// FalAPIKeyAuth defines the fal API key.
+type FalAPIKeyAuth struct {
+	// Key is the fal API key as a literal string.
+	Key string `json:"key"`
+}
+
+// LogValue implements slog.LogValuer for FalAPIKeyAuth to redact sensitive information.
+func (a FalAPIKeyAuth) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("key", "[REDACTED]"))
 }
 

@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
+	"github.com/envoyproxy/ai-gateway/internal/apischema/fal"
 	"github.com/envoyproxy/ai-gateway/internal/endpointspec"
 	"github.com/envoyproxy/ai-gateway/internal/extproc"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -70,6 +71,8 @@ type extProcFlags struct {
 	maxRecvMsgSize int
 	// endpointPrefixes is the comma-separated key-value pairs for endpoint prefixes.
 	endpointPrefixes string
+	// falURLScheme overrides the request's scheme in the gateway URLs that replace fal URLs in responses.
+	falURLScheme string
 }
 
 // newLogHandler returns the slog handler for the requested output format. Anything other than
@@ -144,7 +147,12 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 	fs.StringVar(&flags.endpointPrefixes,
 		"endpointPrefixes",
 		"",
-		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe.",
+		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe,fal:/fal.",
+	)
+	fs.StringVar(&flags.falURLScheme,
+		"falURLScheme",
+		"",
+		"Scheme of the gateway URLs that replace fal URLs in fal responses. One of 'https' or 'http'. Empty uses the request's x-forwarded-proto, else its :scheme.",
 	)
 	fs.IntVar(&flags.maxRecvMsgSize,
 		"maxRecvMsgSize",
@@ -200,6 +208,9 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 		if _, err := internalapi.ParseEndpointPrefixes(flags.endpointPrefixes); err != nil {
 			errs = append(errs, fmt.Errorf("failed to parse endpoint prefixes: %w", err))
 		}
+	}
+	if err := internalapi.ValidateFalURLScheme(flags.falURLScheme); err != nil {
+		errs = append(errs, err)
 	}
 
 	return flags, errors.Join(errs...)
@@ -318,6 +329,7 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	tokenizeMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTokenize)
 	responsesInputTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationResponsesInputTokens)
 	countTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationCountTokens)
+	falMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationFal)
 	mcpMetrics := metrics.NewMCP(meter, metricsRequestHeaderAttributes)
 
 	extproc.LogRequestHeaderAttributes = logRequestHeaderAttributes
@@ -359,6 +371,10 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 		tokenizeMetricsFactory, tracing.TokenizeTracer(), endpointspec.TokenizeEndpointSpec{}))
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/messages/count_tokens"), extproc.NewFactory(
 		countTokensMetricsFactory, tracing.CountTokensTracer(), endpointspec.MessagesCountTokensEndpointSpec{}))
+	falFactory := extproc.NewFactory(falMetricsFactory, tracing.FalTracer(), endpointspec.FalEndpointSpec{Prefix: endpointPrefixes.Fal, URLScheme: flags.falURLScheme})
+	for _, mode := range []fal.Mode{fal.ModeRun, fal.ModeQueue} {
+		server.RegisterPrefix(path.Join(flags.rootPrefix, endpointPrefixes.Fal, string(mode))+"/", falFactory)
+	}
 
 	// Create and register gRPC server with ExternalProcessorServer (the service Envoy calls).
 	if err = filterapi.StartConfigBundleWatcher(ctx, flags.configBundlePath, server, l, time.Second*5); err != nil {

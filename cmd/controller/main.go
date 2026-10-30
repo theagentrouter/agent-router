@@ -43,6 +43,7 @@ type flags struct {
 	envoyGatewayNamespace          string
 	extProcLogLevel                string
 	extProcLogFormat               string
+	extProcFalURLScheme            string
 	logFormat                      string
 	extProcEnableRedaction         bool
 	extProcImage                   string
@@ -158,6 +159,11 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		internalapi.LogFormatText,
 		"The log output format for the external processor. One of 'text' or 'json'.",
 	)
+	extProcFalURLSchemePtr := fs.String(
+		"extProcFalURLScheme",
+		"",
+		"The scheme of the gateway URLs that replace fal URLs in fal responses. One of 'https' or 'http'. Empty uses the request's x-forwarded-proto, else its :scheme.",
+	)
 	extProcEnableRedactionPtr := fs.Bool(
 		"extProcEnableRedaction",
 		false,
@@ -241,7 +247,7 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 	endpointPrefixes := fs.String(
 		"endpointPrefixes",
 		"",
-		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe.",
+		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe,fal:/fal.",
 	)
 	rootPrefix := fs.String(
 		"rootPrefix",
@@ -334,6 +340,9 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 	if err := internalapi.ValidateLogFormat(*extProcLogFormatPtr); err != nil {
 		return nil, fmt.Errorf("external processor: %w", err)
 	}
+	if err := internalapi.ValidateFalURLScheme(*extProcFalURLSchemePtr); err != nil {
+		return nil, fmt.Errorf("external processor: %w", err)
+	}
 
 	extProcPullPolicy, err := parsePullPolicy(*extProcImagePullPolicyPtr)
 	if err != nil {
@@ -410,6 +419,7 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		envoyGatewayNamespace:                  *envoyGatewayNamespace,
 		extProcLogLevel:                        *extProcLogLevelPtr,
 		extProcLogFormat:                       *extProcLogFormatPtr,
+		extProcFalURLScheme:                    *extProcFalURLSchemePtr,
 		logFormat:                              *logFormatPtr,
 		extProcEnableRedaction:                 *extProcEnableRedactionPtr,
 		extProcImage:                           *extProcImagePtr,
@@ -545,6 +555,7 @@ func main() {
 		ExtProcImagePullPolicy:                 parsedFlags.extProcImagePullPolicy,
 		ExtProcLogLevel:                        parsedFlags.extProcLogLevel,
 		ExtProcLogFormat:                       parsedFlags.extProcLogFormat,
+		ExtProcFalURLScheme:                    parsedFlags.extProcFalURLScheme,
 		ExtProcEnableRedaction:                 parsedFlags.extProcEnableRedaction,
 		EnableLeaderElection:                   parsedFlags.enableLeaderElection,
 		UDSPath:                                extProcUDSPath,

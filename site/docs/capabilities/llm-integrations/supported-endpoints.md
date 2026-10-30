@@ -509,6 +509,50 @@ curl -H "Content-Type: application/json" \
   $GATEWAY_URL/typesafe/v1/systemone
 ```
 
+### fal Run and Queue
+
+**Endpoints:**
+
+| Operation           | Gateway Endpoint                                                   | Upstream                                                                      |
+| ------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Run                 | `POST /fal/run/{endpoint_id}`                                      | `POST https://fal.run/{endpoint_id}`                                          |
+| Run (stream)        | `POST /fal/run/{endpoint_id}/stream`                               | `POST https://fal.run/{endpoint_id}/stream`                                   |
+| Queue submit        | `POST /fal/queue/{endpoint_id}`                                    | `POST https://queue.fal.run/{endpoint_id}`                                    |
+| Queue status        | `GET /fal/queue/{owner}/{app}/requests/{request_id}/status`        | `GET https://queue.fal.run/{owner}/{app}/requests/{request_id}/status`        |
+| Queue status stream | `GET /fal/queue/{owner}/{app}/requests/{request_id}/status/stream` | `GET https://queue.fal.run/{owner}/{app}/requests/{request_id}/status/stream` |
+| Queue result        | `GET /fal/queue/{owner}/{app}/requests/{request_id}`               | `GET https://queue.fal.run/{owner}/{app}/requests/{request_id}`               |
+| Queue cancel        | `PUT /fal/queue/{owner}/{app}/requests/{request_id}/cancel`        | `PUT https://queue.fal.run/{owner}/{app}/requests/{request_id}/cancel`        |
+
+**Status:** ✅ Supported
+
+**Description:** Native [fal](https://fal.ai/docs/model-apis/model-endpoints) synchronous and [queue](https://fal.ai/docs/model-apis/model-endpoints/queue) APIs. The gateway strips the `/fal/run` or `/fal/queue` prefix and drops the `fal_webhook` query parameter; the request body is forwarded unchanged, so fal clients work by changing only the base URL.
+
+**Features:**
+
+- ✅ Model is the fal endpoint ID in the path. Queue status, result and cancel requests only carry `owner/app` (fal's URL design), so a cost expression keyed on `model` sees `fal-ai/kling-video`, not `fal-ai/kling-video/v2/master/text-to-video`, on the result leg that carries the billable units
+- ✅ `fal.run` and `queue.fal.run` URLs in responses, such as `status_url` and `response_url`, are rewritten to point at the gateway, using the client request's `x-forwarded-proto`, else its `:scheme`; the controller's `--extProcFalURLScheme` flag (Helm `extProc.falURLScheme`) forces `https` or `http`
+- ✅ Streaming run and queue status stream
+- ✅ Billable units (`x-fal-billable-units`) and token usage tracking. Units are recorded on run and on the queue result only, the two legs fal bills; each fetch of a result is charged again, since the gateway keeps no per-request state. The value is read as a non-negative number of at most 1e12 and otherwise ignored, so a bad header never fails a response
+- ✅ Paths are validated before anything reaches fal: every segment of an endpoint ID or request ID must match `[A-Za-z0-9][A-Za-z0-9._-]*` (the endpoint ID at most 256 bytes, the request ID at most 128), `requests` cannot appear inside an endpoint ID, and a queue request path must end in nothing, `/status`, `/status/stream` or `/cancel`; anything else is answered 404 by the gateway before routing, whatever headers the client sent
+- ❌ Model name override (`modelNameOverride` on the backend ref)
+- ❌ Webhooks (the `fal_webhook` query parameter is stripped; poll `status_url` or use the status stream)
+
+Other `X-Fal-*` request headers (queue priority, object lifecycle, store-io, runner hints, retry settings) pass through to fal like any client header; remove the ones your operators should control with a `headerMutation` on the AIServiceBackend.
+
+Queue request IDs are bearer handles: anyone who can reach the gateway with a `request_id` can fetch or cancel that request under the gateway's fal key, and the ID appears in traces and access logs. Route all queue endpoints for an application to a single fal credential, since a status or result call for a request submitted under another key fails at fal.
+
+**Supported Providers:**
+
+- fal
+
+**Example:**
+
+```bash
+curl -H "Content-Type: application/json" \
+  -d '{"prompt": "a lighthouse at dusk"}' \
+  $GATEWAY_URL/fal/queue/fal-ai/flux/dev
+```
+
 ### Tokenize
 
 **Endpoint:** `POST /tokenize`
@@ -658,6 +702,7 @@ The following table summarizes which providers support which endpoints:
 | [Anthropic](https://docs.claude.com/en/home)                                                          |        ✅        |     ❌      |     ❌     |        ❌        |         ✅         |      ✅      |   ❌   |     ❌     |    ❌    | Via OpenAI-compatible API and Native Anthropic API                                                                   |
 | [vLLM](https://docs.vllm.ai/en/latest/)                                                               |        ✅        |     ✅      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ✅    | Via OpenAI-compatible API; native `/tokenize` support                                                                |
 | [TypeSafe AI](https://docs.typesafe.ai/api.md)                                                        |        ❌        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ✅     |    ❌    | Native System One API for the Jev decision model                                                                     |
+| [fal](https://fal.ai/docs/model-apis/model-endpoints)                                                 |        ❌        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    | Native fal run and queue APIs; see [fal Run and Queue](#fal-run-and-queue)                                           |
 
 - ✅ - Supported and Tested on Agent Router CI
 - ⚠️️ - Expected to work based on provider documentation, but not tested on the CI.
@@ -672,6 +717,7 @@ By default, the gateway registers provider endpoints under these prefixes:
 - Cohere: `/cohere`
 - Anthropic: `/anthropic`
 - TypeSafe: `/typesafe`
+- fal: `/fal`
 
 You can override them via Helm using values under `endpointConfig`:
 
@@ -683,6 +729,7 @@ endpointConfig:
   cohere: "/cohere"
   anthropic: "/anthropic"
   typesafe: "/typesafe"
+  fal: "/fal"
   # rootPrefix applies to all routes; final paths are <rootPrefix><providerPrefix>/...
   # endpointConfig:
   #   rootPrefix: "/"
@@ -696,13 +743,14 @@ helm upgrade --install ai-gateway envoyproxy/ai-gateway-helm \
   --set 'endpointConfig.openai=/' \
   --set 'endpointConfig.cohere=/cohere' \
   --set 'endpointConfig.anthropic=/anthropic' \
-  --set 'endpointConfig.typesafe=/typesafe'
+  --set 'endpointConfig.typesafe=/typesafe' \
+  --set 'endpointConfig.fal=/fal'
 ```
 
 Notes:
 
 - `endpointConfig.rootPrefix` (default `/`) is prepended to all provider prefixes.
-- Only these keys are accepted: `openai`, `cohere`, `anthropic`, `typesafe`.
+- Only these keys are accepted: `openai`, `cohere`, `anthropic`, `typesafe`, `fal`.
 - If any key is omitted or empty, defaults are applied as listed above.
 
 ## What's Next

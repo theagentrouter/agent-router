@@ -70,6 +70,7 @@ func TestWithTestUpstream(t *testing.T) {
 			testUpstreamAWSAnthropicBackend,
 			testUpstreamBodyMutationBackend,
 			testUpstreamBodyMutationAnthropicBackend,
+			testUpstreamFalBackend,
 			{
 				Name: "testupstream-openai-5xx", Schema: openAISchema, HeaderMutation: &filterapi.HTTPHeaderMutation{
 					Set: []filterapi.HTTPHeader{{Name: testupstreamlib.ResponseStatusKey, Value: "500"}},
@@ -133,6 +134,10 @@ func TestWithTestUpstream(t *testing.T) {
 		expPath string
 		// expHost is the expected host to be sent to the test upstream.
 		expHost string
+		// expMethod is the HTTP method the test upstream must receive; empty skips the check.
+		expMethod string
+		// expNoQuery requires the test upstream to receive no query string.
+		expNoQuery bool
 		// expRequestHeaders are the expected request headers to be sent to the test upstream.
 		// The value is a base64 encoded string of comma separated key-value pairs.
 		// E.g. "key1:value1,key2:value2".
@@ -1518,6 +1523,121 @@ data: {"type":"message_stop"}`,
 			expStatus:       http.StatusBadRequest,
 			expResponseBody: `{"error":{"message":"Model not found","type":"invalid_request_error"},"request_id":"","type":"error"}`,
 		},
+		{
+			// fal_webhook, where fal reads its callback URL, never reaches fal; other query parameters do.
+			name:              "fal - /fal/run/<app> drops fal_webhook from the query",
+			backend:           "fal",
+			path:              "/fal/run/fal-ai/flux/schnell?fal_webhook=https%3A%2F%2Fattacker.example%2Fhook",
+			method:            http.MethodPost,
+			requestBody:       `{"prompt":"a fox"}`,
+			expPath:           "/fal-ai/flux/schnell",
+			expNoQuery:        true,
+			expMethod:         http.MethodPost,
+			expRequestBody:    `{"prompt":"a fox"}`,
+			expRequestHeaders: map[string]string{"Authorization": "Key fal-api-key"},
+			responseHeaders:   "x-fal-billable-units:2",
+			responseBody:      `{"images":[{"url":"https://v3.fal.media/files/a.png"}]}`,
+			expStatus:         http.StatusOK,
+			expResponseBody:   `{"images":[{"url":"https://v3.fal.media/files/a.png"}]}`,
+		},
+		{
+			name:                      "fal - /fal/queue/<app> with a per-request credential",
+			backend:                   "fal",
+			path:                      "/fal/queue/fal-ai/flux/schnell",
+			method:                    http.MethodPost,
+			requestBody:               `{"prompt":"a fox"}`,
+			requestHeaders:            map[string]string{"x-fal-key": "per-request-key"},
+			expPath:                   "/fal-ai/flux/schnell",
+			expMethod:                 http.MethodPost,
+			expRequestHeaders:         map[string]string{"Authorization": "Key per-request-key"},
+			nonExpectedRequestHeaders: []string{"x-fal-key"},
+			responseBody:              `{"status":"IN_QUEUE","request_id":"req-123","status_url":"https://queue.fal.run/fal-ai/flux/requests/req-123/status"}`,
+			expStatus:                 http.StatusOK,
+			expResponseBodyFunc: func(t require.TestingT, body []byte) {
+				require.Regexp(t, `"status_url":"http://localhost:\d+/fal/queue/fal-ai/flux/requests/req-123/status"`, string(body))
+			},
+		},
+		{
+			name:              "fal - GET /fal/queue/<app>/requests/<id>/status keeps logs=1",
+			backend:           "fal",
+			path:              "/fal/queue/fal-ai/flux/requests/req-123/status?logs=1",
+			method:            http.MethodGet,
+			expPath:           "/fal-ai/flux/requests/req-123/status",
+			expRawQuery:       "logs=1",
+			expMethod:         http.MethodGet,
+			expRequestHeaders: map[string]string{"Authorization": "Key fal-api-key"},
+			responseBody:      `{"status":"COMPLETED","request_id":"req-123"}`,
+			expStatus:         http.StatusOK,
+		},
+		{
+			name:              "fal - GET /fal/queue/<app>/requests/<id> result with billable units",
+			backend:           "fal",
+			path:              "/fal/queue/fal-ai/flux/requests/req-123",
+			method:            http.MethodGet,
+			expPath:           "/fal-ai/flux/requests/req-123",
+			expMethod:         http.MethodGet,
+			expRequestHeaders: map[string]string{"Authorization": "Key fal-api-key"},
+			responseHeaders:   "x-fal-billable-units:1",
+			responseBody:      `{"images":[{"url":"https://v3.fal.media/files/b/a.png"}]}`,
+			expStatus:         http.StatusOK,
+			expResponseBody:   `{"images":[{"url":"https://v3.fal.media/files/b/a.png"}]}`,
+		},
+		{
+			name:              "fal - PUT /fal/queue/<app>/requests/<id>/cancel",
+			backend:           "fal",
+			path:              "/fal/queue/fal-ai/flux/requests/req-123/cancel",
+			method:            http.MethodPut,
+			expPath:           "/fal-ai/flux/requests/req-123/cancel",
+			expMethod:         http.MethodPut,
+			expRequestHeaders: map[string]string{"Authorization": "Key fal-api-key"},
+			responseBody:      `{"status":"CANCELLATION_REQUESTED"}`,
+			expStatus:         http.StatusOK,
+		},
+		{
+			name:            "fal - a request id with an escape in it is not a fal path",
+			backend:         "fal",
+			path:            "/fal/queue/fal-ai/flux/requests/7f%2F1c/status",
+			method:          http.MethodGet,
+			expStatus:       http.StatusNotFound,
+			expResponseBody: `{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path"}}`,
+		},
+		{
+			name:            "fal - GET /fal/queue/<app>/requests/<id>/ with a trailing slash is not a fal path",
+			backend:         "fal",
+			path:            "/fal/queue/fal-ai/flux/requests/7f1c/",
+			method:          http.MethodGet,
+			expStatus:       http.StatusNotFound,
+			expResponseBody: `{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path"}}`,
+		},
+		{
+			name:            "fal - POST /fal/run/<one segment> with a body is not a fal path",
+			backend:         "fal",
+			path:            "/fal/run/flux",
+			method:          http.MethodPost,
+			requestBody:     `{"prompt":"a fox"}`,
+			expStatus:       http.StatusNotFound,
+			expResponseBody: `{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path"}}`,
+		},
+		{
+			name:            "fal - POST /fal/queue/<app>/requests/<id>/other with a body is not a fal path",
+			backend:         "fal",
+			path:            "/fal/queue/fal-ai/flux/requests/7f1c/other",
+			method:          http.MethodPost,
+			requestBody:     `{}`,
+			expStatus:       http.StatusNotFound,
+			expResponseBody: `{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path"}}`,
+		},
+		{
+			// A body-less request with an invalid path and forged routing headers must be refused
+			// before routing; if it reached the upstream, the forged path and model would be used.
+			name:            "fal - GET with an invalid path and forged routing headers is refused before routing",
+			backend:         "fal",
+			path:            "/fal/run/flux",
+			method:          http.MethodGet,
+			requestHeaders:  map[string]string{"x-ai-eg-original-path": "/fal/run/fal-ai/flux/schnell", "x-ai-eg-model": "spoofed-model"},
+			expStatus:       http.StatusNotFound,
+			expResponseBody: `{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path"}}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			listenerAddress := fmt.Sprintf("http://localhost:%d", listenerPort)
@@ -1545,6 +1665,12 @@ data: {"type":"message_stop"}`,
 			}
 			if tc.expHost != "" {
 				req.Header.Set(testupstreamlib.ExpectedHostKey, tc.expHost)
+			}
+			if tc.expMethod != "" {
+				req.Header.Set(testupstreamlib.ExpectedMethodHeaderKey, tc.expMethod)
+			}
+			if tc.expNoQuery {
+				req.Header.Set(testupstreamlib.ExpectedNoQueryHeaderKey, "true")
 			}
 			if tc.responseType != "" {
 				req.Header.Set(testupstreamlib.ResponseTypeKey, tc.responseType)

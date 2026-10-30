@@ -715,6 +715,12 @@ func TestSetBackendProviderName(t *testing.T) {
 			expectedProvider: "typesafe",
 		},
 		{
+			name:             "Fal schema",
+			schema:           filterapi.APISchemaFal,
+			backendName:      "fal-run",
+			expectedProvider: "fal",
+		},
+		{
 			name:             "Unknown schema falls back to backend name",
 			schema:           "UnknownSchema",
 			backendName:      "my-custom-backend",

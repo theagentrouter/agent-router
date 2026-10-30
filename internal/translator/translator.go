@@ -13,6 +13,7 @@ import (
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/fal"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
@@ -117,6 +118,12 @@ type RequestHeadersSetter interface {
 	SetRequestHeaders(headers map[string]string)
 }
 
+// ClientRequestHeadersSetter is an optional interface for translators that need the request headers
+// as the client sent them, before the route rewrote :authority to the backend host.
+type ClientRequestHeadersSetter interface {
+	SetClientRequestHeaders(headers map[string]string)
+}
+
 // HeaderValueFilterSetter is an optional interface for translators that can filter individual
 // values out of a multi-valued request header before forwarding upstream.
 //
@@ -160,6 +167,8 @@ type (
 	CohereRerankTranslator = Translator[cohereschema.RerankV2Request, tracingapi.RerankSpan]
 	// TypeSafeSystemOneTranslator translates the TypeSafe's /v1/systemone endpoint.
 	TypeSafeSystemOneTranslator = Translator[typesafeschema.SystemOneRequest, tracingapi.SystemOneSpan]
+	// FalTranslator translates fal's run and queue endpoints.
+	FalTranslator = Translator[fal.Request, tracingapi.FalSpan]
 	// AnthropicMessagesTranslator translates the Anthropic's /messages endpoint.
 	AnthropicMessagesTranslator = Translator[anthropicschema.MessagesRequest, tracingapi.MessageSpan]
 	// OpenAIImageGenerationTranslator translates the OpenAI's /images/generations endpoint.
