@@ -2599,3 +2599,21 @@ func mustCompileCEL(t *testing.T, expr string) cel.Program {
 	require.NoError(t, err)
 	return prog
 }
+
+func Test_formatUserFacingErrorJSON(t *testing.T) {
+	t.Run("plain message keeps the documented shape", func(t *testing.T) {
+		body := formatUserFacingErrorJSON("BadRequest", 400, "ordinary error")
+		require.JSONEq(t, `{"type":"error","error":{"type":"BadRequest","code":"400","message":"ordinary error"}}`, string(body))
+	})
+	t.Run("quotes, backslashes and newlines are escaped", func(t *testing.T) {
+		message := "malformed request: invalid temperature value \"bad\": strconv.ParseFloat: parsing \"bad\": invalid syntax\nC:\\path"
+		body := formatUserFacingErrorJSON("BadRequest", 400, message)
+		var decoded struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(body, &decoded), "body is not valid JSON: %s", body)
+		require.Equal(t, message, decoded.Error.Message)
+	})
+}
