@@ -195,7 +195,8 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespons
 // Returns JSON in format: {"type":"error","error":{"type":"<errorType>","code":"<statusCode>","message":"<message>"}}
 // The values are JSON-encoded, so messages that quote user input (e.g. a malformed parameter) stay valid JSON.
 func formatUserFacingErrorJSON(errorType string, statusCode int, message string) []byte {
-	body, err := json.Marshal(userFacingError{
+	// Marshalling a struct of plain strings cannot fail.
+	body, _ := json.Marshal(userFacingError{
 		Type: "error",
 		Error: userFacingErrorDetail{
 			Type:    errorType,
@@ -203,10 +204,6 @@ func formatUserFacingErrorJSON(errorType string, statusCode int, message string)
 			Message: message,
 		},
 	})
-	if err != nil {
-		// Marshalling plain strings cannot fail; fall back to a fixed body rather than an invalid one.
-		return []byte(`{"type":"error","error":{"type":"internal_error","code":"500","message":"failed to format error"}}`)
-	}
 	return body
 }
 
