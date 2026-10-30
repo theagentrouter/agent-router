@@ -306,15 +306,28 @@ func (a AnthropicAPIKeyAuth) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("key", "[REDACTED]"))
 }
 
-// AzureAuth defines the file containing azure access token that will be mounted to the external proc.
+// AzureAuth defines how the external processor authenticates to Azure: a static access token, or a managed identity.
 type AzureAuth struct {
 	// AccessToken is the access token as a literal string.
 	AccessToken string `json:"accessToken"`
+	// ManagedIdentity, when set, makes the external processor obtain access tokens itself with the
+	// Azure managed identity available to its pod. AccessToken is not used in that case.
+	ManagedIdentity *AzureManagedIdentityAuth `json:"managedIdentity,omitempty"`
+}
+
+// AzureManagedIdentityAuth defines the Azure managed identity used by the external processor.
+type AzureManagedIdentityAuth struct {
+	// ClientID selects a user-assigned managed identity. When empty, the default Azure credential chain is used.
+	ClientID string `json:"clientID,omitempty"`
 }
 
 // LogValue implements slog.LogValuer for AzureAuth to redact sensitive information.
 func (a AzureAuth) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("accessToken", "[REDACTED]"))
+	attrs := []slog.Attr{slog.String("accessToken", "[REDACTED]")}
+	if a.ManagedIdentity != nil {
+		attrs = append(attrs, slog.String("managedIdentityClientID", a.ManagedIdentity.ClientID))
+	}
+	return slog.GroupValue(attrs...)
 }
 
 // OpenAIAuth defines the OpenAI access token and the optional organization and project headers.

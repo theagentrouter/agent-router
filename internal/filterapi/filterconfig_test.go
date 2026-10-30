@@ -126,6 +126,13 @@ func TestAzureAuthLogValue(t *testing.T) {
 	require.Equal(t, "[REDACTED]", attrs["accessToken"])
 }
 
+func TestAzureAuthLogValue_ManagedIdentity(t *testing.T) {
+	a := filterapi.AzureAuth{ManagedIdentity: &filterapi.AzureManagedIdentityAuth{ClientID: "some-client-id"}}
+	attrs := logAttrs(a.LogValue())
+	require.Equal(t, "[REDACTED]", attrs["accessToken"])
+	require.Equal(t, "some-client-id", attrs["managedIdentityClientID"])
+}
+
 func TestOpenAIAuthLogValue(t *testing.T) {
 	a := filterapi.OpenAIAuth{AccessToken: "my-access-token", Organization: "org-123", Project: "proj_456"}
 	attrs := logAttrs(a.LogValue())

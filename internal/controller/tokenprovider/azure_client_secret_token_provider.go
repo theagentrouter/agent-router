@@ -7,13 +7,11 @@ package tokenprovider
 
 import (
 	"context"
-	"net/http"
-	"net/url"
-	"os"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+
+	"github.com/envoyproxy/ai-gateway/internal/azureauth"
 )
 
 // azureTokenProvider is a provider implements TokenProvider interface for Azure access tokens.
@@ -41,18 +39,8 @@ func (a *azureClientSecretTokenProvider) GetToken(ctx context.Context) (TokenExp
 	return TokenExpiry{Token: azureToken.Token, ExpiresAt: azureToken.ExpiresOn}, nil
 }
 
+// GetClientSecretCredentialOptions returns the client options, including the proxy configured via the
+// AI_GATEWAY_AZURE_PROXY_URL environment variable, if set.
 func GetClientSecretCredentialOptions() *azidentity.ClientSecretCredentialOptions {
-	if azureProxyURL := os.Getenv("AI_GATEWAY_AZURE_PROXY_URL"); azureProxyURL != "" {
-		proxyURL, err := url.Parse(azureProxyURL)
-		if err == nil {
-			customTransport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
-			customHTTPClient := &http.Client{Transport: customTransport}
-			return &azidentity.ClientSecretCredentialOptions{
-				ClientOptions: azcore.ClientOptions{
-					Transport: customHTTPClient,
-				},
-			}
-		}
-	}
-	return nil
+	return &azidentity.ClientSecretCredentialOptions{ClientOptions: azureauth.ClientOptions()}
 }

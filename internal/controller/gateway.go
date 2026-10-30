@@ -972,12 +972,20 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 		// IRSA, where there is deliberately no secret for the controller to see.
 		hasStaticCred = true
 	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
-		secretName := rotators.GetBSPSecretName(backendSecurityPolicy.Name)
-		azureAccessToken, getErr := c.getSecretData(ctx, namespace, secretName, rotators.AzureAccessTokenKey)
-		if getErr != nil {
-			return nil, getErr
+		if managedIdentity := spec.AzureCredentials.ManagedIdentity; managedIdentity != nil {
+			// The extproc obtains tokens with the managed identity of its own pod, so there is no
+			// rotated secret to read, like the AWS default credential chain.
+			auth = &filterapi.BackendAuth{AzureAuth: &filterapi.AzureAuth{
+				ManagedIdentity: &filterapi.AzureManagedIdentityAuth{ClientID: managedIdentity.ClientID},
+			}}
+		} else {
+			secretName := rotators.GetBSPSecretName(backendSecurityPolicy.Name)
+			azureAccessToken, getErr := c.getSecretData(ctx, namespace, secretName, rotators.AzureAccessTokenKey)
+			if getErr != nil {
+				return nil, getErr
+			}
+			auth = &filterapi.BackendAuth{AzureAuth: &filterapi.AzureAuth{AccessToken: azureAccessToken}}
 		}
-		auth = &filterapi.BackendAuth{AzureAuth: &filterapi.AzureAuth{AccessToken: azureAccessToken}}
 		hasStaticCred = true
 	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
 		gcpCreds := spec.GCPCredentials
