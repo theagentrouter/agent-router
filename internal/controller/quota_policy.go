@@ -102,14 +102,14 @@ func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Req
 	}
 	c.logger.Info("Reconciling QuotaPolicy", "namespace", req.Namespace, "name", req.Name)
 
-	if handleFinalizer(ctx, c.client, c.logger, &quotaPolicy, func(ctx context.Context, policy *aigv1a1.QuotaPolicy) error {
+	if onDelete, err := handleFinalizer(ctx, c.client, c.logger, &quotaPolicy, func(ctx context.Context, policy *aigv1a1.QuotaPolicy) error {
 		// Notify the AIGatewayRoutes targeting this policy's backends so their derived HTTPRoutes are
 		// re-reconciled (re-stamping the quota-policy-hash annotation) and Envoy Gateway re-translates
 		// without the deleted policy.
 		c.notifyAIGatewayRoutes(ctx, policy)
 		return c.deleteQuotaPolicyConfig(ctx, req.NamespacedName)
-	}) {
-		return ctrl.Result{}, nil
+	}); onDelete || err != nil {
+		return ctrl.Result{}, err
 	}
 
 	cacheKey := NamespacedNameKey(quotaPolicy.Namespace, quotaPolicy.Name)

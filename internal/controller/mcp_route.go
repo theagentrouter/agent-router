@@ -88,7 +88,9 @@ func (c *MCPRouteController) Reconcile(ctx context.Context, req reconcile.Reques
 func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
 	// On deletion, propagate to the referenced Gateways and clean up the shared Backend if this
 	// is the last MCPRoute in the namespace.
-	if handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted) {
+	if onDelete, err := handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted); err != nil {
+		return err
+	} else if onDelete {
 		return nil
 	}
 

@@ -1772,7 +1772,11 @@ func (in *QuotaPolicySpec) DeepCopyInto(out *QuotaPolicySpec) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	in.ServiceQuota.DeepCopyInto(&out.ServiceQuota)
+	if in.ServiceQuota != nil {
+		in, out := &in.ServiceQuota, &out.ServiceQuota
+		*out = new(ServiceQuotaDefinition)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.PerModelQuotas != nil {
 		in, out := &in.PerModelQuotas, &out.PerModelQuotas
 		*out = make([]PerModelQuota, len(*in))

@@ -174,7 +174,9 @@ func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.
 // syncAIGatewayRoute is the main logic for reconciling the AIGatewayRoute resource.
 // This is decoupled from the Reconcile method to centralize the error handling and status updates.
 func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
-	if handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.syncGateways) { // Propagate the AIGatewayRoute deletion all the way up to relevant Gateways.
+	if onDelete, err := handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.syncGateways); err != nil {
+		return err
+	} else if onDelete { // Propagate the AIGatewayRoute deletion all the way up to relevant Gateways.
 		return nil
 	}
 

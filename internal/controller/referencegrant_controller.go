@@ -69,9 +69,11 @@ func (c *ReferenceGrantController) Reconcile(ctx context.Context, req reconcile.
 	// A finalizer keeps the ReferenceGrant retrievable (with DeletionTimestamp set) until
 	// triggerAffectedReconciles has run, so a deleted grant still wakes up everything it used to
 	// authorize instead of leaving them with stale, now-invalid access.
-	if handleFinalizer(ctx, c.client, c.logger, &referenceGrant, func(ctx context.Context, rg *gwapiv1b1.ReferenceGrant) error {
+	if onDelete, err := handleFinalizer(ctx, c.client, c.logger, &referenceGrant, func(ctx context.Context, rg *gwapiv1b1.ReferenceGrant) error {
 		return c.triggerAffectedReconciles(ctx, rg.Namespace)
-	}) {
+	}); err != nil {
+		return ctrl.Result{}, err
+	} else if onDelete {
 		return ctrl.Result{}, nil
 	}
 

@@ -82,7 +82,11 @@ func (c *AIBackendController) syncAIServiceBackend(ctx context.Context, aiBacken
 	}
 
 	// Propagate the bsp events all the way up to relevant Gateways regardless of being deleted or not.
-	_ = handleFinalizer(ctx, c.client, c.logger, aiBackend, nil)
+	if onDelete, err := handleFinalizer(ctx, c.client, c.logger, aiBackend, nil); err != nil {
+		return err
+	} else if onDelete {
+		return nil
+	}
 	// Notify the AI Gateway Route controller about the AIServiceBackend change.
 	var aiGatewayRoutes aigv1b1.AIGatewayRouteList
 	err := c.client.List(ctx, &aiGatewayRoutes, client.MatchingFields{k8sClientIndexBackendToReferencingAIGatewayRoute: key})
