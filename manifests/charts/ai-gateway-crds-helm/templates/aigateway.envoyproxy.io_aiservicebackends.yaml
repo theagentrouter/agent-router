@@ -736,6 +736,13 @@ spec:
                   Only GCPAnthropic and AWSAnthropic backends honor this, and today only for the
                   `anthropic-beta` header — a filter naming any other header is accepted but has no effect.
                   Setting it on a backend with any other schema is rejected.
+
+                  On AWSAnthropic backends, filter values are matched after Anthropic-API-only flag names are
+                  rewritten to their Bedrock equivalents (e.g. `advanced-tool-use-2025-11-20` becomes
+                  `tool-search-tool-2025-10-19`), so filters must name the Bedrock value. When no `anthropic-beta`
+                  filter is configured, AWSAnthropic backends fall back to a built-in list of flags known to be
+                  accepted by Bedrock. This fallback is deprecated and will be removed in a future release;
+                  configure an `anthropic-beta` filter to opt out of it now.
                 items:
                   description: |-
                     HTTPHeaderValueFilter filters individual values out of a multi-valued request header before the
