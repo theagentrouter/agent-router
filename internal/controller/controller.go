@@ -508,12 +508,9 @@ func backendSecurityPolicyIndexFunc(o client.Object) []string {
 		key = namespacedNameIndexKey(name, namespace)
 	} else {
 		switch backendSecurityPolicy.Spec.Type {
-		case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
-			if backendSecurityPolicy.Spec.AWSCredentials.OIDCExchangeToken != nil {
-				key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
-			}
-		case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
-			if backendSecurityPolicy.Spec.AzureCredentials.OIDCExchangeToken != nil {
+		case aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
+			aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
+			if getBackendSecurityPolicyAuthOIDC(&backendSecurityPolicy.Spec) != nil {
 				key = backendSecurityPolicyKey(backendSecurityPolicy.Namespace, backendSecurityPolicy.Name)
 			}
 		}

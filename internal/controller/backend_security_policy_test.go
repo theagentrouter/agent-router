@@ -1290,6 +1290,23 @@ func TestValidateGCPCredentialsParams(t *testing.T) {
 	}
 }
 
+func TestBackendSecurityPolicyController_RotateCredential_AzureCredentials_Nil(t *testing.T) {
+	c := NewBackendSecurityPolicyController(fake.NewFakeClient(), fake2.NewClientset(), ctrl.Log, nil, nil, DefaultPreRotationWindow)
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-azure-policy",
+			Namespace: "default",
+		},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type:             aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
+			AzureCredentials: nil,
+		},
+	}
+	_, err := c.rotateCredential(context.Background(), bsp)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid backend security policy, azure credentials cannot be nil")
+}
+
 func TestBackendSecurityPolicyController_RotateCredential_GCPCredentials(t *testing.T) {
 	bspNamespace := "default"
 	bspName := "test-gcp-policy"
