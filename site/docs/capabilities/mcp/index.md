@@ -128,6 +128,43 @@ kubectl apply -f mcp-route.yaml
 
 Now clients can connect to `http://<gateway-address>/mcp` and access GitHub tools.
 
+### In-cluster Backends and Service Mesh Compatibility
+
+An `MCPRoute` `backendRef` may reference either an Envoy Gateway [`Backend`](https://gateway.envoyproxy.io/docs/api/extension_types/#backend) (with an FQDN endpoint) **or** a Kubernetes `Service`. The choice matters when a service mesh enforces strict mTLS, such as Istio with `PeerAuthentication` set to `STRICT` together with a `DestinationRule`.
+
+When you reference an in-cluster `Service`, Envoy resolves it via `EndpointSlices` — that is, it connects **directly to individual pod IPs**, not to the Service cluster IP. A strict-mTLS mesh applies its TLS policy at the **service** level (matching the service FQDN / cluster IP), so connections to pod IPs bypass it: the ALPN/TLS handshake does not match an entry for the pod IP/port, and the MCP session fails to establish.
+
+This is the expected behavior of Envoy/Gateway-API `Service` resolution and is not specific to the AI Gateway, but it is worth calling out because the symptom (a failed MCP session with no AI Gateway error) is non-obvious.
+
+**Workarounds**, in order of preference:
+
+1. **Prefer a `Backend` with the Service FQDN over a `Service` backendRef.** A `Backend` whose endpoint is the Service's DNS name (`<service>.<namespace>.svc.cluster.local`) resolves via Envoy's `STRICT_DNS` to the Service cluster IP, which the mesh intercepts at the service level — so strict mTLS applies as expected. For example, instead of `kind: Service`, name: `mcp-server`:
+
+   ```yaml
+   backendRefs:
+     - name: mcp-server
+       kind: Backend
+       group: gateway.envoyproxy.io
+       path: "/mcp"
+   ---
+   apiVersion: gateway.envoyproxy.io/v1alpha1
+   kind: Backend
+   metadata:
+     name: mcp-server
+     namespace: default
+   spec:
+     endpoints:
+       - fqdn:
+           hostname: mcp-server.default.svc.cluster.local
+           port: 8080
+   ```
+
+2. **Relax mTLS for the backend port only.** In Istio, set `portLevelMtls.mode: PERMISSIVE` for the MCP server's port on the relevant `PeerAuthentication`, so the pod-IP connections succeed without disabling strict mTLS everywhere.
+
+3. **Exclude the backend port or workload from the mesh.** Use an Istio outbound port exclusion (`traffic.sidecar.istio.io/excludeOutboundPorts` or a `ServiceEntry`/`DestinationRule` with `tls.mode: DISABLE`), or exclude the MCP server workload from sidecar injection.
+
+With option 1 the configuration remains mesh-friendly end to end; options 2 and 3 are escape hatches when you cannot change the backend reference.
+
 ### Tool Filtering
 
 Control which tools are exposed using the `toolSelector` field. You can use exact matches or regular expressions:
