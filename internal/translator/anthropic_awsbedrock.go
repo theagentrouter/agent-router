@@ -52,6 +52,9 @@ type anthropicToAWSBedrockTranslator struct {
 func (a *anthropicToAWSBedrockTranslator) RequestBody(_ []byte, body *anthropicschema.MessagesRequest, _ bool) (
 	newHeaders []internalapi.Header, newBody []byte, err error,
 ) {
+	if err = rejectAnthropicPerMessageOutputConfig(body.Messages, "AWS Bedrock Converse"); err != nil {
+		return
+	}
 	a.stream = body.Stream
 	a.requestModel = cmp.Or(a.modelNameOverride, body.Model)
 
@@ -176,7 +179,7 @@ func promoteAnthropicSystemMessagesToParam(body *anthropicschema.MessagesRequest
 	var promoted []anthropicschema.TextBlockParam
 	var filtered []anthropicschema.MessageParam
 	for _, msg := range body.Messages {
-		if msg.Role == "system" {
+		if msg.Role == anthropicschema.MessageRoleSystem {
 			if msg.Content.Text != "" {
 				promoted = append(promoted, anthropicschema.TextBlockParam{Type: "text", Text: msg.Content.Text})
 			}

@@ -202,6 +202,137 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		require.Equal(t, thirdMsg, gjson.GetBytes(body, "messages.0.content.0.text").String())
 	})
 
+	t.Run("Per-message effort remains in conversation order", func(t *testing.T) {
+		raw := []byte(`{
+			"model":"claude-sonnet-5-5",
+			"max_tokens":4096,
+			"reasoning_effort":"high",
+			"messages":[
+				{"role":"user","content":"Plan a migration."},
+				{"role":"assistant","content":"Export, migrate, and verify."},
+				{"role":"system","content":[],"output_config":{"effort":"low"}},
+				{"role":"user","content":"Summarize it."}
+			]
+		}`)
+		var req openai.ChatCompletionRequest
+		require.NoError(t, json.Unmarshal(raw, &req))
+
+		tr := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
+		tr.(RequestHeadersSetter).SetRequestHeaders(map[string]string{
+			anthropicBetaHeaderName: "existing-beta",
+		})
+		headers, body, err := tr.RequestBody(raw, &req, false)
+		require.NoError(t, err)
+
+		require.Equal(t, "high", gjson.GetBytes(body, "output_config.effort").String())
+		require.Equal(t, "user", gjson.GetBytes(body, "messages.0.role").String())
+		require.Equal(t, "assistant", gjson.GetBytes(body, "messages.1.role").String())
+		require.Equal(t, "system", gjson.GetBytes(body, "messages.2.role").String())
+		require.True(t, gjson.GetBytes(body, "messages.2.content").IsArray())
+		require.Empty(t, gjson.GetBytes(body, "messages.2.content").Array())
+		require.Equal(t, "low", gjson.GetBytes(body, "messages.2.output_config.effort").String())
+		require.Equal(t, "user", gjson.GetBytes(body, "messages.3.role").String())
+
+		var betaHeader string
+		for _, header := range headers {
+			if header.Key() == anthropicBetaHeaderName {
+				betaHeader = header.Value()
+			}
+		}
+		require.Equal(t, "existing-beta,"+perMessageOutputConfigBeta, betaHeader)
+	})
+
+	t.Run("Per-message effort requires empty system content", func(t *testing.T) {
+		req := &openai.ChatCompletionRequest{
+			Model:     "claude-sonnet-5-5",
+			MaxTokens: ptr.To(int64(100)),
+			Messages: []openai.ChatCompletionMessageParamUnion{{
+				OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.ContentUnion{Value: "must not be dropped"},
+					OutputConfig: &openai.ChatCompletionSystemMessageOutputConfig{
+						Effort: openai.ReasoningEffortLow,
+					},
+				},
+			}},
+		}
+
+		tr := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
+		_, _, err := tr.RequestBody(nil, req, false)
+		require.ErrorContains(t, err, "per-message output_config requires an empty system message content array")
+	})
+
+	t.Run("Per-message effort rejects unsupported model", func(t *testing.T) {
+		req := &openai.ChatCompletionRequest{
+			Model:     "claude-sonnet-5",
+			MaxTokens: ptr.To(int64(100)),
+			Messages: []openai.ChatCompletionMessageParamUnion{{
+				OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{}},
+					OutputConfig: &openai.ChatCompletionSystemMessageOutputConfig{
+						Effort: openai.ReasoningEffortLow,
+					},
+				},
+			}},
+		}
+
+		tr := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
+		_, _, err := tr.RequestBody(nil, req, false)
+		require.ErrorContains(t, err, `per-message effort is not supported for model "claude-sonnet-5" on backend GCPAnthropic`)
+	})
+
+	t.Run("Per-message effort checks model override", func(t *testing.T) {
+		req := &openai.ChatCompletionRequest{
+			Model:     "claude-sonnet-5",
+			MaxTokens: ptr.To(int64(100)),
+			Messages: []openai.ChatCompletionMessageParamUnion{{
+				OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{}},
+					OutputConfig: &openai.ChatCompletionSystemMessageOutputConfig{
+						Effort: openai.ReasoningEffortLow,
+					},
+				},
+			}},
+		}
+
+		tr := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "claude-sonnet-5-5")
+		_, _, err := tr.RequestBody(nil, req, false)
+		require.NoError(t, err)
+	})
+
+	t.Run("Beta filters apply without per-message effort", func(t *testing.T) {
+		tr := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
+		tr.(RequestHeadersSetter).SetRequestHeaders(map[string]string{
+			anthropicBetaHeaderName: "keep,drop",
+		})
+		tr.(HeaderValueFilterSetter).SetHeaderValueFilter(anthropicBetaHeaderName, headerValueFilterModeDenylist, []string{"drop"})
+
+		headers, _, err := tr.RequestBody(nil, openAIReq, false)
+		require.NoError(t, err)
+		require.Contains(t, headers, internalapi.Header{anthropicBetaHeaderName, "keep"})
+	})
+
+	t.Run("Beta filter cannot remove required per-message beta", func(t *testing.T) {
+		req := &openai.ChatCompletionRequest{
+			Model:     "claude-sonnet-5-5",
+			MaxTokens: ptr.To(int64(100)),
+			Messages: []openai.ChatCompletionMessageParamUnion{{
+				OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Role:         openai.ChatMessageRoleSystem,
+					Content:      openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{}},
+					OutputConfig: &openai.ChatCompletionSystemMessageOutputConfig{Effort: openai.ReasoningEffortLow},
+				},
+			}},
+		}
+		tr := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
+		tr.(HeaderValueFilterSetter).SetHeaderValueFilter(anthropicBetaHeaderName, headerValueFilterModeDenylist, []string{perMessageOutputConfigBeta})
+
+		_, _, err := tr.RequestBody(nil, req, false)
+		require.ErrorContains(t, err, "anthropic-beta filter removes required value")
+	})
+
 	t.Run("Streaming Request Validation", func(t *testing.T) {
 		streamReq := &openai.ChatCompletionRequest{
 			Model:     claudeTestModel,

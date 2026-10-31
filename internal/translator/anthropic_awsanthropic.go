@@ -48,7 +48,9 @@ type anthropicToAWSAnthropicTranslator struct {
 // "invalid beta flag" error if any unrecognized flag is present, so unsupported flags (e.g.
 // ones only the Anthropic API knows) must be stripped rather than forwarded.
 //
-// Every entry was confirmed accepted (HTTP 200) by live probes against Bedrock. Notably,
+// Entries are accepted by Bedrock based on live probes except
+// mid-conversation-output-config-2026-07-01, which is documented by Anthropic for the
+// Bedrock InvokeModel API. Notably,
 // prompt-caching-2024-07-31, extended-cache-ttl-2025-04-11, files-api-2025-04-14,
 // code-execution-2025-05-22 and memory-2025-08-18 were probed and rejected. Extend this set
 // only with flags verified against Bedrock.
@@ -64,6 +66,7 @@ var awsBedrockSupportedAnthropicBetas = map[string]struct{}{
 	"interleaved-thinking-2025-05-14":          {},
 	"mcp-client-2025-04-04":                    {},
 	"mcp-client-2025-11-20":                    {},
+	perMessageOutputConfigBeta:                 {},
 	"model-context-window-exceeded-2025-08-26": {},
 	"output-128k-2025-02-19":                   {},
 	"pdfs-2024-09-25":                          {},
@@ -95,9 +98,13 @@ var anthropicAPIToBedrockBetaAliases = map[string]string{
 
 // SetRequestHeaders implements [RequestHeadersSetter].
 func (a *anthropicToAWSAnthropicTranslator) SetRequestHeaders(headers map[string]string) {
+	a.anthropicBetas = normalizeAWSBedrockBetas(parseCommaSeparatedHeader(headers, anthropicBetaHeaderName))
+}
+
+func normalizeAWSBedrockBetas(input []string) []string {
 	var anthropicBetas []string
 	seen := map[string]struct{}{}
-	for _, beta := range parseCommaSeparatedHeader(headers, anthropicBetaHeaderName) {
+	for _, beta := range input {
 		// Translate Anthropic-API-only flag names to their Bedrock equivalents
 		// before the allowlist check.
 		if alias, ok := anthropicAPIToBedrockBetaAliases[beta]; ok {
@@ -114,7 +121,7 @@ func (a *anthropicToAWSAnthropicTranslator) SetRequestHeaders(headers map[string
 			anthropicBetas = append(anthropicBetas, beta)
 		}
 	}
-	a.anthropicBetas = anthropicBetas
+	return anthropicBetas
 }
 
 // SetHeaderValueFilter implements [HeaderValueFilterSetter]. Only anthropic-beta is handled here:

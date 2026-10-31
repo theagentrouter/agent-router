@@ -489,6 +489,23 @@ func TestOpenAIChatCompletionMessageUnmarshal(t *testing.T) {
 	}
 }
 
+func TestChatCompletionSystemMessagePerMessageEffort(t *testing.T) {
+	input := []byte(`{"model":"claude-sonnet-5-5","messages":[{"role":"system","content":[],"output_config":{"effort":"low"}},{"role":"user","content":"Summarize it."}]}`)
+
+	var req ChatCompletionRequest
+	require.NoError(t, json.Unmarshal(input, &req))
+	require.Len(t, req.Messages, 2)
+	system := req.Messages[0].OfSystem
+	require.NotNil(t, system)
+	require.Equal(t, []ChatCompletionContentPartTextParam{}, system.Content.Value)
+	require.NotNil(t, system.OutputConfig)
+	require.Equal(t, ReasoningEffortLow, system.OutputConfig.Effort)
+
+	output, err := json.Marshal(&req)
+	require.NoError(t, err)
+	require.JSONEq(t, string(input), string(output))
+}
+
 func TestModelListMarshal(t *testing.T) {
 	var (
 		model = Model{

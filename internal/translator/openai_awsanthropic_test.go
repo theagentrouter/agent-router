@@ -28,6 +28,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
@@ -214,6 +215,75 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		require.Equal(t, pathHeaderName, pathHeader.Key())
 		expectedPath := fmt.Sprintf("/model/%s/invoke", overrideModelName)
 		require.Equal(t, expectedPath, pathHeader.Value())
+	})
+
+	t.Run("Per-message effort adds InvokeModel beta", func(t *testing.T) {
+		req := &openai.ChatCompletionRequest{
+			Model:     "anthropic.claude-opus-5-5-v1:0",
+			MaxTokens: ptr.To(int64(100)),
+			Messages: []openai.ChatCompletionMessageParamUnion{{
+				OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{}},
+					OutputConfig: &openai.ChatCompletionSystemMessageOutputConfig{
+						Effort: openai.ReasoningEffortLow,
+					},
+				},
+			}},
+		}
+
+		tr := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+		_, body, err := tr.RequestBody(nil, req, false)
+		require.NoError(t, err)
+		require.Equal(t, perMessageOutputConfigBeta, gjson.GetBytes(body, "anthropic_beta.0").String())
+		require.Equal(t, "system", gjson.GetBytes(body, "messages.0.role").String())
+		require.Equal(t, "low", gjson.GetBytes(body, "messages.0.output_config.effort").String())
+	})
+
+	t.Run("Per-message effort merges and filters beta values", func(t *testing.T) {
+		req := &openai.ChatCompletionRequest{
+			Model:     "anthropic.claude-opus-5-5-v1:0",
+			MaxTokens: ptr.To(int64(100)),
+			Messages: []openai.ChatCompletionMessageParamUnion{{
+				OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Role:         openai.ChatMessageRoleSystem,
+					Content:      openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{}},
+					OutputConfig: &openai.ChatCompletionSystemMessageOutputConfig{Effort: openai.ReasoningEffortLow},
+				},
+			}},
+		}
+		tr := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+		tr.(RequestHeadersSetter).SetRequestHeaders(map[string]string{
+			anthropicBetaHeaderName: "fine-grained-tool-streaming-2025-05-14,unknown-beta",
+		})
+		tr.(HeaderValueFilterSetter).SetHeaderValueFilter(anthropicBetaHeaderName, headerValueFilterModeAllowlist, []string{
+			"fine-grained-tool-streaming-2025-05-14", perMessageOutputConfigBeta,
+		})
+
+		headers, body, err := tr.RequestBody(nil, req, false)
+		require.NoError(t, err)
+		require.Equal(t, "fine-grained-tool-streaming-2025-05-14", gjson.GetBytes(body, "anthropic_beta.0").String())
+		require.Equal(t, perMessageOutputConfigBeta, gjson.GetBytes(body, "anthropic_beta.1").String())
+		require.Contains(t, headers, internalapi.Header{anthropicBetaHeaderName, "fine-grained-tool-streaming-2025-05-14," + perMessageOutputConfigBeta})
+	})
+
+	t.Run("Beta filter cannot remove required per-message beta", func(t *testing.T) {
+		req := &openai.ChatCompletionRequest{
+			Model:     "anthropic.claude-opus-5-5-v1:0",
+			MaxTokens: ptr.To(int64(100)),
+			Messages: []openai.ChatCompletionMessageParamUnion{{
+				OfSystem: &openai.ChatCompletionSystemMessageParam{
+					Role:         openai.ChatMessageRoleSystem,
+					Content:      openai.ContentUnion{Value: []openai.ChatCompletionContentPartTextParam{}},
+					OutputConfig: &openai.ChatCompletionSystemMessageOutputConfig{Effort: openai.ReasoningEffortLow},
+				},
+			}},
+		}
+		tr := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+		tr.(HeaderValueFilterSetter).SetHeaderValueFilter(anthropicBetaHeaderName, headerValueFilterModeDenylist, []string{perMessageOutputConfigBeta})
+
+		_, _, err := tr.RequestBody(nil, req, false)
+		require.ErrorContains(t, err, "anthropic-beta filter removes required value")
 	})
 
 	t.Run("Model Name with ARN (URL encoding)", func(t *testing.T) {
