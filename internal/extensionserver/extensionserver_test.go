@@ -686,7 +686,7 @@ func TestMaybeModifyClusterUsesEndpointBackendIdentity(t *testing.T) {
 			endpointGroup("removed"),
 		}},
 	}
-	require.ErrorContains(t, s.maybeModifyCluster(t.Context(), stale, nil), "Backend ns/removed is absent from the AIGatewayRoute")
+	require.ErrorContains(t, s.maybeModifyCluster(t.Context(), stale, nil), "backend ns/removed is absent from the AIGatewayRoute")
 }
 
 func TestParseAIGatewayClusterName(t *testing.T) {

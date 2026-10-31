@@ -405,9 +405,9 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 				}
 			}
 			for endpointIndex, endpoints := range cluster.LoadAssignment.Endpoints {
-				i, found, err := backendRefIndexFromEndpointGroup(endpoints, httpRouteRule.BackendRefs, aigwRoute.Namespace)
-				if err != nil {
-					return fmt.Errorf("cluster %s endpoint group %d: %w", cluster.Name, endpointIndex, err)
+				i, found, matchErr := backendRefIndexFromEndpointGroup(endpoints, httpRouteRule.BackendRefs, aigwRoute.Namespace)
+				if matchErr != nil {
+					return fmt.Errorf("cluster %s endpoint group %d: %w", cluster.Name, endpointIndex, matchErr)
 				}
 				if !found {
 					// Older Envoy Gateway versions may omit Backend metadata.
@@ -1122,7 +1122,7 @@ func backendRefIndexFromEndpointGroup(endpoints *endpointv3.LocalityLbEndpoints,
 				return i, true, nil
 			}
 		}
-		return 0, true, fmt.Errorf("Backend %s/%s is absent from the AIGatewayRoute", namespace, name)
+		return 0, true, fmt.Errorf("backend %s/%s is absent from the AIGatewayRoute", namespace, name)
 	}
 	return 0, false, nil
 }
