@@ -642,14 +642,25 @@ func TestMaybeModifyClusterUsesEndpointBackendIdentity(t *testing.T) {
 		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{
 			BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
 				{Name: "idle", Weight: ptr.To[int32](0)},
-				{Name: "spot", Weight: ptr.To[int32](1)},
+				{Name: "spot", Namespace: ptr.To(gwapiv1.Namespace("backend-ns")), Weight: ptr.To[int32](1)},
 				{Name: "ondemand", Weight: ptr.To[int32](1)},
 			},
 		}}},
 	}))
+	for _, backend := range []struct{ name, namespace, envoyName string }{
+		{"spot", "backend-ns", "spot-envoy"},
+		{"ondemand", "ns", "ondemand-envoy"},
+	} {
+		require.NoError(t, c.Create(t.Context(), &aigv1b1.AIServiceBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: backend.name, Namespace: backend.namespace},
+			Spec: aigv1b1.AIServiceBackendSpec{BackendRef: gwapiv1.BackendObjectReference{
+				Name: gwapiv1.ObjectName(backend.envoyName),
+			}},
+		}))
+	}
 	s, err := New(c, logr.Discard(), udsPath, false, nil, nil, "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
 	require.NoError(t, err)
-	endpointGroup := func(name string) *endpointv3.LocalityLbEndpoints {
+	endpointGroup := func(name, namespace string) *endpointv3.LocalityLbEndpoints {
 		return &endpointv3.LocalityLbEndpoints{
 			Metadata: &corev3.Metadata{FilterMetadata: map[string]*structpb.Struct{
 				"envoy-gateway": {Fields: map[string]*structpb.Value{
@@ -657,7 +668,7 @@ func TestMaybeModifyClusterUsesEndpointBackendIdentity(t *testing.T) {
 						structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
 							"kind":      structpb.NewStringValue("Backend"),
 							"name":      structpb.NewStringValue(name),
-							"namespace": structpb.NewStringValue("ns"),
+							"namespace": structpb.NewStringValue(namespace),
 						}}),
 					}}),
 				}},
@@ -670,7 +681,7 @@ func TestMaybeModifyClusterUsesEndpointBackendIdentity(t *testing.T) {
 	cluster := &clusterv3.Cluster{
 		Name: "httproute/ns/myroute/rule/0",
 		LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
-			endpointGroup("ondemand"), endpointGroup("spot"),
+			endpointGroup("ondemand-envoy", "ns"), endpointGroup("spot-envoy", "backend-ns"),
 		}},
 	}
 	require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
@@ -683,7 +694,7 @@ func TestMaybeModifyClusterUsesEndpointBackendIdentity(t *testing.T) {
 	stale := &clusterv3.Cluster{
 		Name: "httproute/ns/myroute/rule/0",
 		LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
-			endpointGroup("removed"),
+			endpointGroup("removed", "ns"),
 		}},
 	}
 	require.ErrorContains(t, s.maybeModifyCluster(t.Context(), stale, nil), "backend ns/removed is absent from the AIGatewayRoute")

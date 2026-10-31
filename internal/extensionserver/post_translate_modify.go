@@ -405,7 +405,7 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 				}
 			}
 			for endpointIndex, endpoints := range cluster.LoadAssignment.Endpoints {
-				i, found, matchErr := backendRefIndexFromEndpointGroup(endpoints, httpRouteRule.BackendRefs, aigwRoute.Namespace)
+				i, found, matchErr := s.backendRefIndexFromEndpointGroup(ctx, endpoints, httpRouteRule.BackendRefs, aigwRoute.Namespace)
 				if matchErr != nil {
 					return fmt.Errorf("cluster %s endpoint group %d: %w", cluster.Name, endpointIndex, matchErr)
 				}
@@ -1101,7 +1101,7 @@ func routeNameFromEnvoyGatewayMetadata(route *routev3.Route) string {
 // AIGatewayRoute backend that produced it. The locality metadata is part of
 // the translated cluster, so it remains correct when the route changes while
 // Envoy Gateway and AI Gateway reconcile independently.
-func backendRefIndexFromEndpointGroup(endpoints *endpointv3.LocalityLbEndpoints, refs []aigv1b1.AIGatewayRouteRuleBackendRef, routeNamespace string) (int, bool, error) {
+func (s *Server) backendRefIndexFromEndpointGroup(ctx context.Context, endpoints *endpointv3.LocalityLbEndpoints, refs []aigv1b1.AIGatewayRouteRuleBackendRef, routeNamespace string) (int, bool, error) {
 	resources := endpoints.GetMetadata().GetFilterMetadata()["envoy-gateway"].GetFields()["resources"].GetListValue()
 	if resources == nil {
 		return 0, false, nil
@@ -1118,7 +1118,20 @@ func backendRefIndexFromEndpointGroup(endpoints *endpointv3.LocalityLbEndpoints,
 			if ref.Namespace != nil {
 				refNamespace = string(*ref.Namespace)
 			}
-			if ref.Name == name && refNamespace == namespace {
+			// The generated HTTPRoute references the Envoy Gateway Backend named
+			// by the AIServiceBackend, which need not share its name or namespace.
+			backend := &aigv1b1.AIServiceBackend{}
+			if err := s.k8sClient.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: refNamespace}, backend); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				return 0, true, fmt.Errorf("get AIServiceBackend %s/%s: %w", refNamespace, ref.Name, err)
+			}
+			backendNamespace := backend.Namespace
+			if backend.Spec.BackendRef.Namespace != nil {
+				backendNamespace = string(*backend.Spec.BackendRef.Namespace)
+			}
+			if string(backend.Spec.BackendRef.Name) == name && backendNamespace == namespace {
 				return i, true, nil
 			}
 		}
