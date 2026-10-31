@@ -629,6 +629,60 @@ func Test_maybeModifyCluster(t *testing.T) {
 	}
 }
 
+func TestMaybeModifyClusterZeroWeightTransitionDoesNotMislabelSpotEndpoint(t *testing.T) {
+	// Envoy Gateway translated the older HTTPRoute while west4-spot had weight
+	// zero. The AIGatewayRoute read by the extension server has since given it
+	// weight one. Positional matching would shift every endpoint group and label
+	// the west1 Spot endpoint as west3 on-demand, as observed in production.
+	refs := []aigv1b1.AIGatewayRouteRuleBackendRef{
+		{Name: "west4-spot", Weight: ptr.To[int32](1)},
+		{Name: "west4-ondemand", Weight: ptr.To[int32](1)},
+		{Name: "west3-ondemand", Weight: ptr.To[int32](1)},
+		{Name: "west1-spot", Weight: ptr.To[int32](10)},
+		{Name: "west1-ondemand", Weight: ptr.To[int32](0)},
+	}
+	c := newFakeClient()
+	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "external-gemma", Namespace: "inference"},
+		Spec:       aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{BackendRefs: refs}}},
+	}))
+	for _, ref := range refs {
+		require.NoError(t, c.Create(t.Context(), &aigv1b1.AIServiceBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: ref.Name, Namespace: "inference"},
+			Spec: aigv1b1.AIServiceBackendSpec{BackendRef: gwapiv1.BackendObjectReference{
+				Name: gwapiv1.ObjectName("eg-" + ref.Name),
+			}},
+		}))
+	}
+	endpointGroup := func(name string) *endpointv3.LocalityLbEndpoints {
+		resources, err := structpb.NewStruct(map[string]interface{}{
+			"resources": []interface{}{map[string]interface{}{
+				"kind": "Backend", "name": "eg-" + name, "namespace": "inference",
+			}},
+		})
+		require.NoError(t, err)
+		return &endpointv3.LocalityLbEndpoints{
+			Metadata:    &corev3.Metadata{FilterMetadata: map[string]*structpb.Struct{"envoy-gateway": resources}},
+			LbEndpoints: []*endpointv3.LbEndpoint{{}},
+		}
+	}
+	cluster := &clusterv3.Cluster{
+		Name: "httproute/inference/external-gemma/rule/0",
+		LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+			endpointGroup("west4-ondemand"), endpointGroup("west3-ondemand"), endpointGroup("west1-spot"),
+		}},
+	}
+	s, err := New(c, logr.Discard(), udsPath, false, nil, nil, "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
+	require.NoError(t, err)
+	require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
+	for endpointIndex, refIndex := range []int{1, 2, 3} {
+		got := cluster.LoadAssignment.Endpoints[endpointIndex].LbEndpoints[0].GetMetadata().
+			GetFilterMetadata()[internalapi.InternalEndpointMetadataNamespace].GetFields()[internalapi.InternalMetadataBackendNameKey].GetStringValue()
+		want := internalapi.PerRouteRuleRefBackendName("inference", refs[refIndex].Name, "external-gemma", 0, refIndex)
+		require.Equal(t, want, got)
+	}
+}
+
 func TestParseAIGatewayClusterName(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
