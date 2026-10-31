@@ -20,10 +20,15 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -447,6 +452,222 @@ func Test_findListenerRouteConfigs(t *testing.T) {
 	}
 	names := findListenerRouteConfigs(l)
 	require.ElementsMatch(t, []string{"foo", "bar"}, names)
+}
+
+func TestCountDistinctBackendPriorities(t *testing.T) {
+	tests := []struct {
+		name     string
+		refs     []aigv1b1.AIGatewayRouteRuleBackendRef
+		expected int
+	}{
+		{
+			name:     "no backends",
+			refs:     nil,
+			expected: 0,
+		},
+		{
+			name: "all unset priority (defaults to 0)",
+			refs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+				{Name: "b1"}, {Name: "b2"},
+			},
+			expected: 1,
+		},
+		{
+			name: "distinct priorities",
+			refs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+				{Name: "b1", Priority: ptr.To(uint32(0))},
+				{Name: "b2", Priority: ptr.To(uint32(1))},
+			},
+			expected: 2,
+		},
+		{
+			name: "same explicit priority",
+			refs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+				{Name: "b1", Priority: ptr.To(uint32(2))},
+				{Name: "b2", Priority: ptr.To(uint32(2))},
+			},
+			expected: 1,
+		},
+		{
+			name: "InferencePool refs are ignored",
+			refs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+				{Name: "b1", Priority: ptr.To(uint32(0))},
+				{
+					Name:     "pool1",
+					Group:    ptr.To("inference.networking.k8s.io"),
+					Kind:     ptr.To("InferencePool"),
+					Priority: ptr.To(uint32(1)),
+				},
+			},
+			expected: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, countDistinctBackendPriorities(tt.refs))
+		})
+	}
+}
+
+// decodeHeaderOrderAny is a minimal hand-rolled decoder mirroring
+// buildHeaderOrderLoadBalancingPolicyAny's encoding, used to verify the encoded Any without
+// requiring generated Go bindings for the header_order proto.
+func decodeHeaderOrderAny(t *testing.T, b []byte) (metadataNamespace, metadataKey string, fallbackPolicy *clusterv3.LoadBalancingPolicy) {
+	t.Helper()
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		require.Positive(t, n)
+		require.Equal(t, protowire.BytesType, typ)
+		b = b[n:]
+		v, n := protowire.ConsumeBytes(b)
+		require.Positive(t, n)
+		b = b[n:]
+		switch num {
+		case 1:
+			metadataNamespace = string(v)
+		case 2:
+			metadataKey = string(v)
+		case 3:
+			fallbackPolicy = &clusterv3.LoadBalancingPolicy{}
+			require.NoError(t, proto.Unmarshal(v, fallbackPolicy))
+		default:
+			t.Fatalf("unexpected field number %d", num)
+		}
+	}
+	return metadataNamespace, metadataKey, fallbackPolicy
+}
+
+func TestBuildHeaderOrderLoadBalancingPolicyAny(t *testing.T) {
+	fallback := &clusterv3.LoadBalancingPolicy{
+		Policies: []*clusterv3.LoadBalancingPolicy_Policy{{
+			TypedExtensionConfig: &corev3.TypedExtensionConfig{
+				Name: "envoy.load_balancing_policies.round_robin",
+			},
+		}},
+	}
+
+	any, err := buildHeaderOrderLoadBalancingPolicyAny("envoy.ai_gateway.endpoint_order", "order", fallback)
+	require.NoError(t, err)
+	require.Equal(t, headerOrderLbConfigTypeURL, any.TypeUrl)
+
+	gotNamespace, gotKey, gotFallback := decodeHeaderOrderAny(t, any.Value)
+	require.Equal(t, "envoy.ai_gateway.endpoint_order", gotNamespace)
+	require.Equal(t, "order", gotKey)
+	require.True(t, proto.Equal(fallback, gotFallback))
+}
+
+func newAIGatewayRouteWithBackendPriorities(namespace, name string, priorities ...uint32) *aigv1b1.AIGatewayRoute {
+	refs := make([]aigv1b1.AIGatewayRouteRuleBackendRef, len(priorities))
+	for i, p := range priorities {
+		refs[i] = aigv1b1.AIGatewayRouteRuleBackendRef{Name: "backend", Priority: ptr.To(p)}
+	}
+	return &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			Rules: []aigv1b1.AIGatewayRouteRule{{BackendRefs: refs}},
+		},
+	}
+}
+
+func TestServer_maybeSetHeaderOrderLoadBalancingPolicy(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, aigv1b1.AddToScheme(scheme))
+
+	existingPolicy := &clusterv3.LoadBalancingPolicy{
+		Policies: []*clusterv3.LoadBalancingPolicy_Policy{{
+			TypedExtensionConfig: &corev3.TypedExtensionConfig{
+				Name: "envoy.load_balancing_policies.round_robin",
+			},
+		}},
+	}
+
+	tests := []struct {
+		name             string
+		clusterName      string
+		loadBalancing    *clusterv3.LoadBalancingPolicy
+		route            *aigv1b1.AIGatewayRoute
+		expectWrapped    bool
+		expectUnmodified bool
+	}{
+		{
+			name:             "not an AIGatewayRoute cluster",
+			clusterName:      "some-other-cluster",
+			loadBalancing:    existingPolicy,
+			expectUnmodified: true,
+		},
+		{
+			name:             "per-backendRef cluster is skipped",
+			clusterName:      "httproute/ns/route/rule/0/backend/0",
+			loadBalancing:    existingPolicy,
+			route:            newAIGatewayRouteWithBackendPriorities("ns", "route", 0, 1),
+			expectUnmodified: true,
+		},
+		{
+			name:             "AIGatewayRoute not found",
+			clusterName:      "httproute/ns/missing/rule/0",
+			loadBalancing:    existingPolicy,
+			expectUnmodified: true,
+		},
+		{
+			name:             "rule index out of range",
+			clusterName:      "httproute/ns/route/rule/5",
+			loadBalancing:    existingPolicy,
+			route:            newAIGatewayRouteWithBackendPriorities("ns", "route", 0, 1),
+			expectUnmodified: true,
+		},
+		{
+			name:             "single distinct priority is skipped",
+			clusterName:      "httproute/ns/route/rule/0",
+			loadBalancing:    existingPolicy,
+			route:            newAIGatewayRouteWithBackendPriorities("ns", "route", 0, 0),
+			expectUnmodified: true,
+		},
+		{
+			name:             "no existing LoadBalancingPolicy to wrap is skipped",
+			clusterName:      "httproute/ns/route/rule/0",
+			loadBalancing:    nil,
+			route:            newAIGatewayRouteWithBackendPriorities("ns", "route", 0, 1),
+			expectUnmodified: true,
+		},
+		{
+			name:          "multiple distinct priorities wraps the existing policy",
+			clusterName:   "httproute/ns/route/rule/0",
+			loadBalancing: existingPolicy,
+			route:         newAIGatewayRouteWithBackendPriorities("ns", "route", 0, 1),
+			expectWrapped: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := fake.NewClientBuilder().WithScheme(scheme)
+			if tt.route != nil {
+				builder = builder.WithObjects(tt.route)
+			}
+			s := &Server{log: zap.New(), k8sClient: builder.Build()}
+
+			cluster := &clusterv3.Cluster{Name: tt.clusterName, LoadBalancingPolicy: tt.loadBalancing}
+			cache := make(map[client.ObjectKey]*aigv1b1.AIGatewayRoute)
+			err := s.maybeSetHeaderOrderLoadBalancingPolicy(t.Context(), cluster, cache)
+			require.NoError(t, err)
+
+			if tt.expectUnmodified {
+				require.Equal(t, tt.loadBalancing, cluster.LoadBalancingPolicy)
+				return
+			}
+
+			require.True(t, tt.expectWrapped)
+			require.Len(t, cluster.LoadBalancingPolicy.Policies, 1)
+			policy := cluster.LoadBalancingPolicy.Policies[0].TypedExtensionConfig
+			require.Equal(t, headerOrderLbPolicyName, policy.Name)
+			require.Equal(t, headerOrderLbConfigTypeURL, policy.TypedConfig.TypeUrl)
+
+			gotNamespace, gotKey, gotFallback := decodeHeaderOrderAny(t, policy.TypedConfig.Value)
+			require.Equal(t, internalapi.EndpointOrderMetadataNamespace, gotNamespace)
+			require.Equal(t, internalapi.EndpointOrderMetadataKey, gotKey)
+			require.True(t, proto.Equal(tt.loadBalancing, gotFallback))
+		})
+	}
 }
 
 // extProcFilterConfig returns the upstream ai-gateway ext_proc configuration of the cluster.
