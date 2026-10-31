@@ -35,9 +35,9 @@ func requireNewServerWithMockProcessor(t *testing.T) (*Server, *mockProcessor) {
 	})), false)
 	require.NoError(t, err)
 	require.NotNil(t, s)
-	s.config = &filterapi.RuntimeConfig{}
+	s.config.Store(&filterapi.RuntimeConfig{})
 
-	m := newMockProcessor(s.config, s.logger)
+	m := newMockProcessor(s.config.Load(), s.logger)
 	s.Register("/", func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
 		return m, nil
 	})
@@ -50,7 +50,7 @@ func TestServer_LoadConfig(t *testing.T) {
 	s := &Server{}
 	err := s.LoadConfig(t.Context(), config)
 	require.NoError(t, err)
-	require.NotNil(t, s.config)
+	require.NotNil(t, s.config.Load())
 }
 
 func TestServer_Check(t *testing.T) {
@@ -313,7 +313,7 @@ func TestServer_Process(t *testing.T) {
 
 func TestServer_setBackend(t *testing.T) {
 	s, _ := requireNewServerWithMockProcessor(t)
-	s.config.Backends = map[string]*filterapi.RuntimeBackend{"openai": {Backend: &filterapi.Backend{Name: "openai"}}}
+	s.config.Load().Backends = map[string]*filterapi.RuntimeBackend{"openai": {Backend: &filterapi.Backend{Name: "openai"}}}
 	mockProc := &mockProcessor{}
 
 	for _, isEndpointPicker := range []bool{true, false} {
@@ -341,6 +341,99 @@ func TestServer_setBackend(t *testing.T) {
 			require.ErrorContains(t, err, `no router processor found, request_id=aaaaaaaaaaaa, backend=openai`)
 		})
 	}
+}
+
+func TestServer_setBackend_unknownBackend(t *testing.T) {
+	const internalReqID = "aaaaaaaaaaaa"
+	req := &extprocv3.ProcessingRequest{
+		Attributes: map[string]*structpb.Struct{
+			"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{
+				internalapi.XDSUpstreamHostMetadataBackendNamePath: structpb.NewStringValue("new"),
+			}},
+		},
+		Request: &extprocv3.ProcessingRequest_RequestHeaders{RequestHeaders: &extprocv3.HttpHeaders{}},
+	}
+	withNewBackend := &filterapi.RuntimeConfig{Backends: map[string]*filterapi.RuntimeBackend{
+		"new": {Backend: &filterapi.Backend{Name: "new"}},
+	}}
+	newServer := func(t *testing.T) *Server {
+		s, _ := requireNewServerWithMockProcessor(t)
+		s.routerProcessorsPerReqID[internalReqID] = &mockProcessor{}
+		return s
+	}
+
+	t.Run("no reloader", func(t *testing.T) {
+		s := newServer(t)
+		err := s.setBackend(t.Context(), &mockProcessor{}, internalReqID, false, req)
+		require.ErrorIs(t, err, errUnknownBackend)
+	})
+	t.Run("reload finds the backend", func(t *testing.T) {
+		s := newServer(t)
+		reloads := 0
+		s.SetConfigReloader(func(context.Context) error {
+			reloads++
+			s.config.Store(withNewBackend)
+			return nil
+		})
+		require.NoError(t, s.setBackend(t.Context(), &mockProcessor{}, internalReqID, false, req))
+		require.Equal(t, 1, reloads)
+	})
+	t.Run("reload does not find the backend", func(t *testing.T) {
+		s := newServer(t)
+		reloads := 0
+		s.SetConfigReloader(func(context.Context) error {
+			reloads++
+			return nil
+		})
+		err := s.setBackend(t.Context(), &mockProcessor{}, internalReqID, false, req)
+		require.ErrorIs(t, err, errUnknownBackend)
+		require.Equal(t, 1, reloads)
+	})
+	t.Run("reload fails", func(t *testing.T) {
+		s := newServer(t)
+		s.SetConfigReloader(func(context.Context) error { return errors.New("reload failed") })
+		err := s.setBackend(t.Context(), &mockProcessor{}, internalReqID, false, req)
+		require.ErrorIs(t, err, errUnknownBackend)
+	})
+	t.Run("reload waits at most configReloadTimeout", func(t *testing.T) {
+		s := newServer(t)
+		s.SetConfigReloader(func(ctx context.Context) error {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.LessOrEqual(t, time.Until(deadline), configReloadTimeout)
+			return nil
+		})
+		err := s.setBackend(t.Context(), &mockProcessor{}, internalReqID, false, req)
+		require.ErrorIs(t, err, errUnknownBackend)
+	})
+	t.Run("known backend does not reload", func(t *testing.T) {
+		s := newServer(t)
+		s.config.Store(withNewBackend)
+		reloads := 0
+		s.SetConfigReloader(func(context.Context) error {
+			reloads++
+			return nil
+		})
+		require.NoError(t, s.setBackend(t.Context(), &mockProcessor{}, internalReqID, false, req))
+		require.Zero(t, reloads)
+	})
+	t.Run("no config loaded yet", func(t *testing.T) {
+		s := newServer(t)
+		s.config.Store(nil)
+		s.SetConfigReloader(func(context.Context) error {
+			s.config.Store(withNewBackend)
+			return nil
+		})
+		require.NoError(t, s.setBackend(t.Context(), &mockProcessor{}, internalReqID, false, req))
+	})
+}
+
+func Test_unknownBackendResponse(t *testing.T) {
+	ir := unknownBackendResponse().GetImmediateResponse()
+	require.NotNil(t, ir)
+	require.Equal(t, typev3.StatusCode_ServiceUnavailable, ir.GetStatus().GetCode())
+	require.Equal(t, uint32(codes.Unavailable), ir.GetGrpcStatus().GetStatus())
+	require.JSONEq(t, `{"type":"error","error":{"type":"ServiceUnavailable","code":"503","message":"the backend for this route is not loaded yet, retry the request"}}`, string(ir.GetBody()))
 }
 
 func TestResolveBackendName(t *testing.T) {
@@ -471,7 +564,7 @@ func TestServer_ProcessorSelection(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
-	s.config = &filterapi.RuntimeConfig{}
+	s.config.Store(&filterapi.RuntimeConfig{})
 	s.Register("/one", func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
 		// Returning nil guarantees that the test will fail if this processor is selected.
 		return nil, nil
@@ -751,8 +844,8 @@ func TestServer_processMsg_RedactsCredentialMutation(t *testing.T) {
 	}))
 	s, err := NewServer(logger, false) // enableRedaction=false, debug on
 	require.NoError(t, err)
-	s.config = &filterapi.RuntimeConfig{}
-	m := newMockProcessor(s.config, s.logger).(*mockProcessor)
+	s.config.Store(&filterapi.RuntimeConfig{})
+	m := newMockProcessor(s.config.Load(), s.logger).(*mockProcessor)
 	s.Register("/", func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
 		return m, nil
 	})
@@ -1125,7 +1218,7 @@ func TestServer_ProcessorForPath_QueryParameterStripping(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
-	s.config = &filterapi.RuntimeConfig{}
+	s.config.Store(&filterapi.RuntimeConfig{})
 
 	// Register processors for different base paths.
 	mockProc := &mockProcessor{}
