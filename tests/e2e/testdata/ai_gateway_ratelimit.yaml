@@ -26,7 +26,7 @@ spec:
         - name: ratelimit
           command:
             - /bin/ratelimit
-          image: docker.io/envoyproxy/ratelimit:1631871c
+          image: docker.io/envoyproxy/ratelimit:63c7e9cc
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8081
@@ -36,6 +36,13 @@ spec:
           env:
             - name: LOG_LEVEL
               value: debug
+            # Emit the per-request passedBackends list in the rate limit response's
+            # dynamic metadata. The Envoy host_allowlist LB policy reads this to exclude
+            # quota-exhausted backends at host-selection time (quota-aware failover). Without
+            # it the policy sees no allowlist, fails open, and keeps routing to the exhausted
+            # backend instead of failing over.
+            - name: RESPONSE_DYNAMIC_METADATA
+              value: "true"
             - name: REDIS_SOCKET_TYPE
               value: tcp
             - name: REDIS_URL

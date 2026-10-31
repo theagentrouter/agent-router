@@ -1,0 +1,341 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+#
+# Quota failover fixture: a single AIGatewayRoute with three backends at
+# ascending priorities:
+#
+#   backend-failover-a  priority 0  QuotaPolicy limit 10 (model quota-failover-a)
+#   backend-failover-b  priority 1  QuotaPolicy limit 10 (model quota-failover-b)
+#   backend-failover-c  priority 2  NO QuotaPolicy        (model quota-failover-c)
+#
+# This exercises the new RLS "passedBackends" dynamic metadata + the Envoy
+# "envoy.load_balancing_policies.host_allowlist" load balancing policy:
+#   - While backend-a still has quota, requests go to it (priority 0).
+#   - When backend-a's quota is exhausted, RLS still returns OK (backend-b's
+#     quota group is not over) and advertises passedBackends=[backend-b], so
+#     host_allowlist excludes backend-a and traffic fails over to backend-b.
+#   - When BOTH quota backends are exhausted, every quota group is over, so RLS
+#     returns OVER_LIMIT and the rate-limit filter returns 429 BEFORE host
+#     selection. The non-quota backend-c is therefore never reached. (This is
+#     the current behavior: there is no failover to a non-quota backend once all
+#     quota-backed targets are exhausted.)
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy-ai-gateway-quota-failover
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: envoy-ai-gateway-quota-failover
+  namespace: default
+spec:
+  gatewayClassName: envoy-ai-gateway-quota-failover
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway-quota-failover
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway-quota-failover
+  namespace: default
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        container:
+          # Clear the default memory/cpu requirements for local tests.
+          resources: {}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: quota-failover
+  namespace: default
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway-quota-failover
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: quota-failover-model
+      backendRefs:
+        - name: backend-failover-a
+          modelNameOverride: quota-failover-a
+          priority: 0
+        - name: backend-failover-b
+          modelNameOverride: quota-failover-b
+          priority: 1
+        - name: backend-failover-c
+          modelNameOverride: quota-failover-c
+          priority: 2
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_total_token
+      type: TotalToken
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: backend-failover-a
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: backend-failover-a
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: backend-failover-b
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: backend-failover-b
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: backend-failover-c
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: backend-failover-c
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: backend-failover-a
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: backend-failover-a.default.svc.cluster.local
+        port: 80
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: backend-failover-b
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: backend-failover-b.default.svc.cluster.local
+        port: 80
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: backend-failover-c
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: backend-failover-c.default.svc.cluster.local
+        port: 80
+---
+# QuotaPolicy for backend-a: 10 total tokens per hour for model quota-failover-a.
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: quota-failover-a-policy
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: backend-failover-a
+  perModelQuotas:
+    - modelName: "quota-failover-a"
+      quota:
+        mode: Shared
+        defaultBucket:
+          limit: 10
+          duration: "1h"
+---
+# QuotaPolicy for backend-b: 10 total tokens per hour for model quota-failover-b.
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: quota-failover-b-policy
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: backend-failover-b
+  perModelQuotas:
+    - modelName: "quota-failover-b"
+      quota:
+        mode: Shared
+        defaultBucket:
+          limit: 10
+          duration: "1h"
+---
+# backend-failover-c has NO QuotaPolicy on purpose (non-quota fallback target).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-failover-a
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend-failover-a
+  template:
+    metadata:
+      labels:
+        app: backend-failover-a
+    spec:
+      containers:
+        - name: backend-failover-a
+          image: docker.io/envoyproxy/ai-gateway-testupstream:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TESTUPSTREAM_ID
+              value: backend-failover-a
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-failover-a
+  namespace: default
+spec:
+  selector:
+    app: backend-failover-a
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-failover-b
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend-failover-b
+  template:
+    metadata:
+      labels:
+        app: backend-failover-b
+    spec:
+      containers:
+        - name: backend-failover-b
+          image: docker.io/envoyproxy/ai-gateway-testupstream:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TESTUPSTREAM_ID
+              value: backend-failover-b
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-failover-b
+  namespace: default
+spec:
+  selector:
+    app: backend-failover-b
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-failover-c
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend-failover-c
+  template:
+    metadata:
+      labels:
+        app: backend-failover-c
+    spec:
+      containers:
+        - name: backend-failover-c
+          image: docker.io/envoyproxy/ai-gateway-testupstream:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TESTUPSTREAM_ID
+              value: backend-failover-c
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-failover-c
+  namespace: default
+spec:
+  selector:
+    app: backend-failover-c
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
