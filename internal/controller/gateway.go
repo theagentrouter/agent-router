@@ -13,6 +13,7 @@ import (
 	stdjson "encoding/json" //nolint: depguard // byte-stable hashing; sonic does not guarantee stable field order.
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -424,6 +425,8 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	// ec.UnscopedModels (and merge them into ec.ModelsByHost) when at least one route
 	// IS hostname-scoped; otherwise the existing ec.Models list already covers them.
 	var unscopedModels []filterapi.Model
+	// Credential override input headers of every policy on this gateway's backends.
+	credentialHeaders := map[string]struct{}{}
 
 	for i := range aiGatewayRoutes {
 		aiGatewayRoute := &aiGatewayRoutes[i]
@@ -560,6 +563,11 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 				}
 
 				if bsp != nil {
+					// Collected before resolving the auth, so a policy whose Secret is unreadable
+					// still gets its header stripped from the other backends of the gateway.
+					for _, h := range credentialOverrideInputHeaders(bsp) {
+						credentialHeaders[h] = struct{}{}
+					}
 					b.Auth, err = c.bspToFilterAPIBackendAuth(ctx, bsp)
 					if err != nil {
 						if isCtxErr(err) {
@@ -570,7 +578,6 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 							"aigatewayroute", aiGatewayRoute.Name, "namespace", aiGatewayRoute.Namespace)
 						continue
 					}
-					stripCredentialOverrideInputHeaders(&b)
 				}
 
 				ec.Backends = append(ec.Backends, b)
@@ -600,6 +607,8 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 			}
 		}
 	}
+
+	stripCredentialOverrideInputHeaders(ec.Backends, credentialHeaders)
 
 	// If at least one route is hostname-scoped, promote the unscoped models to ec.UnscopedModels
 	// so the runtime can fall back to them on unmatched hosts, and merge them into every per-host
@@ -809,21 +818,49 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 	return mc, hasEffectiveRoute
 }
 
-// stripCredentialOverrideInputHeaders puts the credential input header(s) on the backend's remove
-// list so Envoy drops them before the backend sees them. HeaderMutator.Mutate keeps them in the
-// extproc's local map, so the handler can still read them in Do().
+// stripCredentialOverrideInputHeaders puts the credential input headers on every backend's remove
+// list so Envoy drops them before any backend sees them. HeaderMutator.Mutate keeps them in the
+// extproc's local map, so the handler can still read them in Do(), and does not restore removed
+// headers on retry.
 //
-// This is what keeps the credential off the wire. Deleting it from the requestHeaders map would
-// not: only headers a handler returns become Envoy mutations. AWS has three, others one. No-op for
-// the metadata source, where the credential never touches the request.
-func stripCredentialOverrideInputHeaders(b *filterapi.Backend) {
-	if b.Auth == nil || b.Auth.CredentialOverride == nil || len(b.Auth.CredentialOverride.InputHeadersToRemove) == 0 {
+// Every backend, not only the one whose policy reads the header: the injecting filter runs before
+// routing, so the header reaches whichever backend the request is routed to, and Envoy replays the
+// original request headers when it retries or falls back to another backend.
+func stripCredentialOverrideInputHeaders(backends []filterapi.Backend, headers map[string]struct{}) {
+	if len(headers) == 0 {
 		return
 	}
-	if b.HeaderMutation == nil {
-		b.HeaderMutation = &filterapi.HTTPHeaderMutation{}
+	sorted := slices.Sorted(maps.Keys(headers))
+	for i := range backends {
+		b := &backends[i]
+		if b.HeaderMutation == nil {
+			b.HeaderMutation = &filterapi.HTTPHeaderMutation{}
+		}
+		for _, h := range sorted {
+			if !slices.Contains(b.HeaderMutation.Remove, h) {
+				b.HeaderMutation.Remove = append(b.HeaderMutation.Remove, h)
+			}
+		}
 	}
-	b.HeaderMutation.Remove = append(b.HeaderMutation.Remove, b.Auth.CredentialOverride.InputHeadersToRemove...)
+}
+
+// credentialOverrideInputHeaders returns the request headers a trusted filter injects for the
+// policy's fromRequestHeaders override, or nil when it has none. Three for AWS, one otherwise.
+func credentialOverrideInputHeaders(bsp *aigv1b1.BackendSecurityPolicy) []string {
+	o := bsp.Spec.CredentialOverride
+	if o == nil || o.FromRequestHeaders == nil {
+		return nil
+	}
+	return overrideInputHeaders(bsp.Spec.Type, overrideHeaderName(bsp.Spec.Type, o.FromRequestHeaders))
+}
+
+// overrideHeaderName returns the lowercased header name of a fromRequestHeaders source, or the
+// auth type's default when unset. For AWSCredentials it is a prefix.
+func overrideHeaderName(t aigv1b1.BackendSecurityPolicyType, src *aigv1b1.CredentialOverrideFromRequestHeaders) string {
+	if src.Header == "" {
+		return defaultOverrideHeaderName(t)
+	}
+	return strings.ToLower(src.Header)
 }
 
 // defaultOverrideHeaderName returns the default x-aigw-* header name for the given auth type.
@@ -861,8 +898,8 @@ func defaultOverrideMetadataKey(t aigv1b1.BackendSecurityPolicyType) string {
 	return defaultOverrideHeaderName(t)
 }
 
-// overrideInputHeaders returns the headers a trusted filter injects for this auth type, which are
-// also the ones to strip. Three for AWS, one for the rest.
+// overrideInputHeaders returns the headers a trusted filter injects for this auth type given the
+// header name (a prefix for AWS). Three for AWS, one for the rest.
 func overrideInputHeaders(t aigv1b1.BackendSecurityPolicyType, headerName string) []string {
 	if t == aigv1b1.BackendSecurityPolicyTypeAWSCredentials {
 		accessKeyID, secretAccessKey, sessionToken := internalapi.AWSCredentialOverrideHeaderNames(headerName)
@@ -883,13 +920,7 @@ func resolveCredentialOverride(bspType aigv1b1.BackendSecurityPolicyType, overri
 	switch {
 	case override.FromRequestHeaders != nil:
 		src := override.FromRequestHeaders
-		headerName := src.Header
-		if headerName == "" {
-			headerName = defaultOverrideHeaderName(bspType)
-		}
-		headerName = strings.ToLower(headerName)
-		result.HeaderName = headerName
-		result.InputHeadersToRemove = overrideInputHeaders(bspType, headerName)
+		result.HeaderName = overrideHeaderName(bspType, src)
 		result.FallbackToConfigured = src.FallbackToConfigured == nil || *src.FallbackToConfigured
 
 	case override.FromDynamicMetadata != nil:

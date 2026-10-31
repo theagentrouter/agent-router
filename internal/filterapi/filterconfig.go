@@ -250,11 +250,6 @@ type CredentialOverride struct {
 	// FallbackToConfigured controls behaviour when the source value is absent.
 	// true falls back to the static credential; false returns 401 to the caller.
 	FallbackToConfigured bool `json:"fallbackToConfigured"`
-	// InputHeadersToRemove are stripped before the request reaches the backend. Only set for the
-	// HeaderName source; one entry for every auth type except AWS, which has three.
-	// The controller adds these to HeaderMutation.Remove, so Envoy drops them upstream while they
-	// stay visible in the local requestHeaders map for the handler to read.
-	InputHeadersToRemove []string `json:"inputHeadersToRemove,omitempty"`
 }
 
 // AWSAuth defines the credentials needed to access AWS.

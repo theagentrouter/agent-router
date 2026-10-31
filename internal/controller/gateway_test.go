@@ -1698,7 +1698,6 @@ func TestResolveCredentialOverride(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, "x-aigw-api-key", result.HeaderName)
-		require.Equal(t, []string{"x-aigw-api-key"}, result.InputHeadersToRemove)
 		require.True(t, result.FallbackToConfigured)
 	})
 
@@ -1746,7 +1745,6 @@ func TestResolveCredentialOverride(t *testing.T) {
 		require.Equal(t, "envoy.filters.http.ext_authz", result.DynamicMetadataNamespace)
 		require.Equal(t, "upstream_key", result.DynamicMetadataKey)
 		require.True(t, result.FallbackToConfigured)
-		require.Empty(t, result.InputHeadersToRemove, "dynamic metadata source has no strip header")
 	})
 
 	t.Run("fromDynamicMetadata default key for GCPCredentials", func(t *testing.T) {
@@ -1787,11 +1785,6 @@ func TestResolveCredentialOverride(t *testing.T) {
 		require.NoError(t, err)
 		// HeaderName is the prefix; backendauth derives the same three names.
 		require.Equal(t, "x-aigw-aws-", result.HeaderName)
-		require.Equal(t, []string{
-			"x-aigw-aws-access-key-id",
-			"x-aigw-aws-secret-access-key",
-			"x-aigw-aws-session-token",
-		}, result.InputHeadersToRemove)
 	})
 
 	t.Run("fromRequestHeaders for AWSCredentials honours a custom prefix", func(t *testing.T) {
@@ -1804,11 +1797,6 @@ func TestResolveCredentialOverride(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, "x-tenant-aws-", result.HeaderName, "prefix is lowercased like any header name")
-		require.Equal(t, []string{
-			"x-tenant-aws-access-key-id",
-			"x-tenant-aws-secret-access-key",
-			"x-tenant-aws-session-token",
-		}, result.InputHeadersToRemove)
 	})
 
 	t.Run("fromDynamicMetadata default key for AWSCredentials is not the header prefix", func(t *testing.T) {
@@ -1822,7 +1810,6 @@ func TestResolveCredentialOverride(t *testing.T) {
 		require.NoError(t, err)
 		// The metadata value is one struct holding all three inputs, so it is a key, not a prefix.
 		require.Equal(t, "x-aigw-aws-credentials", result.DynamicMetadataKey)
-		require.Empty(t, result.InputHeadersToRemove)
 	})
 
 	t.Run("fallbackToConfigured=true with no static credential returns error", func(t *testing.T) {
@@ -1890,84 +1877,128 @@ func TestGatewayController_bspToFilterAPIBackendAuth_WithOverride(t *testing.T) 
 	require.Equal(t, "thisisapikey", auth.APIKey.Key)
 	require.NotNil(t, auth.CredentialOverride)
 	require.Equal(t, "x-aigw-api-key", auth.CredentialOverride.HeaderName)
-	require.Equal(t, []string{"x-aigw-api-key"}, auth.CredentialOverride.InputHeadersToRemove)
 	require.True(t, auth.CredentialOverride.FallbackToConfigured)
 }
 
 func TestStripCredentialOverrideInputHeaders(t *testing.T) {
-	awsOverride := func() *filterapi.BackendAuth {
-		return &filterapi.BackendAuth{
-			AWSAuth: &filterapi.AWSAuth{Region: "us-east-1"},
-			CredentialOverride: &filterapi.CredentialOverride{
-				HeaderName: "x-aigw-aws-",
-				InputHeadersToRemove: []string{
-					"x-aigw-aws-access-key-id",
-					"x-aigw-aws-secret-access-key",
-					"x-aigw-aws-session-token",
+	t.Run("every backend gets every header, sorted, after its own removes", func(t *testing.T) {
+		backends := []filterapi.Backend{
+			{Name: "reads-the-header"},
+			{Name: "no-override", HeaderMutation: &filterapi.HTTPHeaderMutation{Remove: []string{"x-user-supplied"}}},
+		}
+		stripCredentialOverrideInputHeaders(backends, map[string]struct{}{
+			"x-aigw-api-key":           {},
+			"x-aigw-aws-access-key-id": {},
+		})
+		require.Equal(t, []string{"x-aigw-api-key", "x-aigw-aws-access-key-id"}, backends[0].HeaderMutation.Remove)
+		require.Equal(t, []string{"x-user-supplied", "x-aigw-api-key", "x-aigw-aws-access-key-id"}, backends[1].HeaderMutation.Remove)
+	})
+
+	t.Run("a header already removed is not duplicated", func(t *testing.T) {
+		backends := []filterapi.Backend{{HeaderMutation: &filterapi.HTTPHeaderMutation{Remove: []string{"x-aigw-api-key"}}}}
+		stripCredentialOverrideInputHeaders(backends, map[string]struct{}{"x-aigw-api-key": {}})
+		require.Equal(t, []string{"x-aigw-api-key"}, backends[0].HeaderMutation.Remove)
+	})
+
+	t.Run("no headers leaves backends untouched", func(t *testing.T) {
+		backends := []filterapi.Backend{{}}
+		stripCredentialOverrideInputHeaders(backends, nil)
+		require.Nil(t, backends[0].HeaderMutation)
+	})
+}
+
+func TestCredentialOverrideInputHeaders(t *testing.T) {
+	bsp := func(typ aigv1b1.BackendSecurityPolicyType, o *aigv1b1.BackendSecurityPolicyCredentialOverride) *aigv1b1.BackendSecurityPolicy {
+		return &aigv1b1.BackendSecurityPolicy{Spec: aigv1b1.BackendSecurityPolicySpec{Type: typ, CredentialOverride: o}}
+	}
+	fromHeaders := func(header string) *aigv1b1.BackendSecurityPolicyCredentialOverride {
+		return &aigv1b1.BackendSecurityPolicyCredentialOverride{
+			FromRequestHeaders: &aigv1b1.CredentialOverrideFromRequestHeaders{Header: header},
+		}
+	}
+
+	require.Equal(t, []string{"x-aigw-api-key"},
+		credentialOverrideInputHeaders(bsp(aigv1b1.BackendSecurityPolicyTypeAPIKey, fromHeaders(""))))
+	require.Equal(t, []string{"x-custom-key"},
+		credentialOverrideInputHeaders(bsp(aigv1b1.BackendSecurityPolicyTypeAPIKey, fromHeaders("X-Custom-Key"))))
+	require.Equal(t, []string{"x-aigw-aws-access-key-id", "x-aigw-aws-secret-access-key", "x-aigw-aws-session-token"},
+		credentialOverrideInputHeaders(bsp(aigv1b1.BackendSecurityPolicyTypeAWSCredentials, fromHeaders(""))))
+	require.Equal(t, []string{"x-tenant-aws-access-key-id", "x-tenant-aws-secret-access-key", "x-tenant-aws-session-token"},
+		credentialOverrideInputHeaders(bsp(aigv1b1.BackendSecurityPolicyTypeAWSCredentials, fromHeaders("X-Tenant-AWS-"))))
+	require.Nil(t, credentialOverrideInputHeaders(bsp(aigv1b1.BackendSecurityPolicyTypeAPIKey, nil)))
+	require.Nil(t, credentialOverrideInputHeaders(bsp(aigv1b1.BackendSecurityPolicyTypeAPIKey,
+		&aigv1b1.BackendSecurityPolicyCredentialOverride{
+			FromDynamicMetadata: &aigv1b1.CredentialOverrideFromDynamicMetadata{Namespace: "envoy.filters.http.ext_authz"},
+		})))
+}
+
+// A credential header injected for one backend must be stripped from every backend of the gateway,
+// since a retry or weighted split can send the request to a backend whose policy does not read it.
+func TestGatewayController_reconcileFilterConfigSecret_StripsCredentialHeadersFromEveryBackend(t *testing.T) {
+	const gwNamespace, configNamespace = "ns", "some-namespace"
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	kube := fake2.NewClientset()
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	for _, name := range []string{"primary", "unreadable", "secondary"} {
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: gwNamespace},
+			Spec: aigv1b1.AIServiceBackendSpec{
+				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
+			},
+		}))
+	}
+	newBSP := func(name, target, secret, header string) *aigv1b1.BackendSecurityPolicy {
+		return &aigv1b1.BackendSecurityPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: gwNamespace},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type:   aigv1b1.BackendSecurityPolicyTypeAPIKey,
+				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{SecretRef: &gwapiv1.SecretObjectReference{Name: gwapiv1.ObjectName(secret)}},
+				CredentialOverride: &aigv1b1.BackendSecurityPolicyCredentialOverride{
+					FromRequestHeaders: &aigv1b1.CredentialOverrideFromRequestHeaders{Header: header},
+				},
+				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
+					{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: gwapiv1.ObjectName(target)},
 				},
 			},
 		}
 	}
+	require.NoError(t, fakeClient.Create(t.Context(), newBSP("primary-bsp", "primary", "api-key", "")))
+	// Its Secret does not exist, so the backend is skipped, but its header must still be stripped
+	// from the backends that remain.
+	require.NoError(t, fakeClient.Create(t.Context(), newBSP("unreadable-bsp", "unreadable", "missing", "x-other-key")))
+	_, err := kube.CoreV1().Secrets(gwNamespace).Create(t.Context(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-key", Namespace: gwNamespace},
+		StringData: map[string]string{apiKeyInSecret: "static"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
 
-	t.Run("AWS strips all three credential headers", func(t *testing.T) {
-		b := &filterapi.Backend{Auth: awsOverride()}
-		stripCredentialOverrideInputHeaders(b)
-		require.NotNil(t, b.HeaderMutation)
-		require.Equal(t, []string{
-			"x-aigw-aws-access-key-id",
-			"x-aigw-aws-secret-access-key",
-			"x-aigw-aws-session-token",
-		}, b.HeaderMutation.Remove)
-	})
+	routes := []aigv1b1.AIGatewayRoute{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{
+				{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "primary"}, {Name: "unreadable"}}},
+			}},
+		},
+		{
+			// A different route of the same gateway: the injecting filter runs before routing, so
+			// its requests can carry the header too.
+			ObjectMeta: metav1.ObjectMeta{Name: "route2", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{
+				{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "secondary"}}},
+			}},
+		},
+	}
+	_, err = c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, configNamespace, routes, nil, "uuid", nil, nil)
+	require.NoError(t, err)
 
-	t.Run("appends to an existing remove list rather than replacing it", func(t *testing.T) {
-		b := &filterapi.Backend{
-			Auth:           awsOverride(),
-			HeaderMutation: &filterapi.HTTPHeaderMutation{Remove: []string{"x-user-supplied"}},
-		}
-		stripCredentialOverrideInputHeaders(b)
-		require.Equal(t, []string{
-			"x-user-supplied",
-			"x-aigw-aws-access-key-id",
-			"x-aigw-aws-secret-access-key",
-			"x-aigw-aws-session-token",
-		}, b.HeaderMutation.Remove)
-	})
-
-	t.Run("single-valued for non-AWS types", func(t *testing.T) {
-		b := &filterapi.Backend{Auth: &filterapi.BackendAuth{
-			APIKey: &filterapi.APIKeyAuth{Key: "static"},
-			CredentialOverride: &filterapi.CredentialOverride{
-				HeaderName:           "x-aigw-api-key",
-				InputHeadersToRemove: []string{"x-aigw-api-key"},
-			},
-		}}
-		stripCredentialOverrideInputHeaders(b)
-		require.Equal(t, []string{"x-aigw-api-key"}, b.HeaderMutation.Remove)
-	})
-
-	t.Run("metadata source strips nothing", func(t *testing.T) {
-		// Out-of-band credential: no header to remove, no HeaderMutation to materialize.
-		b := &filterapi.Backend{Auth: &filterapi.BackendAuth{
-			AWSAuth: &filterapi.AWSAuth{Region: "us-east-1"},
-			CredentialOverride: &filterapi.CredentialOverride{
-				DynamicMetadataNamespace: "envoy.filters.http.ext_authz",
-				DynamicMetadataKey:       "x-aigw-aws-credentials",
-			},
-		}}
-		stripCredentialOverrideInputHeaders(b)
-		require.Nil(t, b.HeaderMutation)
-	})
-
-	t.Run("no auth and no override are no-ops", func(t *testing.T) {
-		b := &filterapi.Backend{}
-		stripCredentialOverrideInputHeaders(b)
-		require.Nil(t, b.HeaderMutation)
-
-		b = &filterapi.Backend{Auth: &filterapi.BackendAuth{APIKey: &filterapi.APIKeyAuth{Key: "static"}}}
-		stripCredentialOverrideInputHeaders(b)
-		require.Nil(t, b.HeaderMutation)
-	})
+	fc := requireFilterConfigFromBundle(t, kube, configNamespace, "gw", gwNamespace)
+	require.Len(t, fc.Backends, 2)
+	for _, b := range fc.Backends {
+		require.NotNil(t, b.HeaderMutation, b.Name)
+		require.Equal(t, []string{"x-aigw-api-key", "x-other-key"}, b.HeaderMutation.Remove, b.Name)
+	}
 }
 
 func TestGatewayController_bspToFilterAPIBackendAuth_AWSWithOverride(t *testing.T) {
