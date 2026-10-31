@@ -37,6 +37,13 @@ command = "npm run build"
   to = "/docs/:splat"
   status = 301
 
+# Stable URL for the aigw one-command installer: `curl -fsSL https://theagentrouter.ai/install.sh | sh`.
+# Update the target once if the repository moves again.
+[[redirects]]
+  from = "/install.sh"
+  to = "https://raw.githubusercontent.com/theagentrouter/agent-router/main/install.sh"
+  status = 301
+
 # Self-hosted brand fonts and hashed build assets are immutable.
 [[headers]]
   for = "/fonts/*"

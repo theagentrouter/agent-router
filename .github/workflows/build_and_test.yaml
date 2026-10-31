@@ -386,6 +386,30 @@ jobs:
       - if: failure()
         run: cat ollama.log || true
 
+  test_install_script:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
+    name: Install Script Smoke Test (${{ matrix.os }})
+    # Installs the latest published aigw release with install.sh so the script cannot silently rot.
+    # It depends on GitHub Releases being reachable, so it is advisory rather than a required check.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - if: matrix.os == 'ubuntu-latest'
+        run: shellcheck -s sh install.sh
+      - run: sh install.sh
+        env:
+          AIGW_INSTALL_DIR: ${{ runner.temp }}/aigw-bin
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: ${RUNNER_TEMP}/aigw-bin/aigw version
+
   compute_version:
     # Runs on PRs too, so GitVersion's output shows up in checks before it can affect main; docker_push/helm_push below stay push-only, so nothing publishes here.
     name: Compute dev version
