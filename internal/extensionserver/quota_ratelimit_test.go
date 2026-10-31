@@ -7,6 +7,7 @@ package extensionserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -3120,6 +3122,30 @@ func TestApplyHostAllowlistToQuotaCluster(t *testing.T) {
 			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
 				lbEndpointGroup("httproute/default/zwroute/rule/0", 0),
 			}},
+		}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		require.False(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("logs and skips host_allowlist marshal error", func(t *testing.T) {
+		originalMarshalAny := marshalAny
+		t.Cleanup(func() {
+			marshalAny = originalMarshalAny
+		})
+		marshalAny = func(proto.Message) (*anypb.Any, error) {
+			return nil, errors.New("forced marshal error")
+		}
+
+		c := &clusterv3.Cluster{
+			Name: clusterName,
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				lbEndpointGroup(routePrefix, 0),
+			}},
+			LoadBalancingPolicy: &clusterv3.LoadBalancingPolicy{
+				Policies: []*clusterv3.LoadBalancingPolicy_Policy{{
+					TypedExtensionConfig: &corev3.TypedExtensionConfig{Name: "existing-picker"},
+				}},
+			},
 		}
 		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
 		require.False(t, clusterWrappedInHostAllowlist(c))

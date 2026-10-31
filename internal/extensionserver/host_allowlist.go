@@ -38,6 +38,10 @@ const (
 	hostAllowlistCandidatesMetadataKey = "passedBackends"
 )
 
+// marshalAny is a variable so tests can exercise the defensive error paths around protobuf
+// marshaling. In production it always points to anypb.New.
+var marshalAny = anypb.New
+
 // setEndpointMetadataQuotaRouting stamps the short "namespace/name" backend identity and the backend's
 // model name override onto endpoint-level metadata under the AI Gateway namespace. These are the
 // primary (backend_name) and secondary (model_name_override) host keys the Envoy host_allowlist load
@@ -76,7 +80,7 @@ func wrapClusterLBInHostAllowlist(cluster *clusterv3.Cluster) error {
 
 	child := cluster.LoadBalancingPolicy
 	if child == nil {
-		lr, err := anypb.New(&leastrequestv3.LeastRequest{})
+		lr, err := marshalAny(&leastrequestv3.LeastRequest{})
 		if err != nil {
 			return fmt.Errorf("failed to marshal default least_request policy: %w", err)
 		}
@@ -108,7 +112,7 @@ func wrapClusterLBInHostAllowlist(cluster *clusterv3.Cluster) error {
 		FailClosedOnMissingMetadata: false,
 		ChildPolicy:                 child,
 	}
-	haAny, err := anypb.New(ha)
+	haAny, err := marshalAny(ha)
 	if err != nil {
 		return fmt.Errorf("failed to marshal HostAllowlist policy: %w", err)
 	}
