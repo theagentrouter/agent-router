@@ -3116,14 +3116,14 @@ func TestApplyHostAllowlistToQuotaCluster(t *testing.T) {
 				}},
 			},
 		}
-		s := newTestServerWithRoute(t, zeroWeightRoute)
+		zeroWeightServer := newTestServerWithRoute(t, zeroWeightRoute)
 		c := &clusterv3.Cluster{
 			Name: "httproute/default/zwroute/rule/0",
 			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
 				lbEndpointGroup("httproute/default/zwroute/rule/0", 0),
 			}},
 		}
-		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		zeroWeightServer.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
 		require.False(t, clusterWrappedInHostAllowlist(c))
 	})
 
