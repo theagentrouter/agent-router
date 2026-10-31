@@ -394,36 +394,31 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 				}
 			}
 		default:
-			// Populate the metadata for each endpoint in the LoadAssignment.
-			var lbEndpointIndex int
-			for i, backendRef := range httpRouteRule.BackendRefs {
-				// The weight of 0 means this backend is disabled and is not included in the LoadAssignment by EG,
-				// so we skip it here.
-				if backendRef.Weight != nil && *backendRef.Weight == 0 {
-					continue
+			// Envoy Gateway records the actual Backend on each endpoint group. Use
+			// that identity rather than its position: the freshly fetched
+			// AIGatewayRoute may have different zero weights or membership from
+			// the HTTPRoute snapshot used to build this LoadAssignment.
+			activeRefs := make([]int, 0, len(httpRouteRule.BackendRefs))
+			for i, ref := range httpRouteRule.BackendRefs {
+				if ref.Weight == nil || *ref.Weight != 0 {
+					activeRefs = append(activeRefs, i)
 				}
-				// httpRouteRule.BackendRefs comes from a fresh
-				// s.k8sClient.Get(&aigwRoute); cluster.LoadAssignment is
-				// whatever Envoy Gateway translated for this cluster. The two
-				// can be a revision apart, so the rule can carry more
-				// non-zero-weight BackendRefs than the cluster has endpoint
-				// groups (e.g. an AIGatewayRoute gained a BackendRef whose
-				// AIServiceBackend does not resolve yet, so the generated
-				// HTTPRoute - and the cluster - stay a revision behind).
-				// lbEndpointIndex only increases, so once it is out of range
-				// every remaining backendRef is too; stop rather than index out
-				// of bounds. The rule and backendRef indices are already
-				// guarded the same way earlier in this function. The unmatched
-				// backend(s) get their endpoint metadata stamped on a later
-				// reconcile once the counts agree.
-				if lbEndpointIndex >= len(cluster.LoadAssignment.Endpoints) {
-					s.log.Info("cluster LoadAssignment has fewer endpoint groups than non-zero-weight backendRefs",
-						"cluster_name", cluster.Name, "backend_index", i,
-						"load_assignment_endpoints", len(cluster.LoadAssignment.Endpoints))
-					break
+			}
+			for endpointIndex, endpoints := range cluster.LoadAssignment.Endpoints {
+				i, found, err := backendRefIndexFromEndpointGroup(endpoints, httpRouteRule.BackendRefs, aigwRoute.Namespace)
+				if err != nil {
+					return fmt.Errorf("cluster %s endpoint group %d: %w", cluster.Name, endpointIndex, err)
 				}
-				endpoints := cluster.LoadAssignment.Endpoints[lbEndpointIndex]
-				lbEndpointIndex++
+				if !found {
+					// Older Envoy Gateway versions may omit Backend metadata.
+					// Preserve positional mapping only when the group count agrees.
+					if len(activeRefs) != len(cluster.LoadAssignment.Endpoints) {
+						return fmt.Errorf("cluster %s has %d endpoint groups and %d non-zero-weight backendRefs without Backend metadata",
+							cluster.Name, len(cluster.LoadAssignment.Endpoints), len(activeRefs))
+					}
+					i = activeRefs[endpointIndex]
+				}
+				backendRef := httpRouteRule.BackendRefs[i]
 				name := backendRef.Name
 				namespace := aigwRoute.Namespace
 				if backendRef.Priority != nil {
@@ -1100,6 +1095,36 @@ func routeNameFromEnvoyGatewayMetadata(route *routev3.Route) string {
 		}
 	}
 	return ""
+}
+
+// backendRefIndexFromEndpointGroup matches an Envoy Gateway locality to the
+// AIGatewayRoute backend that produced it. The locality metadata is part of
+// the translated cluster, so it remains correct when the route changes while
+// Envoy Gateway and AI Gateway reconcile independently.
+func backendRefIndexFromEndpointGroup(endpoints *endpointv3.LocalityLbEndpoints, refs []aigv1b1.AIGatewayRouteRuleBackendRef, routeNamespace string) (int, bool, error) {
+	resources := endpoints.GetMetadata().GetFilterMetadata()["envoy-gateway"].GetFields()["resources"].GetListValue()
+	if resources == nil {
+		return 0, false, nil
+	}
+	for _, resource := range resources.Values {
+		fields := resource.GetStructValue().GetFields()
+		if fields["kind"].GetStringValue() != "Backend" {
+			continue
+		}
+		name := fields["name"].GetStringValue()
+		namespace := fields["namespace"].GetStringValue()
+		for i, ref := range refs {
+			refNamespace := routeNamespace
+			if ref.Namespace != nil {
+				refNamespace = string(*ref.Namespace)
+			}
+			if ref.Name == name && refNamespace == namespace {
+				return i, true, nil
+			}
+		}
+		return 0, true, fmt.Errorf("Backend %s/%s is absent from the AIGatewayRoute", namespace, name)
+	}
+	return 0, false, nil
 }
 
 // endpointUpstreamHost returns the DNS hostname of the given endpoint, or "" if it has none.

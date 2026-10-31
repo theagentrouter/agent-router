@@ -213,6 +213,7 @@ func Test_maybeModifyCluster(t *testing.T) {
 		cluster     *clusterv3.Cluster
 		expectedLog string
 		expected    *clusterv3.Cluster
+		wantErr     string
 	}{
 		{
 			name: "nil LoadAssignment sets cluster metadata",
@@ -476,7 +477,8 @@ func Test_maybeModifyCluster(t *testing.T) {
 			// BackendRefs. maybeModifyCluster must log and stop, not index
 			// out of range - this reproduces the "index out of range"
 			// panic the guard prevents.
-			name: "fewer LoadAssignment endpoints than non-zero-weight backendRefs logs and stops",
+			name:    "unlabelled LoadAssignment with mismatched backend count is rejected",
+			wantErr: "has 1 endpoint groups and 2 non-zero-weight backendRefs without Backend metadata",
 			cluster: &clusterv3.Cluster{
 				Name: "httproute/ns/myroute/rule/0",
 				LoadAssignment: &endpointv3.ClusterLoadAssignment{
@@ -621,12 +623,70 @@ func Test_maybeModifyCluster(t *testing.T) {
 			s, err := New(c, logr.FromSlogHandler(handler), udsPath, false, nil, nil, "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
 			require.NoError(t, err)
 			err = s.maybeModifyCluster(t.Context(), tc.cluster, nil)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
 			require.NoError(t, err)
 
 			require.Equal(t, tc.expectedLog, buf.String())
 			require.Equal(t, tc.expected, tc.cluster)
 		})
 	}
+}
+
+func TestMaybeModifyClusterUsesEndpointBackendIdentity(t *testing.T) {
+	c := newFakeClient()
+	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "ns"},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{
+			BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+				{Name: "idle", Weight: ptr.To[int32](0)},
+				{Name: "spot", Weight: ptr.To[int32](1)},
+				{Name: "ondemand", Weight: ptr.To[int32](1)},
+			},
+		}}},
+	}))
+	s, err := New(c, logr.Discard(), udsPath, false, nil, nil, "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
+	require.NoError(t, err)
+	endpointGroup := func(name string) *endpointv3.LocalityLbEndpoints {
+		return &endpointv3.LocalityLbEndpoints{
+			Metadata: &corev3.Metadata{FilterMetadata: map[string]*structpb.Struct{
+				"envoy-gateway": {Fields: map[string]*structpb.Value{
+					"resources": structpb.NewListValue(&structpb.ListValue{Values: []*structpb.Value{
+						structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+							"kind":      structpb.NewStringValue("Backend"),
+							"name":      structpb.NewStringValue(name),
+							"namespace": structpb.NewStringValue("ns"),
+						}}),
+					}}),
+				}},
+			}},
+			LbEndpoints: []*endpointv3.LbEndpoint{{}},
+		}
+	}
+	// The cluster was translated from an older HTTPRoute that had the reverse
+	// order. Both backends can share an upstream address, so position is unsafe.
+	cluster := &clusterv3.Cluster{
+		Name: "httproute/ns/myroute/rule/0",
+		LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+			endpointGroup("ondemand"), endpointGroup("spot"),
+		}},
+	}
+	require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
+	for i, want := range []string{"ondemand", "spot"} {
+		refIndex := 2 - i
+		got := cluster.LoadAssignment.Endpoints[i].LbEndpoints[0].GetMetadata().GetFilterMetadata()[internalapi.InternalEndpointMetadataNamespace].GetFields()[internalapi.InternalMetadataBackendNameKey].GetStringValue()
+		require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", want, "myroute", 0, refIndex), got)
+	}
+
+	stale := &clusterv3.Cluster{
+		Name: "httproute/ns/myroute/rule/0",
+		LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+			endpointGroup("removed"),
+		}},
+	}
+	require.ErrorContains(t, s.maybeModifyCluster(t.Context(), stale, nil), "Backend ns/removed is absent from the AIGatewayRoute")
 }
 
 func TestParseAIGatewayClusterName(t *testing.T) {
