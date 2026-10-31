@@ -638,22 +638,30 @@ type sseMessageStop struct {
 	Type string `json:"type"`
 }
 
+type anthropicStreamBlockType uint8
+
+const (
+	anthropicStreamBlockNone anthropicStreamBlockType = iota
+	anthropicStreamBlockText
+	anthropicStreamBlockThinking
+	anthropicStreamBlockTool
+)
+
 // openAIStreamToAnthropicState tracks the state for converting OpenAI SSE chunks to Anthropic SSE events.
 type openAIStreamToAnthropicState struct {
-	buffer           bytes.Buffer
-	messageStarted   bool // flag indicating emitted message_start
-	hasOpenBlock     bool // flag indicating emitted content_block_start but not content_block_stop
-	hasThinkingBlock bool // flag indicating the open block is a thinking block
-	closingEmitted   bool // flag indicating emitted content_block_stop + message_delta + message_stop
-	messageID        string
-	model            string
-	stopReason       string // Anthropic stop_reason, mapped from OpenAI finish_reason
-	inputTokens      int
-	outputTokens     int
-	tokenUsage       metrics.TokenUsage
-	blockIndex       int                       // current Anthropic content block index
-	activeTools      map[int64]*streamToolCall // keyed by OpenAI tool_call index
-	requestModel     string
+	buffer         bytes.Buffer
+	messageStarted bool // flag indicating emitted message_start
+	openBlock      anthropicStreamBlockType
+	closingEmitted bool // flag indicating emitted content_block_stop + message_delta + message_stop
+	messageID      string
+	model          string
+	stopReason     string // Anthropic stop_reason, mapped from OpenAI finish_reason
+	inputTokens    int
+	outputTokens   int
+	tokenUsage     metrics.TokenUsage
+	blockIndex     int                       // current Anthropic content block index
+	activeTools    map[int64]*streamToolCall // keyed by OpenAI tool_call index
+	requestModel   string
 }
 
 type streamToolCall struct {
@@ -785,14 +793,14 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 
 		// Handle text content.
 		if delta.Content != nil && *delta.Content != "" {
-			// Close any open thinking block before starting a text block.
-			if s.hasThinkingBlock {
-				if err := s.closeThinkingBlock(out); err != nil {
+			// Close any open non-text block before starting a text block.
+			if s.openBlock != anthropicStreamBlockNone && s.openBlock != anthropicStreamBlockText {
+				if err := s.closeOpenBlock(out); err != nil {
 					return err
 				}
 			}
 			// Emit textblockstart if not started
-			if !s.hasOpenBlock {
+			if s.openBlock == anthropicStreamBlockNone {
 				if err := s.emitTextBlockStart(out); err != nil {
 					return err
 				}
@@ -845,7 +853,7 @@ func (s *openAIStreamToAnthropicState) emitMessageStart(out *[]byte) error {
 
 // emitTextBlockStart emits a content_block_start SSE event for a text content block.
 func (s *openAIStreamToAnthropicState) emitTextBlockStart(out *[]byte) error {
-	s.hasOpenBlock = true
+	s.openBlock = anthropicStreamBlockText
 	payload := sseContentBlockStartText{
 		Type:         "content_block_start",
 		Index:        s.blockIndex,
@@ -886,15 +894,13 @@ func (s *openAIStreamToAnthropicState) handleReasoningDelta(rc *openai.StreamRea
 	}
 	// Close any open non-thinking block (e.g., text) before starting a thinking block.
 	// This handles the unlikely case where reasoning arrives after text content.
-	if !s.hasThinkingBlock && s.hasOpenBlock {
-		if err := s.emitContentBlockStop(out); err != nil {
+	if s.openBlock != anthropicStreamBlockThinking {
+		if err := s.closeOpenBlock(out); err != nil {
 			return err
 		}
-		s.hasOpenBlock = false
-		s.blockIndex++
 	}
 	// Ensure the thinking block is open before emitting any delta.
-	if !s.hasThinkingBlock {
+	if s.openBlock == anthropicStreamBlockNone {
 		if err := s.emitThinkingBlockStart(out); err != nil {
 			return err
 		}
@@ -916,8 +922,7 @@ func (s *openAIStreamToAnthropicState) handleReasoningDelta(rc *openai.StreamRea
 
 // emitThinkingBlockStart emits a content_block_start SSE event for a thinking content block.
 func (s *openAIStreamToAnthropicState) emitThinkingBlockStart(out *[]byte) error {
-	s.hasOpenBlock = true
-	s.hasThinkingBlock = true
+	s.openBlock = anthropicStreamBlockThinking
 	payload := sseContentBlockStartThinking{
 		Type:         "content_block_start",
 		Index:        s.blockIndex,
@@ -961,13 +966,14 @@ func (s *openAIStreamToAnthropicState) emitSignatureDelta(signature string, out 
 	return nil
 }
 
-// closeThinkingBlock closes an open thinking block by emitting content_block_stop and advancing the block index.
-func (s *openAIStreamToAnthropicState) closeThinkingBlock(out *[]byte) error {
+func (s *openAIStreamToAnthropicState) closeOpenBlock(out *[]byte) error {
+	if s.openBlock == anthropicStreamBlockNone {
+		return nil
+	}
 	if err := s.emitContentBlockStop(out); err != nil {
 		return err
 	}
-	s.hasOpenBlock = false
-	s.hasThinkingBlock = false
+	s.openBlock = anthropicStreamBlockNone
 	s.blockIndex++
 	return nil
 }
@@ -976,26 +982,22 @@ func (s *openAIStreamToAnthropicState) closeThinkingBlock(out *[]byte) error {
 func (s *openAIStreamToAnthropicState) handleToolCallDelta(tc *openai.ChatCompletionChunkChoiceDeltaToolCall, out *[]byte) error {
 	tool, exists := s.activeTools[tc.Index]
 	if !exists {
-		// New tool call: close any open block (e.g., text or thinking block) and open a new tool_use block.
-		if s.hasOpenBlock {
-			if err := s.emitContentBlockStop(out); err != nil {
-				return err
-			}
-			s.hasThinkingBlock = false
-			s.blockIndex++
-		}
-
 		id := ""
 		if tc.ID != nil {
 			id = *tc.ID
 		}
 		tool = &streamToolCall{
-			blockIdx: s.blockIndex,
-			id:       id,
-			name:     tc.Function.Name,
+			id:   id,
+			name: tc.Function.Name,
 		}
 		s.activeTools[tc.Index] = tool
-		s.hasOpenBlock = true
+	}
+	if !exists || s.openBlock != anthropicStreamBlockTool || tool.blockIdx != s.blockIndex {
+		if err := s.closeOpenBlock(out); err != nil {
+			return err
+		}
+		tool.blockIdx = s.blockIndex
+		s.openBlock = anthropicStreamBlockTool
 
 		// Emit content_block_start for the new tool_use block.
 		payload := sseContentBlockStartTool{
@@ -1003,8 +1005,8 @@ func (s *openAIStreamToAnthropicState) handleToolCallDelta(tc *openai.ChatComple
 			Index: tool.blockIdx,
 			ContentBlock: sseToolBlock{
 				Type:  "tool_use",
-				ID:    id,
-				Name:  tc.Function.Name,
+				ID:    tool.id,
+				Name:  tool.name,
 				Input: map[string]any{},
 			},
 		}
@@ -1050,12 +1052,8 @@ func (s *openAIStreamToAnthropicState) emitClosingEvents(out *[]byte) error {
 	}
 	s.closingEmitted = true
 
-	// Close the currently open content block.
-	if s.hasOpenBlock {
-		if err := s.emitContentBlockStop(out); err != nil {
-			return err
-		}
-		s.hasOpenBlock = false
+	if err := s.closeOpenBlock(out); err != nil {
+		return err
 	}
 
 	stopReason := s.stopReason
