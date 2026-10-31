@@ -112,13 +112,19 @@ func wrapClusterLBInHostAllowlist(cluster *clusterv3.Cluster) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal HostAllowlist policy: %w", err)
 	}
-	cluster.LoadBalancingPolicy = &clusterv3.LoadBalancingPolicy{
-		Policies: []*clusterv3.LoadBalancingPolicy_Policy{{
-			TypedExtensionConfig: &corev3.TypedExtensionConfig{
-				Name:        hostAllowlistPolicyName,
-				TypedConfig: haAny,
-			},
-		}},
-	}
+	// Envoy selects the first policy in the list whose extension it supports. List host_allowlist
+	// first, then the original picker as a fallback sibling: a data plane that predates the
+	// host_allowlist extension (envoyproxy/envoy#47805 — e.g. the Envoy shipped with Envoy Gateway
+	// v1.8/v1.9) silently falls back to the original picker instead of rejecting the whole cluster
+	// (which would 503 the route and break plain quota enforcement). On a data plane that supports
+	// host_allowlist the fallback is never reached, and quota-aware failover works as intended.
+	policies := []*clusterv3.LoadBalancingPolicy_Policy{{
+		TypedExtensionConfig: &corev3.TypedExtensionConfig{
+			Name:        hostAllowlistPolicyName,
+			TypedConfig: haAny,
+		},
+	}}
+	policies = append(policies, child.GetPolicies()...)
+	cluster.LoadBalancingPolicy = &clusterv3.LoadBalancingPolicy{Policies: policies}
 	return nil
 }

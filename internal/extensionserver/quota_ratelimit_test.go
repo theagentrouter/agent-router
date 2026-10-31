@@ -2933,8 +2933,8 @@ func TestBackendRefHasQuotaForModel(t *testing.T) {
 			},
 		}},
 	}
-	ref := func(name, model string) aigv1b1.AIGatewayRouteRuleBackendRef {
-		return aigv1b1.AIGatewayRouteRuleBackendRef{Name: name, ModelNameOverride: model}
+	ref := func(name, model string) *aigv1b1.AIGatewayRouteRuleBackendRef {
+		return &aigv1b1.AIGatewayRouteRuleBackendRef{Name: name, ModelNameOverride: model}
 	}
 
 	t.Run("backend not in map", func(t *testing.T) {

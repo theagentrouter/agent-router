@@ -508,7 +508,7 @@ func (s *Server) applyHostAllowlistToQuotaCluster(ctx context.Context, cluster *
 		if group == nil {
 			continue
 		}
-		if !backendRefHasQuotaForModel(backendRef, info.namespace, quotaBackendPolicies) {
+		if !backendRefHasQuotaForModel(&backendRef, info.namespace, quotaBackendPolicies) {
 			continue
 		}
 		namespace := backendRef.GetNamespace(info.namespace)
@@ -529,7 +529,7 @@ func (s *Server) applyHostAllowlistToQuotaCluster(ctx context.Context, cluster *
 // (backend, model) pair this backendRef represents. A quota is considered enforceable only when the
 // matching PerModelQuota has bucket rules or a positive default bucket limit, mirroring the guard in
 // enableQuotaRateLimitOnRoute so host metadata and rate limit descriptors stay consistent.
-func backendRefHasQuotaForModel(backendRef aigv1b1.AIGatewayRouteRuleBackendRef, routeNamespace string, quotaBackendPolicies map[string][]aigv1a1.QuotaPolicy) bool {
+func backendRefHasQuotaForModel(backendRef *aigv1b1.AIGatewayRouteRuleBackendRef, routeNamespace string, quotaBackendPolicies map[string][]aigv1a1.QuotaPolicy) bool {
 	key := controller.NamespacedNameKey(backendRef.GetNamespace(routeNamespace), backendRef.Name)
 	policies, ok := quotaBackendPolicies[key]
 	if !ok {
