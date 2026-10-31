@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -37,6 +38,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/pprof"
 	"github.com/envoyproxy/ai-gateway/internal/ratelimit/runner"
+	"github.com/envoyproxy/ai-gateway/internal/version"
 )
 
 type flags struct {
@@ -463,7 +465,21 @@ func newZapOpts(logFormat string, level zapcore.LevelEnabler) []zap.Opts {
 	return opts
 }
 
+// handleVersion prints the controller version and returns true when the first
+// argument is the "version" subcommand, mirroring `envoy-gateway version`.
+func handleVersion(args []string, stdout io.Writer) bool {
+	if len(args) == 0 || args[0] != "version" {
+		return false
+	}
+	_, _ = fmt.Fprintf(stdout, "Envoy AI Gateway Controller: %s\n", version.Parse())
+	return true
+}
+
 func main() {
+	if handleVersion(os.Args[1:], os.Stdout) {
+		return
+	}
+
 	setupLog := ctrl.Log.WithName("setup")
 
 	parsedFlags, err := parseAndValidateFlags(os.Args[1:])
@@ -473,6 +489,7 @@ func main() {
 	}
 
 	ctrl.SetLogger(zap.New(newZapOpts(parsedFlags.logFormat, parsedFlags.logLevel)...))
+	setupLog.Info("starting Envoy AI Gateway controller", "version", version.Parse())
 	k8sConfig := ctrl.GetConfigOrDie()
 
 	lis, err := net.Listen("tcp", parsedFlags.extensionServerPort)
