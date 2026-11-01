@@ -649,6 +649,34 @@ func TestRedactBody(t *testing.T) {
 		require.NotContains(t, redacted.Choices[0].Message.Audio.Transcript, "audio transcript")
 	})
 
+	t.Run("redacts reasoning", func(t *testing.T) {
+		translator := &openAIToOpenAITranslatorV1ChatCompletion{}
+
+		resp := &openai.ChatCompletionResponse{
+			ID:    "chatcmpl-abc",
+			Model: "qwen3",
+			Choices: []openai.ChatCompletionResponseChoice{
+				{
+					Index: 0,
+					Message: openai.ChatCompletionResponseChoiceMessage{
+						Role:      "assistant",
+						Reasoning: ptr.To("The user's secret is 12345, so"),
+					},
+				},
+			},
+		}
+
+		redacted := translator.RedactBody(resp)
+
+		// Verify original is not modified
+		require.Equal(t, "The user's secret is 12345, so", *resp.Choices[0].Message.Reasoning)
+
+		// Verify redacted copy has redacted reasoning
+		require.NotNil(t, redacted.Choices[0].Message.Reasoning)
+		require.Contains(t, *redacted.Choices[0].Message.Reasoning, "[REDACTED")
+		require.NotContains(t, *redacted.Choices[0].Message.Reasoning, "12345")
+	})
+
 	t.Run("handles nil response", func(t *testing.T) {
 		translator := &openAIToOpenAITranslatorV1ChatCompletion{}
 
