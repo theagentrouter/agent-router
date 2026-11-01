@@ -644,12 +644,16 @@ func TestMaybeModifyClusterUsesEndpointBackendIdentity(t *testing.T) {
 				{Name: "idle", Weight: ptr.To[int32](0)},
 				{Name: "spot", Namespace: ptr.To(gwapiv1.Namespace("backend-ns")), Weight: ptr.To[int32](1)},
 				{Name: "ondemand", Weight: ptr.To[int32](1)},
+				// This ref was added after Envoy Gateway translated the older
+				// HTTPRoute, so it has no endpoint group in this cluster yet.
+				{Name: "newly-added", Weight: ptr.To[int32](1)},
 			},
 		}}},
 	}))
 	for _, backend := range []struct{ name, namespace, envoyName string }{
 		{"spot", "backend-ns", "spot-envoy"},
 		{"ondemand", "ns", "ondemand-envoy"},
+		{"newly-added", "ns", "newly-added-envoy"},
 	} {
 		require.NoError(t, c.Create(t.Context(), &aigv1b1.AIServiceBackend{
 			ObjectMeta: metav1.ObjectMeta{Name: backend.name, Namespace: backend.namespace},
