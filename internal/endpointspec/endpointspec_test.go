@@ -130,6 +130,35 @@ func TestChatCompletionsEndpointSpec_ParseBody(t *testing.T) {
 		require.NotNil(t, parsed)
 		require.Nil(t, mutated)
 	})
+
+	t.Run("force_include_usage_error", func(t *testing.T) {
+		stubForceStreamOptionsIncludeUsageError(t)
+		body := []byte(`{"model":"gpt-4o","stream":true}`)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, true)
+		require.ErrorIs(t, err, internalapi.ErrMalformedRequest)
+		require.ErrorContains(t, err, "failed to set stream_options.include_usage")
+		require.Empty(t, model)
+		require.Nil(t, parsed)
+		require.False(t, stream)
+		require.Nil(t, mutated)
+	})
+}
+
+// stubForceStreamOptionsIncludeUsageError makes forceStreamOptionsIncludeUsageFn fail for the
+// duration of the test. Tests using it must not run in parallel.
+func stubForceStreamOptionsIncludeUsageError(t *testing.T) {
+	orig := forceStreamOptionsIncludeUsageFn
+	t.Cleanup(func() { forceStreamOptionsIncludeUsageFn = orig })
+	forceStreamOptionsIncludeUsageFn = func([]byte) ([]byte, error) { return nil, errors.New("boom") }
+}
+
+func TestForceStreamOptionsIncludeUsage_NullStreamOptions(t *testing.T) {
+	// A null stream_options is valid JSON for the parsed request (nil pointer), and must be
+	// replaced by an object rather than causing an error.
+	mutated, err := forceStreamOptionsIncludeUsage([]byte(`{"model":"gpt-4o","stream":true,"stream_options":null}`))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true}}`, string(mutated))
 }
 
 func TestChatCompletionsEndpointSpec_GetTranslator(t *testing.T) {
@@ -301,6 +330,19 @@ func TestCompletionsEndpointSpec_ParseBody(t *testing.T) {
 		require.False(t, stream)
 		require.NotNil(t, parsed)
 		require.Nil(t, parsed.StreamOptions)
+		require.Nil(t, mutated)
+	})
+
+	t.Run("force_include_usage_error", func(t *testing.T) {
+		stubForceStreamOptionsIncludeUsageError(t)
+		body := []byte(`{"model":"text-davinci-003","prompt":"say hi","stream":true}`)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, true)
+		require.ErrorIs(t, err, internalapi.ErrMalformedRequest)
+		require.ErrorContains(t, err, "failed to set stream_options.include_usage")
+		require.Empty(t, model)
+		require.Nil(t, parsed)
+		require.False(t, stream)
 		require.Nil(t, mutated)
 	})
 }
