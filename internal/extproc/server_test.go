@@ -242,7 +242,7 @@ func TestServer_Process(t *testing.T) {
 		err := s.Process(ms)
 		require.ErrorContains(t, err, "context canceled")
 	})
-	t.Run("recv iof", func(t *testing.T) {
+	t.Run("recv EOF", func(t *testing.T) {
 		s, _ := requireNewServerWithMockProcessor(t)
 		ms := &mockExternalProcessingStream{t: t, retErr: io.EOF, ctx: t.Context()}
 		err := s.Process(ms)

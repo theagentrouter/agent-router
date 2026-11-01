@@ -47,7 +47,7 @@ func (o *ToAWSBedrockV1Tokenize) tokenizeToBedrockCountTokens(tokenizeChatReq *t
 	converseInput.Messages = make([]*awsbedrock.Message, 0, len(tokenizeChatReq.Messages))
 	for i := range tokenizeChatReq.Messages {
 		msg := &tokenizeChatReq.Messages[i]
-		role := msg.ExtractMessgaeRole()
+		role := msg.ExtractMessageRole()
 		switch {
 		case msg.OfUser != nil:
 			bedrockMessage, err := openAIMessageToBedrockMessageRoleUser(msg.OfUser, role)

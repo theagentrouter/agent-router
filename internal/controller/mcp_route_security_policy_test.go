@@ -531,7 +531,7 @@ func TestMCPRouteControllerCleanupSecurityPolicyResources(t *testing.T) {
 
 	securityPolicyName := internalapi.MCPGeneratedResourceCommonPrefix + mcpRoute.Name
 	backendTrafficPolicyName := internalapi.MCPGeneratedResourceCommonPrefix + mcpRoute.Name + oauthProtectedResourceMetadataSuffix
-	protecedResourceMetadataFilterName := internalapi.MCPGeneratedResourceCommonPrefix + mcpRoute.Name + oauthProtectedResourceMetadataSuffix
+	protectedResourceMetadataFilterName := internalapi.MCPGeneratedResourceCommonPrefix + mcpRoute.Name + oauthProtectedResourceMetadataSuffix
 	authServerMetadataFilterName := internalapi.MCPGeneratedResourceCommonPrefix + mcpRoute.Name + oauthAuthServerMetadataSuffix
 
 	var securityPolicy egv1a1.SecurityPolicy
@@ -542,8 +542,8 @@ func TestMCPRouteControllerCleanupSecurityPolicyResources(t *testing.T) {
 	err = fakeClient.Get(t.Context(), client.ObjectKey{Name: backendTrafficPolicyName, Namespace: mcpRoute.Namespace}, &backendTrafficPolicy)
 	require.NoError(t, err, "BackendTrafficPolicy should exist before cleanup")
 
-	var protecedResourceMetadataFilter egv1a1.HTTPRouteFilter
-	err = fakeClient.Get(t.Context(), client.ObjectKey{Name: protecedResourceMetadataFilterName, Namespace: mcpRoute.Namespace}, &protecedResourceMetadataFilter)
+	var protectedResourceMetadataFilter egv1a1.HTTPRouteFilter
+	err = fakeClient.Get(t.Context(), client.ObjectKey{Name: protectedResourceMetadataFilterName, Namespace: mcpRoute.Namespace}, &protectedResourceMetadataFilter)
 	require.NoError(t, err, "Protected Resource Metadata HTTPRouteFilter should exist before cleanup")
 
 	var authServerMetadataFilter egv1a1.HTTPRouteFilter
@@ -564,7 +564,7 @@ func TestMCPRouteControllerCleanupSecurityPolicyResources(t *testing.T) {
 	require.Error(t, err, "BackendTrafficPolicy should be deleted after cleanup")
 	require.True(t, apierrors.IsNotFound(err), "BackendTrafficPolicy should not be found after cleanup")
 
-	err = fakeClient.Get(t.Context(), client.ObjectKey{Name: protecedResourceMetadataFilterName, Namespace: mcpRoute.Namespace}, &protecedResourceMetadataFilter)
+	err = fakeClient.Get(t.Context(), client.ObjectKey{Name: protectedResourceMetadataFilterName, Namespace: mcpRoute.Namespace}, &protectedResourceMetadataFilter)
 	require.Error(t, err, "Protected Resource Metadata HTTPRouteFilter should be deleted after cleanup")
 	require.True(t, apierrors.IsNotFound(err), "Protected Resource Metadata HTTPRouteFilter should not be found after cleanup")
 

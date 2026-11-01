@@ -85,7 +85,7 @@ Each non-patch release should start with Release Candidate (RC) phase as follows
 
    This will create the new folder for the release, `versioned_docs/release-0.50`. You'll have to update the `_vars.json` and `compatibility.md` and
    make sure all the versions are correct.
-   You also need to udpate the version list in `docusaurus.config.ts` and point the `latestVersion` to the versino being released.
+   You also need to update the version list in `docusaurus.config.ts` and point the `latestVersion` to the version being released.
 
 3. Cut the request candidate tag from the main branch. The tag should be v0.50.0-rc1. Assuming the remote `origin` is the main envoyproxy/ai-gateway repository,
    the command to cut the tag is:

@@ -79,14 +79,14 @@ func TestMCP_standalone(t *testing.T) {
 				toolName: "context7__resolve-library-id",
 				params: map[string]any{
 					"libraryName": "theagentrouter/agent-router",
-					"query":       "how can I route to an LLM bakend",
+					"query":       "how can I route to an LLM backend",
 				},
 			},
 			{
 				toolName: "context7__query-docs",
 				params: map[string]any{
 					"libraryId": "/theagentrouter/agent-router",
-					"query":     "how can I route to an LLM bakend",
+					"query":     "how can I route to an LLM backend",
 				},
 			},
 			// {
