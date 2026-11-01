@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # The full text of the Apache license is available in the LICENSE file at
 # the root of the repo.
-#
 # Shared AI Gateway rate limit service used by QuotaPolicy e2e tests.
 # Reads QuotaPolicy configs via xDS from the AI Gateway controller and
 # enforces quota-based rate limiting for upstream clusters.

@@ -92,6 +92,12 @@ func AWSCredentialOverrideHeaderNames(prefix string) (accessKeyID, secretAccessK
 	return prefix + "access-key-id", prefix + "secret-access-key", prefix + "session-token"
 }
 
+// MCPProxyAddr is the address the MCP proxy listens on. It is loopback-only: its only client is the
+// Envoy proxy in the same pod (the extension server points the MCP main route's cluster at
+// 127.0.0.1), and it trusts the route and subject headers that Envoy's frontend sets after enforcing
+// the MCPRoute's security policy, so it must not be reachable from other pods.
+var MCPProxyAddr = fmt.Sprintf("127.0.0.1:%d", MCPProxyPort)
+
 // MCPInternalHeadersToMetadata maps special MCP headers to metadata keys.
 //
 // Only headers that do not survive to the router belong here. Headers the MCP proxy sets and leaves

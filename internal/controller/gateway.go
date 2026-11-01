@@ -616,6 +616,9 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	// Configuration for MCP processor.
 	var effectiveMCPRoute bool
 	ec.MCPConfig, effectiveMCPRoute = mcpConfig(mcpRoutes)
+	if ec.MCPConfig != nil {
+		ec.MCPConfig.SessionEncryption = c.mcpSessionEncryption()
+	}
 	hasEffectiveRoute = hasEffectiveRoute || effectiveMCPRoute
 
 	c.warnUndeclaredMetadataNamespaces(ec, declaredMetadataNamespaces, gatewayName, gatewayNamespace)
@@ -840,6 +843,8 @@ func defaultOverrideHeaderName(t aigv1b1.BackendSecurityPolicyType) string {
 		return "x-aigw-azure-access-token"
 	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
 		return "x-aigw-gcp-access-token"
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		return "x-aigw-openai-access-token"
 	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
 		return internalapi.AWSCredentialOverrideHeaderPrefix
 	default:
@@ -1003,6 +1008,18 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 			}
 			hasStaticCred = true
 		}
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		secretName := rotators.GetBSPSecretName(backendSecurityPolicy.Name)
+		openAIAccessToken, getErr := c.getSecretData(ctx, namespace, secretName, rotators.OpenAIAccessTokenKey)
+		if getErr != nil {
+			return nil, getErr
+		}
+		auth = &filterapi.BackendAuth{OpenAIAuth: &filterapi.OpenAIAuth{
+			AccessToken:  openAIAccessToken,
+			Organization: spec.OpenAICredentials.Organization,
+			Project:      spec.OpenAICredentials.Project,
+		}}
+		hasStaticCred = true
 	default:
 		return nil, fmt.Errorf("invalid backend security type %s for policy %s", spec.Type, backendSecurityPolicy.Name)
 	}
@@ -1252,19 +1269,17 @@ func (c *GatewayController) checkPodHasSideCar(pod *corev1.Pod, needMCP bool, de
 		for i := range podSpec.InitContainers {
 			if podSpec.InitContainers[i].Name == extProcContainerName && podSpec.InitContainers[i].Image == desiredImage {
 				hasSideCar = true
-				hasMCPAddr := false
+				mcpAddr := ""
 				for j := range podSpec.InitContainers[i].Args {
 					if j > 0 && podSpec.InitContainers[i].Args[j-1] == "-logLevel" && podSpec.InitContainers[i].Args[j] != c.logLevel {
 						hasSideCar = false
 						break
 					}
 					if j > 0 && podSpec.InitContainers[i].Args[j-1] == "-mcpAddr" {
-						hasMCPAddr = true
+						mcpAddr = podSpec.InitContainers[i].Args[j]
 					}
 				}
-				if needMCP && !hasMCPAddr {
-					c.logger.Info("MCPRoutes exist but sidecar is missing -mcpAddr argument, triggering rollout",
-						"pod", pod.Name, "namespace", pod.Namespace)
+				if needMCP && !c.checkMCPAddr(pod, mcpAddr) {
 					hasSideCar = false
 				}
 				break
@@ -1274,19 +1289,17 @@ func (c *GatewayController) checkPodHasSideCar(pod *corev1.Pod, needMCP bool, de
 		for i := range podSpec.Containers {
 			if podSpec.Containers[i].Name == extProcContainerName && podSpec.Containers[i].Image == desiredImage {
 				hasSideCar = true
-				hasMCPAddr := false
+				mcpAddr := ""
 				for j := range podSpec.Containers[i].Args {
 					if j > 0 && podSpec.Containers[i].Args[j-1] == "-logLevel" && podSpec.Containers[i].Args[j] != c.logLevel {
 						hasSideCar = false
 						break
 					}
 					if j > 0 && podSpec.Containers[i].Args[j-1] == "-mcpAddr" {
-						hasMCPAddr = true
+						mcpAddr = podSpec.Containers[i].Args[j]
 					}
 				}
-				if needMCP && !hasMCPAddr {
-					c.logger.Info("MCPRoutes exist but sidecar is missing -mcpAddr argument, triggering rollout",
-						"pod", pod.Name, "namespace", pod.Namespace)
+				if needMCP && !c.checkMCPAddr(pod, mcpAddr) {
 					hasSideCar = false
 				}
 				break
@@ -1295,6 +1308,24 @@ func (c *GatewayController) checkPodHasSideCar(pod *corev1.Pod, needMCP bool, de
 	}
 
 	return hasSideCar
+}
+
+// checkMCPAddr reports whether the extproc sidecar's -mcpAddr is the desired MCP proxy address.
+// Besides a missing argument, this also rolls pods whose MCP proxy still listens on every interface
+// (created before the proxy was bound to loopback), which would otherwise stay reachable from other
+// pods until something else restarted them.
+func (c *GatewayController) checkMCPAddr(pod *corev1.Pod, mcpAddr string) bool {
+	switch mcpAddr {
+	case internalapi.MCPProxyAddr:
+		return true
+	case "":
+		c.logger.Info("MCPRoutes exist but sidecar is missing -mcpAddr argument, triggering rollout",
+			"pod", pod.Name, "namespace", pod.Namespace)
+	default:
+		c.logger.Info("sidecar -mcpAddr is not the desired MCP proxy address, triggering rollout",
+			"pod", pod.Name, "namespace", pod.Namespace, "mcpAddr", mcpAddr, "desired", internalapi.MCPProxyAddr)
+	}
+	return false
 }
 
 // isRolloutInProgress checks whether any Deployment or DaemonSet is currently rolling out.
