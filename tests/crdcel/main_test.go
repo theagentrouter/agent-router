@@ -239,6 +239,32 @@ func TestBackendSecurityPolicies(t *testing.T) {
 		{name: "aws_credential_override.yaml"},
 		{name: "gcp_oidc.yaml"},
 		{name: "anthropic-apikey.yaml"},
+		{name: "openai_spiffe.yaml"},
+		{name: "openai_oidc.yaml"},
+		{
+			name:   "openai_missing_subject_token.yaml",
+			expErr: "Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified",
+		},
+		{
+			name:   "openai_multiple_subject_tokens.yaml",
+			expErr: "Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified",
+		},
+		{
+			name:   "openai_missing_identity_provider_id.yaml",
+			expErr: "spec.openAICredentials.workloadIdentityFederationConfig.identityProviderID in body should be at least 1 chars long",
+		},
+		{
+			name:   "openai_invalid_socket_path.yaml",
+			expErr: "spec.openAICredentials.workloadIdentityFederationConfig.subjectToken.spiffeJWTSVID.socketPath in body should match",
+		},
+		{
+			name:   "openai_with_apikey.yaml",
+			expErr: "When type is OpenAICredentials, only openAICredentials field should be set",
+		},
+		{
+			name:   "apikey_with_openai_credentials.yaml",
+			expErr: "When type is APIKey, only apiKey field should be set",
+		},
 		{name: "targetrefs_basic.yaml"},
 		{name: "targetrefs_multiple.yaml"},
 		{name: "targetrefs_inferencepool.yaml"},

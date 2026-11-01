@@ -395,7 +395,7 @@ func (runCtx *runCmdContext) mustStartExtProc(
 		"--configBundlePath", configBundlePath,
 		"--extProcAddr", fmt.Sprintf("unix://%s", runCtx.udsPath),
 		"--adminPort", fmt.Sprintf("%d", runCtx.adminPort),
-		"--mcpAddr", ":" + strconv.Itoa(internalapi.MCPProxyPort),
+		"--mcpAddr", internalapi.MCPProxyAddr,
 		"--mcpSessionEncryptionIterations", strconv.Itoa(runCtx.mcpSessionEncryptionIterations),
 	}
 	if runCtx.isDebug {

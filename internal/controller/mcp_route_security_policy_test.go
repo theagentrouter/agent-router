@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -1053,6 +1054,39 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, "", 1*time.Second)
 		require.NoError(t, err)
 		require.Equal(t, "http://"+addr+issuerPath, metadata.Issuer)
+	})
+
+	// Valid metadata padded with an unknown field, so only the size makes it unusable.
+	oversizedDocument := func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(map[string]interface{}{
+			"issuer":  "http://" + r.Host + issuerPath,
+			"padding": strings.Repeat("a", maxMetadataResponseBytes),
+		})(w, r)
+	}
+
+	t.Run("falls through an oversized document to a later variant", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc(firstVariant, oversizedDocument)
+		mux.HandleFunc(lastVariant, completeDocument)
+
+		server := httptest.NewServer(mux)
+		t.Cleanup(server.Close)
+		addr := server.Listener.Addr().String()
+
+		metadata, err := fetchOAuthAuthServerMetadata(server.URL+issuerPath, "", 1*time.Second)
+		require.NoError(t, err)
+		require.Equal(t, "http://"+addr+issuerPath, metadata.Issuer)
+	})
+
+	t.Run("rejects an oversized document at an explicit URL", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(oversizedDocument))
+		t.Cleanup(server.Close)
+
+		metadata, err := fetchOAuthAuthServerMetadata("", server.URL+"/metadata", 1*time.Second)
+		require.Nil(t, metadata)
+		var invalidErr *invalidMetadataError
+		require.ErrorAs(t, err, &invalidErr)
+		require.ErrorContains(t, err, "response exceeds")
 	})
 }
 

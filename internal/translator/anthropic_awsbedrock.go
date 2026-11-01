@@ -539,6 +539,10 @@ func (a *anthropicToAWSBedrockTranslator) ResponseBody(_ map[string]string, body
 	if bedrockResp.Output != nil {
 		anthropicResp.Content = make([]anthropicschema.MessagesContentBlock, 0)
 		for _, block := range bedrockResp.Output.Message.Content {
+			// Content elements are pointers, so a null element decodes to nil.
+			if block == nil {
+				continue
+			}
 			switch {
 			case block.Text != nil:
 				anthropicResp.Content = append(anthropicResp.Content, anthropicschema.MessagesContentBlock{

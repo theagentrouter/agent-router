@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"strings"
@@ -23,10 +24,13 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -83,6 +87,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 		require.Equal(t, 4*1024*1024, f.maxRecvMsgSize)
 		require.Nil(t, f.spanRequestHeaderAttributes)
 		require.Nil(t, f.logRequestHeaderAttributes)
+		require.Equal(t, 5*time.Minute, f.credentialPreRotationWindow)
 		require.NoError(t, err)
 	})
 	t.Run("all flags", func(t *testing.T) {
@@ -114,6 +119,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 					tc.dash + "maxRecvMsgSize=33554432",
 					tc.dash + "watchNamespaces=default,envoy-ai-gateway-system",
 					tc.dash + "cacheSyncTimeout=5m",
+					tc.dash + "credentialPreRotationWindow=15m",
 					tc.dash + "mcpSessionEncryptionSeed=my-seed",
 					tc.dash + "mcpSessionEncryptionIterations=100",
 					tc.dash + "mcpFallbackSessionEncryptionSeed=my-fallback-seed",
@@ -142,6 +148,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				require.Equal(t, 32*1024*1024, f.maxRecvMsgSize)
 				require.Equal(t, []string{"default", "envoy-ai-gateway-system"}, f.watchNamespaces)
 				require.Equal(t, 5*time.Minute, f.cacheSyncTimeout)
+				require.Equal(t, 15*time.Minute, f.credentialPreRotationWindow)
 				require.Equal(t, "my-seed", f.mcpSessionEncryptionSeed)
 				require.Equal(t, 100, f.mcpSessionEncryptionIterations)
 				require.Equal(t, "my-fallback-seed", f.mcpFallbackSessionEncryptionSeed)
@@ -242,6 +249,21 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				flags:  []string{"--mcpFallbackSessionEncryptionSeed=fallback", "--mcpFallbackSessionEncryptionIterations=-1"},
 				expErr: "mcp fallback session encryption iterations must be positive: -1",
 			},
+			{
+				name:   "invalid credential pre-rotation window",
+				flags:  []string{"--credentialPreRotationWindow=invalid"},
+				expErr: `invalid value "invalid" for flag -credentialPreRotationWindow: parse error`,
+			},
+			{
+				name:   "zero credential pre-rotation window",
+				flags:  []string{"--credentialPreRotationWindow=0s"},
+				expErr: "credential pre-rotation window must be positive: 0s",
+			},
+			{
+				name:   "negative credential pre-rotation window",
+				flags:  []string{"--credentialPreRotationWindow=-1m"},
+				expErr: "credential pre-rotation window must be positive: -1m0s",
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				_, err := parseAndValidateFlags(tc.flags)
@@ -329,6 +351,81 @@ func Test_maybePatchAdmissionWebhook(t *testing.T) {
 	err = c.Get(t.Context(), client.ObjectKey{Name: w.Name}, updated)
 	require.NoError(t, err)
 	require.Equal(t, updated.Webhooks[0].ClientConfig.CABundle, []byte("somebundle"))
+}
+
+func Test_parseAndValidateFlags_mcpSessionEncryptionSeedEnvVars(t *testing.T) {
+	t.Run("from env vars", func(t *testing.T) {
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "env-seed")
+		t.Setenv(mcpFallbackSessionEncryptionSeedEnvVar, "env-fallback-seed")
+		f, err := parseAndValidateFlags([]string{"--mcpFallbackSessionEncryptionIterations=200"})
+		require.NoError(t, err)
+		require.Equal(t, "env-seed", f.mcpSessionEncryptionSeed)
+		require.Equal(t, "env-fallback-seed", f.mcpFallbackSessionEncryptionSeed)
+		require.Equal(t, 200, f.mcpFallbackSessionEncryptionIterations)
+	})
+	t.Run("flags take precedence", func(t *testing.T) {
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "env-seed")
+		t.Setenv(mcpFallbackSessionEncryptionSeedEnvVar, "env-fallback-seed")
+		f, err := parseAndValidateFlags([]string{
+			"--mcpSessionEncryptionSeed=flag-seed",
+			"--mcpFallbackSessionEncryptionSeed=flag-fallback-seed",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "flag-seed", f.mcpSessionEncryptionSeed)
+		require.Equal(t, "flag-fallback-seed", f.mcpFallbackSessionEncryptionSeed)
+	})
+	t.Run("empty env vars are ignored", func(t *testing.T) {
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "")
+		t.Setenv(mcpFallbackSessionEncryptionSeedEnvVar, "")
+		f, err := parseAndValidateFlags(nil)
+		require.NoError(t, err)
+		require.Equal(t, "default-insecure-seed", f.mcpSessionEncryptionSeed)
+		require.Empty(t, f.mcpFallbackSessionEncryptionSeed)
+	})
+	t.Run("fallback iterations are validated for the env var seed", func(t *testing.T) {
+		t.Setenv(mcpFallbackSessionEncryptionSeedEnvVar, "env-fallback-seed")
+		_, err := parseAndValidateFlags([]string{"--mcpFallbackSessionEncryptionIterations=0"})
+		require.ErrorContains(t, err, "mcp fallback session encryption iterations must be positive")
+	})
+}
+
+// Test_maybePatchAdmissionWebhook_conflict reproduces two controller replicas racing to set the CA bundle:
+// the other replica writes the bundle between our Get and Update, so our Update gets a Conflict.
+func Test_maybePatchAdmissionWebhook_conflict(t *testing.T) {
+	const ns = "envoy-ai-gateway-system"
+	t.Setenv("POD_NAMESPACE", ns)
+	p := t.TempDir() + "/bundle"
+	require.NoError(t, os.WriteFile(p, []byte("somebundle"), 0o600))
+
+	w := &admissionregistrationv1.MutatingWebhookConfiguration{
+		ObjectMeta: metav1.ObjectMeta{Name: mutatingWebhookConfigurationName + "." + ns},
+		Webhooks:   []admissionregistrationv1.MutatingWebhook{{}},
+	}
+	var updates int
+	c := fake.NewClientBuilder().WithObjects(w).WithInterceptorFuncs(interceptor.Funcs{
+		Update: func(ctx context.Context, cli client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			updates++
+			if updates == 1 {
+				// The other replica wins the race.
+				winner := &admissionregistrationv1.MutatingWebhookConfiguration{}
+				require.NoError(t, cli.Get(ctx, client.ObjectKeyFromObject(obj), winner))
+				winner.Webhooks[0].ClientConfig.CABundle = []byte("somebundle")
+				require.NoError(t, cli.Update(ctx, winner))
+				return apierrors.NewConflict(schema.GroupResource{
+					Group:    "admissionregistration.k8s.io",
+					Resource: "mutatingwebhookconfigurations",
+				}, obj.GetName(), errors.New("the object has been modified"))
+			}
+			return cli.Update(ctx, obj, opts...)
+		},
+	}).Build()
+
+	require.NoError(t, maybePatchAdmissionWebhook(t.Context(), c, p))
+	require.Equal(t, 1, updates, "the retry must not write once the bundle already matches")
+
+	updated := &admissionregistrationv1.MutatingWebhookConfiguration{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Name: w.Name}, updated))
+	require.Equal(t, []byte("somebundle"), updated.Webhooks[0].ClientConfig.CABundle)
 }
 
 func Test_parseAndValidateFlags_extProcImagePullSecrets(t *testing.T) {

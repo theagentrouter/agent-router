@@ -446,7 +446,7 @@ func TestBackendSecurityPolicyController(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, controller.ApplyIndexing(t.Context(), mgr.GetFieldIndexer().IndexField))
 
-	pc := controller.NewBackendSecurityPolicyController(mgr.GetClient(), k, defaultLogger(), eventCh.Ch, eventChPool.Ch)
+	pc := controller.NewBackendSecurityPolicyController(mgr.GetClient(), k, defaultLogger(), eventCh.Ch, eventChPool.Ch, controller.DefaultPreRotationWindow)
 	err = controller.TypedControllerBuilderForCRD(mgr, &aigv1b1.BackendSecurityPolicy{}).Complete(pc)
 	require.NoError(t, err)
 
