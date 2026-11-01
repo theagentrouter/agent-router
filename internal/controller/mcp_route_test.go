@@ -2246,6 +2246,73 @@ func TestMCPRouteController_deletePerBackendResources_KeepsReplacedObjects(t *te
 	requirePerBackendResources(t, inner, kubeClient, route, "svc", true, "kept")
 }
 
+// TestMCPRouteController_deletePerBackendResources_Errors verifies that a failed read or delete of a
+// per-backend object is returned, so that the reconcile is retried instead of reporting the backend
+// as cleaned up, and that the orphan cleanup passes the error on.
+func TestMCPRouteController_deletePerBackendResources_Errors(t *testing.T) {
+	route := &aigv1b1.MCPRoute{ObjectMeta: metav1.ObjectMeta{Name: "route-a", Namespace: "default", UID: "uid-a"}}
+	httpRouteName := mcpPerBackendRefHTTPRouteName(route.Name, "svc")
+	filterName := mcpBackendRefFilterName(route, "svc")
+	secretName := mcpCredentialSecretName(route, "svc")
+	errInjected := errors.New("injected")
+	tests := []struct {
+		name string
+		// failGet and failDelete name the object whose Get or Delete fails; "secret" is the credential Secret.
+		failGet, failDelete string
+		expErr              string
+	}{
+		{name: "HTTPRoute read", failGet: httpRouteName, expErr: "failed to get HTTPRoute " + httpRouteName},
+		{name: "HTTPRoute delete", failDelete: httpRouteName, expErr: "failed to delete HTTPRoute " + httpRouteName},
+		{name: "HTTPRouteFilter read", failGet: filterName, expErr: "failed to get HTTPRouteFilter " + filterName},
+		{name: "HTTPRouteFilter delete", failDelete: filterName, expErr: "failed to delete HTTPRouteFilter " + filterName},
+		{name: "credential Secret read", failGet: "secret", expErr: "failed to get credential secret " + secretName},
+		{name: "credential Secret delete", failDelete: "secret", expErr: "failed to delete credential secret " + secretName},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inner, ok := requireNewFakeClientWithIndexesForMCP(t).(client.WithWatch)
+			require.True(t, ok)
+			fakeClient := interceptor.NewClient(inner, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if key.Name == tt.failGet {
+						return errInjected
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+				Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+					if obj.GetName() == tt.failDelete {
+						return errInjected
+					}
+					return c.Delete(ctx, obj, opts...)
+				},
+			})
+			kubeClient := fakekube.NewClientset()
+			for verb, fail := range map[string]string{"get": tt.failGet, "delete": tt.failDelete} {
+				if fail == "secret" {
+					kubeClient.PrependReactor(verb, "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+						return true, nil, errInjected
+					})
+				}
+			}
+			c := NewMCPRouteController(fakeClient, kubeClient, logr.Discard(), internaltesting.NewControllerEventChan[*gwapiv1.Gateway]().Ch)
+			meta := func(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Name: name, Namespace: route.Namespace} }
+			require.NoError(t, inner.Create(t.Context(), &gwapiv1.HTTPRoute{ObjectMeta: meta(httpRouteName)}))
+			require.NoError(t, inner.Create(t.Context(), &egv1a1.HTTPRouteFilter{ObjectMeta: meta(filterName)}))
+			require.NoError(t, kubeClient.Tracker().Add(&corev1.Secret{ObjectMeta: meta(secretName)}))
+
+			err := c.deleteOrphanedPerBackendResources(t.Context(), route, map[string]*gwapiv1.HTTPRoute{httpRouteName: {}})
+			require.ErrorIs(t, err, errInjected)
+			require.ErrorContains(t, err, tt.expErr)
+		})
+	}
+}
+
+func TestPerBackendObjectKind(t *testing.T) {
+	require.Equal(t, "HTTPRoute", perBackendObjectKind(&gwapiv1.HTTPRoute{}))
+	require.Equal(t, "HTTPRouteFilter", perBackendObjectKind(&egv1a1.HTTPRouteFilter{}))
+	require.Equal(t, "*v1.Secret", perBackendObjectKind(&corev1.Secret{}))
+}
+
 // TestMCPRouteController_Reconcile_ManyDenialsFitTheStatus revokes the grant of routes whose backends
 // all read the same foreign Secret. The CRD caps a condition message at 32768 characters, so the status
 // lists the denials up to a limit and counts the rest; it must still turn NotAccepted. A route with one

@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -1243,4 +1245,58 @@ func TestReferenceGrantController_Reconcile_MCPRouteReferenceGrantChanges(t *tes
 	require.Len(t, mcpRouteChan, 1)
 	eventObject = (<-mcpRouteChan).Object.(*aigv1b1.MCPRoute)
 	require.Equal(t, "apps/remote", eventObject.Namespace+"/"+eventObject.Name)
+}
+
+// TestReferenceGrantController_Reconcile_MCPRouteErrors verifies that a failure to list or enqueue
+// the MCPRoutes affected by a grant is returned, so the grant is reconciled again instead of a route
+// missing the change.
+func TestReferenceGrantController_Reconcile_MCPRouteErrors(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, gwapiv1b1.Install(scheme))
+	require.NoError(t, aigv1a1.AddToScheme(scheme))
+	require.NoError(t, aigv1b1.AddToScheme(scheme))
+
+	route := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "remote", Namespace: "apps"},
+		Spec: aigv1b1.MCPRouteSpec{BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+			BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc"},
+			SecurityPolicy: &aigv1b1.MCPBackendSecurityPolicy{APIKey: &aigv1b1.MCPBackendAPIKey{
+				SecretRef: &gwapiv1.SecretObjectReference{Name: "token", Namespace: ptr.To(gwapiv1.Namespace("credentials"))},
+			}},
+		}}},
+	}
+	referenceGrant := &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "token-grant", Namespace: "credentials"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{Group: aiServiceBackendGroup, Kind: mcpRouteKind, Namespace: "apps"}},
+			To:   []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+		},
+	}
+	request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(referenceGrant)}
+
+	t.Run("listing MCPRoutes fails", func(t *testing.T) {
+		errInjected := errors.New("injected")
+		fakeClient := interceptor.NewClient(
+			fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, referenceGrant).Build(),
+			interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*aigv1b1.MCPRouteList); ok {
+					return errInjected
+				}
+				return c.List(ctx, list, opts...)
+			}},
+		)
+		controller := NewReferenceGrantController(fakeClient, logr.Discard(),
+			make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10), nil, make(chan event.GenericEvent, 10))
+		_, err := controller.Reconcile(t.Context(), request)
+		require.ErrorIs(t, err, errInjected)
+		require.ErrorContains(t, err, "failed to list MCPRoutes")
+	})
+
+	t.Run("MCPRoute channel full", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, referenceGrant).Build()
+		controller := NewReferenceGrantController(fakeClient, logr.Discard(),
+			make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10), nil, make(chan event.GenericEvent))
+		_, err := controller.Reconcile(t.Context(), request)
+		require.ErrorContains(t, err, "MCPRoute event channel buffer full while enqueueing apps/remote")
+	})
 }
