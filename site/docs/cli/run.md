@@ -4,6 +4,9 @@ title: aigw run
 sidebar_position: 2
 ---
 
+import CodeBlock from '@theme/CodeBlock';
+import vars from '../\_vars.json';
+
 # `aigw run`
 
 ## Overview
@@ -35,6 +38,9 @@ AZURE_OPENAI_ENDPOINT=https://example.openai.azure.com \
 OPENAI_BASE_URL=https://api.router.tetrate.ai/v1 OPENAI_API_KEY=sk-your-key aigw run
 # Ollama running locally
 OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_API_KEY=unused aigw run
+
+# Anthropic
+ANTHROPIC_API_KEY=sk-ant-your-key aigw run
 ```
 
 Now, the AI Gateway is running locally with the default configuration serving at `localhost:1975`.
@@ -70,6 +76,17 @@ When `AZURE_OPENAI_API_KEY` is set, the following environment variables are read
 | `AZURE_OPENAI_API_KEY`  | Yes      | `abc123...`                        | API key for authentication                  |
 | `OPENAI_API_VERSION`    | Yes      | `2024-12-01-preview`               | Azure OpenAI API version                    |
 
+**Anthropic:**
+
+When `ANTHROPIC_API_KEY` is set and neither `OPENAI_API_KEY` nor `AZURE_OPENAI_API_KEY` is set, the following environment variables are read:
+
+| Variable             | Required | Example                        | Description                                   |
+| -------------------- | -------- | ------------------------------ | --------------------------------------------- |
+| `ANTHROPIC_API_KEY`  | Yes      | `sk-ant-...`                   | API key for authentication                    |
+| `ANTHROPIC_BASE_URL` | No       | `https://api.anthropic.com/v1` | Base URL of your Anthropic-compatible backend |
+
+**Precedence:** when keys for more than one provider are set, `AZURE_OPENAI_API_KEY` takes precedence over `OPENAI_API_KEY`, and either of them takes precedence over `ANTHROPIC_API_KEY`, which is only used when no OpenAI or Azure OpenAI key is set.
+
 **Optional headers (both OpenAI and Azure OpenAI):**
 
 | Variable            | Example    | Description                                                                                    |
@@ -94,16 +111,16 @@ The best way to start customizing the configuration is to start with an [example
 
 First, download an example configuration to use as a starting point:
 
-```shell
-curl -o ollama.yaml https://raw.githubusercontent.com/theagentrouter/agent-router/refs/heads/{vars.aigwGitRef}/examples/aigw/ollama.yaml
-```
+<CodeBlock language="shell">
+{`curl -o ollama.yaml https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/aigw/ollama.yaml`}
+</CodeBlock>
 
 Next, let's say change the model matcher from `.*` (match all) to specifically match `deepseek-r1:1.5b` and save the configuration to `custom.yaml`:
 
 ```diff
 --- ollama.yaml
 +++ custom.yaml
-@@ -88,7 +88,7 @@
+@@ -135,7 +135,7 @@
          - headers:
              - type: RegularExpression
                name: x-ai-eg-model
@@ -118,7 +135,7 @@ instead, to default the model to the `CHAT_MODEL` variable.
 ```diff
 --- ollama.yaml
 +++ custom.yaml
-@@ -88,7 +88,7 @@
+@@ -135,7 +135,7 @@
          - headers:
              - type: RegularExpression
                name: x-ai-eg-model
