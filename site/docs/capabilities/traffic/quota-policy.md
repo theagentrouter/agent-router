@@ -242,7 +242,9 @@ floating point — for example `uint(double(cached_input_tokens) * 0.1)`.
 
 Cohere bills rerank in search units and reports no tokens, so the default `total_tokens` cost is
 always 0 for Cohere rerank models. The gateway reports their search units as `billable_units`, so
-use `costExpression: "uint(billable_units)"` for them instead.
+use `costExpression: "uint(billable_units)"` for them instead. `billable_units` is a double: a bare
+`billable_units` does not evaluate to an integer and the expression is rejected, so always cast it,
+for example `total_tokens + uint(billable_units) * 1000u`.
 :::
 
 ### Bucket Mode
