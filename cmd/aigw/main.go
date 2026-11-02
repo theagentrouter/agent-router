@@ -40,6 +40,8 @@ type (
 		Healthcheck cmdHealthcheck `cmd:"" help:"Docker HEALTHCHECK command."`
 		// DownloadEnvoy downloads the Envoy binary used by Envoy Gateway.
 		DownloadEnvoy cmdDownloadEnvoy `cmd:"" help:"Download Envoy binary for the Envoy Gateway default version."`
+		// Validate statically checks AI Gateway config YAML files.
+		Validate cmdValidate `cmd:"" help:"Validate AI Gateway config YAML file(s) without starting Envoy."`
 	}
 	// cmdRun corresponds to `aigw run` command.
 	cmdRun struct {
@@ -164,10 +166,11 @@ type (
 	runFn           func(context.Context, *cmdRun, *runOpts, io.Writer, io.Writer) error
 	healthcheckFn   func(context.Context, io.Writer, io.Writer) error
 	downloadEnvoyFn func(context.Context, *cmdDownloadEnvoy, io.Writer, io.Writer) error
+	validateFn      func(context.Context, *cmdValidate, io.Writer, io.Writer) error
 )
 
 func main() {
-	doMain(ctrl.SetupSignalHandler(), os.Stdout, os.Stderr, os.Args[1:], os.Exit, run, healthcheck, downloadEnvoyCmd)
+	doMain(ctrl.SetupSignalHandler(), os.Stdout, os.Stderr, os.Args[1:], os.Exit, run, healthcheck, downloadEnvoyCmd, validate)
 }
 
 // doMain is the main entry point for the CLI. It parses the command line arguments and executes the appropriate command.
@@ -181,6 +184,7 @@ func doMain(ctx context.Context, stdout, stderr io.Writer, args []string, exitFn
 	rf runFn,
 	hf healthcheckFn,
 	df downloadEnvoyFn,
+	vf validateFn,
 ) {
 	var c cmd
 	parser, err := kong.New(&c,
@@ -212,6 +216,11 @@ func doMain(ctx context.Context, stdout, stderr io.Writer, args []string, exitFn
 		err = df(ctx, &c.DownloadEnvoy, stdout, stderr)
 		if err != nil {
 			log.Fatalf("Download Envoy failed: %v", err)
+		}
+	case "validate", "validate <paths>":
+		err = vf(ctx, &c.Validate, stdout, stderr)
+		if err != nil {
+			log.Fatalf("Validation failed: %v", err)
 		}
 	default:
 		panic("unreachable")

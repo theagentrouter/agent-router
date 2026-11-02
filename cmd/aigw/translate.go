@@ -339,6 +339,101 @@ func translateCustomResourceObjects(
 	return
 }
 
+// validateCustomResourceObjects runs the same controller pipeline as translateCustomResourceObjects
+// but returns errors instead of panicking, making it safe to use for user-facing validation.
+func validateCustomResourceObjects(
+	ctx context.Context,
+	aigwRoutes []*aigv1b1.AIGatewayRoute,
+	mcpRoutes []*aigv1b1.MCPRoute,
+	aiSvcBackends []*aigv1b1.AIServiceBackend,
+	backendSecurityPolicies []*aigv1b1.BackendSecurityPolicy,
+	backendTLSPolicies []*gwapiv1.BackendTLSPolicy,
+	referenceGrants []*gwapiv1b1.ReferenceGrant,
+	gws []*gwapiv1.Gateway,
+	userDefinedSecrets []*corev1.Secret,
+	logger *slog.Logger,
+) error {
+	builder := fake.NewClientBuilder().
+		WithScheme(controller.Scheme).
+		WithStatusSubresource(&aigv1b1.AIGatewayRoute{}).
+		WithStatusSubresource(&aigv1b1.MCPRoute{}).
+		WithStatusSubresource(&aigv1b1.AIServiceBackend{}).
+		WithStatusSubresource(&aigv1b1.BackendSecurityPolicy{})
+	_ = controller.ApplyIndexing(ctx, func(_ context.Context, obj client.Object, field string, extractValue client.IndexerFunc) error {
+		builder = builder.WithIndex(obj, field, extractValue)
+		return nil
+	})
+	fakeClient := builder.Build()
+	fakeClientSet := fake2.NewClientset()
+
+	for _, s := range userDefinedSecrets {
+		if _, err := fakeClientSet.CoreV1().Secrets(s.Namespace).Create(ctx, s, metav1.CreateOptions{}); err != nil {
+			return fmt.Errorf("error creating secret: %w", err)
+		}
+	}
+
+	const eventChanBuffer = 100
+	bspC := controller.NewBackendSecurityPolicyController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),
+		make(chan event.GenericEvent, eventChanBuffer), make(chan event.GenericEvent, eventChanBuffer), controller.DefaultPreRotationWindow)
+	aisbC := controller.NewAIServiceBackendController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),
+		make(chan event.GenericEvent, eventChanBuffer))
+	airC := controller.NewAIGatewayRouteController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),
+		make(chan event.GenericEvent, eventChanBuffer), "/",
+	)
+	mcpC := controller.NewMCPRouteController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),
+		make(chan event.GenericEvent, eventChanBuffer),
+	)
+	gwC := controller.NewGatewayController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()), "envoy-gateway-system",
+		true, func() string { return "aigw-validate" },
+		&controller.Options{
+			ExtProcImage:    "docker.io/envoyproxy/ai-gateway-extproc:latest",
+			ExtProcLogLevel: "debug",
+		}, false,
+	)
+
+	for _, gw := range gws {
+		if err := tryCreate(ctx, fakeClient, gw, logger); err != nil {
+			return err
+		}
+	}
+	for _, btp := range backendTLSPolicies {
+		if err := tryCreate(ctx, fakeClient, btp, logger); err != nil {
+			return err
+		}
+	}
+	for _, rg := range referenceGrants {
+		if err := tryCreate(ctx, fakeClient, rg, logger); err != nil {
+			return err
+		}
+	}
+	for _, bsp := range backendSecurityPolicies {
+		if err := tryCreateAndReconcile(ctx, fakeClient, bsp, bspC, logger); err != nil {
+			return err
+		}
+	}
+	for _, backend := range aiSvcBackends {
+		if err := tryCreateAndReconcile(ctx, fakeClient, backend, aisbC, logger); err != nil {
+			return err
+		}
+	}
+	for _, route := range aigwRoutes {
+		if err := tryCreateAndReconcile(ctx, fakeClient, route, airC, logger); err != nil {
+			return err
+		}
+	}
+	for _, mcpRoute := range mcpRoutes {
+		if err := tryCreateAndReconcile(ctx, fakeClient, mcpRoute, mcpC, logger); err != nil {
+			return err
+		}
+	}
+	for _, gw := range gws {
+		if err := tryReconcile(ctx, gw, gwC, logger); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // mustExtractAndAppend extracts the object from the unstructured object and appends it to the slice.
 func mustExtractAndAppend[T any](obj *unstructured.Unstructured, slice *[]T) {
 	var item T
@@ -385,6 +480,48 @@ func mustReconcile(
 	if err != nil {
 		panic(err)
 	}
+}
+
+// tryCreate creates the object in the fake client, returning any error instead of panicking.
+func tryCreate(ctx context.Context, fakeClient client.Client, obj client.Object, logger *slog.Logger) error {
+	logger.Info("Fake creating", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
+	err := fakeClient.Create(ctx, obj)
+	if err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			logger.Info("Skipping already existing object", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
+			return nil
+		}
+		return fmt.Errorf("creating %s %q: %w", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
+	}
+	return nil
+}
+
+// tryCreateAndReconcile creates the object in the fake client and reconciles it, returning any error.
+func tryCreateAndReconcile(
+	ctx context.Context,
+	fakeClient client.Client, obj client.Object,
+	c reconcile.TypedReconciler[reconcile.Request],
+	logger *slog.Logger,
+) error {
+	if err := tryCreate(ctx, fakeClient, obj, logger); err != nil {
+		return err
+	}
+	return tryReconcile(ctx, obj, c, logger)
+}
+
+// tryReconcile reconciles the object using the provided reconciler, returning any error.
+func tryReconcile(
+	ctx context.Context,
+	obj client.Object,
+	c reconcile.TypedReconciler[reconcile.Request],
+	logger *slog.Logger,
+) error {
+	logger.Info("Fake reconciling", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
+	_, err := c.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}})
+	if err != nil {
+		return fmt.Errorf("reconciling %s %q: %w", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
+	}
+	return nil
 }
 
 func mustSetGroupVersionKind(typedMeta *metav1.TypeMeta, obj client.Object) {
