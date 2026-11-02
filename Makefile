@@ -194,6 +194,10 @@ test-coverage: ## Run the unit tests for the codebase with coverage check.
 	@$(MAKE) test GO_TEST_ARGS="-coverprofile=$(OUTPUT_DIR)/go-test-coverage.out -covermode=atomic -coverpkg=github.com/envoyproxy/ai-gateway/... -count=1 $(GO_TEST_ARGS)"
 	@$(GO_TOOL) go-test-coverage --config=.testcoverage.yml
 
+.PHONY: vulncheck
+vulncheck: ## Report known vulnerabilities reachable from the codebase.
+	@$(GO_TOOL) govulncheck ./...
+
 # This runs the integration tests of CEL validation rules in CRD definitions.
 #
 # This requires the EnvTest binary to be built.
