@@ -21,6 +21,10 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
+// maxBillableUnits bounds a provider-reported billing quantity so uint(billable_units * 1e6) in a cost
+// expression stays within uint64; anything outside [0, maxBillableUnits] is ignored, as is a missing value.
+const maxBillableUnits = 1e12
+
 // NewRerankCohereToCohereTranslator implements [Factory] for Cohere Rerank v2 translation.
 func NewRerankCohereToCohereTranslator(apiVersion string, modelNameOverride internalapi.ModelNameOverride) CohereRerankTranslator {
 	return &cohereToCohereTranslatorV2Rerank{modelNameOverride: modelNameOverride, path: path.Join("/", apiVersion, "rerank")} // e.g., /v2/rerank
@@ -72,7 +76,7 @@ func (t *cohereToCohereTranslatorV2Rerank) ResponseHeaders(map[string]string) (n
 
 // ResponseBody implements [CohereRerankTranslator.ResponseBody].
 // Token usage comes from meta.tokens when the provider reports it. Cohere bills rerank in search
-// units instead and reports them in meta.billed_units.search_units.
+// units instead and reports them in meta.billed_units.search_units, recorded as billable units.
 func (t *cohereToCohereTranslatorV2Rerank) ResponseBody(_ map[string]string, body io.Reader, _ bool, span tracingapi.RerankSpan) (
 	newHeaders []internalapi.Header, newBody []byte, tokenUsage metrics.TokenUsage, responseModel internalapi.ResponseModel, err error,
 ) {
@@ -102,8 +106,9 @@ func (t *cohereToCohereTranslatorV2Rerank) ResponseBody(_ map[string]string, bod
 		}
 		tokenUsage.SetTotalTokens(totalTokens)
 	}
-	if resp.Meta != nil && resp.Meta.BilledUnits != nil && resp.Meta.BilledUnits.SearchUnits != nil {
-		tokenUsage.SetSearchUnits(uint32(*resp.Meta.BilledUnits.SearchUnits)) //nolint:gosec
+	if resp.Meta != nil && resp.Meta.BilledUnits != nil && resp.Meta.BilledUnits.SearchUnits != nil &&
+		*resp.Meta.BilledUnits.SearchUnits >= 0 && *resp.Meta.BilledUnits.SearchUnits <= maxBillableUnits {
+		tokenUsage.SetBillableUnits(*resp.Meta.BilledUnits.SearchUnits)
 	}
 
 	// Cohere rerank responses do not echo model; report the effective request model if known.

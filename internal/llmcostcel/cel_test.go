@@ -75,8 +75,8 @@ func TestEvaluateProgram(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(150), v)
 	})
-	t.Run("search_units variable", func(t *testing.T) {
-		prog, err := NewProgram("total_tokens + search_units * 1000u")
+	t.Run("billable_units variable", func(t *testing.T) {
+		prog, err := NewProgram("total_tokens + uint(billable_units) * 1000u")
 		require.NoError(t, err)
 		v, err := EvaluateProgram(prog, "rerank-v3.5", "cool_backend", "cool_route", 0, 0, 0, 0, 0, 0, 3)
 		require.NoError(t, err)

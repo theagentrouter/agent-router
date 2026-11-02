@@ -25,7 +25,7 @@ const (
 	celOutputTokensKey             = "output_tokens"
 	celTotalTokensKey              = "total_tokens"
 	celReasoningTokensKey          = "reasoning_tokens"
-	celSearchUnitsKey              = "search_units"
+	celBillableUnitsKey            = "billable_units"
 )
 
 var env *cel.Env
@@ -42,7 +42,7 @@ func init() {
 		cel.Variable(celOutputTokensKey, cel.UintType),
 		cel.Variable(celTotalTokensKey, cel.UintType),
 		cel.Variable(celReasoningTokensKey, cel.UintType),
-		cel.Variable(celSearchUnitsKey, cel.UintType),
+		cel.Variable(celBillableUnitsKey, cel.DoubleType),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("cannot create CEL environment: %v", err))
@@ -70,7 +70,7 @@ func NewProgram(expr string) (prog cel.Program, err error) {
 }
 
 // EvaluateProgram evaluates the given CEL program with the given variables.
-func EvaluateProgram(prog cel.Program, modelName, backend, routeName string, inputTokens, cachedInputTokens, cacheCreationInputTokens, outputTokens, totalTokens, reasoningTokens, searchUnits uint32) (uint64, error) {
+func EvaluateProgram(prog cel.Program, modelName, backend, routeName string, inputTokens, cachedInputTokens, cacheCreationInputTokens, outputTokens, totalTokens, reasoningTokens uint32, billableUnits float64) (uint64, error) {
 	out, _, err := prog.Eval(map[string]any{
 		celModelNameKey:                modelName,
 		celBackendKey:                  backend,
@@ -81,7 +81,7 @@ func EvaluateProgram(prog cel.Program, modelName, backend, routeName string, inp
 		celOutputTokensKey:             outputTokens,
 		celTotalTokensKey:              totalTokens,
 		celReasoningTokensKey:          reasoningTokens,
-		celSearchUnitsKey:              searchUnits,
+		celBillableUnitsKey:            billableUnits,
 	})
 	if err != nil || out == nil {
 		return 0, fmt.Errorf("failed to evaluate CEL expression: %w", err)

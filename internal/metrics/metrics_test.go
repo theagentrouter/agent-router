@@ -478,29 +478,29 @@ func TestTokenUsage_IsZero(t *testing.T) {
 	require.False(t, u.IsZero())
 }
 
-func TestTokenUsage_SearchUnits(t *testing.T) {
+func TestTokenUsage_BillableUnits(t *testing.T) {
 	var u TokenUsage
-	v, ok := u.SearchUnits()
+	v, ok := u.BillableUnits()
 	require.False(t, ok)
 	require.Zero(t, v)
 
-	u.SetSearchUnits(2)
-	v, ok = u.SearchUnits()
+	u.SetBillableUnits(2)
+	v, ok = u.BillableUnits()
 	require.True(t, ok)
-	require.Equal(t, uint32(2), v)
+	require.Equal(t, float64(2), v)
 	require.False(t, u.IsZero())
 
 	var costs TokenUsage
 	costs.Override(u)
-	v, ok = costs.SearchUnits()
+	v, ok = costs.BillableUnits()
 	require.True(t, ok)
-	require.Equal(t, uint32(2), v)
+	require.Equal(t, float64(2), v)
 
-	// An update without search units keeps the ones already recorded.
+	// An update without billable units keeps the ones already recorded.
 	var tokensOnly TokenUsage
 	tokensOnly.SetInputTokens(5)
 	costs.Override(tokensOnly)
-	v, ok = costs.SearchUnits()
+	v, ok = costs.BillableUnits()
 	require.True(t, ok)
-	require.Equal(t, uint32(2), v)
+	require.Equal(t, float64(2), v)
 }

@@ -645,16 +645,20 @@ spec:
                         the number of output tokens. Type: unsigned integer.\n\t*
                         total_tokens: the total number of tokens. Type: unsigned integer.\n\t*
                         reasoning_tokens: the number of reasoning tokens. Type: unsigned
-                        integer.\n\t* search_units: the number of billed search units,
-                        reported by Cohere rerank instead of tokens. Type: unsigned
-                        integer.\n\nFor example, the following expressions are valid:\n\n\t*
+                        integer.\n\t* billable_units: billing units the provider reports,
+                        in the provider's own unit (Cohere rerank: billed_units.search_units),
+                        or 0. Type: double. A cost expression must evaluate to an
+                        unsigned integer, so cast it, e.g. uint(billable_units), which
+                        truncates; the unit depends on the provider, so branch on
+                        backend.\n\nFor example, the following expressions are valid:\n\n\t*
                         \"model == 'llama' ?  input_tokens + output_token * 0.5 :
                         total_tokens\"\n\t* \"backend == 'foo.default' ?  input_tokens
                         + output_tokens : total_tokens\"\n\t* \"backend == 'bar.default'
                         ?  (input_tokens - cached_input_tokens) + cached_input_tokens
                         * 0.1 + cache_creation_input_tokens * 1.25 + output_tokens
                         : total_tokens\"\n\t* \"input_tokens + output_tokens + total_tokens\"\n\t*
-                        \"input_tokens * output_tokens\""
+                        \"input_tokens * output_tokens\"\n\t* \"backend == 'rerank.default'
+                        ? uint(billable_units) : total_tokens\""
                       type: string
                     metadataKey:
                       description: MetadataKey is the key of the metadata to store
@@ -1391,16 +1395,20 @@ spec:
                         the number of output tokens. Type: unsigned integer.\n\t*
                         total_tokens: the total number of tokens. Type: unsigned integer.\n\t*
                         reasoning_tokens: the number of reasoning tokens. Type: unsigned
-                        integer.\n\t* search_units: the number of billed search units,
-                        reported by Cohere rerank instead of tokens. Type: unsigned
-                        integer.\n\nFor example, the following expressions are valid:\n\n\t*
+                        integer.\n\t* billable_units: billing units the provider reports,
+                        in the provider's own unit (Cohere rerank: billed_units.search_units),
+                        or 0. Type: double. A cost expression must evaluate to an
+                        unsigned integer, so cast it, e.g. uint(billable_units), which
+                        truncates; the unit depends on the provider, so branch on
+                        backend.\n\nFor example, the following expressions are valid:\n\n\t*
                         \"model == 'llama' ?  input_tokens + output_token * 0.5 :
                         total_tokens\"\n\t* \"backend == 'foo.default' ?  input_tokens
                         + output_tokens : total_tokens\"\n\t* \"backend == 'bar.default'
                         ?  (input_tokens - cached_input_tokens) + cached_input_tokens
                         * 0.1 + cache_creation_input_tokens * 1.25 + output_tokens
                         : total_tokens\"\n\t* \"input_tokens + output_tokens + total_tokens\"\n\t*
-                        \"input_tokens * output_tokens\""
+                        \"input_tokens * output_tokens\"\n\t* \"backend == 'rerank.default'
+                        ? uint(billable_units) : total_tokens\""
                       type: string
                     metadataKey:
                       description: MetadataKey is the key of the metadata to store
