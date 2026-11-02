@@ -1,0 +1,122 @@
+name: Image Scan
+
+on:
+  push:
+    branches:
+      - "main"
+  schedule:
+    - cron: "53 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  trivy:
+    name: Trivy (${{ matrix.command_name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - command_name: controller
+            image_name: controller
+          - command_name: extproc
+            image_name: extproc
+          - command_name: aigw
+            image_name: cli
+    env:
+      IMAGE: docker.io/envoyproxy/ai-gateway-${{ matrix.image_name }}:${{ github.sha }}
+    steps:
+      # Tags give the binaries a release version, so Trivy does not match the main module against old advisories.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - run: make docker-build.${{ matrix.command_name }} TAG=${{ github.sha }} DOCKER_BUILD_ARGS="--load"
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: ${{ env.IMAGE }}
+          scanners: vuln
+          ignore-unfixed: true
+          format: sarif
+          output: trivy.sarif
+      - uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-${{ matrix.image_name }}
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          scanners: vuln
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          skip-setup-trivy: true
+
+  # Trivy cannot identify the Envoy binary in the aigw image, so the pinned Envoy release is checked against
+  # OSV by commit and against Envoy's own advisories, which include some with no CVE that OSV does not carry.
+  envoy:
+    name: Envoy (.envoy-version)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Check the pinned Envoy release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(tr -d '[:space:]' < .envoy-version)"
+          repo=https://github.com/envoyproxy/envoy
+          commit="$(git ls-remote "$repo" "refs/tags/v${version}^{}" | cut -f1)"
+          commit="${commit:-$(git ls-remote "$repo" "refs/tags/v${version}" | cut -f1)}"
+          if [ -z "$commit" ]; then
+            echo "::error::Envoy tag v${version} not found"
+            exit 1
+          fi
+
+          osv="$(curl -sSf --retry 3 --max-time 30 -X POST https://api.osv.dev/v1/query -d "{\"commit\":\"${commit}\"}")"
+          if [ "$(jq -r '.next_page_token // empty' <<< "$osv")" != "" ]; then
+            echo "::error::OSV returned a partial result for ${commit}"
+            exit 1
+          fi
+          osv_ids="$(jq -r '.vulns[]?.id' <<< "$osv")"
+
+          # An advisory applies when it lists a patched release on this minor line that is newer than the pin.
+          ghsa_ids="$(gh api --paginate 'repos/envoyproxy/envoy/security-advisories?state=published&per_page=100' \
+            | jq -nr --arg v "$version" '
+                ($v | split(".") | map(tonumber)) as [$ma, $mi, $pa]
+                | inputs[]
+                | select(.withdrawn_at == null)
+                | select([.vulnerabilities[]?.patched_versions // "" | scan("[0-9]+\\.[0-9]+\\.[0-9]+")
+                          | split(".") | map(tonumber)
+                          | select(.[0] == $ma and .[1] == $mi and .[2] > $pa)] | length > 0)
+                | .ghsa_id')"
+
+          ids="$(printf '%s\n%s\n' "$osv_ids" "$ghsa_ids" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+          if [ -n "$ids" ]; then
+            echo "::error::Envoy v${version} (${commit}) is affected by: ${ids}"
+            exit 1
+          fi
+          echo "Envoy v${version} (${commit}): no known vulnerabilities in OSV or Envoy's advisories"
