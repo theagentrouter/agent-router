@@ -119,31 +119,26 @@ func TestGatewayMutator_mutatePod(t *testing.T) {
 			name:    "basic extproc container with MCPRoute",
 			needMCP: true,
 			extprocTest: func(t *testing.T, container corev1.Container) {
-				var foundMCPAddr, foundMCPSeed, foundMCPSIterations, foundFallbackSeed, foundFallbackIterations bool
+				var foundMCPAddr bool
 				for i, arg := range container.Args {
 					switch arg {
 					case "-mcpAddr":
 						foundMCPAddr = true
 						require.Equal(t, internalapi.MCPProxyAddr, container.Args[i+1])
-					case "-mcpSessionEncryptionSeed":
-						foundMCPSeed = true
-						require.Equal(t, "seed", container.Args[i+1])
-					case "-mcpSessionEncryptionIterations":
-						foundMCPSIterations = true
-						require.Equal(t, "100", container.Args[i+1])
-					case "-mcpFallbackSessionEncryptionSeed":
-						foundFallbackSeed = true
-						require.Equal(t, "fallback", container.Args[i+1])
-					case "-mcpFallbackSessionEncryptionIterations":
-						foundFallbackIterations = true
-						require.Equal(t, "200", container.Args[i+1])
+					case "-mcpSessionEncryptionSeed", "-mcpSessionEncryptionIterations",
+						"-mcpFallbackSessionEncryptionSeed", "-mcpFallbackSessionEncryptionIterations":
+						t.Fatalf("MCP session encryption config must not be passed as an argument: %s", arg)
 					}
 				}
 				require.True(t, foundMCPAddr)
-				require.True(t, foundMCPSeed)
-				require.True(t, foundMCPSIterations)
-				require.True(t, foundFallbackSeed)
-				require.True(t, foundFallbackIterations)
+				// The seeds are delivered through the filter config Secrets and must not appear anywhere
+				// in the Pod spec, which is readable by anyone with pod read access.
+				require.NotContains(t, container.Args, "seed")
+				require.NotContains(t, container.Args, "fallback")
+				for _, env := range container.Env {
+					require.NotEqual(t, "seed", env.Value)
+					require.NotEqual(t, "fallback", env.Value)
+				}
 			},
 		},
 		{

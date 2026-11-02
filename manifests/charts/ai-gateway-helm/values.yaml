@@ -142,6 +142,11 @@ controller:
     # Default is 2 minutes.
     cacheSyncTimeout: 2m
 
+  # How long before expiry the controller rotates short-lived BackendSecurityPolicy credentials
+  #  Must be positive and shorter than the credential lifetime.
+  # Default is 5 minutes.
+  credentialPreRotationWindow: 5m
+
   # -- Deployment configs --
   image:
     repository: docker.io/envoyproxy/ai-gateway-controller
@@ -198,6 +203,9 @@ controller:
   ##   # Enabled by default for troubleshooting purposes given the impact is negligible when not in use.
   ##   - name: DISABLE_PPROF
   ##     value: "true"
+  ##   # OpenAI Workload Identity Federation token exchange requests will use this proxy if set.
+  ##   - name: AI_GATEWAY_OPENAI_PROXY_URL
+  ##     value: "http://proxy.example.com:8080"
   extraEnvVars: []
 
   # Example of volumes
@@ -318,6 +326,10 @@ controller:
         # Fallback seed used to derive the MCP session encryption key.
         # Set to a non-empty value to enable fallback.
         # It should be the previous seed used before changing to the new seed.
+        # The chart stores it in a Secret named "<controller fullname>-mcp-session-encryption-fallback".
+        # While it is set, the controller is restarted on every "helm upgrade" so that changes to either seed take
+        # effect. When it is not set, restart the controller manually after changing the seed
+        # (e.g. "kubectl rollout restart deployment/<controller fullname>").
         seed: ""
         # Number of PBKDF2 iterations to use for deriving the MCP session encryption key with the fallback seed.
         iterations: 100000

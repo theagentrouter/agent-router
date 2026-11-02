@@ -385,3 +385,66 @@ backends:
 		require.NoError(t, err, "extproc exited with error before startup message")
 	}
 }
+
+type recordingConfigReceiver struct{ loaded int }
+
+func (r *recordingConfigReceiver) LoadConfig(context.Context, *filterapi.Config) error {
+	r.loaded++
+	return nil
+}
+
+func TestInsecureSeedWarner(t *testing.T) {
+	const warning = "MCP session encryption seed is set to the well-known default value"
+	for _, tc := range []struct {
+		name     string
+		flagSeed string
+		config   *filterapi.Config
+		expWarn  bool
+	}{
+		{
+			name:     "no MCP config",
+			flagSeed: defaultInsecureMCPSessionEncryptionSeed,
+			config:   &filterapi.Config{},
+		},
+		{
+			name:     "default flag seed and no seed in config",
+			flagSeed: defaultInsecureMCPSessionEncryptionSeed,
+			config:   &filterapi.Config{MCPConfig: &filterapi.MCPConfig{}},
+			expWarn:  true,
+		},
+		{
+			name:     "default flag seed overridden by config",
+			flagSeed: defaultInsecureMCPSessionEncryptionSeed,
+			config: &filterapi.Config{MCPConfig: &filterapi.MCPConfig{
+				SessionEncryption: &filterapi.MCPSessionEncryption{Seed: "secure-seed", Iterations: 100},
+			}},
+		},
+		{
+			name:     "default seed in config",
+			flagSeed: "secure-seed",
+			config: &filterapi.Config{MCPConfig: &filterapi.MCPConfig{
+				SessionEncryption: &filterapi.MCPSessionEncryption{Seed: defaultInsecureMCPSessionEncryptionSeed, Iterations: 100},
+			}},
+			expWarn: true,
+		},
+		{
+			name:     "secure flag seed and no seed in config",
+			flagSeed: "secure-seed",
+			config:   &filterapi.Config{MCPConfig: &filterapi.MCPConfig{}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			rcv := &recordingConfigReceiver{}
+			w := &insecureSeedWarner{ConfigReceiver: rcv, l: slog.New(slog.NewTextHandler(&buf, nil)), flagSeed: tc.flagSeed}
+			require.NoError(t, w.LoadConfig(t.Context(), tc.config))
+			require.NoError(t, w.LoadConfig(t.Context(), tc.config))
+			require.Equal(t, 2, rcv.loaded)
+			if tc.expWarn {
+				require.Equal(t, 1, strings.Count(buf.String(), warning), "should warn exactly once")
+			} else {
+				require.NotContains(t, buf.String(), warning)
+			}
+		})
+	}
+}

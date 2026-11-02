@@ -309,6 +309,67 @@ Supported header match types are `Exact`, `Distinct`, and `RegularExpression`.
 
 `clientSelectors` reuse the Envoy Gateway [`RateLimitSelectCondition`](https://gateway.envoyproxy.io/docs/api/extension_types/#ratelimitselectcondition) type, but QuotaPolicy currently applies only the `headers` matcher. The other fields on that type (`sourceCIDR`, `methods`, `path`, `queryParams`) are accepted by the schema but **not yet honored** for quota buckets.
 
+### Dynamic Bucket Limits with `fromMetadata`
+
+`QuotaPolicy` can resolve a bucket's limit for each request from Envoy dynamic
+metadata. This is useful when an authentication or entitlement filter already
+knows the tenant's budget and should serve many tenants with one policy.
+
+Both the metadata namespace and key are configurable. The producer must write
+`requests_per_unit` and `unit` at that configured path:
+
+```json
+{
+  "envoy.filters.http.ext_authz": {
+    "total_limit": {
+      "requests_per_unit": 50000,
+      "unit": "HOUR"
+    }
+  }
+}
+```
+
+The metadata namespace and key are configured on each `QuotaValue`:
+
+```yaml
+defaultBucket:
+  limit: 1000 # Required static RLS baseline and fallback.
+  duration: "1h"
+  fromMetadata:
+    namespace: envoy.filters.http.ext_authz
+    key: total_limit
+```
+
+`ext_authz` is the usual producer. Its dynamic metadata is stored under
+`envoy.filters.http.ext_authz`, but an `ext_proc`, Lua, or other HTTP filter can
+write the same contract. The producer must execute before the AI Gateway quota
+rate-limit filter, which is inserted immediately before the router.
+
+The static `limit` and `duration` remain required. They are emitted to the
+dedicated quota rate-limit service and are used when the metadata is missing or
+malformed. An override with `requests_per_unit: 0` is a real zero limit and
+suspends the matching tenant; it does not mean “use the fallback”. The metadata
+unit uses Envoy names such as `SECOND`, `MINUTE`, `HOUR`, and `DAY`, while the
+CRD duration uses values such as `1s`, `1m`, `1h`, and `1d`. The unit string is
+case-sensitive: lowercase values such as `hour` are ignored and the static
+baseline applies. Keep the static `limit` a conservative ceiling; missing or
+malformed metadata fails open to that baseline.
+
+When multiple quotas contribute to the same route-level descriptor, their
+dynamic metadata references must use the same namespace and key. Static quotas
+may share that descriptor with a dynamic quota; requests without the dynamic
+metadata use the static baseline. Different routes or descriptors may use
+different metadata references.
+
+With token charging, a suspended tenant (`requests_per_unit: 0`) can still
+complete one already-admitted request before subsequent matching requests are
+denied. Request-count charging (no response cost) denies immediately.
+
+Dynamic limits affect only the bucket size. Token cost is still computed from
+the response and charged through `quota_cost` after the response or stream
+ends. See the [dynamic metadata proposal](https://github.com/theagentrouter/agent-router/blob/main/docs/proposals/013-quota-policy-from-metadata/proposal.md)
+for the xDS flow and implementation details.
+
 ### Shadow Mode
 
 Shadow mode lets you test a bucket rule without rejecting traffic. When `shadowMode` is enabled on a

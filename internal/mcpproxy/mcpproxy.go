@@ -272,7 +272,7 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 		return nil, errors.New("failed to create MCP session to any backend")
 	}
 
-	encrypted, err := m.sessionCrypto.Encrypt(string(clientToGatewaySessionIDFromEntries(subject, finalEntries, routeName)))
+	encrypted, err := m.currentSessionCrypto().Encrypt(string(clientToGatewaySessionIDFromEntries(subject, finalEntries, routeName)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt session ID: %w", err)
 	}
@@ -322,7 +322,8 @@ var errSessionRouteMismatch = errors.New("session ID was issued for a different 
 // MUST be compared against the subject embedded in the session ID to prevent session hijacking:
 // resuming a session must only be allowed for the same authenticated caller that created it.
 func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, lastEvent secureClientToGatewayEventID, currentRoute filterapi.MCPRouteName, currentSubject string) (*session, error) {
-	decrypted, err := m.sessionCrypto.Decrypt(string(id))
+	sessionCrypto := m.currentSessionCrypto()
+	decrypted, err := sessionCrypto.Decrypt(string(id))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt session ID: %w", err)
 	}
@@ -338,7 +339,7 @@ func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, las
 		return nil, errSessionSubjectMismatch
 	}
 	if len(lastEvent) != 0 {
-		decryptedEventID, err := m.sessionCrypto.Decrypt(string(lastEvent))
+		decryptedEventID, err := sessionCrypto.Decrypt(string(lastEvent))
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt last event ID: %w", err)
 		}

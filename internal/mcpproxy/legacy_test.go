@@ -16,6 +16,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -2342,6 +2343,11 @@ func Test_errorType(t *testing.T) {
 			expected: metrics.MCPErrorInvalidParam,
 		},
 		{
+			name:     "invalid prompt name error",
+			err:      errInvalidPromptName,
+			expected: metrics.MCPErrorInvalidParam,
+		},
+		{
 			name:     "wrapped backend not found error",
 			err:      fmt.Errorf("failed to call backend: %w", errBackendNotFound),
 			expected: metrics.MCPErrorInvalidParam,
@@ -2695,4 +2701,95 @@ func TestMCPProxy_handleCompletionComplete_NeverModeBareName(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+// TestHandlePromptGetRequest_PromptSelector verifies that prompts filtered out by the backend's
+// promptSelector cannot be fetched directly via prompts/get, even though the client knows the
+// name. Allowed prompts on the same backend must still be routed.
+func TestHandlePromptGetRequest_PromptSelector(t *testing.T) {
+	var hits atomic.Int32
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"messages":[]}}`))
+	}))
+	t.Cleanup(backendServer.Close)
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = backendServer.URL
+	proxy.routes["test-route"].promptSelectors = map[filterapi.MCPBackendName]*toolSelector{
+		"backend1": {
+			exclude:        map[string]struct{}{"private_prompt": {}},
+			excludeRegexps: []*regexp.Regexp{regexp.MustCompile("^secret_.*")},
+		},
+	}
+	s := &session{
+		route:  "test-route",
+		reqCtx: proxy,
+		perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+			"backend1": {backendName: "backend1"},
+		},
+	}
+
+	for _, name := range []string{"backend1__private_prompt", "backend1__secret_stuff"} {
+		t.Run(name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			_, err := proxy.handlePromptGetRequest(t.Context(), s, rr, &jsonrpc.Request{}, &mcp.GetPromptParams{Name: name})
+			require.ErrorIs(t, err, errInvalidPromptName)
+			require.Equal(t, http.StatusBadRequest, rr.Code)
+			require.Contains(t, rr.Body.String(), "invalid prompt name")
+		})
+	}
+	require.Zero(t, hits.Load(), "excluded prompts must not be forwarded to the backend")
+
+	rr := httptest.NewRecorder()
+	_, err := proxy.handlePromptGetRequest(t.Context(), s, rr, &jsonrpc.Request{}, &mcp.GetPromptParams{Name: "backend1__public_prompt"})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, int32(1), hits.Load())
+}
+
+// TestMCPProxy_handleCompletionComplete_PromptSelector verifies that "ref/prompt" completion
+// requests honor the backend's promptSelector the same way prompts/get does.
+func TestMCPProxy_handleCompletionComplete_PromptSelector(t *testing.T) {
+	reqID, _ := jsonrpc.MakeID("id")
+	var hits atomic.Int32
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		resp := &jsonrpc.Response{ID: reqID}
+		resp.Result, _ = json.Marshal(&mcp.CompleteResult{})
+		respBody, _ := jsonrpc.EncodeMessage(resp)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(respBody)
+	}))
+	t.Cleanup(backendServer.Close)
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = backendServer.URL
+	proxy.routes["test-route"].promptSelectors = map[filterapi.MCPBackendName]*toolSelector{
+		"backend1": {include: map[string]struct{}{"public_prompt": {}}},
+	}
+	s := &session{
+		reqCtx: proxy,
+		perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+			"backend1": {sessionID: "test-session"},
+		},
+		route: "test-route",
+	}
+
+	rr := httptest.NewRecorder()
+	_, err := proxy.handleCompletionComplete(t.Context(), s, rr, &jsonrpc.Request{ID: reqID, Method: "completion/complete"}, &mcp.CompleteParams{
+		Ref: &mcp.CompleteReference{Type: "ref/prompt", Name: "backend1__private_prompt"},
+	}, nil)
+	require.ErrorIs(t, err, errInvalidPromptName)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Zero(t, hits.Load(), "excluded prompts must not be forwarded to the backend")
+
+	rr = httptest.NewRecorder()
+	_, err = proxy.handleCompletionComplete(t.Context(), s, rr, &jsonrpc.Request{ID: reqID, Method: "completion/complete"}, &mcp.CompleteParams{
+		Ref: &mcp.CompleteReference{Type: "ref/prompt", Name: "backend1__public_prompt"},
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, int32(1), hits.Load())
 }
