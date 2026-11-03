@@ -146,12 +146,23 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) RequestBody(_ []byte, ope
 		bedrockReq.AdditionalModelRequestFields = getAwsBedrockThinkingMap(openAIReq.Thinking)
 	}
 
-	// Forward reasoning_effort as reasoning_config (for GLM, Nova, and other models)
+	// Forward reasoning_effort as reasoning_config (for GLM, Nova, and other models).
+	// Claude aliases reasoning_config to its thinking field, which has to be an object, so a
+	// bare effort string is rejected. Those models take the level through output_config.effort.
+	// See: https://platform.claude.com/docs/en/build-with-claude/effort
 	if openAIReq.ReasoningEffort != "" {
 		if bedrockReq.AdditionalModelRequestFields == nil {
 			bedrockReq.AdditionalModelRequestFields = make(map[string]interface{})
 		}
-		bedrockReq.AdditionalModelRequestFields["reasoning_config"] = string(openAIReq.ReasoningEffort)
+		if effortAvailable(o.requestModel) {
+			effort, effortErr := mapReasoningEffortToOutputConfigEffort(openAIReq.ReasoningEffort)
+			if effortErr != nil {
+				return nil, nil, effortErr
+			}
+			bedrockReq.AdditionalModelRequestFields["output_config"] = map[string]interface{}{"effort": string(effort)}
+		} else {
+			bedrockReq.AdditionalModelRequestFields["reasoning_config"] = string(openAIReq.ReasoningEffort)
+		}
 	}
 
 	// Convert Chat Completion messages.
