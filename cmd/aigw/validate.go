@@ -29,8 +29,7 @@ func validate(ctx context.Context, c *cmdValidate, stdout, stderr io.Writer) err
 	}
 
 	aigwRoutes, mcpRoutes, aiSvcBackends, backendSecurityPolicies,
-		backendTLSConfigs, referenceGrants, gws, secrets, _, err :=
-		collectObjects(yamlInput, io.Discard, logger)
+		backendTLSConfigs, referenceGrants, gws, secrets, _, err := collectObjects(yamlInput, io.Discard, logger)
 	if err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}
