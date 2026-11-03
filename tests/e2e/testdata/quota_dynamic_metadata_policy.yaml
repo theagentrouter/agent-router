@@ -1,0 +1,35 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# QuotaPolicy overlay for dynamic_metadata_ratelimit.yaml.
+# The base fixture supplies the Gateway, AIServiceBackend, ext_authz producer,
+# and token-producing test upstream. ext_authz writes the tier limit struct to
+# envoy.filters.http.ext_authz/total_limit before the quota rate-limit filter runs.
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: envoy-ai-gateway-dynamic-quota
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: envoy-ai-gateway-dynamic-ratelimit-testupstream
+  perModelQuotas:
+    - modelName: dynamic-ratelimit-model
+      quota:
+        mode: Shared
+        bucketRules:
+          - clientSelectors:
+              - headers:
+                  - name: x-tenant-id
+                    type: Distinct
+            quota:
+              # Conservative fallback for an auth tier that does not emit metadata.
+              limit: 1
+              duration: "1h"
+              fromMetadata:
+                namespace: envoy.filters.http.ext_authz
+                key: total_limit
