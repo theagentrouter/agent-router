@@ -155,9 +155,14 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) ResponseBody(_ map[strin
 	}
 
 	// Non-streaming logic.
-	gcpResp := &genai.GenerateContentResponse{}
-	if err = json.NewDecoder(body).Decode(gcpResp); err != nil {
+	// Decode into a pointer: a JSON null body then yields nil instead of reaching genai's
+	// UnmarshalJSON, which dereferences a nil pointer on null. Treat it as an empty response.
+	var gcpResp *genai.GenerateContentResponse
+	if err = json.NewDecoder(body).Decode(&gcpResp); err != nil {
 		return nil, nil, metrics.TokenUsage{}, "", fmt.Errorf("error decoding GCP response: %w", err)
+	}
+	if gcpResp == nil {
+		gcpResp = &genai.GenerateContentResponse{}
 	}
 
 	responseModel = o.requestModel
@@ -320,10 +325,13 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) parseGCPStreamingChunks(
 			line = part
 		}
 
-		// Try to parse as JSON.
-		var chunk genai.GenerateContentResponse
+		// Try to parse as JSON. Decode into a pointer so that a null event yields nil instead of
+		// reaching genai's UnmarshalJSON, which dereferences a nil pointer on null.
+		var chunk *genai.GenerateContentResponse
 		if err := json.Unmarshal(line, &chunk); err == nil {
-			chunks = append(chunks, chunk)
+			if chunk != nil {
+				chunks = append(chunks, *chunk)
+			}
 			o.bufferedBody = nil
 		} else {
 			// Failed to parse, buffer it for the next call.

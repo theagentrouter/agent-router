@@ -244,7 +244,7 @@ func translateCustomResourceObjects(
 	// This mirrors the production code at controller/controller.go:128
 	const eventChanBuffer = 100
 	bspC := controller.NewBackendSecurityPolicyController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),
-		make(chan event.GenericEvent, eventChanBuffer), make(chan event.GenericEvent, eventChanBuffer))
+		make(chan event.GenericEvent, eventChanBuffer), make(chan event.GenericEvent, eventChanBuffer), controller.DefaultPreRotationWindow)
 	aisbC := controller.NewAIServiceBackendController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),
 		make(chan event.GenericEvent, eventChanBuffer))
 	airC := controller.NewAIGatewayRouteController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),

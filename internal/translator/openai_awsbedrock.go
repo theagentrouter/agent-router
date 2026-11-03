@@ -454,6 +454,10 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) ResponseBody(_ map[string
 	}
 
 	for _, output := range bedrockResp.Output.Message.Content {
+		// Content elements are pointers, so a null element decodes to nil.
+		if output == nil {
+			continue
+		}
 		// The AWS Content Block data type is a UNION,
 		// so only one of the members can be specified when used or returned.
 		// see: https: //docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html

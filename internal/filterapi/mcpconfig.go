@@ -5,6 +5,8 @@
 
 package filterapi
 
+import "log/slog"
+
 // MCPConfig is the configuration for the MCP listener and routing.
 type MCPConfig struct {
 	// BackendListenerAddr is the address that speaks plain HTTP and can be used to
@@ -17,6 +19,35 @@ type MCPConfig struct {
 
 	// Routes is the list of routes that this listener can route to.
 	Routes []MCPRoute `json:"routes,omitempty"`
+
+	// SessionEncryption is the configuration used to encrypt and decrypt MCP session IDs.
+	//
+	// It is delivered through the filter config (which is stored in Secrets) rather than as
+	// command line arguments, so that the seeds are not exposed in the Pod spec or the process
+	// command line. When nil, the external processor falls back to its command line flags.
+	SessionEncryption *MCPSessionEncryption `json:"sessionEncryption,omitempty"`
+}
+
+// MCPSessionEncryption is the configuration for MCP session ID encryption.
+type MCPSessionEncryption struct {
+	// Seed is the seed used to derive the MCP session encryption key.
+	Seed string `json:"seed"`
+	// Iterations is the number of PBKDF2 iterations used to derive the key from Seed.
+	Iterations int `json:"iterations"`
+	// FallbackSeed is the optional seed used to decrypt session IDs during seed rotation.
+	FallbackSeed string `json:"fallbackSeed,omitempty"`
+	// FallbackIterations is the number of PBKDF2 iterations used to derive the key from FallbackSeed.
+	FallbackIterations int `json:"fallbackIterations,omitempty"`
+}
+
+// LogValue implements slog.LogValuer for MCPSessionEncryption to redact sensitive information.
+func (e MCPSessionEncryption) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("seed", "[REDACTED]"),
+		slog.Int("iterations", e.Iterations),
+		slog.Bool("fallbackSeedSet", e.FallbackSeed != ""),
+		slog.Int("fallbackIterations", e.FallbackIterations),
+	)
 }
 
 // PrefixMode controls how tool and prompt names are prefixed when exposed to clients.
