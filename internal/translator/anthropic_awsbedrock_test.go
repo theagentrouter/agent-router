@@ -484,7 +484,7 @@ func TestAnthropicToAWSBedrockTranslator_ResponseBody_StreamingRecordsSpanChunks
 	for _, c := range span.chunks {
 		recorded = append(recorded, string(c.Type))
 	}
-	require.Equal(t, strings.Count(string(body), "event: "), len(recorded), "recorded %v for body %s", recorded, body)
+	require.Len(t, recorded, strings.Count(string(body), "event: "), "recorded %v for body %s", recorded, body)
 	require.Contains(t, recorded, "message_start")
 	require.Contains(t, recorded, "content_block_delta")
 	require.Contains(t, recorded, "message_delta")
@@ -492,7 +492,7 @@ func TestAnthropicToAWSBedrockTranslator_ResponseBody_StreamingRecordsSpanChunks
 }
 
 func TestRecordStreamedChunks(t *testing.T) {
-	t.Run("nil span", func(t *testing.T) {
+	t.Run("nil span", func(*testing.T) {
 		recordStreamedChunks(nil, []byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
 	})
 	t.Run("skips lines that are not valid data events", func(t *testing.T) {
