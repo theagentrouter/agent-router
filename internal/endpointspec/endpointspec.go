@@ -91,8 +91,9 @@ type (
 		//   The placeholder hash is deterministic, so requests from the same user can still be
 		//   correlated in logs.
 		// * Keep model and format configuration that describes how to call the model rather than
-		//   who is calling or what they said: model, sampling parameters, tool definitions,
-		//   response_format and other schemas.
+		//   who is calling or what they said: model, sampling parameters, stop sequences, tool
+		//   definitions, response_format and other schemas. Fields inside them that authenticate
+		//   (MCP tokens, headers, server URLs) are credentials, not configuration, and are redacted.
 		//
 		// Fields not named by an implementation are logged as sent, so a new request field must be
 		// classified explicitly when it is added.
@@ -261,9 +262,23 @@ func (ChatCompletionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Ch
 	// User is an end-user identifier set by the application — redact it.
 	redacted.User = redaction.RedactString(req.User)
 
+	// The web search user location is the end user's approximate location — redact it, keep the type.
+	if req.WebSearchOptions != nil && req.WebSearchOptions.UserLocation != nil {
+		redactedOptions := *req.WebSearchOptions
+		redactedLocation := *req.WebSearchOptions.UserLocation
+		redactedLocation.Approximate = openai.WebSearchLocation{
+			City:    redaction.RedactString(redactedLocation.Approximate.City),
+			Region:  redaction.RedactString(redactedLocation.Approximate.Region),
+			Country: redaction.RedactString(redactedLocation.Approximate.Country),
+		}
+		redactedOptions.UserLocation = &redactedLocation
+		redacted.WebSearchOptions = &redactedOptions
+	}
+
 	// Tool definitions (name, description, parameters) are developer-authored schema metadata,
 	// not user data — kept as-is.
-	// Response format schemas and guided_json are developer-authored — kept as-is.
+	// Response format schemas and guided_json are developer-authored — kept as-is. So are the
+	// other vLLM output constraints (guided_choice, guided_regex, structured_outputs).
 
 	return &redacted, nil
 }
@@ -304,10 +319,9 @@ func (CompletionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Comple
 	redacted.Prompt = openai.PromptUnion{Value: redactInterfaceValue(req.Prompt.Value)}
 	// User is an end-user identifier set by the application — redact it.
 	redacted.User = redaction.RedactString(req.User)
-	// Stop sequences are caller-chosen text (string or []string) that can quote the prompt.
-	if req.Stop != nil {
-		redacted.Stop = redactInterfaceValue(req.Stop)
-	}
+	// Suffix is the text after the insertion point, so it is prompt content — redact it.
+	redacted.Suffix = redaction.RedactString(req.Suffix)
+	// Stop sequences are generation config, like sampling parameters — kept as-is.
 	return &redacted, nil
 }
 
@@ -445,15 +459,63 @@ func (ResponsesEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Response
 	// Instructions and User are user-supplied text / PII.
 	redacted.Instructions = redaction.RedactString(req.Instructions)
 	redacted.User = redaction.RedactString(req.User)
-	// SafetyIdentifier identifies the end user; Metadata is a free-form client map that can hold
-	// user IDs or similar. Metadata keys are kept and only the values are redacted.
+	// SafetyIdentifier identifies the end user; PromptCacheKey is often built per user or per
+	// session; Metadata is a free-form client map that can hold user IDs or similar. Metadata keys
+	// are kept and only the values are redacted.
 	redacted.SafetyIdentifier = redaction.RedactString(req.SafetyIdentifier)
+	redacted.PromptCacheKey = redaction.RedactString(req.PromptCacheKey)
 	redacted.Metadata = redactUnionField(req.Metadata)
 	// Input and Prompt are JSON unions holding conversation items / content — redact every
 	// nested string leaf via the generic redactor so user content inside any item type is caught.
 	redacted.Input = redactUnionField(req.Input)
 	redacted.Prompt = redactUnionField(req.Prompt)
+	// Tool definitions are kept as config, except where a tool carries credentials.
+	if len(req.Tools) > 0 {
+		redacted.Tools = make([]openai.ResponseToolUnion, len(req.Tools))
+		for i := range req.Tools {
+			redacted.Tools[i] = redactResponseTool(&req.Tools[i])
+		}
+	}
 	return &redacted, nil
+}
+
+// redactResponseTool redacts the parts of a Responses tool definition that carry credentials or
+// end-user data. MCP tools hold an OAuth access token in Authorization, may authenticate through
+// Headers, and may embed a key in ServerURL. Web search tools carry the end user's location. A
+// tool of unrecognized type is opaque, so it is redacted whole. Everything else is
+// developer-authored config and is kept.
+func redactResponseTool(tool *openai.ResponseToolUnion) openai.ResponseToolUnion {
+	switch {
+	case tool.OfMcp != nil:
+		mcp := *tool.OfMcp
+		mcp.Authorization = redaction.RedactString(tool.OfMcp.Authorization)
+		mcp.ServerURL = redaction.RedactString(tool.OfMcp.ServerURL)
+		if len(tool.OfMcp.Headers) > 0 {
+			mcp.Headers = make(map[string]string, len(tool.OfMcp.Headers))
+			for k, v := range tool.OfMcp.Headers {
+				mcp.Headers[k] = redaction.RedactString(v)
+			}
+		}
+		return openai.ResponseToolUnion{OfMcp: &mcp}
+	case tool.OfWebSearch != nil:
+		webSearch := *tool.OfWebSearch
+		webSearch.UserLocation.City = redaction.RedactString(tool.OfWebSearch.UserLocation.City)
+		webSearch.UserLocation.Region = redaction.RedactString(tool.OfWebSearch.UserLocation.Region)
+		webSearch.UserLocation.Country = redaction.RedactString(tool.OfWebSearch.UserLocation.Country)
+		webSearch.UserLocation.Timezone = redaction.RedactString(tool.OfWebSearch.UserLocation.Timezone)
+		return openai.ResponseToolUnion{OfWebSearch: &webSearch}
+	case tool.OfWebSearchPreview != nil:
+		webSearch := *tool.OfWebSearchPreview
+		webSearch.UserLocation.City = redaction.RedactString(tool.OfWebSearchPreview.UserLocation.City)
+		webSearch.UserLocation.Region = redaction.RedactString(tool.OfWebSearchPreview.UserLocation.Region)
+		webSearch.UserLocation.Country = redaction.RedactString(tool.OfWebSearchPreview.UserLocation.Country)
+		webSearch.UserLocation.Timezone = redaction.RedactString(tool.OfWebSearchPreview.UserLocation.Timezone)
+		return openai.ResponseToolUnion{OfWebSearchPreview: &webSearch}
+	case tool.OfUnknown != nil:
+		return openai.ResponseToolUnion{OfUnknown: redactRawJSON(tool.OfUnknown)}
+	default:
+		return *tool
+	}
 }
 
 // ParseBody implements [EndpointSpec.ParseBody]. Decisions is a non-streaming endpoint.
@@ -560,6 +622,21 @@ func (MessagesEndpointSpec) RedactSensitiveInfoFromRequest(req *anthropic.Messag
 		redactedMetadata.UserID = redactOptionalString(req.Metadata.UserID)
 		redacted.Metadata = &redactedMetadata
 	}
+	if len(req.MCPServers) > 0 {
+		redacted.MCPServers = make([]anthropic.MCPServer, len(req.MCPServers))
+		for i, server := range req.MCPServers {
+			redacted.MCPServers[i] = redactMCPServer(server)
+		}
+	}
+	// Tool definitions are kept as config, except the web search tool's end-user location.
+	if len(req.Tools) > 0 {
+		redacted.Tools = make([]anthropic.ToolUnion, len(req.Tools))
+		for i := range req.Tools {
+			redacted.Tools[i] = redactAnthropicTool(&req.Tools[i])
+		}
+	}
+	// Container (a container id and skills to load) and ContextManagement (context-editing
+	// config) are provider ids and config — kept as-is.
 	return &redacted, nil
 }
 
@@ -578,6 +655,46 @@ func redactAnthropicMessagesAndSystem(msgs []anthropic.MessageParam, system *ant
 		redactedSystem = ptr.To(redactUnionField(*system))
 	}
 	return redactedMsgs, redactedSystem
+}
+
+// redactAnthropicTool redacts the end user's location from a web search tool definition and
+// keeps every other tool definition as-is.
+func redactAnthropicTool(tool *anthropic.ToolUnion) anthropic.ToolUnion {
+	if tool.WebSearchTool == nil || tool.WebSearchTool.UserLocation == nil {
+		return *tool
+	}
+	webSearch := *tool.WebSearchTool
+	location := *tool.WebSearchTool.UserLocation
+	location.City = redaction.RedactString(location.City)
+	location.Region = redaction.RedactString(location.Region)
+	location.Country = redaction.RedactString(location.Country)
+	location.Timezone = redaction.RedactString(location.Timezone)
+	webSearch.UserLocation = &location
+	return anthropic.ToolUnion{WebSearchTool: &webSearch}
+}
+
+// mcpServerKeptKeys are the mcp_servers entry keys that describe which server and tools to use
+// rather than how to authenticate. Every other key is redacted, so a credential field added to
+// the API later is not logged by default.
+var mcpServerKeptKeys = map[string]bool{"type": true, "name": true, "tool_configuration": true}
+
+// redactMCPServer redacts an Anthropic mcp_servers entry. MCPServer is untyped, so without this
+// the caller's object, including authorization_token (an OAuth bearer token for the MCP server)
+// and url (which can embed a key), would be logged as received.
+func redactMCPServer(server anthropic.MCPServer) anthropic.MCPServer {
+	entry, ok := server.(map[string]any)
+	if !ok {
+		return redactInterfaceValue(server)
+	}
+	redacted := make(map[string]any, len(entry))
+	for k, v := range entry {
+		if mcpServerKeptKeys[k] {
+			redacted[k] = v
+			continue
+		}
+		redacted[k] = redactInterfaceValue(v)
+	}
+	return redacted
 }
 
 // redactOptionalString returns a pointer to the redacted value of s, or nil if s is nil.
@@ -1237,6 +1354,8 @@ func (TranscriptionEndpointSpec) GetTranslator(
 func (TranscriptionEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.TranscriptionRequest) (*openai.TranscriptionRequest, error) {
 	redacted := *req
 	redacted.Prompt = redaction.RedactString(req.Prompt)
+	// FileName is the caller's upload file name, which often names a person or a meeting.
+	redacted.FileName = redaction.RedactString(req.FileName)
 	return &redacted, nil
 }
 
@@ -1342,6 +1461,8 @@ func (TranslationEndpointSpec) GetTranslator(
 func (TranslationEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.TranslationRequest) (*openai.TranslationRequest, error) {
 	redacted := *req
 	redacted.Prompt = redaction.RedactString(req.Prompt)
+	// FileName is the caller's upload file name, which often names a person or a meeting.
+	redacted.FileName = redaction.RedactString(req.FileName)
 	return &redacted, nil
 }
 

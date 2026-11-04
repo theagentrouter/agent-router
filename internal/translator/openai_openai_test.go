@@ -20,6 +20,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/redaction"
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 )
 
@@ -700,6 +701,44 @@ func TestRedactBody(t *testing.T) {
 		require.Equal(t, originalContentCopy, *resp.Choices[0].Message.Content)
 		require.NotContains(t, *resp.Choices[0].Message.Content, "[REDACTED")
 	})
+}
+
+func TestRedactBody_ThinkingBlocks(t *testing.T) {
+	const thinking = "reasoning-marker"
+	const signature = "signature-marker"
+	const data = "data-marker"
+	for _, tc := range []struct {
+		name       string
+		translator interface {
+			RedactBody(*openai.ChatCompletionResponse) *openai.ChatCompletionResponse
+		}
+	}{
+		{name: "openai", translator: &openAIToOpenAITranslatorV1ChatCompletion{}},
+		{name: "aws bedrock", translator: &openAIToAWSBedrockTranslatorV1ChatCompletion{}},
+		{name: "gcp vertex ai", translator: &openAIToGCPVertexAITranslatorV1ChatCompletion{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &openai.ChatCompletionResponse{
+				Choices: []openai.ChatCompletionResponseChoice{{
+					Message: openai.ChatCompletionResponseChoiceMessage{
+						Role: "assistant",
+						ThinkingBlocks: []openai.ThinkingBlock{
+							{Type: "thinking", Thinking: thinking, Signature: signature},
+							{Type: "redacted_thinking", Data: data},
+						},
+					},
+				}},
+			}
+
+			redacted := tc.translator.RedactBody(resp)
+
+			require.Equal(t, []openai.ThinkingBlock{
+				{Type: "thinking", Thinking: redaction.RedactString(thinking), Signature: redaction.RedactString(signature)},
+				{Type: "redacted_thinking", Data: redaction.RedactString(data)},
+			}, redacted.Choices[0].Message.ThinkingBlocks)
+			require.Equal(t, thinking, resp.Choices[0].Message.ThinkingBlocks[0].Thinking, "original must not be mutated")
+		})
+	}
 }
 
 // The space after "data:" is optional per the SSE specification, and some
