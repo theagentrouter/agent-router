@@ -331,6 +331,13 @@ controller:
         # effect. When it is not set, restart the controller manually after changing the seed
         # (e.g. "kubectl rollout restart deployment/<controller fullname>").
         seed: ""
+        # Name of an existing Secret in the release namespace that holds the fallback seed under the "seed" key.
+        # When set, the chart does not create the fallback Secret and ignores the fallback seed value above.
+        # Use this together with controller.mcp.sessionEncryption.existingSecret when the seeds are managed outside of
+        # the chart values (for example with a secret manager or a GitOps workflow), so that rotating the seed does not
+        # require putting the previous seed in the values.
+        # While it is set, the controller is restarted on every "helm upgrade", as with the fallback seed value.
+        existingSecret: ""
         # Number of PBKDF2 iterations to use for deriving the MCP session encryption key with the fallback seed.
         iterations: 100000
 
