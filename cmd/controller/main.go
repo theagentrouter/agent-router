@@ -140,6 +140,12 @@ const (
 	// mcpFallbackSessionEncryptionSeedEnvVar is the environment variable to read the MCP fallback session
 	// encryption seed from when the mcpFallbackSessionEncryptionSeed flag is not set.
 	mcpFallbackSessionEncryptionSeedEnvVar = "MCP_FALLBACK_SESSION_ENCRYPTION_SEED"
+	// fileIDEncryptionSeedEnvVar is the environment variable to read the Files/Batch API id encryption
+	// seed from when the fileIDEncryptionSeed flag is not set.
+	fileIDEncryptionSeedEnvVar = "FILE_ID_ENCRYPTION_SEED"
+	// fileIDFallbackEncryptionSeedEnvVar is the environment variable to read the Files/Batch API id
+	// fallback encryption seed from when the fileIDFallbackEncryptionSeed flag is not set.
+	fileIDFallbackEncryptionSeedEnvVar = "FILE_ID_FALLBACK_ENCRYPTION_SEED"
 )
 
 // parseAndValidateFlags parses the command-line arguments provided in args,
@@ -298,11 +304,13 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 	mcpFallbackSessionEncryptionIterations := fs.Int("mcpFallbackSessionEncryptionIterations", 100_000,
 		"Number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.")
 	fileIDEncryptionSeed := fs.String("fileIDEncryptionSeed", "default-insecure-seed",
-		"Seed used to derive the Files/Batch API id encryption key. This should be changed and set to a secure value.")
+		"Seed used to derive the Files/Batch API id encryption key. This should be changed and set to a secure value. "+
+			"Prefer the "+fileIDEncryptionSeedEnvVar+" environment variable to keep it out of the process command line.")
 	fileIDEncryptionIterations := fs.Int("fileIDEncryptionIterations", 100_000,
 		"Number of iterations to use for PBKDF2 key derivation for Files/Batch API id encryption.")
 	fileIDFallbackEncryptionSeed := fs.String("fileIDFallbackEncryptionSeed", "",
-		"Optional fallback seed used for Files/Batch API id key rotation.")
+		"Optional fallback seed used for Files/Batch API id key rotation. "+
+			"Prefer the "+fileIDFallbackEncryptionSeedEnvVar+" environment variable to keep it out of the process command line.")
 	fileIDFallbackEncryptionIterations := fs.Int("fileIDFallbackEncryptionIterations", 100_000,
 		"Number of iterations used in the fallback PBKDF2 key derivation for Files/Batch API id encryption.")
 	quotaRateLimitServiceAddr := fs.String("quotaRateLimitServiceAddr", "envoy-ai-gateway-ratelimit.envoy-gateway-system",
@@ -317,7 +325,7 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		return nil, err
 	}
 
-	// The MCP session encryption seeds can be provided through environment variables so that they are
+	// The MCP session and file id encryption seeds can be provided through environment variables so that they are
 	// not exposed in the process command line. Explicitly set flags take precedence.
 	setFlags := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
@@ -326,6 +334,12 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 	}
 	if v := os.Getenv(mcpFallbackSessionEncryptionSeedEnvVar); v != "" && !setFlags["mcpFallbackSessionEncryptionSeed"] {
 		*mcpFallbackSessionEncryptionSeed = v
+	}
+	if v := os.Getenv(fileIDEncryptionSeedEnvVar); v != "" && !setFlags["fileIDEncryptionSeed"] {
+		*fileIDEncryptionSeed = v
+	}
+	if v := os.Getenv(fileIDFallbackEncryptionSeedEnvVar); v != "" && !setFlags["fileIDFallbackEncryptionSeed"] {
+		*fileIDFallbackEncryptionSeed = v
 	}
 
 	var slogLevel slog.Level

@@ -52,6 +52,34 @@ type Config struct {
 	UnscopedModels []Model `json:"unscopedModels,omitempty"`
 	// MCPConfig is the configuration for the MCPRoute implementations.
 	MCPConfig *MCPConfig `json:"mcpConfig,omitempty"`
+	// FileIDEncryption is the configuration used to encrypt Files/Batch API ids.
+	//
+	// It is delivered through the filter config (stored in Secrets) so the seeds are not exposed
+	// in the Pod spec or the process command line. When nil, the external processor uses its
+	// command line flags.
+	FileIDEncryption *FileIDEncryption `json:"fileIDEncryption,omitempty"`
+}
+
+// FileIDEncryption is the configuration for Files/Batch API id encryption.
+type FileIDEncryption struct {
+	// Seed is the seed used to derive the id encryption key.
+	Seed string `json:"seed"`
+	// Iterations is the number of PBKDF2 iterations used to derive the key from Seed.
+	Iterations int `json:"iterations"`
+	// FallbackSeed is the optional previous seed, tried on decode during seed rotation.
+	FallbackSeed string `json:"fallbackSeed,omitempty"`
+	// FallbackIterations is the number of PBKDF2 iterations used to derive the key from FallbackSeed.
+	FallbackIterations int `json:"fallbackIterations,omitempty"`
+}
+
+// LogValue implements slog.LogValuer for FileIDEncryption to redact sensitive information.
+func (e FileIDEncryption) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("seed", "[REDACTED]"),
+		slog.Int("iterations", e.Iterations),
+		slog.Bool("fallbackSeedSet", e.FallbackSeed != ""),
+		slog.Int("fallbackIterations", e.FallbackIterations),
+	)
 }
 
 // Model corresponds to the OpenAI model object in the OpenAI-compatible APIs
