@@ -1835,6 +1835,29 @@ func TestMessagesEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 		require.NotContains(t, out, marker)
 		require.Contains(t, out, "[REDACTED")
 	})
+
+	t.Run("array system text blocks", func(t *testing.T) {
+		const marker1 = "marker-system-block-1"
+		const marker2 = "marker-system-block-2"
+		body := `{"model":"claude-3-5-sonnet","max_tokens":10,"messages":[{"role":"user","content":"hi"}],"system":[{"type":"text","text":"` + marker1 + `"},{"type":"text","text":"` + marker2 + `","cache_control":{"type":"ephemeral","ttl":"5m"}}]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotNil(t, redacted.System)
+		require.Empty(t, redacted.System.Text)
+		require.Len(t, redacted.System.Texts, 2)
+		for _, b := range redacted.System.Texts {
+			require.Equal(t, "text", b.Type)
+			require.Contains(t, b.Text, "[REDACTED")
+		}
+		require.NotNil(t, redacted.System.Texts[1].CacheControl)
+		require.NotNil(t, redacted.System.Texts[1].CacheControl.Ephemeral)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker1)
+		require.NotContains(t, out, marker2)
+		require.Contains(t, mustMarshal(t, req), marker1, "original must not be mutated")
+	})
 }
 
 func TestRerankEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
@@ -1970,6 +1993,29 @@ func TestMessagesCountTokensEndpointSpec_RedactSensitiveInfoFromRequest(t *testi
 		out := mustMarshal(t, redacted)
 		require.NotContains(t, out, marker)
 		require.Contains(t, out, "[REDACTED")
+	})
+
+	t.Run("array system text blocks", func(t *testing.T) {
+		const marker1 = "marker-system-block-1"
+		const marker2 = "marker-system-block-2"
+		body := `{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"hi"}],"system":[{"type":"text","text":"` + marker1 + `"},{"type":"text","text":"` + marker2 + `","cache_control":{"type":"ephemeral","ttl":"5m"}}]}`
+		_, req, _, _, err := MessagesCountTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesCountTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotNil(t, redacted.System)
+		require.Empty(t, redacted.System.Text)
+		require.Len(t, redacted.System.Texts, 2)
+		for _, b := range redacted.System.Texts {
+			require.Equal(t, "text", b.Type)
+			require.Contains(t, b.Text, "[REDACTED")
+		}
+		require.NotNil(t, redacted.System.Texts[1].CacheControl)
+		require.NotNil(t, redacted.System.Texts[1].CacheControl.Ephemeral)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker1)
+		require.NotContains(t, out, marker2)
+		require.Contains(t, mustMarshal(t, req), marker1, "original must not be mutated")
 	})
 }
 
