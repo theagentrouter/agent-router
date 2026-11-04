@@ -1534,6 +1534,76 @@ type ChatCompletionResponseChoiceMessage struct {
 	GroundingMetadata *genai.GroundingMetadata `json:"grounding_metadata,omitempty"`
 }
 
+// chatCompletionResponseContentPart is a typed content part returned by
+// OpenAI-compatible backends (for example Mistral reasoning models) that emit
+// message.content as an array instead of a string.
+type chatCompletionResponseContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+}
+
+// UnmarshalJSON accepts both OpenAI's string content and OpenAI-compatible
+// backends that return content as an array of typed parts. Text parts are
+// joined into Content; thinking parts are joined into ReasoningContent when
+// that field is not already set. See
+// https://github.com/theagentrouter/agent-router/issues/2974.
+func (m *ChatCompletionResponseChoiceMessage) UnmarshalJSON(data []byte) error {
+	type messageAlias ChatCompletionResponseChoiceMessage
+	aux := struct {
+		Content json.RawMessage `json:"content,omitempty"`
+		messageAlias
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*m = ChatCompletionResponseChoiceMessage(aux.messageAlias)
+	return m.unmarshalContent(aux.Content)
+}
+
+func (m *ChatCompletionResponseChoiceMessage) unmarshalContent(raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		m.Content = &text
+		return nil
+	}
+
+	var parts []chatCompletionResponseContentPart
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return fmt.Errorf("cannot unmarshal message content as string or array of content parts: %w", err)
+	}
+
+	var contentParts, thinkingParts []string
+	for _, part := range parts {
+		switch part.Type {
+		case string(ChatCompletionAssistantMessageParamContentTypeText):
+			if part.Text != "" {
+				contentParts = append(contentParts, part.Text)
+			}
+		case string(ChatCompletionAssistantMessageParamContentTypeThinking):
+			thinking := part.Thinking
+			if thinking == "" {
+				thinking = part.Text
+			}
+			if thinking != "" {
+				thinkingParts = append(thinkingParts, thinking)
+			}
+		}
+	}
+	if len(contentParts) > 0 {
+		joined := strings.Join(contentParts, "")
+		m.Content = &joined
+	}
+	if len(thinkingParts) > 0 && m.ReasoningContent == nil {
+		m.ReasoningContent = &ReasoningContentUnion{Value: strings.Join(thinkingParts, "")}
+	}
+	return nil
+}
+
 // URLCitation contains citation information for web search results.
 // Docs: https://platform.openai.com/docs/guides/tools-web-search?api-mode=chat
 type URLCitation struct {
