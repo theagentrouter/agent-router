@@ -435,6 +435,9 @@ func (DecisionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, 
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return translator.NewDecisionsOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+	case filterapi.APISchemaAzureOpenAI:
+		// Azure serves Decisions only on its v1 API: deployment name in the body, no api-version.
+		return translator.NewDecisionsOpenAIToOpenAITranslator("openai/v1", modelNameOverride), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}

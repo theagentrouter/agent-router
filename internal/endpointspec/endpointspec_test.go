@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"mime/multipart"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -550,8 +551,51 @@ func TestDecisionsEndpointSpec(t *testing.T) {
 		_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
 		require.NoError(t, err)
 
-		_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe}, "override")
-		require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+		unsupportedSchemas := []filterapi.APISchemaName{
+			filterapi.APISchemaAWSOpenAI,
+			filterapi.APISchemaTypeSafe,
+		}
+		for _, schema := range unsupportedSchemas {
+			_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: schema}, "override")
+			require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody, "schema %s", schema)
+		}
+	})
+
+	t.Run("azure openai uses the v1 path without api-version", func(t *testing.T) {
+		azure := filterapi.VersionedAPISchema{Name: filterapi.APISchemaAzureOpenAI, Version: "2025-01-01-preview"}
+		const reqBody = `{"model":"gpt-6-luna","input":"charged twice"}`
+		const overriddenBody = `{"model":"my-luna-deployment","input":"charged twice"}`
+
+		for _, tc := range []struct {
+			name          string
+			modelOverride string
+			expHeaders    []internalapi.Header
+			expBody       string // empty when the original body is forwarded as is
+		}{
+			{
+				name:       "no override leaves the body untouched",
+				expHeaders: []internalapi.Header{{":path", "/openai/v1/decisions"}},
+			},
+			{
+				name:          "override sets the deployment name",
+				modelOverride: "my-luna-deployment",
+				expHeaders: []internalapi.Header{
+					{":path", "/openai/v1/decisions"},
+					{"content-length", strconv.Itoa(len(overriddenBody))},
+				},
+				expBody: overriddenBody,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				tr, err := spec.GetTranslator(azure, tc.modelOverride)
+				require.NoError(t, err)
+
+				headers, body, err := tr.RequestBody([]byte(reqBody), &openai.DecisionRequest{Model: "gpt-6-luna"}, false)
+				require.NoError(t, err)
+				require.Equal(t, tc.expHeaders, headers)
+				require.Equal(t, tc.expBody, string(body))
+			})
+		}
 	})
 }
 
