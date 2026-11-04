@@ -452,7 +452,7 @@ func (DecisionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Decision
 	redacted.Questions = make([]openai.DecisionQuestion, len(req.Questions))
 	for i := range req.Questions {
 		q := req.Questions[i]
-		q.Instructions = redaction.RedactString(q.Instructions)
+		q.Instructions = redactRawJSON(q.Instructions)
 		q.Choices = make([]openai.DecisionChoiceOption, len(req.Questions[i].Choices))
 		for j := range req.Questions[i].Choices {
 			q.Choices[j] = openai.DecisionChoiceOption{

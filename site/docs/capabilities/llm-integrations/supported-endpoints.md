@@ -363,6 +363,7 @@ curl -H "Content-Type: application/json" \
 
 - ✅ `predicate`, `choice`, and `score` questions, including multiple independent questions in one request
 - ✅ `refusal` answers when the model declines an individual question
+- ✅ Question `instructions` as a string or as an array of `input_text` and `input_image` parts, to give each question its own images
 - ✅ Text input and user messages containing text, JSON, and images as inline base64 data URLs or public HTTP or HTTPS URLs
 - ✅ Model selection via request body or `x-ai-eg-model` header
 - ✅ Model name virtualization, provider fallback, and load balancing

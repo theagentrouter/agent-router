@@ -518,7 +518,15 @@ func TestDecisionsEndpointSpec(t *testing.T) {
 		require.False(t, stream)
 		require.Nil(t, mutated)
 		require.JSONEq(t, `"charged twice"`, string(req.Input))
+		require.JSONEq(t, `"route it"`, string(req.Questions[0].Instructions))
 		require.JSONEq(t, `"billing"`, string(req.Questions[0].Choices[0].Value))
+	})
+
+	t.Run("parse instructions as content parts", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-6-luna","input":"candidate photo","questions":[{"type":"predicate","name":"match","instructions":[{"type":"input_text","text":"same item as the reference?"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]}]}`)
+		_, req, _, _, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.JSONEq(t, `[{"type":"input_text","text":"same item as the reference?"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]`, string(req.Questions[0].Instructions))
 	})
 
 	t.Run("parse boolean choice values", func(t *testing.T) {
@@ -600,7 +608,7 @@ func TestDecisionsEndpointSpec(t *testing.T) {
 }
 
 func TestDecisionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
-	body := []byte(`{"model":"gpt-6-luna","input":"customer complaint","safety_identifier":"user-hash-123","questions":[{"type":"choice","name":"department","instructions":"route this complaint","choices":[{"value":"billing","description":"payment issues"}]},{"type":"score","name":"severity","instructions":"score it","levels":[{"label":"critical","description":"no workaround"}]}]}`)
+	body := []byte(`{"model":"gpt-6-luna","input":"customer complaint","safety_identifier":"user-hash-123","questions":[{"type":"choice","name":"department","instructions":"route this complaint","choices":[{"value":"billing","description":"payment issues"}]},{"type":"score","name":"severity","instructions":"score it","levels":[{"label":"critical","description":"no workaround"}]},{"type":"predicate","name":"match","instructions":[{"type":"input_text","text":"compare to reference"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]}]}`)
 	_, req, _, _, err := DecisionsEndpointSpec{}.ParseBody(body, false)
 	require.NoError(t, err)
 	redacted, err := DecisionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
@@ -613,6 +621,9 @@ func TestDecisionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 	require.NotContains(t, text, "customer complaint")
 	require.NotContains(t, text, "payment issues")
 	require.NotContains(t, text, "critical")
+	require.NotContains(t, text, "route this complaint")
+	require.NotContains(t, text, "compare to reference")
+	require.NotContains(t, text, "example.com/ref.jpg")
 	require.NotContains(t, text, "user-hash-123")
 	require.Contains(t, text, `"safety_identifier":"[REDACTED LENGTH=`)
 	require.Contains(t, text, `"model":"gpt-6-luna"`)
