@@ -1995,7 +1995,7 @@ func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
 	t.Run("responses safety_identifier, prompt_cache_key and metadata", func(t *testing.T) {
 		const metadataMarker = "tenant-marker-42"
 		const cacheKeyMarker = "cache-key-marker-42"
-		body := `{"model":"m","input":"hi","safety_identifier":"` + marker + `","prompt_cache_key":"` + cacheKeyMarker + `","metadata":{"tenant":"` + metadataMarker + `"}}`
+		body := `{"model":"m","input":"hi","safety_identifier":"` + marker + `","prompt_cache_key":"` + cacheKeyMarker + `","metadata":{"tenant":"` + metadataMarker + `","type":"type-value-marker"}}`
 		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
 		require.NoError(t, err)
 		redacted, err := ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
@@ -2003,10 +2003,11 @@ func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
 		out := mustMarshal(t, redacted)
 		require.NotContains(t, out, marker)
 		require.NotContains(t, out, metadataMarker)
+		require.NotContains(t, out, "type-value-marker", "a metadata key named type is not a union discriminator")
 		require.NotContains(t, out, cacheKeyMarker)
 		require.Equal(t, redaction.RedactString(marker), redacted.SafetyIdentifier)
 		require.Equal(t, redaction.RedactString(cacheKeyMarker), redacted.PromptCacheKey)
-		require.Equal(t, map[string]string{"tenant": redaction.RedactString(metadataMarker)}, redacted.Metadata, "keys are kept, values redacted")
+		require.Equal(t, map[string]string{"tenant": redaction.RedactString(metadataMarker), "type": redaction.RedactString("type-value-marker")}, redacted.Metadata, "keys are kept, values redacted")
 		require.Contains(t, mustMarshal(t, req), metadataMarker, "original must not be mutated")
 	})
 
@@ -2129,6 +2130,52 @@ func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
 		require.Equal(t, redaction.RedactString(cityMarker), redacted.Tools[0].WebSearchTool.UserLocation.City)
 		require.Contains(t, out, "web_search", "the tool definition is kept")
 		require.Equal(t, cityMarker, req.Tools[0].WebSearchTool.UserLocation.City, "original must not be mutated")
+	})
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "embeddings vertex title (input form)", body: `{"model":"m","input":"hi","task_type":"RETRIEVAL_DOCUMENT","title":"title-marker"}`},
+		{name: "embeddings vertex title (messages form)", body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"task_type":"RETRIEVAL_DOCUMENT","title":"title-marker"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(tc.body), false)
+			require.NoError(t, err)
+			redacted, err := EmbeddingsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+			require.NoError(t, err)
+			out := mustMarshal(t, redacted)
+			require.NotContains(t, out, "title-marker")
+			require.Contains(t, out, redaction.RedactString("title-marker"))
+			require.Contains(t, out, "RETRIEVAL_DOCUMENT", "task_type is config and is kept")
+			require.Equal(t, "title-marker", req.Title, "the request sent upstream must keep the real title")
+			require.Contains(t, mustMarshal(t, req), "title-marker", "the request sent upstream must keep the real title")
+		})
+	}
+
+	t.Run("responses prompt variable named type", func(t *testing.T) {
+		body := `{"model":"m","prompt":{"id":"p1","variables":{"type":"variable-marker","name":{"type":"input_text","text":"text-marker"}}}}`
+		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, "variable-marker")
+		require.NotContains(t, out, "text-marker")
+		require.Equal(t, redaction.RedactString("variable-marker"), *redacted.Prompt.Variables["type"].OfString)
+		require.Equal(t, "variable-marker", *req.Prompt.Variables["type"].OfString, "original must not be mutated")
+	})
+
+	t.Run("anthropic messages tool_use input with a type argument", func(t *testing.T) {
+		body := `{"model":"m","max_tokens":10,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"lookup","input":{"type":"argument-marker"}}]}]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, "argument-marker")
+		require.Contains(t, out, redaction.RedactString("argument-marker"))
+		require.Contains(t, out, `"tool_use"`, "the block discriminator is kept")
 	})
 }
 

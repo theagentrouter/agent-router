@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/ptr"
 
+	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/redaction"
@@ -716,6 +717,7 @@ func TestRedactBody_ThinkingBlocks(t *testing.T) {
 		{name: "openai", translator: &openAIToOpenAITranslatorV1ChatCompletion{}},
 		{name: "aws bedrock", translator: &openAIToAWSBedrockTranslatorV1ChatCompletion{}},
 		{name: "gcp vertex ai", translator: &openAIToGCPVertexAITranslatorV1ChatCompletion{}},
+		{name: "gcp anthropic", translator: &openAIToGCPAnthropicTranslatorV1ChatCompletion{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp := &openai.ChatCompletionResponse{
@@ -739,6 +741,26 @@ func TestRedactBody_ThinkingBlocks(t *testing.T) {
 			require.Equal(t, thinking, resp.Choices[0].Message.ThinkingBlocks[0].Thinking, "original must not be mutated")
 		})
 	}
+}
+
+func TestRedactReasoningContent_SignatureAndRedactedContent(t *testing.T) {
+	t.Run("reasoning text and signature", func(t *testing.T) {
+		rc := &openai.ReasoningContentUnion{Value: &openai.ReasoningContent{ReasoningContent: &awsbedrock.ReasoningContentBlock{
+			ReasoningText: &awsbedrock.ReasoningTextBlock{Text: "reasoning-marker", Signature: "signature-marker"},
+		}}}
+		redacted := redactReasoningContent(rc).Value.(*openai.ReasoningContent).ReasoningContent
+		require.Equal(t, redaction.RedactString("reasoning-marker"), redacted.ReasoningText.Text)
+		require.Equal(t, redaction.RedactString("signature-marker"), redacted.ReasoningText.Signature)
+		require.Equal(t, "signature-marker", rc.Value.(*openai.ReasoningContent).ReasoningContent.ReasoningText.Signature, "original must not be mutated")
+	})
+	t.Run("redacted content only", func(t *testing.T) {
+		rc := &openai.ReasoningContentUnion{Value: &openai.ReasoningContent{ReasoningContent: &awsbedrock.ReasoningContentBlock{
+			RedactedContent: []byte("encrypted-marker"),
+		}}}
+		redacted := redactReasoningContent(rc).Value.(*openai.ReasoningContent).ReasoningContent
+		require.Equal(t, []byte(redaction.RedactString("encrypted-marker")), redacted.RedactedContent)
+		require.Nil(t, redacted.ReasoningText)
+	})
 }
 
 // The space after "data:" is optional per the SSE specification, and some
