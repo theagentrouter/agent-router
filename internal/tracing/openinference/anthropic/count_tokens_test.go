@@ -107,3 +107,17 @@ func TestCountTokensRecorder_RecordResponseOnError(t *testing.T) {
 
 	require.Equal(t, trace.Status{Code: codes.Error, Description: "Error code: 400 - {\"error\":\"bad request\"}"}, actualSpan.Status)
 }
+
+func TestCountTokensRecorder_RecordResponseOnError_RedactsBody(t *testing.T) {
+	const secret = "SENSITIVE-PROMPT-TEXT"
+
+	recorder := NewCountTokensRecorder(&openinference.TraceConfig{HideInputs: true, HideOutputs: true})
+
+	actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+		recorder.RecordResponseOnError(span, 400, []byte(`{"error":"`+secret+`"}`))
+		return false
+	})
+
+	require.Equal(t, trace.Status{Code: codes.Error, Description: "Error code: 400"}, actualSpan.Status)
+	require.NotContains(t, actualSpan.Status.Description, secret)
+}

@@ -156,12 +156,65 @@ func TestRecordResponseError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
-				RecordResponseError(span, tt.statusCode, tt.body)
+				RecordResponseError(span, NewTraceConfig(), tt.statusCode, tt.body)
 				return false // Recording of error shouldn't end the span.
 			})
 			RequireEventsEqual(t, tt.expectedEvents, actualSpan.Events)
 			require.Equal(t, codes.Error, actualSpan.Status.Code)
 			require.Equal(t, tt.expectedDescription, actualSpan.Status.Description)
 		})
+	}
+}
+
+// TestRecordResponseError_hidesBodyWhenContentIsHidden verifies that the error
+// description drops the upstream body whenever TraceConfig hides any content,
+// since provider error bodies routinely echo the request.
+func TestRecordResponseError_hidesBodyWhenContentIsHidden(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *TraceConfig
+	}{
+		{name: "hide inputs", config: &TraceConfig{HideInputs: true}},
+		{name: "hide outputs", config: &TraceConfig{HideOutputs: true}},
+		{name: "hide inputs and outputs", config: &TraceConfig{HideInputs: true, HideOutputs: true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+				RecordResponseError(span, tt.config, 400, `{"error": {"message": "Invalid request"}}`)
+				return false
+			})
+			require.Equal(t, codes.Error, actualSpan.Status.Code)
+			require.Equal(t, "Error code: 400", actualSpan.Status.Description)
+			require.Len(t, actualSpan.Events, 1)
+			require.Equal(t, "exception", actualSpan.Events[0].Name)
+			RequireAttributesEqual(t, []attribute.KeyValue{
+				attribute.String("exception.type", "BadRequestError"),
+				attribute.String("exception.message", "Error code: 400"),
+			}, actualSpan.Events[0].Attributes)
+		})
+	}
+}
+
+// TestRecordResponseError_doesNotLeakBody is the regression guard for the
+// redaction hole: with content capture hidden, no part of the body may reach
+// the span. It mirrors the GenAI tracer's equivalent guard.
+func TestRecordResponseError_doesNotLeakBody(t *testing.T) {
+	const secret = "SENSITIVE-PROMPT-TEXT"
+
+	span := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+		RecordResponseError(span, &TraceConfig{HideInputs: true, HideOutputs: true}, 400, `{"error":"`+secret+`"}`)
+		return false
+	})
+
+	require.NotContains(t, span.Status.Description, secret)
+	for _, attr := range span.Attributes {
+		require.NotContains(t, attr.Value.AsString(), secret, "attribute %s", attr.Key)
+	}
+	for _, event := range span.Events {
+		for _, attr := range event.Attributes {
+			require.NotContains(t, attr.Value.AsString(), secret, "event attribute %s", attr.Key)
+		}
 	}
 }

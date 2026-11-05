@@ -70,7 +70,7 @@ func (r *ChatCompletionRecorder) RecordResponseChunks(span trace.Span, chunks []
 
 // RecordResponseOnError implements the same method as defined in tracingapi.ChatCompletionRecorder.
 func (r *ChatCompletionRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
 
 // RecordResponse implements the same method as defined in tracingapi.ChatCompletionRecorder.
