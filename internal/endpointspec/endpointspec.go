@@ -632,13 +632,7 @@ func (MessagesEndpointSpec) RedactSensitiveInfoFromRequest(req *anthropic.Messag
 			redacted.MCPServers[i] = redactMCPServer(server)
 		}
 	}
-	// Tool definitions are kept as config, except the web search tool's end-user location.
-	if len(req.Tools) > 0 {
-		redacted.Tools = make([]anthropic.ToolUnion, len(req.Tools))
-		for i := range req.Tools {
-			redacted.Tools[i] = redactAnthropicTool(&req.Tools[i])
-		}
-	}
+	redacted.Tools = redactAnthropicTools(req.Tools)
 	// Container (a container id and skills to load) and ContextManagement (context-editing config) are provider ids and config — kept as-is.
 	return &redacted, nil
 }
@@ -658,6 +652,18 @@ func redactAnthropicMessagesAndSystem(msgs []anthropic.MessageParam, system *ant
 		redactedSystem = ptr.To(redactUnionField(*system))
 	}
 	return redactedMsgs, redactedSystem
+}
+
+// redactAnthropicTools returns a copy of the tool definitions with the web search tool's end-user location redacted. Every other tool definition is config and is kept.
+func redactAnthropicTools(tools []anthropic.ToolUnion) []anthropic.ToolUnion {
+	if len(tools) == 0 {
+		return tools
+	}
+	redacted := make([]anthropic.ToolUnion, len(tools))
+	for i := range tools {
+		redacted[i] = redactAnthropicTool(&tools[i])
+	}
+	return redacted
 }
 
 // redactAnthropicTool redacts the end user's location from a web search tool definition and keeps every other tool definition as-is.
@@ -747,8 +753,9 @@ func (MessagesCountTokensEndpointSpec) ParseMultipartBody([]byte, string, bool) 
 // RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
 func (MessagesCountTokensEndpointSpec) RedactSensitiveInfoFromRequest(req *anthropic.CountTokensRequest) (redactedReq *anthropic.CountTokensRequest, err error) {
 	redacted := *req
-	// Same message/system shapes as /v1/messages.
+	// Same message/system and tool shapes as /v1/messages.
 	redacted.Messages, redacted.System = redactAnthropicMessagesAndSystem(req.Messages, req.System)
+	redacted.Tools = redactAnthropicTools(req.Tools)
 	return &redacted, nil
 }
 

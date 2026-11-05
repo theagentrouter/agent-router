@@ -2153,6 +2153,18 @@ func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
 		})
 	}
 
+	t.Run("anthropic count_tokens web search tool user_location", func(t *testing.T) {
+		body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[` +
+			`{"type":"web_search_20250305","name":"web_search","user_location":{"type":"approximate","city":"` + cityMarker + `"}}]}`
+		_, req, _, _, err := MessagesCountTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesCountTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotContains(t, mustMarshal(t, redacted), cityMarker)
+		require.Equal(t, redaction.RedactString(cityMarker), redacted.Tools[0].WebSearchTool.UserLocation.City)
+		require.Equal(t, cityMarker, req.Tools[0].WebSearchTool.UserLocation.City, "original must not be mutated")
+	})
+
 	t.Run("responses prompt variable named type", func(t *testing.T) {
 		body := `{"model":"m","prompt":{"id":"p1","variables":{"type":"variable-marker","name":{"type":"input_text","text":"text-marker"}}}}`
 		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
