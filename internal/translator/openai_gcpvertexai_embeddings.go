@@ -190,8 +190,8 @@ func collectInputTexts(input openai.EmbeddingRequestInput) ([]string, error) {
 
 // collectPartsFromMessages extracts genai.Part objects from chat messages for embedding.
 // Only user messages are processed; system/assistant/tool/developer messages are skipped.
-// Supported content types: text and images (URL or data URI).
-// Audio/video/PDF would require extending the OpenAI chat message schema.
+// Supported content types: text, images (URL or data URI), input_audio, and file data URIs (e.g. PDF or video).
+// Whether non-text parts are accepted depends on the target embedding model (e.g. gemini-embedding-2).
 func collectPartsFromMessages(messages []openai.ChatCompletionMessageParamUnion, requestModel internalapi.RequestModel) ([]*genai.Part, error) {
 	var parts []*genai.Part
 	for _, msg := range messages {
