@@ -178,6 +178,37 @@ func testInferenceGatewayConnectivity(t *testing.T, egSelector, body string, add
 	}, 2*time.Minute, 5*time.Second, "Gateway should return expected status code", expectedStatusCode)
 }
 
+// postChatCompletion sends one chat completion request through the forwarded Gateway, with the given
+// extra headers, and returns the HTTP status code. Unlike testInferenceGatewayConnectivity it does not
+// assert or retry, so callers can count failures.
+func postChatCompletion(t *testing.T, fwd e2elib.PortForwarder, body string, headers map[string]string) (int, error) {
+	code, _, err := postChatCompletionFromUpstream(t, fwd, body, headers)
+	return code, err
+}
+
+// postChatCompletionFromUpstream is postChatCompletion that also returns the testupstream-id
+// response header, which a testupstream server sets to its TESTUPSTREAM_ID, so that a test can tell
+// which server answered.
+func postChatCompletionFromUpstream(t *testing.T, fwd e2elib.PortForwarder, body string, headers map[string]string) (int, string, error) {
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fwd.Address()+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode, resp.Header.Get("testupstream-id"), nil
+}
+
 // getInferencePoolStatus retrieves the status of an InferencePool resource.
 func getInferencePoolStatus(ctx context.Context, namespace, name string) (*gwaiev1.InferencePoolStatus, error) {
 	cmd := exec.CommandContext(ctx, "kubectl", "get", "inferencepool", name, "-n", namespace, "-o", "json")
