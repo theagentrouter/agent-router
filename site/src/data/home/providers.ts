@@ -14,6 +14,7 @@ export type Provider = {
 };
 
 export const providers: Provider[] = [
+  { name: 'ai&', logoUrl: '/img/providers/aiand.svg', status: 'supported' },
   { name: 'Anthropic', logoUrl: '/img/providers/anthropic.svg', status: 'supported' },
   { name: 'AWS Bedrock', logoUrl: '/img/providers/aws-bedrock.svg', status: 'supported' },
   { name: 'Azure OpenAI', logoUrl: '/img/providers/azure-openai.svg', status: 'supported' },
