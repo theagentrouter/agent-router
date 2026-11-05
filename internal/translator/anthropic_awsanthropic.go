@@ -166,6 +166,7 @@ func (a *anthropicToAWSAnthropicTranslator) RequestBody(rawBody []byte, body *an
 	// It is safe to use sjsonOptionsInPlace here since we have already created a new mutatedBody above.
 	newBody, _ = sjson.DeleteBytesOptions(newBody, "model", sjsonOptionsInPlace)
 	newBody, _ = sjson.DeleteBytesOptions(newBody, "stream", sjsonOptionsInPlace)
+	newBody = moveOutputFormatToOutputConfig(newBody)
 
 	betas, betasChanged := filterHeaderValues(a.anthropicBetas, a.betaFilterMode, a.betaFilterValues)
 	if len(betas) > 0 {

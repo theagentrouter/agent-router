@@ -20,6 +20,8 @@ import (
 	anthropicParam "github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	openAIconstant "github.com/openai/openai-go/shared/constant"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"k8s.io/utils/ptr"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
@@ -1542,4 +1544,24 @@ func openAIToAnthropicCountTokensParams(chatReq *tokenize.ChatRequest, model int
 	}
 
 	return params, nil
+}
+
+// moveOutputFormatToOutputConfig moves the deprecated output_format field into
+// output_config.format, which Claude on AWS Bedrock and GCP Vertex AI requires: they reject
+// output_format with "This field is deprecated. Use 'output_config.format' instead.".
+// An output_config.format already in the request takes precedence.
+func moveOutputFormatToOutputConfig(body []byte) []byte {
+	outputFormat := gjson.GetBytes(body, "output_format")
+	if !outputFormat.Exists() {
+		return body
+	}
+	if outputFormat.Type != gjson.Null && !gjson.GetBytes(body, "output_config.format").Exists() {
+		moved, err := sjson.SetRawBytesOptions(body, "output_config.format", []byte(outputFormat.Raw), sjsonOptions)
+		if err != nil {
+			return body // Leave a malformed output_config for the backend to reject.
+		}
+		body = moved
+	}
+	body, _ = sjson.DeleteBytesOptions(body, "output_format", sjsonOptions)
+	return body
 }

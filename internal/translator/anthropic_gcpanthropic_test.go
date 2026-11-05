@@ -781,3 +781,24 @@ data: {"type": "message_stop"}
 	assert.True(t, cacheCreationSet, "cache creation tokens should be set")
 	assert.Equal(t, uint32(1), cacheCreationTokens, "No cache creation tokens in this scenario")
 }
+
+func TestAnthropicToGCPAnthropicTranslator_RequestBody_OutputFormat(t *testing.T) {
+	translator := NewAnthropicToGCPAnthropicTranslator("vertex-2023-10-16", "")
+	rawBody := []byte(`{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"Hello"}],` +
+		`"output_config":{"effort":"low"},"output_format":{"type":"json_schema","schema":{"type":"object"}}}`)
+	original := bytes.Clone(rawBody)
+	req := &anthropic.MessagesRequest{}
+	require.NoError(t, json.Unmarshal(rawBody, req))
+
+	_, newBody, err := translator.RequestBody(rawBody, req, false)
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(newBody, &got))
+	require.NotContains(t, got, "output_format")
+	require.Equal(t, map[string]any{
+		"effort": "low",
+		"format": map[string]any{"type": "json_schema", "schema": map[string]any{"type": "object"}},
+	}, got["output_config"])
+	require.Equal(t, original, rawBody, "the original request body must not be modified")
+}

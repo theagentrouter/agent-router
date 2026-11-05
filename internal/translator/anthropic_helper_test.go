@@ -2252,3 +2252,19 @@ data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
 		require.Empty(t, body)
 	})
 }
+
+func TestMoveOutputFormatToOutputConfig(t *testing.T) {
+	const format = `{"type":"json_schema","schema":{"type":"object","properties":{"b":{},"a":{}}}}`
+	for _, tc := range []struct{ name, body, want string }{
+		{"no output_format", `{"output_config":{"effort":"low"}}`, `{"output_config":{"effort":"low"}}`},
+		{"moved", `{"max_tokens":16,"output_format":` + format + `}`, `{"max_tokens":16,"output_config":{"format":` + format + `}}`},
+		{"other output_config fields kept", `{"output_config":{"effort":"low"},"output_format":` + format + `}`, `{"output_config":{"effort":"low","format":` + format + `}}`},
+		{"output_config.format takes precedence", `{"output_config":{"format":{}},"output_format":` + format + `}`, `{"output_config":{"format":{}}}`},
+		{"null dropped", `{"max_tokens":16,"output_format":null}`, `{"max_tokens":16}`},
+		{"malformed output_config left alone", `{"output_config":[1],"output_format":{}}`, `{"output_config":[1],"output_format":{}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, string(moveOutputFormatToOutputConfig([]byte(tc.body))))
+		})
+	}
+}
