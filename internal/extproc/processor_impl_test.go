@@ -678,6 +678,77 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 	})
 }
 
+func Test_chatCompletionProcessorUpstreamFilter_Close(t *testing.T) {
+	// Close is the ext_proc stream teardown path: the downstream client disconnected
+	// mid-generation, so no EndOfStream will ever arrive. The provider still bills the
+	// tokens processed so far, so the accumulated usage and a failure completion must be
+	// emitted instead of dropped.
+	t.Run("aborted stream emits partial usage and failed completion", func(t *testing.T) {
+		mm := &mockMetrics{}
+		mt := &mockTranslator{t: t}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator:      mt,
+			metrics:         mm,
+			responseHeaders: map[string]string{":status": "200"},
+			parent: &chatCompletionProcessorRouterFilter{
+				stream: true,
+				config: &filterapi.RuntimeConfig{},
+			},
+		}
+		// Simulate the request having started and one usage-bearing chunk having arrived.
+		p.metrics.StartRequest(nil)
+		usage := &metrics.TokenUsage{}
+		usage.SetInputTokens(12)
+		usage.SetOutputTokens(34)
+		p.costs.Override(*usage)
+
+		p.Close(t.Context())
+
+		require.Equal(t, 12, mm.inputTokenCount)
+		require.Equal(t, 34, mm.outputTokenCount)
+		mm.RequireRequestFailure(t) // an abandoned stream is not a success
+		mm.RequireClosed(t)
+	})
+	t.Run("completed stream does not double-emit", func(t *testing.T) {
+		mm := &mockMetrics{}
+		mt := &mockTranslator{t: t}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator:      mt,
+			metrics:         mm,
+			responseHeaders: map[string]string{":status": "200"},
+			parent: &chatCompletionProcessorRouterFilter{
+				stream: true,
+				config: &filterapi.RuntimeConfig{},
+			},
+		}
+		p.metrics.StartRequest(nil)
+		// Drive the normal completion path: final chunk records success and usage.
+		final := &extprocv3.HttpBody{Body: []byte("chunk-final"), EndOfStream: true}
+		mt.expResponseBody = final
+		mt.retUsedToken.SetOutputTokens(10)
+		_, err := p.ProcessResponseBody(t.Context(), final)
+		require.NoError(t, err)
+		mm.RequireRequestSuccess(t)
+
+		// A Close after a normal completion (Envoy tears the stream down after the response
+		// finished) must not emit anything new.
+		p.Close(t.Context())
+		mm.RequireRequestSuccess(t)
+		require.Equal(t, 10, mm.outputTokenCount)
+		require.Zero(t, mm.closedCount)
+	})
+	t.Run("request that never started emits nothing", func(t *testing.T) {
+		mm := &mockMetrics{}
+		p := &chatCompletionProcessorUpstreamFilter{
+			parent: &chatCompletionProcessorRouterFilter{stream: true, config: &filterapi.RuntimeConfig{}},
+		}
+		p.metrics = mm
+		p.Close(t.Context())
+		mm.RequireRequestNotCompleted(t)
+		require.Zero(t, mm.closedCount)
+	})
+}
+
 func bodyFromModel(t *testing.T, model string, stream bool, streamOptions *openai.StreamOptions) []byte {
 	openAIReq := &openai.ChatCompletionRequest{}
 	openAIReq.Model = model
