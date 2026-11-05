@@ -190,3 +190,59 @@ func TestBodyMutator_Mutate_InvalidJSONValue(t *testing.T) {
 	require.Equal(t, "not valid json but will be treated as string", result["service_tier"])
 	require.Equal(t, "valid", result["valid_field"])
 }
+
+func TestBodyMutator_Mutate_JSONLookingStrings(t *testing.T) {
+	for _, value := range []string{
+		"1.0.0",
+		"+1",
+		"01",
+		"1e",
+		"-",
+		`[abc]`,
+		`{"key":}`,
+		`"invalid\q"`,
+		"",
+		"   ",
+	} {
+		t.Run(value, func(t *testing.T) {
+			mutator := NewBodyMutator(&filterapi.HTTPBodyMutation{
+				Set: []filterapi.HTTPBodyField{{Path: "metadata", Value: value}},
+			}, nil)
+			mutated, err := mutator.Mutate([]byte(`{"model":"test-model","messages":[]}`))
+			require.NoError(t, err)
+			var result map[string]interface{}
+			require.NoError(t, json.Unmarshal(mutated, &result), "mutation produced %s", mutated)
+			require.Equal(t, value, result["metadata"])
+			require.Equal(t, "test-model", result["model"])
+		})
+	}
+}
+
+func TestBodyMutator_Mutate_JSONLiterals(t *testing.T) {
+	for _, value := range []string{
+		`"quoted"`,
+		`42`,
+		`-0.7`,
+		`1e2`,
+		`true`,
+		`false`,
+		`null`,
+		`{"nested": [1, true, null]}`,
+		`["item", 2]`,
+		`  {"key": "value"}  `,
+	} {
+		t.Run(value, func(t *testing.T) {
+			mutator := NewBodyMutator(&filterapi.HTTPBodyMutation{
+				Set: []filterapi.HTTPBodyField{{Path: "metadata", Value: value}},
+			}, nil)
+			mutated, err := mutator.Mutate([]byte(`{"model":"test-model"}`))
+			require.NoError(t, err)
+			var result map[string]interface{}
+			require.NoError(t, json.Unmarshal(mutated, &result))
+			var expected interface{}
+			require.NoError(t, json.Unmarshal([]byte(value), &expected))
+			require.Equal(t, expected, result["metadata"])
+			require.Equal(t, "test-model", result["model"])
+		})
+	}
+}
