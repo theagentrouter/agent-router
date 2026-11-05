@@ -55,6 +55,9 @@ type anthropicToOpenAIV1ChatCompletionTranslator struct {
 func (a *anthropicToOpenAIV1ChatCompletionTranslator) RequestBody(_ []byte, body *anthropic.MessagesRequest, _ bool) (
 	newHeaders []internalapi.Header, newBody []byte, err error,
 ) {
+	if err = rejectAnthropicPerMessageOutputConfig(body.Messages, "OpenAI-compatible"); err != nil {
+		return
+	}
 	// Set translator config based on Anthropic message request
 	a.stream = body.Stream
 	// Store the request model to use as fallback for response model

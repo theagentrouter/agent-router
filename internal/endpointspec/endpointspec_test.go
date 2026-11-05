@@ -1809,6 +1809,18 @@ func TestResponsesEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 }
 
 func TestMessagesEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("effort-only system message", func(t *testing.T) {
+		body := `{"model":"claude-sonnet-5-5","max_tokens":10,"messages":[{"role":"system","content":[],"output_config":{"effort":"low"}},{"role":"user","content":"summarize"}]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.Contains(t, out, `"role":"system"`)
+		require.Contains(t, out, `"content":[]`)
+		require.Contains(t, out, `"output_config":{"effort":"low"}`)
+	})
+
 	t.Run("string content + string system", func(t *testing.T) {
 		const markerContent = "marker-user-message"
 		const markerSystem = "marker-system-prompt"
