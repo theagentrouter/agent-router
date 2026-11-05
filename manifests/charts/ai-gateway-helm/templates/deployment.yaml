@@ -17,12 +17,12 @@ spec:
       {{- include "ai-gateway-helm.controller.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- if or .Values.controller.podAnnotations .Values.controller.mcp.sessionEncryption.fallback.seed }}
+      {{- if or .Values.controller.podAnnotations (include "ai-gateway-helm.controller.mcpFallbackSessionEncryptionEnabled" .) }}
       annotations:
         {{- with .Values.controller.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        {{- if .Values.controller.mcp.sessionEncryption.fallback.seed }}
+        {{- if (include "ai-gateway-helm.controller.mcpFallbackSessionEncryptionEnabled" .) }}
         # The MCP session encryption seeds are read from Secrets at startup, so changing them does not change
         # the pod template. While a fallback seed is set (i.e. during a seed rotation), restart the controller
         # on every upgrade so that seed changes take effect. The release revision is used instead of a checksum
@@ -129,7 +129,7 @@ spec:
             # The MCP session encryption seeds are read from the MCP_SESSION_ENCRYPTION_SEED and
             # MCP_FALLBACK_SESSION_ENCRYPTION_SEED environment variables, so they are not exposed in the command line.
             - --mcpSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.iterations }}
-            {{- if .Values.controller.mcp.sessionEncryption.fallback.seed }}
+            {{- if (include "ai-gateway-helm.controller.mcpFallbackSessionEncryptionEnabled" .) }}
             - --mcpFallbackSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.fallback.iterations }}
             {{- end }}
           # Allow the default two-minute cache sync timeout plus startup overhead.
@@ -153,7 +153,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "ai-gateway-helm.controller.mcpSessionEncryptionSecretName" . }}
                   key: seed
-            {{- if .Values.controller.mcp.sessionEncryption.fallback.seed }}
+            {{- if (include "ai-gateway-helm.controller.mcpFallbackSessionEncryptionEnabled" .) }}
             - name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED
               valueFrom:
                 secretKeyRef:
