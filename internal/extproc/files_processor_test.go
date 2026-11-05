@@ -960,6 +960,15 @@ func TestNewFilesProcessorFactory(t *testing.T) {
 	proc, err := factory(config, headers, slog.Default(), false, false)
 	require.NoError(t, err)
 	require.NotNil(t, proc)
+	// No codec in the filter config: the flag codec is used.
+	require.Same(t, codec, proc.(*filesProcessor).codec)
+
+	// The filter config codec takes precedence over the flag codec.
+	configCodec, err := idcodec.NewCodec("config-seed", 1000, "", 0)
+	require.NoError(t, err)
+	proc, err = factory(&filterapi.RuntimeConfig{FileIDCodec: configCodec}, headers, slog.Default(), false, false)
+	require.NoError(t, err)
+	require.Same(t, configCodec, proc.(*filesProcessor).codec)
 }
 
 // ---------------------------------------------------------------------------

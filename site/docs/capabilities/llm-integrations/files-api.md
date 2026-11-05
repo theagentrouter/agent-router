@@ -136,8 +136,17 @@ buffer limit; make sure your gateway does the same. See
 ### Encryption of file ids
 
 The gateway encrypts the backend identity and routing model into every file id using AES-GCM with a PBKDF2-derived key —
-the same mechanism used for MCP session encryption. The key is derived from a seed configured on the
-external processor:
+the same mechanism used for MCP session encryption. The key is derived from a seed.
+
+On Kubernetes, configure the seed with the Helm values below. The controller delivers it to the
+external processors through the filter configuration, which is stored in Secrets, so the seed is not
+visible in the Envoy Pod spec or process command line.
+
+With [`aigw run`](../../cli/run.md#encryption-seeds), set the seed with the
+`AIGW_FILE_ID_ENCRYPTION_SEED` environment variable. It is also delivered through the filter
+configuration, not the command line.
+
+When the external processor runs on its own, without the controller or `aigw`, it uses these flags:
 
 | Flag                                   | Default                 | Description                                                                            |
 | -------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------- |
@@ -148,17 +157,18 @@ external processor:
 
 :::danger Never use the well-known default seed
 
-If `--fileIDEncryptionSeed` is left at the well-known default (`default-insecure-seed`), **anyone who
-knows this public default can decrypt and forge file and batch ids**. The external processor logs a
-warning at startup when it detects the default. Set the seed to a secret, randomly generated value
+If the seed is left at the well-known default (`default-insecure-seed`), **anyone who knows this
+public default can decrypt and forge file and batch ids**. The external processor logs a warning when
+it detects the default. Set the seed to a secret, randomly generated value
 before exposing the gateway to untrusted or multi-tenant clients.
 
 :::
 
 #### Kubernetes (Helm)
 
-When deployed with the Helm chart, the controller passes the seed to every external processor it
-manages. Configure it with the `controller.fileIDEncryption` values:
+When deployed with the Helm chart, the controller delivers the seed to every external processor it
+manages through the filter configuration Secrets. Seed changes are picked up without restarting the
+Envoy pods. Configure it with the `controller.fileIDEncryption` values:
 
 | Helm value                                        | Default  | Description                                                                                                                                                                                                                    |
 | ------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

@@ -384,27 +384,25 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/messages/count_tokens"), extproc.NewFactory(
 		countTokensMetricsFactory, tracing.CountTokensTracer(), endpointspec.MessagesCountTokensEndpointSpec{}))
 
-	if flags.fileIDEncryptionSeed == defaultInsecureMCPSessionEncryptionSeed {
-		l.Warn("Files/Batch API id encryption seed is set to the well-known default value; " +
-			"this allows anyone who knows this public default to decrypt and forge file and batch ids. " +
-			"Set --fileIDEncryptionSeed (or the Helm value controller.fileIDEncryption.seed) to a secret " +
-			"randomly-generated value before exposing this gateway to untrusted or multi-tenant clients.")
-	}
-	fileIDCodec, err := newFileIDCodec(&flags)
+	// The codec built from the flags is only used when the filter config does not carry its own
+	// file id encryption config. The controller delivers the seeds through the filter config so
+	// that they are not exposed in the Pod spec or the process command line.
+	flagFileIDCodec, err := newFileIDCodec(&flags)
 	if err != nil {
 		return err
 	}
 	// Register the OpenAI Files API endpoints (/v1/files, /v1/files/{id}, /v1/files/{id}/content)
 	// under a single prefix processor that routes by encoded backend id.
 	server.RegisterPrefix(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/files"),
-		extproc.NewFilesProcessorFactory(fileIDCodec))
+		extproc.NewFilesProcessorFactory(flagFileIDCodec))
 	// Register the OpenAI Batch API endpoints (/v1/batches, /v1/batches/{id}, /v1/batches/{id}/cancel).
 	// They share the Files codec so batch output/error file ids are readable via /v1/files/{id}/content.
 	server.RegisterPrefix(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/batches"),
-		extproc.NewBatchesProcessorFactory(fileIDCodec))
+		extproc.NewBatchesProcessorFactory(flagFileIDCodec))
 
 	// Create and register gRPC server with ExternalProcessorServer (the service Envoy calls).
-	if err = filterapi.StartConfigBundleWatcher(ctx, flags.configBundlePath, server, l, time.Second*5); err != nil {
+	serverConfigReceiver := newFileIDSeedWarner(server, l, flags.fileIDEncryptionSeed)
+	if err = filterapi.StartConfigBundleWatcher(ctx, flags.configBundlePath, serverConfigReceiver, l, time.Second*5); err != nil {
 		return fmt.Errorf("failed to start config watcher: %w", err)
 	}
 
@@ -431,7 +429,7 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 		if err != nil {
 			return fmt.Errorf("failed to create MCP proxy: %w", err)
 		}
-		mcpConfigReceiver := &insecureSeedWarner{ConfigReceiver: mcpProxyConfig, l: l, flagSeed: flags.mcpSessionEncryptionSeed}
+		mcpConfigReceiver := newMCPSeedWarner(mcpProxyConfig, l, flags.mcpSessionEncryptionSeed)
 		if err = filterapi.StartConfigBundleWatcher(ctx, flags.configBundlePath, mcpConfigReceiver, l, time.Second*5); err != nil {
 			return fmt.Errorf("failed to start config watcher: %w", err)
 		}
@@ -517,30 +515,74 @@ func listenAddress(addrFlag string) (string, string) {
 	return "tcp", addrFlag
 }
 
-// insecureSeedWarner wraps a [filterapi.ConfigReceiver] and warns once when the effective MCP session
-// encryption seed is the well-known default. The effective seed is the one delivered in the filter config,
-// or the one from the command line flags when the filter config does not carry one.
+// insecureSeedWarner wraps a [filterapi.ConfigReceiver] and warns once when the effective encryption
+// seed is the well-known default. The effective seed is the one delivered in the filter config, or
+// the one from the command line flags when the filter config does not carry one.
 type insecureSeedWarner struct {
 	filterapi.ConfigReceiver
 	l        *slog.Logger
 	flagSeed string
-	warned   bool
+	// configSeed returns the seed delivered in the filter config ("" when none) and whether the
+	// feature is in use for that config. Nothing is checked when it is not in use.
+	configSeed func(*filterapi.Config) (seed string, inUse bool)
+	message    string
+	warned     bool
+}
+
+// newMCPSeedWarner returns an [insecureSeedWarner] for the MCP session encryption seed.
+func newMCPSeedWarner(rcv filterapi.ConfigReceiver, l *slog.Logger, flagSeed string) *insecureSeedWarner {
+	return &insecureSeedWarner{
+		ConfigReceiver: rcv,
+		l:              l,
+		flagSeed:       flagSeed,
+		configSeed: func(c *filterapi.Config) (string, bool) {
+			if c.MCPConfig == nil {
+				return "", false
+			}
+			if e := c.MCPConfig.SessionEncryption; e != nil {
+				return e.Seed, true
+			}
+			return "", true
+		},
+		message: "MCP session encryption seed is set to the well-known default value; " +
+			"this allows anyone who knows this public default to decrypt and forge MCP session IDs " +
+			"(including the anti-hijacking subject embedded in them). Set --mcpSessionEncryptionSeed " +
+			"(or the Helm value controller.mcp.sessionEncryption.seed) to a secret, randomly-generated " +
+			"value before exposing this gateway to untrusted or multi-tenant clients.",
+	}
+}
+
+// newFileIDSeedWarner returns an [insecureSeedWarner] for the Files/Batch API id encryption seed.
+func newFileIDSeedWarner(rcv filterapi.ConfigReceiver, l *slog.Logger, flagSeed string) *insecureSeedWarner {
+	return &insecureSeedWarner{
+		ConfigReceiver: rcv,
+		l:              l,
+		flagSeed:       flagSeed,
+		configSeed: func(c *filterapi.Config) (string, bool) {
+			if e := c.FileIDEncryption; e != nil {
+				return e.Seed, true
+			}
+			return "", true
+		},
+		message: "Files/Batch API id encryption seed is set to the well-known default value; " +
+			"this allows anyone who knows this public default to decrypt and forge file and batch ids. " +
+			"Set the Helm value controller.fileIDEncryption.seed (or --fileIDEncryptionSeed when running " +
+			"without the controller) to a secret, randomly-generated value before exposing this gateway " +
+			"to untrusted or multi-tenant clients.",
+	}
 }
 
 // LoadConfig implements [filterapi.ConfigReceiver.LoadConfig].
 func (w *insecureSeedWarner) LoadConfig(ctx context.Context, config *filterapi.Config) error {
-	if !w.warned && config.MCPConfig != nil {
-		seed := w.flagSeed
-		if e := config.MCPConfig.SessionEncryption; e != nil {
-			seed = e.Seed
-		}
-		if seed == defaultInsecureMCPSessionEncryptionSeed {
-			w.warned = true
-			w.l.Warn("MCP session encryption seed is set to the well-known default value; " +
-				"this allows anyone who knows this public default to decrypt and forge MCP session IDs " +
-				"(including the anti-hijacking subject embedded in them). Set --mcpSessionEncryptionSeed " +
-				"(or the Helm value controller.mcp.sessionEncryption.seed) to a secret, randomly-generated " +
-				"value before exposing this gateway to untrusted or multi-tenant clients.")
+	if !w.warned {
+		if seed, inUse := w.configSeed(config); inUse {
+			if seed == "" {
+				seed = w.flagSeed
+			}
+			if seed == defaultInsecureMCPSessionEncryptionSeed {
+				w.warned = true
+				w.l.Warn(w.message)
+			}
 		}
 	}
 	return w.ConfigReceiver.LoadConfig(ctx, config)

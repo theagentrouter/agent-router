@@ -62,6 +62,15 @@ to the same name as the primary seed Secret.
 {{- end }}
 
 {{/*
+Name of the Secret that holds the Files/Batch API id encryption fallback seed.
+The fullname is truncated first so the suffix is always kept; otherwise a long fullname would truncate this
+to the same name as the primary seed Secret.
+*/}}
+{{- define "ai-gateway-helm.controller.fileIDFallbackEncryptionSecretName" -}}
+{{- printf "%s-file-id-encryption-fallback" (include "ai-gateway-helm.controller.fullname" . | trunc 34 | trimSuffix "-") }}
+{{- end }}
+
+{{/*
 Create chart name and version as used by the chart label.
 */}}
 {{- define "ai-gateway-helm.chart" -}}

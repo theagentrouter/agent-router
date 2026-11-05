@@ -67,8 +67,15 @@ const (
 //
 // Encoding the owning backend into the id keeps ids stable if multi-backend (sticky) routing is
 // added later.
-func NewFilesProcessorFactory(codec idcodec.Codec) ProcessorFactory {
+//
+// flagCodec is built from the command line flags and is used only when the filter config does not
+// carry its own file id encryption config (see [filterapi.RuntimeConfig.FileIDCodec]).
+func NewFilesProcessorFactory(flagCodec idcodec.Codec) ProcessorFactory {
 	return func(config *filterapi.RuntimeConfig, requestHeaders map[string]string, logger *slog.Logger, isUpstreamFilter bool, _ bool) (Processor, error) {
+		codec := flagCodec
+		if config != nil && config.FileIDCodec != nil {
+			codec = config.FileIDCodec
+		}
 		return &filesProcessor{
 			codec:            codec,
 			config:           config,

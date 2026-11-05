@@ -58,8 +58,15 @@ const (
 //   - List: routed by "?model=" or the model recorded in a gateway "after" batch id.
 //   - Responses: "id" becomes a gateway batch id and input/output/error file ids become gateway
 //     file ids for the same backend and model, so the output can be fetched via the Files API.
-func NewBatchesProcessorFactory(codec idcodec.Codec) ProcessorFactory {
+//
+// flagCodec is built from the command line flags and is used only when the filter config does not
+// carry its own file id encryption config (see [filterapi.RuntimeConfig.FileIDCodec]).
+func NewBatchesProcessorFactory(flagCodec idcodec.Codec) ProcessorFactory {
 	return func(config *filterapi.RuntimeConfig, requestHeaders map[string]string, logger *slog.Logger, isUpstreamFilter bool, _ bool) (Processor, error) {
+		codec := flagCodec
+		if config != nil && config.FileIDCodec != nil {
+			codec = config.FileIDCodec
+		}
 		return &batchesProcessor{
 			codec:            codec,
 			config:           config,

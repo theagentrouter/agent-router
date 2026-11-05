@@ -203,6 +203,9 @@ controller:
   ##   # Enabled by default for troubleshooting purposes given the impact is negligible when not in use.
   ##   - name: DISABLE_PPROF
   ##     value: "true"
+  ##   # OpenAI Workload Identity Federation token exchange requests will use this proxy if set.
+  ##   - name: AI_GATEWAY_OPENAI_PROXY_URL
+  ##     value: "http://proxy.example.com:8080"
   extraEnvVars: []
 
   # Example of volumes
@@ -350,6 +353,10 @@ controller:
     # Optional fallback configuration for id encryption key rotation.
     fallback:
       # The previous seed. Ids that fail to decode with the current seed are retried with this one.
+      # The chart stores it in a Secret named "<controller fullname>-file-id-encryption-fallback".
+      # While it is set, the controller is restarted on every "helm upgrade" so that changes to either seed take
+      # effect. When it is not set, restart the controller manually after changing the seed
+      # (e.g. "kubectl rollout restart deployment/<controller fullname>").
       seed: ""
       # Number of PBKDF2 iterations used with the fallback seed.
       iterations: 100000
