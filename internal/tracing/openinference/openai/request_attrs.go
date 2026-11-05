@@ -523,44 +523,31 @@ func handleInputItemUnionAttrs(item *openai.ResponseInputItemUnionParam, attrs [
 	case item.OfCustomToolCallOutput != nil:
 		attrs = setCustomToolCallOutputAttrs(item.OfCustomToolCallOutput, attrs, config, index)
 	case item.OfCompaction != nil:
-		// TODO: Handle compaction response
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L462
+		attrs = setInputCompactionAttrs(item.OfCompaction, attrs, config, index)
 	case item.OfImageGenerationCall != nil:
-		// TODO: Handle image generation call
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L426
+		attrs = setInputImageGenerationCallAttrs(item.OfImageGenerationCall, attrs, config, index)
 	case item.OfCodeInterpreterCall != nil:
-		// TODO: Handle code interpreter call
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L429
+		attrs = setInputCodeInterpreterCallAttrs(item.OfCodeInterpreterCall, attrs, config, index)
 	case item.OfLocalShellCall != nil:
-		// TODO: Handle local shell call
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L432
+		attrs = setInputLocalShellCallAttrs(item.OfLocalShellCall, attrs, config, index)
 	case item.OfLocalShellCallOutput != nil:
-		// TODO: Handle local shell call output
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L435
+		attrs = setInputLocalShellCallOutputAttrs(item.OfLocalShellCallOutput, attrs, config, index)
 	case item.OfShellCall != nil:
-		// TODO: Handle shell call
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L450
+		attrs = setInputShellCallAttrs(item.OfShellCall, attrs, config, index)
 	case item.OfShellCallOutput != nil:
-		// TODO: Handle shell call output
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L453
+		attrs = setInputShellCallOutputAttrs(item.OfShellCallOutput, attrs, config, index)
 	case item.OfApplyPatchCall != nil:
-		// TODO: Handle patch call
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L456
+		attrs = setInputApplyPatchCallAttrs(item.OfApplyPatchCall, attrs, config, index)
 	case item.OfApplyPatchCallOutput != nil:
-		// TODO: Handle patch call output
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L459
+		attrs = setInputApplyPatchCallOutputAttrs(item.OfApplyPatchCallOutput, attrs, config, index)
 	case item.OfMcpListTools != nil:
-		// TODO: Handle mcp list tools
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L438
+		attrs = setInputMcpListToolsAttrs(item.OfMcpListTools, attrs, config, index)
 	case item.OfMcpApprovalRequest != nil:
-		// TODO: Handle mcp approval request
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L441
+		attrs = setInputMcpApprovalRequestAttrs(item.OfMcpApprovalRequest, attrs, config, index)
 	case item.OfMcpApprovalResponse != nil:
-		// TODO: Handle mcp approval response
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L444
+		attrs = setInputMcpApprovalResponseAttrs(item.OfMcpApprovalResponse, attrs, config, index)
 	case item.OfMcpCall != nil:
-		// TODO: Handle mcp call
-		// https://github.com/Arize-ai/openinference/blob/f6561ca5a169f13d5b40120311b782348550b5ac/python/instrumentation/openinference-instrumentation-openai/src/openinference/instrumentation/openai/_attributes/_responses_api.py#L447
+		attrs = setInputMcpCallAttrs(item.OfMcpCall, attrs, config, index)
 	}
 	return attrs
 }
@@ -773,6 +760,176 @@ func setCustomToolCallOutputAttrs(c *openai.ResponseCustomToolCallOutputParam, a
 		if content, err := json.Marshal(c.Output); err == nil {
 			attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageContent), string(content)))
 		}
+	}
+	return attrs
+}
+
+func setInputCompactionAttrs(c *openai.ResponseCompactionItemParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "assistant"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), c.ID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Type))
+	}
+	return attrs
+}
+
+func setInputImageGenerationCallAttrs(c *openai.ResponseInputItemImageGenerationCallParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "assistant"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), c.ID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Type))
+	}
+	return attrs
+}
+
+func setInputCodeInterpreterCallAttrs(c *openai.ResponseCodeInterpreterToolCallParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "assistant"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), c.ID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Type),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), c.Code))
+	}
+	return attrs
+}
+
+func setInputLocalShellCallAttrs(c *openai.ResponseInputItemLocalShellCallParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "assistant"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), c.CallID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Type))
+		if data, err := json.Marshal(c.Action.Command); err == nil {
+			attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), string(data)))
+		}
+	}
+	return attrs
+}
+
+func setInputLocalShellCallOutputAttrs(c *openai.ResponseInputItemLocalShellCallOutputParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "tool"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageContent), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.ToolCallID), c.ID),
+			attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageContent), c.Output))
+	}
+	return attrs
+}
+
+func setInputShellCallAttrs(c *openai.ResponseInputItemShellCallParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "assistant"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), c.CallID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Type))
+		if data, err := json.Marshal(c.Action.Commands); err == nil {
+			attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), string(data)))
+		}
+	}
+	return attrs
+}
+
+func setInputShellCallOutputAttrs(c *openai.ResponseInputItemShellCallOutputParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "tool"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.ToolCallID), c.CallID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Type))
+	}
+	return attrs
+}
+
+func setInputApplyPatchCallAttrs(c *openai.ResponseInputItemApplyPatchCallParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "assistant"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), c.CallID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Type))
+	}
+	return attrs
+}
+
+func setInputApplyPatchCallOutputAttrs(c *openai.ResponseInputItemApplyPatchCallOutputParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "tool"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageContent), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.ToolCallID), c.CallID),
+			attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageContent), c.Output))
+	}
+	return attrs
+}
+
+func setInputMcpListToolsAttrs(c *openai.ResponseMcpListTools, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "assistant"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), c.ID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Type))
+	}
+	return attrs
+}
+
+func setInputMcpApprovalRequestAttrs(c *openai.ResponseMcpApprovalRequest, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "assistant"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), c.ID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Name),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), c.Arguments))
+	}
+	return attrs
+}
+
+func setInputMcpApprovalResponseAttrs(c *openai.ResponseInputItemMcpApprovalResponseParam, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "tool"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageContent), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.ToolCallID), c.ApprovalRequestID),
+			attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageContent), c.Reason))
+	}
+	return attrs
+}
+
+func setInputMcpCallAttrs(c *openai.ResponseMcpCall, attrs []attribute.KeyValue, config *openinference.TraceConfig, messageIndex int) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(messageIndex, openinference.MessageRole), "assistant"))
+	if config.HideInputText {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), openinference.RedactedValue),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), openinference.RedactedValue))
+	} else {
+		attrs = append(attrs, attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallID), c.ID),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionName), c.Name),
+			attribute.String(openinference.InputMessageToolCallAttribute(messageIndex, 0, openinference.ToolCallFunctionArguments), c.Arguments))
 	}
 	return attrs
 }
