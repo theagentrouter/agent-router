@@ -985,6 +985,28 @@ func evalRuntimeRequestCost(rc *filterapi.RuntimeRequestCost, costs *metrics.Tok
 	return evalCost(rc.Type, rc.CELProg, costs, requestHeaders, backendName, routeName)
 }
 
+// buildCacheDetails returns the cache token counts that were set on costs, or nil if none were set.
+func buildCacheDetails(costs *metrics.TokenUsage) *structpb.Struct {
+	fields := make(map[string]*structpb.Value, 4)
+	for _, d := range []struct {
+		key    string
+		getter func() (uint32, bool)
+	}{
+		{"cache_read_input_tokens", costs.CachedInputTokens},
+		{"cache_creation_input_tokens", costs.CacheCreationInputTokens},
+		{"cache_creation_5m_input_tokens", costs.CacheCreation5mInputTokens},
+		{"cache_creation_1h_input_tokens", costs.CacheCreation1hInputTokens},
+	} {
+		if v, ok := d.getter(); ok {
+			fields[d.key] = structpb.NewNumberValue(float64(v))
+		}
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	return &structpb.Struct{Fields: fields}
+}
+
 // buildDynamicMetadata creates metadata for rate limiting and cost tracking.
 // This function is called by the upstream filter at the end of the stream (body.EndOfStream=true), and,
 // for streaming responses, also as soon as a chunk carries new usage so the access log still captures it
@@ -1052,6 +1074,12 @@ func buildDynamicMetadataWithBackendIdentity(globalRequestCosts []filterapi.Runt
 			return nil, err
 		}
 		metadata[rc.MetadataKey] = &structpb.Value{Kind: &structpb.Value_NumberValue{NumberValue: float64(cost)}}
+	}
+
+	// cache_details carries the raw cache token counts, since a single cost value collapses the
+	// cache read and the per-TTL cache write tokens. Only values reported by the provider are emitted.
+	if cacheDetails := buildCacheDetails(costs); cacheDetails != nil {
+		metadata["cache_details"] = structpb.NewStructValue(cacheDetails)
 	}
 
 	metadata["model_name_override"] = &structpb.Value{Kind: &structpb.Value_StringValue{StringValue: actualModel}}

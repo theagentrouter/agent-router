@@ -2139,6 +2139,49 @@ func Test_buildDynamicMetadata(t *testing.T) {
 		// model_name_override should still be present, just with empty value.
 		require.Empty(t, inner.Fields["model_name_override"].GetStringValue())
 	})
+
+	t.Run("cache_details carries all cache token counts", func(t *testing.T) {
+		costs := &metrics.TokenUsage{}
+		costs.SetCachedInputTokens(200)
+		costs.SetCacheCreationInputTokens(1005)
+		costs.SetCacheCreation5mInputTokens(5)
+		costs.SetCacheCreation1hInputTokens(1000)
+
+		md, err := buildDynamicMetadata(nil, []filterapi.RuntimeRequestCost{}, costs, map[string]string{}, "", "", "")
+		require.NoError(t, err)
+
+		inner := md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue()
+		details := inner.Fields["cache_details"].GetStructValue()
+		require.NotNil(t, details)
+		require.Equal(t, map[string]any{
+			"cache_read_input_tokens":        float64(200),
+			"cache_creation_input_tokens":    float64(1005),
+			"cache_creation_5m_input_tokens": float64(5),
+			"cache_creation_1h_input_tokens": float64(1000),
+		}, details.AsMap())
+	})
+
+	t.Run("cache_details only includes set cache token counts", func(t *testing.T) {
+		costs := &metrics.TokenUsage{}
+		costs.SetCachedInputTokens(0)
+
+		md, err := buildDynamicMetadata(nil, []filterapi.RuntimeRequestCost{}, costs, map[string]string{}, "", "", "")
+		require.NoError(t, err)
+
+		inner := md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue()
+		require.Equal(t, map[string]any{"cache_read_input_tokens": float64(0)}, inner.Fields["cache_details"].GetStructValue().AsMap())
+	})
+
+	t.Run("cache_details omitted when no cache token counts are set", func(t *testing.T) {
+		costs := &metrics.TokenUsage{}
+		costs.SetInputTokens(10)
+
+		md, err := buildDynamicMetadata(nil, []filterapi.RuntimeRequestCost{}, costs, map[string]string{}, "", "", "")
+		require.NoError(t, err)
+
+		inner := md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue()
+		require.NotContains(t, inner.Fields, "cache_details")
+	})
 }
 
 func Test_buildBackendDynamicMetadata(t *testing.T) {
