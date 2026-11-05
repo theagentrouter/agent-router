@@ -78,6 +78,10 @@ func newExtProcBuilder(options *Options, extProcAsSideCar bool, logger logr.Logg
 		mcpSessionEncryptionIterations:         options.MCPSessionEncryptionIterations,
 		mcpFallbackSessionEncryptionSeed:       options.MCPFallbackSessionEncryptionSeed,
 		mcpFallbackSessionEncryptionIterations: options.MCPFallbackSessionEncryptionIterations,
+		fileIDEncryptionSeed:                   options.FileIDEncryptionSeed,
+		fileIDEncryptionIterations:             options.FileIDEncryptionIterations,
+		fileIDFallbackEncryptionSeed:           options.FileIDFallbackEncryptionSeed,
+		fileIDFallbackEncryptionIterations:     options.FileIDFallbackEncryptionIterations,
 	}
 }
 
@@ -111,6 +115,11 @@ type extProcBuilder struct {
 	mcpSessionEncryptionIterations         int
 	mcpFallbackSessionEncryptionSeed       string
 	mcpFallbackSessionEncryptionIterations int
+
+	fileIDEncryptionSeed               string
+	fileIDEncryptionIterations         int
+	fileIDFallbackEncryptionSeed       string
+	fileIDFallbackEncryptionIterations int
 }
 
 // extProcContainerInput is the per-gateway input for extproc injection.
@@ -225,6 +234,23 @@ func (b *extProcBuilder) mcpSessionEncryption() *filterapi.MCPSessionEncryption 
 	return e
 }
 
+// fileIDEncryption returns the Files/Batch API id encryption configuration to deliver to the
+// extproc through the filter config, or nil if no seed is configured.
+func (b *extProcBuilder) fileIDEncryption() *filterapi.FileIDEncryption {
+	if b == nil || b.fileIDEncryptionSeed == "" {
+		return nil
+	}
+	e := &filterapi.FileIDEncryption{
+		Seed:       b.fileIDEncryptionSeed,
+		Iterations: b.fileIDEncryptionIterations,
+	}
+	if b.fileIDFallbackEncryptionSeed != "" {
+		e.FallbackSeed = b.fileIDFallbackEncryptionSeed
+		e.FallbackIterations = b.fileIDFallbackEncryptionIterations
+	}
+	return e
+}
+
 // extProcConfigDigest contains the config inputs that affect extproc injection.
 // It intentionally avoids hashing the full Kubernetes Container API object.
 type extProcConfigDigest struct {
@@ -316,6 +342,8 @@ func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {
 		"-rootPrefix", b.rootPrefix,
 		"-maxRecvMsgSize", fmt.Sprintf("%d", b.maxRecvMsgSize),
 	}
+	// The Files/Batch API id encryption seeds are not passed as arguments, for the same reason as
+	// the MCP seeds below. They are delivered in the filter config Secrets (see fileIDEncryption).
 	if f := b.nonDefaultLogFormat(); f != "" {
 		args = append(args, "-logFormat", f)
 	}
