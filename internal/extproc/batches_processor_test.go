@@ -387,12 +387,28 @@ func TestBatches_ResolveTranslator_UnsupportedOp(t *testing.T) {
 }
 
 func TestNewBatchesProcessorFactory(t *testing.T) {
-	f := NewBatchesProcessorFactory(newTestCodec())
+	codec := newTestCodec()
+	f := NewBatchesProcessorFactory(codec)
 	proc, err := f(nil, map[string]string{}, slog.Default(), true, false)
 	require.NoError(t, err)
 	bp, ok := proc.(*batchesProcessor)
 	require.True(t, ok)
 	require.True(t, bp.isUpstreamFilter)
+	// No filter config: the flag codec is used.
+	require.Same(t, codec, bp.codec)
+
+	// A filter config without its own codec also falls back to the flag codec.
+	proc, err = f(&filterapi.RuntimeConfig{}, map[string]string{}, slog.Default(), false, false)
+	require.NoError(t, err)
+	require.Same(t, codec, proc.(*batchesProcessor).codec)
+
+	// The filter config codec takes precedence over the flag codec, so batch ids are encrypted
+	// with the same key as the file ids minted by the Files processor.
+	configCodec, err := idcodec.NewCodec("config-seed", 1000, "", 0)
+	require.NoError(t, err)
+	proc, err = f(&filterapi.RuntimeConfig{FileIDCodec: configCodec}, map[string]string{}, slog.Default(), false, false)
+	require.NoError(t, err)
+	require.Same(t, configCodec, proc.(*batchesProcessor).codec)
 }
 
 // fakeBatchCreateTranslator is a create translator that rejects one endpoint, fails on another, and

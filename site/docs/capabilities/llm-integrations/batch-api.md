@@ -74,14 +74,17 @@ the [Files API](./files-api.md#configuration): batches are served by the route t
 used to upload the input file.
 
 Batch ids are encrypted with the same key as file ids. There is no separate Batch setting: configure
-`--fileIDEncryptionSeed`, or the Helm values under `controller.fileIDEncryption`, as described in
-[Encryption of file ids](./files-api.md#encryption-of-file-ids). With Helm, the chart generates a
-random seed on install when `controller.fileIDEncryption.seed` is empty and reuses it on upgrades.
+the Helm values under `controller.fileIDEncryption` (or the `AIGW_FILE_ID_ENCRYPTION_SEED`
+environment variable with `aigw run`), as described in
+[Encryption of file ids](./files-api.md#encryption-of-file-ids). The seed is delivered to the
+external processors through the filter configuration, so it is not visible in the Pod spec or
+process command line. With Helm, the chart generates a random seed on install when
+`controller.fileIDEncryption.seed` is empty and reuses it on upgrades.
 
 :::danger Never use the well-known default seed
 
-If `--fileIDEncryptionSeed` is left at the well-known default (`default-insecure-seed`), **anyone who
-knows this public default can decrypt and forge batch and file ids**. Set the seed to a secret,
+If the seed is left at the well-known default (`default-insecure-seed`), **anyone who knows this
+public default can decrypt and forge batch and file ids**. Set the seed to a secret,
 randomly generated value before exposing the gateway to untrusted or multi-tenant clients.
 
 :::
@@ -159,7 +162,7 @@ because the `after` cursor is a gateway batch id that carries the model.
 - **Token usage is not metered.** Batch work runs asynchronously on the provider, so the gateway
   does not record token usage for batch requests.
 - **JSONL contents are not inspected.** The `model` in each input line is sent upstream as written.
-- **Change the encryption seed.** With the well-known default `fileIDEncryptionSeed`, anyone can
+- **Change the encryption seed.** With the well-known default seed, anyone can
   decrypt and forge batch ids. See [Configuration](#configuration).
 - **Ids are gateway-issued.** Store and reuse exactly what the gateway returns.
 
