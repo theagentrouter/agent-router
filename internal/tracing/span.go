@@ -6,6 +6,7 @@
 package tracing
 
 import (
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
@@ -17,13 +18,25 @@ import (
 )
 
 type span[RespT, ChunkT any] struct {
-	span     trace.Span
-	recorder tracingapi.SpanResponseRecorder[RespT, ChunkT]
-	chunks   []*ChunkT
+	span              trace.Span
+	recorder          tracingapi.SpanResponseRecorder[RespT, ChunkT]
+	chunks            []*ChunkT
+	stream            tracingapi.StreamRecorder[ChunkT]
+	streamInitialized bool
 }
 
 // RecordResponseChunk implements [tracingapi.Span.RecordResponseChunk]
 func (s *span[RespT, ChunkT]) RecordResponseChunk(resp *ChunkT) {
+	if !s.streamInitialized {
+		s.streamInitialized = true
+		if factory, ok := s.recorder.(tracingapi.StreamRecorderFactory[ChunkT]); ok {
+			s.stream = factory.NewStreamRecorder()
+		}
+	}
+	if s.stream != nil {
+		s.stream.RecordChunk(resp)
+		return
+	}
 	s.chunks = append(s.chunks, resp)
 }
 
@@ -42,7 +55,11 @@ func (s *span[RespT, ChunkT]) RecordBackend(backend tracingapi.Backend) {
 
 // EndSpan implements [tracingapi.Span.EndSpan]
 func (s *span[RespT, ChunkT]) EndSpan() {
-	if len(s.chunks) > 0 {
+	if s.stream != nil {
+		s.stream.RecordAttributes(s.span)
+		s.span.SetStatus(codes.Ok, "")
+		s.stream = nil
+	} else if len(s.chunks) > 0 {
 		s.recorder.RecordResponseChunks(s.span, s.chunks)
 	}
 	s.span.End()
@@ -50,6 +67,10 @@ func (s *span[RespT, ChunkT]) EndSpan() {
 
 // EndSpanOnError implements [tracingapi.Span.EndSpanOnError]
 func (s *span[RespT, ChunkT]) EndSpanOnError(statusCode int, body []byte) {
+	if s.stream != nil {
+		s.stream.RecordAttributes(s.span)
+		s.stream = nil
+	}
 	s.recorder.RecordResponseOnError(s.span, statusCode, body)
 	s.span.End()
 }
