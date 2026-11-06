@@ -163,9 +163,11 @@ extProc:
 Token counts and sampling parameters are recorded either way, since the
 conventions treat those as metadata rather than content.
 
-Message content is currently mapped for chat completions and Anthropic
-messages. Other endpoints record operation, model, usage and sampling
-parameters. Several — image generation, speech, transcription, translation and
+Message content is currently mapped for chat completions, Anthropic messages
+and decisions. For decisions, the input is recorded as `gen_ai.input.messages`,
+the questions as `gen_ai.system_instructions` and the answers as
+`gen_ai.output.messages`. Other endpoints record operation, model, usage and
+sampling parameters. Several — image generation, speech, transcription, translation and
 rerank and TypeSafe System One — have no content attributes defined by the conventions at all.
 
 The `OPENINFERENCE_HIDE_*` variables described below apply only to the
