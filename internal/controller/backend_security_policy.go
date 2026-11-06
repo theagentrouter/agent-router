@@ -176,6 +176,9 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 			return ctrl.Result{}, nil
 		}
 	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
+		if bsp.Spec.AzureCredentials == nil {
+			return ctrl.Result{}, fmt.Errorf("invalid backend security policy, azure credentials cannot be nil")
+		}
 		clientID := bsp.Spec.AzureCredentials.ClientID
 		tenantID := bsp.Spec.AzureCredentials.TenantID
 		var provider tokenprovider.TokenProvider
