@@ -130,6 +130,35 @@ func TestChatCompletionsEndpointSpec_ParseBody(t *testing.T) {
 		require.NotNil(t, parsed)
 		require.Nil(t, mutated)
 	})
+
+	t.Run("force_include_usage_error", func(t *testing.T) {
+		stubForceStreamOptionsIncludeUsageError(t)
+		body := []byte(`{"model":"gpt-4o","stream":true}`)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, true)
+		require.ErrorIs(t, err, internalapi.ErrMalformedRequest)
+		require.ErrorContains(t, err, "failed to set stream_options.include_usage")
+		require.Empty(t, model)
+		require.Nil(t, parsed)
+		require.False(t, stream)
+		require.Nil(t, mutated)
+	})
+}
+
+// stubForceStreamOptionsIncludeUsageError makes forceStreamOptionsIncludeUsageFn fail for the
+// duration of the test. Tests using it must not run in parallel.
+func stubForceStreamOptionsIncludeUsageError(t *testing.T) {
+	orig := forceStreamOptionsIncludeUsageFn
+	t.Cleanup(func() { forceStreamOptionsIncludeUsageFn = orig })
+	forceStreamOptionsIncludeUsageFn = func([]byte) ([]byte, error) { return nil, errors.New("boom") }
+}
+
+func TestForceStreamOptionsIncludeUsage_NullStreamOptions(t *testing.T) {
+	// A null stream_options is valid JSON for the parsed request (nil pointer), and must be
+	// replaced by an object rather than causing an error.
+	mutated, err := forceStreamOptionsIncludeUsage([]byte(`{"model":"gpt-4o","stream":true,"stream_options":null}`))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gpt-4o","stream":true,"stream_options":{"include_usage":true}}`, string(mutated))
 }
 
 func TestChatCompletionsEndpointSpec_GetTranslator(t *testing.T) {
@@ -188,6 +217,132 @@ func TestCompletionsEndpointSpec_ParseBody(t *testing.T) {
 		require.Equal(t, "text-davinci-003", model)
 		require.True(t, stream)
 		require.NotNil(t, parsed)
+		require.Nil(t, mutated)
+	})
+
+	t.Run("streaming_without_include_usage", func(t *testing.T) {
+		req := openai.CompletionRequest{Model: "text-davinci-003", Stream: true, Prompt: openai.PromptUnion{Value: "say hi"}}
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.Equal(t, "text-davinci-003", model)
+		require.True(t, stream)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.StreamOptions)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+
+		var mutatedReq openai.CompletionRequest
+		require.NoError(t, json.Unmarshal(mutated, &mutatedReq))
+		require.NotNil(t, mutatedReq.StreamOptions)
+		require.True(t, mutatedReq.StreamOptions.IncludeUsage)
+	})
+
+	t.Run("streaming_with_include_usage_false", func(t *testing.T) {
+		body := []byte(`{"model":"text-davinci-003","prompt":"say hi","stream":true,"stream_options":{"include_usage":false}}`)
+
+		_, parsed, _, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		require.JSONEq(t, `{"model":"text-davinci-003","prompt":"say hi","stream":true,"stream_options":{"include_usage":true}}`, string(mutated))
+	})
+
+	t.Run("streaming_with_include_usage_already_true", func(t *testing.T) {
+		req := openai.CompletionRequest{
+			Model:         "text-davinci-003",
+			Stream:        true,
+			Prompt:        openai.PromptUnion{Value: "say hi"},
+			StreamOptions: &openai.StreamOptions{IncludeUsage: true},
+		}
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+
+		_, parsed, _, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.Nil(t, mutated)
+	})
+
+	t.Run("streaming_with_duplicate_stream_options", func(t *testing.T) {
+		body := []byte(`{"model":"text-davinci-003","prompt":"say hi","stream":true,"stream_options":{"include_usage":true},"stream_options":{"include_usage":false}}`)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.Equal(t, "text-davinci-003", model)
+		require.True(t, stream)
+		require.NotNil(t, parsed)
+		require.NotNil(t, parsed.StreamOptions)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+
+		// The mutated body -- which is what actually gets forwarded to the upstream provider --
+		// must contain a single, unambiguous stream_options.include_usage=true and must not retain
+		// any client-supplied duplicate "stream_options" key.
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		var mutatedReq openai.CompletionRequest
+		require.NoError(t, json.Unmarshal(mutated, &mutatedReq))
+		require.NotNil(t, mutatedReq.StreamOptions)
+		require.True(t, mutatedReq.StreamOptions.IncludeUsage)
+	})
+
+	t.Run("streaming_preserves_extra_stream_options_fields", func(t *testing.T) {
+		// vLLM supports additional stream_options fields beyond include_usage, e.g.
+		// continuous_usage_stats. Forcing include_usage must not drop them.
+		body := []byte(`{"model":"text-davinci-003","prompt":"say hi","stream":true,"stream_options":{"include_usage":false,"continuous_usage_stats":true}}`)
+
+		_, parsed, _, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		require.JSONEq(t, `{"model":"text-davinci-003","prompt":"say hi","stream":true,"stream_options":{"include_usage":true,"continuous_usage_stats":true}}`, string(mutated))
+	})
+
+	t.Run("streaming_with_duplicate_stream_options_preserves_last_fields", func(t *testing.T) {
+		// With duplicate top-level keys, json.Unmarshal (and therefore `parsed`) takes the
+		// last occurrence. The mutated body must match that behavior and keep its other fields.
+		body := []byte(`{"model":"text-davinci-003","prompt":"say hi","stream":true,"stream_options":{"continuous_usage_stats":true},"stream_options":{"include_usage":false,"continuous_usage_stats":false}}`)
+
+		_, parsed, _, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.NotNil(t, parsed)
+		require.True(t, parsed.StreamOptions.IncludeUsage)
+		require.NotNil(t, mutated)
+		require.Equal(t, 1, strings.Count(string(mutated), "stream_options"))
+		require.JSONEq(t, `{"model":"text-davinci-003","prompt":"say hi","stream":true,"stream_options":{"include_usage":true,"continuous_usage_stats":false}}`, string(mutated))
+	})
+
+	t.Run("non_streaming_with_cost", func(t *testing.T) {
+		req := openai.CompletionRequest{Model: "text-davinci-003", Prompt: openai.PromptUnion{Value: "say hi"}}
+		body, err := json.Marshal(req)
+		require.NoError(t, err)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, true)
+		require.NoError(t, err)
+		require.Equal(t, "text-davinci-003", model)
+		require.False(t, stream)
+		require.NotNil(t, parsed)
+		require.Nil(t, parsed.StreamOptions)
+		require.Nil(t, mutated)
+	})
+
+	t.Run("force_include_usage_error", func(t *testing.T) {
+		stubForceStreamOptionsIncludeUsageError(t)
+		body := []byte(`{"model":"text-davinci-003","prompt":"say hi","stream":true}`)
+
+		model, parsed, stream, mutated, err := spec.ParseBody(body, true)
+		require.ErrorIs(t, err, internalapi.ErrMalformedRequest)
+		require.ErrorContains(t, err, "failed to set stream_options.include_usage")
+		require.Empty(t, model)
+		require.Nil(t, parsed)
+		require.False(t, stream)
 		require.Nil(t, mutated)
 	})
 }
