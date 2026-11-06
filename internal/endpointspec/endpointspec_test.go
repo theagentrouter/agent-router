@@ -477,11 +477,17 @@ func TestResponsesEndpointSpec_ParseBody(t *testing.T) {
 func TestResponsesEndpointSpec_GetTranslator(t *testing.T) {
 	spec := ResponsesEndpointSpec{}
 
-	_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
-	require.NoError(t, err)
-
-	_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAzureOpenAI}, "override")
-	require.NoError(t, err)
+	for _, schema := range []filterapi.VersionedAPISchema{
+		{Name: filterapi.APISchemaOpenAI},
+		{Name: filterapi.APISchemaAWSAnthropic},
+		{Name: filterapi.APISchemaAzureOpenAI},
+		{Name: filterapi.APISchemaGCPVertexAI},
+		{Name: filterapi.APISchemaGCPAnthropic},
+	} {
+		translator, err := spec.GetTranslator(schema, "override")
+		require.NoError(t, err)
+		require.NotNil(t, translator)
+	}
 
 	awsTranslator, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI}, "us.openai.gpt-5.6-luna")
 	require.NoError(t, err)
