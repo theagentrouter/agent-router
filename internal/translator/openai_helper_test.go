@@ -646,6 +646,40 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_TextStreaming(t *testing.T) 
 	require.JSONEq(t, `{"type":"message_stop"}`, events[6].data)
 }
 
+// TestOpenAIStreamToAnthropicState_ProcessBuffer_UsageWithFinishReason covers backends that send the
+// usage on the same chunk as finish_reason instead of in a separate usage-only chunk. The usage must
+// reach message_delta and the reported token usage.
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_UsageWithFinishReason(t *testing.T) {
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "claude-3",
+	}
+
+	input := "data: {\"id\":\"chatcmpl-abc\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}],\"model\":\"gpt-4o\"}\n\n" +
+		"data: {\"id\":\"chatcmpl-abc\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n" +
+		"data: [DONE]\n\n"
+	state.buffer.WriteString(input)
+
+	var out []byte
+	require.NoError(t, state.processBuffer(&out, true))
+
+	events := parseSSEEventsFromBytes(out)
+	var messageDelta string
+	for _, e := range events {
+		if e.eventType == "message_delta" {
+			messageDelta = e.data
+		}
+	}
+	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":10,"output_tokens":5}}`, messageDelta)
+
+	inputTokens, ok := state.tokenUsage.InputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(10), inputTokens)
+	outputTokens, ok := state.tokenUsage.OutputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(5), outputTokens)
+}
+
 // TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens is a regression test guarding
 // against double-counting OpenAI's cached_tokens/cache_write_tokens (a breakdown
 // within prompt_tokens) as if they were additive, Anthropic-native cache usage fields.
