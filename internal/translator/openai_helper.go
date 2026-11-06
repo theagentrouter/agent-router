@@ -138,6 +138,9 @@ func appendAnthropicAssistantMessage(messages []openai.ChatCompletionMessagePara
 	for _, block := range msg.Content.Array {
 		switch {
 		case block.Thinking != nil:
+			if block.Thinking.Thinking == "" && block.Thinking.Signature == "" {
+				continue
+			}
 			if block.Thinking.Thinking != "" {
 				reasoningTexts = append(reasoningTexts, block.Thinking.Thinking)
 			}
@@ -173,7 +176,7 @@ func appendAnthropicAssistantMessage(messages []openai.ChatCompletionMessagePara
 		ThinkingBlocks: thinkingBlocks,
 	}
 	if len(reasoningTexts) > 0 {
-		assistantMsg.ReasoningContent = strings.Join(reasoningTexts, "\n")
+		assistantMsg.ReasoningContent = strings.Join(reasoningTexts, "")
 	}
 
 	text := anthropicContentToText(msg.Content)
@@ -463,12 +466,13 @@ func appendThinkingBlocks(content []anthropic.MessagesContentBlock, msg *openai.
 			})
 		}
 		if rc, ok := msg.ReasoningContent.Value.(*openai.ReasoningContent); ok && rc != nil && rc.ReasoningContent != nil {
-			if rc.ReasoningContent.ReasoningText != nil {
+			start := len(content)
+			if rt := rc.ReasoningContent.ReasoningText; rt != nil && (rt.Text != "" || rt.Signature != "") {
 				content = append(content, anthropic.MessagesContentBlock{
 					Thinking: &anthropic.ThinkingBlock{
 						Type:      "thinking",
-						Thinking:  rc.ReasoningContent.ReasoningText.Text,
-						Signature: rc.ReasoningContent.ReasoningText.Signature,
+						Thinking:  rt.Text,
+						Signature: rt.Signature,
 					},
 				})
 			}
@@ -480,7 +484,9 @@ func appendThinkingBlocks(content []anthropic.MessagesContentBlock, msg *openai.
 					},
 				})
 			}
-			return content
+			if len(content) > start {
+				return content
+			}
 		}
 	}
 
