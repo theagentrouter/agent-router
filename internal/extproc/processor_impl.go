@@ -386,9 +386,19 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 			if req, ok := any(u.parent.originalRequestBody).(*openai.ChatCompletionRequest); ok {
 				result, resolveErr := u.cacheResolver.Resolve(ctx, req)
 				if resolveErr != nil {
+					// Resolvers only return an error when caching is misconfigured: a
+					// *contextcache.ResolveError, which for GCP is HTTP 401, 403 or 404 from
+					// cachedContents.create. Other failures (400, 429, 5xx, network) are
+					// served uncached. Pass the provider's message through so the
+					// misconfiguration is visible to the caller.
 					u.logger.Error("context cache resolution failed", slog.String("error", resolveErr.Error()))
 					u.metrics.RecordRequestCompletion(ctx, false, u.requestHeaders)
-					return createUserFacingErrorResponse(502, "UpstreamError", "upstream cache service error"), nil
+					msg := "upstream cache service error"
+					var re *contextcache.ResolveError
+					if errors.As(resolveErr, &re) {
+						msg = fmt.Sprintf("context cache configuration error (HTTP %d from provider): %s", re.StatusCode, re.Message)
+					}
+					return createUserFacingErrorResponse(502, "UpstreamError", msg), nil
 				}
 				if result != nil {
 					cacheResult := &translator.ContextCacheResult{

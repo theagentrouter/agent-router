@@ -7,6 +7,7 @@ package contextcache
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -36,8 +37,29 @@ type ResolveResult struct {
 type CacheResolver interface {
 	// Resolve inspects openAIReq for cache_control markers, resolves or creates the
 	// corresponding provider cache, and returns the result. It returns (nil, nil) when
-	// the request has no markers.
+	// the request has no markers, or when the prefix cannot be cached and the request
+	// should be served uncached. A *ResolveError means caching is misconfigured (for GCP:
+	// HTTP 401, 403 or 404 from cachedContents.create) and the request should fail.
 	// The caller is responsible for injecting ResolveResult.CacheName into the provider
 	// request and replacing the request messages with ResolveResult.Messages.
 	Resolve(ctx context.Context, openAIReq *openai.ChatCompletionRequest) (*ResolveResult, error)
+}
+
+// ResolveError is returned by a CacheResolver when caching is misconfigured, so the request
+// must fail rather than be served uncached. For GCP these are the cachedContents.create
+// responses that will not fix themselves:
+//   - 401 UNAUTHENTICATED: credentials rejected (expired static token, revoked key).
+//   - 403 PERMISSION_DENIED: missing aiplatform.cachedContents.create, Vertex AI API not
+//     enabled, billing disabled, or an org policy blocking the region.
+//   - 404 NOT_FOUND: wrong project, or a model not offered in that region.
+//
+// StatusCode and Message describe the provider's response and are safe to return to the
+// client.
+type ResolveError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *ResolveError) Error() string {
+	return fmt.Sprintf("context cache: provider returned HTTP %d: %s", e.StatusCode, e.Message)
 }

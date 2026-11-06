@@ -2838,3 +2838,39 @@ func Test_upstreamProcessor_CacheResolver_error(t *testing.T) {
 	require.Contains(t, string(immediateResp.ImmediateResponse.Body), "upstream cache service error")
 	mm.RequireRequestFailure(t)
 }
+
+// A configuration error from the resolver reaches the client with the provider's message.
+func Test_upstreamProcessor_CacheResolver_configurationError(t *testing.T) {
+	someBody := bodyFromModel(t, "gemini-1.5-pro", false, nil)
+	var body openai.ChatCompletionRequest
+	require.NoError(t, json.Unmarshal(someBody, &body))
+
+	cr := &mockCacheResolver{retErr: &contextcache.ResolveError{StatusCode: 403, Message: "missing aiplatform.cachedContents.create"}}
+	tr := &mockCacheTranslator{mockTranslator: mockTranslator{t: t, expRequestBody: &body}}
+	mm := &mockMetrics{}
+
+	p := &chatCompletionProcessorUpstreamFilter{
+		parent: &chatCompletionProcessorRouterFilter{
+			config:                 &filterapi.RuntimeConfig{},
+			logger:                 slog.Default(),
+			originalRequestBodyRaw: someBody,
+			originalRequestBody:    &body,
+			originalModel:          "gemini-1.5-pro",
+		},
+		requestHeaders: map[string]string{internalapi.ModelNameHeaderKeyDefault: "gemini-1.5-pro"},
+		metrics:        mm,
+		translator:     tr,
+		handler:        &mockGCPAuthHandler{},
+		cacheResolver:  cr,
+		logger:         slog.Default(),
+	}
+	resp, err := p.ProcessRequestHeaders(t.Context(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	immediateResp, ok := resp.Response.(*extprocv3.ProcessingResponse_ImmediateResponse)
+	require.True(t, ok)
+	require.Equal(t, typev3.StatusCode(502), immediateResp.ImmediateResponse.Status.Code)
+	require.Contains(t, string(immediateResp.ImmediateResponse.Body), "HTTP 403")
+	require.Contains(t, string(immediateResp.ImmediateResponse.Body), "missing aiplatform.cachedContents.create")
+	mm.RequireRequestFailure(t)
+}

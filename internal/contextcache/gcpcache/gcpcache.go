@@ -20,11 +20,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -202,8 +204,13 @@ func (r *Resolver) Resolve(ctx context.Context, openAIReq *openai.ChatCompletion
 
 	// Check the shared store first. A store failure is not fatal: it is logged and
 	// treated as a miss, so an unreachable store degrades caching rather than the
-	// request. GCP-side failures below are a different matter and do fail fast.
+	// request. Create failures are classified in handleCreateError: configuration errors
+	// (HTTP 401, 403, 404) fail the request, everything else serves it uncached.
 	if e, ok := r.storeGet(ctx, cacheKey); ok {
+		r.logger.Debug("gcpcache: cache hit",
+			slog.String("key", cacheKey), slog.String("cache", e.Name),
+			slog.Time("expireTime", e.ExpireTime), slog.Int("cachedMessages", breakpoint+1),
+			slog.Int("remainingMessages", len(remainderMessages)))
 		return &contextcache.ResolveResult{
 			CacheName:  e.Name,
 			Messages:   remainderMessages,
@@ -211,12 +218,31 @@ func (r *Resolver) Resolve(ctx context.Context, openAIReq *openai.ChatCompletion
 		}, nil
 	}
 
+	// Skip the create for a prefix GCP recently rejected with HTTP 400 (usually because it is
+	// below the model's minimum cache size). The create body is fully determined by the cache
+	// key, so retrying would only repeat the same 400 and add a GCP round trip to every
+	// request. handleCreateError writes the marker; it expires after one default TTL, after
+	// which the create is tried again. The request is served uncached. If the store is
+	// unreachable the check reports false and the create is attempted as normal.
+	if r.isUncacheable(ctx, cacheKey) {
+		r.logger.Debug("gcpcache: prefix previously rejected by GCP, serving uncached",
+			slog.String("key", cacheKey), slog.String("model", openAIReq.Model))
+		return nil, nil
+	}
+
 	// Store miss — create against GCP. See resolveUncached for how concurrent
 	// resolutions of the same key behave.
+	r.logger.Debug("gcpcache: cache miss, creating",
+		slog.String("key", cacheKey), slog.String("model", openAIReq.Model),
+		slog.String("ttl", ttl), slog.Int("cachedMessages", breakpoint+1))
 	result, err := r.resolveUncached(ctx, openAIReq, auth, cacheKey, ttl, contents, systemInstruction, geminiTools)
 	if err != nil {
-		return nil, err
+		return r.handleCreateError(ctx, cacheKey, openAIReq.Model, err)
 	}
+	r.logger.Debug("gcpcache: cache created",
+		slog.String("key", cacheKey), slog.String("cache", result.CacheName),
+		slog.Time("expireTime", result.ExpireTime), slog.Int("tokenCount", result.TokenCount),
+		slog.Int("remainingMessages", len(remainderMessages)))
 
 	// resolveUncached leaves Messages unset because it deals only in the cached prefix;
 	// the remainder is per-request.
@@ -441,6 +467,96 @@ func computeKeyInputs(model string, cachedMessages []openai.ChatCompletionMessag
 }
 
 // -----------------------------------------------------------------------
+// Create failures
+// -----------------------------------------------------------------------
+
+// uncacheablePrefix namespaces markers for prefixes GCP rejected with a 400. Cache keys
+// are 64 hex characters, so the prefix cannot collide with them.
+const uncacheablePrefix = "gcpcache:uncacheable:"
+
+// createError is a non-200 response from cachedContents.create.
+type createError struct {
+	// StatusCode is the HTTP status.
+	StatusCode int
+	// Status is GCP's status name, e.g. "INVALID_ARGUMENT", when the body could be parsed.
+	Status string
+	// Message is GCP's error message, or the raw body when it could not be parsed.
+	Message string
+}
+
+func (e *createError) Error() string {
+	return fmt.Sprintf("create cachedContent returned HTTP %d %s: %s", e.StatusCode, e.Status, e.Message)
+}
+
+// newCreateError parses GCP's error body: {"error": {"code", "message", "status"}}.
+func newCreateError(statusCode int, body []byte) *createError {
+	e := &createError{StatusCode: statusCode, Message: strings.TrimSpace(string(body))}
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+			Status  string `json:"status"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &parsed) == nil && parsed.Error.Message != "" {
+		e.Message = parsed.Error.Message
+		e.Status = parsed.Error.Status
+	}
+	return e
+}
+
+// handleCreateError decides what a failed create means for the request.
+//
+//   - 401 UNAUTHENTICATED, 403 PERMISSION_DENIED, 404 NOT_FOUND: configuration errors
+//     (credentials, permission, project, model or region). Fail the request with GCP's
+//     message, so a broken setup is noticed instead of silently costing more.
+//   - 400 INVALID_ARGUMENT: usually a prefix below the model's minimum cache size. Serve
+//     uncached and mark the prefix uncacheable, since the same key repeats the same 400.
+//   - Anything else (429 RESOURCE_EXHAUSTED, 5xx, network and token errors, a response
+//     without expireTime): serve uncached.
+func (r *Resolver) handleCreateError(ctx context.Context, key, model string, err error) (*contextcache.ResolveResult, error) {
+	var ce *createError
+	if errors.As(err, &ce) {
+		attrs := []any{
+			slog.String("key", key), slog.String("model", model), slog.Int("status", ce.StatusCode),
+			slog.String("gcpStatus", ce.Status), slog.String("message", ce.Message),
+		}
+		switch ce.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+			r.logger.Error("gcpcache: cache create failed due to configuration", attrs...)
+			return nil, &contextcache.ResolveError{StatusCode: ce.StatusCode, Message: ce.Message}
+		case http.StatusBadRequest:
+			// The create body is fully determined by the cache key, so a 400 will repeat for
+			// this key. The usual cause is a prefix below the model's minimum token count.
+			r.markUncacheable(ctx, key)
+			r.logger.Warn("gcpcache: cache create rejected, serving uncached", attrs...)
+			return nil, nil
+		}
+	}
+	r.logger.Warn("gcpcache: cache create failed, serving uncached",
+		slog.String("key", key), slog.String("model", model), slog.String("error", err.Error()))
+	return nil, nil
+}
+
+// markUncacheable records that GCP rejected key's create with a 400, for one default TTL.
+func (r *Resolver) markUncacheable(ctx context.Context, key string) {
+	ttl, err := time.ParseDuration(r.defaultTTL)
+	if err != nil || ttl <= 0 {
+		ttl = DefaultTTL
+	}
+	e := contextcache.Entry{Name: "uncacheable", ExpireTime: time.Now().Add(ttl)}
+	if err := r.store.Set(ctx, uncacheablePrefix+key, e, ttl); err != nil {
+		r.logger.Warn("gcpcache: cache store write failed", slog.String("error", err.Error()))
+	}
+}
+
+// isUncacheable reports whether key's create was recently rejected with a 400. A store
+// failure reports false, so the create is attempted.
+func (r *Resolver) isUncacheable(ctx context.Context, key string) bool {
+	_, ok, err := r.store.Get(ctx, uncacheablePrefix+key)
+	return err == nil && ok
+}
+
+// -----------------------------------------------------------------------
 // Cache key
 // -----------------------------------------------------------------------
 
@@ -525,7 +641,7 @@ func (r *Resolver) createCache(
 		return "", 0, time.Time{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, time.Time{}, fmt.Errorf("create cachedContent returned HTTP %d: %s", resp.StatusCode, respBody)
+		return "", 0, time.Time{}, newCreateError(resp.StatusCode, respBody)
 	}
 
 	var cr gcp.CachedContent

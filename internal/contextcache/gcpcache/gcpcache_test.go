@@ -533,9 +533,9 @@ func TestResolver_StoreEntryExpiring_Refetches(t *testing.T) {
 	assert.Equal(t, "projects/p/locations/us-central1/cachedContents/refreshed", e.Name)
 }
 
-// A create response without an expireTime cannot be stored (its TTL would be negative),
-// so every later request would create again. It must fail instead of passing silently.
-func TestResolver_CreateExpiryMissing_Fails(t *testing.T) {
+// A create response without an expireTime cannot be stored (its TTL would be negative).
+// The request is served uncached rather than using a cache the store cannot track.
+func TestResolver_CreateExpiryMissing_ServesUncached(t *testing.T) {
 	fake := newFakeCacheServer(t, `{"cachedContents":[]}`,
 		`{"name":"projects/p/locations/us-central1/cachedContents/x"}`, http.StatusOK)
 	store := newMemStore()
@@ -549,13 +549,13 @@ func TestResolver_CreateExpiryMissing_Fails(t *testing.T) {
 	}
 
 	res, err := r.Resolve(context.Background(), req)
-	require.Error(t, err)
+	require.NoError(t, err, "a malformed create response serves the request uncached")
 	assert.Nil(t, res)
-	assert.Contains(t, err.Error(), "no expireTime")
+	assert.Equal(t, int64(0), store.sets.Load(), "nothing is stored for an unusable response")
 }
 
 // An unparseable expireTime fails JSON decoding of the create response.
-func TestResolver_CreateExpiryUnparseable_Fails(t *testing.T) {
+func TestResolver_CreateExpiryUnparseable_ServesUncached(t *testing.T) {
 	fake := newFakeCacheServer(t, `{"cachedContents":[]}`,
 		`{"name":"projects/p/locations/us-central1/cachedContents/x","expireTime":"not-a-time"}`, http.StatusOK)
 	r := resolverWithServer(fake.srv.URL)
@@ -568,27 +568,78 @@ func TestResolver_CreateExpiryUnparseable_Fails(t *testing.T) {
 	}
 
 	res, err := r.Resolve(context.Background(), req)
-	require.Error(t, err)
+	require.NoError(t, err)
 	assert.Nil(t, res)
 }
 
-func TestResolver_CreateFailure_ReturnsError(t *testing.T) {
-	fake := newFakeCacheServer(t,
-		`{"cachedContents":[]}`,
-		`{"error":{"message":"below minimum tokens"}}`,
-		http.StatusUnprocessableEntity,
-	)
-	r := resolverWithServer(fake.srv.URL)
-	req := &openai.ChatCompletionRequest{
-		Model: "gemini-1.5-pro",
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			systemMsg("sys", ephemeralFields()),
-			userMsg("q"),
+// GCP create failures: configuration errors fail the request with GCP's message, and
+// everything else serves the request uncached.
+func TestResolver_CreateFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     int
+		body       string
+		wantErr    bool
+		uncachable bool
+	}{
+		{
+			name: "below minimum tokens", status: http.StatusBadRequest,
+			body:       `{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"The cached content is of 512 tokens. The minimum token count to start caching is 1024."}}`,
+			uncachable: true,
 		},
+		{
+			name: "other bad request", status: http.StatusBadRequest,
+			body:       `{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"bad field"}}`,
+			uncachable: true,
+		},
+		{
+			name: "unauthenticated", status: http.StatusUnauthorized, wantErr: true,
+			body: `{"error":{"code":401,"status":"UNAUTHENTICATED","message":"invalid credentials"}}`,
+		},
+		{
+			name: "permission denied", status: http.StatusForbidden, wantErr: true,
+			body: `{"error":{"code":403,"status":"PERMISSION_DENIED","message":"missing aiplatform.cachedContents.create"}}`,
+		},
+		{
+			name: "model not found", status: http.StatusNotFound, wantErr: true,
+			body: `{"error":{"code":404,"status":"NOT_FOUND","message":"model not found"}}`,
+		},
+		{
+			name: "quota", status: http.StatusTooManyRequests,
+			body: `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota"}}`,
+		},
+		{name: "server error", status: http.StatusInternalServerError, body: `not json`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeCacheServer(t, `{"cachedContents":[]}`, tc.body, tc.status)
+			store := newMemStore()
+			r := resolverWithServer(fake.srv.URL, store)
+			req := &openai.ChatCompletionRequest{
+				Model:    "gemini-1.5-pro",
+				Messages: []openai.ChatCompletionMessageParamUnion{systemMsg("sys", ephemeralFields()), userMsg("q")},
+			}
+
+			res, err := r.Resolve(context.Background(), req)
+			assert.Nil(t, res)
+			if tc.wantErr {
+				var re *contextcache.ResolveError
+				require.ErrorAs(t, err, &re)
+				assert.Equal(t, tc.status, re.StatusCode)
+				assert.NotContains(t, re.Message, `"error"`, "the GCP message is extracted from the body")
+				return
+			}
+			require.NoError(t, err, "non-configuration failures serve the request uncached")
+
+			// A second request skips the create only after a 400.
+			_, err = r.Resolve(context.Background(), req)
+			require.NoError(t, err)
+			if tc.uncachable {
+				assert.Equal(t, 1, fake.creates(), "a prefix rejected with a 400 must not be retried")
+			} else {
+				assert.Equal(t, 2, fake.creates())
+			}
+		})
 	}
-	_, err := r.Resolve(context.Background(), req)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "422")
 }
 
 func TestResolver_TTLDefault_SentToGoogle(t *testing.T) {
