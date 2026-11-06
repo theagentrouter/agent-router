@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -27,7 +28,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
 	"github.com/envoyproxy/ai-gateway/internal/bodymutator"
 	"github.com/envoyproxy/ai-gateway/internal/endpointspec"
@@ -470,10 +474,13 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 		mt.retUsedToken.SetInputTokens(1)
 		mt.retUsedToken.SetCachedInputTokens(1)
 		mt.retUsedToken.SetCacheCreationInputTokens(3)
+		mt.retUsedToken.SetBillableUnits(2)
 
 		celProgInt, err := llmcostcel.NewProgram("54321")
 		require.NoError(t, err)
 		celProgUint, err := llmcostcel.NewProgram("uint(9999)")
+		require.NoError(t, err)
+		celProgBillableUnits, err := llmcostcel.NewProgram("uint(billable_units * 25000.0)")
 		require.NoError(t, err)
 		p := &chatCompletionProcessorUpstreamFilter{
 			translator: mt,
@@ -493,6 +500,10 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 						{
 							CELProg:        celProgUint,
 							LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCEL, MetadataKey: "cel_uint"},
+						},
+						{
+							CELProg:        celProgBillableUnits,
+							LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCEL, MetadataKey: "cel_billable_units"},
 						},
 					},
 				},
@@ -528,6 +539,8 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 			GetStructValue().Fields["cel_int"].GetNumberValue())
 		require.Equal(t, float64(9999), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
 			GetStructValue().Fields["cel_uint"].GetNumberValue())
+		require.Equal(t, float64(50000), md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+			GetStructValue().Fields["cel_billable_units"].GetNumberValue())
 		require.Equal(t, "ai_gateway_llm", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["model_name_override"].GetStringValue())
 		require.Equal(t, "some_backend", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["ai_service_backend_name"].GetStringValue())
 		require.Equal(t, "some_route", md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields["route_name"].GetStringValue())
@@ -1548,6 +1561,41 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_SpoofedUps
 	require.Contains(t, headerMutation.RemoveHeaders, internalapi.UpstreamHostHeader)
 	for _, h := range headerMutation.SetHeaders {
 		require.NotEqual(t, internalapi.UpstreamHostHeader, h.Header.Key, "spoofed upstream-host header must not be re-set")
+	}
+}
+
+// Test_ProcessRequestHeaders_bodylessRequestKeepsNoBody covers a request routed from its path whose headers
+// ended the stream, so the router never saw a body: neither a backend body mutation nor a retry may give it one.
+func Test_ProcessRequestHeaders_bodylessRequestKeepsNoBody(t *testing.T) {
+	for _, tt := range []struct {
+		name                string
+		upstreamFilterCount int
+	}{
+		{name: "backend body mutation on the first attempt", upstreamFilterCount: 1},
+		{name: "retry", upstreamFilterCount: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &chatCompletionProcessorUpstreamFilter{
+				requestHeaders: map[string]string{":path": "/models/owner/app/requests/7f1c", ":method": "GET"},
+				metrics:        &mockMetrics{},
+				translator:     &mockTranslator{t: t, expForceRequestBodyMutation: tt.upstreamFilterCount > 1},
+				handler:        &mockBackendAuthHandler{},
+				bodyMutator: bodymutator.NewBodyMutator(&filterapi.HTTPBodyMutation{
+					Set: []filterapi.HTTPBodyField{{Path: "enable_safety_checker", Value: "true"}},
+				}, nil),
+				parent: &chatCompletionProcessorRouterFilter{
+					upstreamFilterCount: tt.upstreamFilterCount,
+					originalModel:       "owner/app",
+					logger:              slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{})),
+					config:              &filterapi.RuntimeConfig{},
+				},
+			}
+			resp, err := p.ProcessRequestHeaders(t.Context(), nil)
+			require.NoError(t, err)
+			common := resp.Response.(*extprocv3.ProcessingResponse_RequestHeaders).RequestHeaders.Response
+			require.Empty(t, common.GetBodyMutation().GetBody(), "a body-less request must not be given a body")
+			require.Equal(t, extprocv3.CommonResponse_CONTINUE, common.GetStatus())
+		})
 	}
 }
 
@@ -2598,4 +2646,181 @@ func mustCompileCEL(t *testing.T, expr string) cel.Program {
 	prog, err := llmcostcel.NewProgram(expr)
 	require.NoError(t, err)
 	return prog
+}
+
+type pathModelChatSpec struct {
+	endpointspec.ChatCompletionsEndpointSpec
+}
+
+func (pathModelChatSpec) ModelFromPath(path string) (internalapi.OriginalModel, bool, bool) {
+	model, ok := strings.CutPrefix(path, "/models/")
+	if !ok || model == "" {
+		return "", false, false
+	}
+	model, stream := strings.CutSuffix(model, "/stream")
+	return model, stream, true
+}
+
+type pathModelChatRouterFilter = routerProcessor[openai.ChatCompletionRequest, openai.ChatCompletionResponse, openai.ChatCompletionResponseChunk, pathModelChatSpec]
+
+func newPathModelChatRouterFilter(headers map[string]string) *pathModelChatRouterFilter {
+	return newRouterProcessor[openai.ChatCompletionRequest, openai.ChatCompletionResponse, openai.ChatCompletionResponseChunk, pathModelChatSpec](
+		&filterapi.RuntimeConfig{}, headers, slog.Default(),
+		tracingapi.NoopTracer[openai.ChatCompletionRequest, openai.ChatCompletionResponse, openai.ChatCompletionResponseChunk]{}, false)
+}
+
+func requireRequestHeadersPassThrough[ReqT, RespT, RespChunkT any, S endpointspec.Spec[ReqT, RespT, RespChunkT]](t *testing.T, _ S) {
+	headers := map[string]string{":path": "/models/some-model"}
+	p := newRouterProcessor[ReqT, RespT, RespChunkT, S](&filterapi.RuntimeConfig{}, headers, slog.Default(), tracingapi.NoopTracer[ReqT, RespT, RespChunkT]{}, false)
+	resp, err := p.ProcessRequestHeaders(t.Context(), &corev3.HeaderMap{})
+	require.NoError(t, err)
+	rh, ok := resp.Response.(*extprocv3.ProcessingResponse_RequestHeaders)
+	require.True(t, ok)
+	require.Nil(t, rh.RequestHeaders)
+	require.Equal(t, map[string]string{":path": "/models/some-model"}, headers)
+	require.Empty(t, p.originalModel)
+	require.False(t, p.stream)
+}
+
+func Test_routerProcessor_ProcessRequestHeaders_noOpForExistingSpecs(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{name: "chat completions", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.ChatCompletionRequest, openai.ChatCompletionResponse, openai.ChatCompletionResponseChunk](t, endpointspec.ChatCompletionsEndpointSpec{})
+		}},
+		{name: "completions", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.CompletionRequest, openai.CompletionResponse, openai.CompletionResponse](t, endpointspec.CompletionsEndpointSpec{})
+		}},
+		{name: "embeddings", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.EmbeddingRequest, openai.EmbeddingResponse, struct{}](t, endpointspec.EmbeddingsEndpointSpec{})
+		}},
+		{name: "image generation", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}](t, endpointspec.ImageGenerationEndpointSpec{})
+		}},
+		{name: "responses", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.ResponseRequest, openai.Response, openai.ResponseStreamEventUnion](t, endpointspec.ResponsesEndpointSpec{})
+		}},
+		{name: "decisions", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.DecisionRequest, openai.DecisionResponse, struct{}](t, endpointspec.DecisionsEndpointSpec{})
+		}},
+		{name: "responses input tokens", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.ResponseRequest, openai.ResponsesInputTokensResponse, struct{}](t, endpointspec.ResponsesInputTokensEndpointSpec{})
+		}},
+		{name: "speech", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.SpeechRequest, []byte, openai.SpeechStreamChunk](t, endpointspec.SpeechEndpointSpec{})
+		}},
+		{name: "transcription", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.TranscriptionRequest, openai.TranscriptionResponse, openai.TranscriptionStreamEvent](t, endpointspec.TranscriptionEndpointSpec{})
+		}},
+		{name: "translation", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[openai.TranslationRequest, openai.TranslationResponse, struct{}](t, endpointspec.TranslationEndpointSpec{})
+		}},
+		{name: "rerank", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[cohere.RerankV2Request, cohere.RerankV2Response, struct{}](t, endpointspec.RerankEndpointSpec{})
+		}},
+		{name: "system one", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}](t, endpointspec.SystemOneEndpointSpec{})
+		}},
+		{name: "messages", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk](t, endpointspec.MessagesEndpointSpec{})
+		}},
+		{name: "messages count tokens", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[anthropicschema.CountTokensRequest, anthropicschema.CountTokensResponse, struct{}](t, endpointspec.MessagesCountTokensEndpointSpec{})
+		}},
+		{name: "tokenize", run: func(t *testing.T) {
+			requireRequestHeadersPassThrough[tokenize.RequestUnion, tokenize.Response, struct{}](t, endpointspec.TokenizeEndpointSpec{})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.run)
+	}
+}
+
+func Test_routerProcessor_ProcessRequestHeaders_pathModel(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		expModel  string
+		expStream bool
+		expRouted bool
+	}{
+		{name: "model from path", path: "/models/owner/app", expModel: "owner/app", expRouted: true},
+		{name: "stream suffix", path: "/models/owner/app/stream", expModel: "owner/app", expStream: true, expRouted: true},
+		{name: "no model in path", path: "/other"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := map[string]string{
+				":path":                               tt.path,
+				internalapi.ModelNameHeaderKeyDefault: "client-supplied",
+			}
+			p := newPathModelChatRouterFilter(headers)
+			resp, err := p.ProcessRequestHeaders(t.Context(), &corev3.HeaderMap{})
+			require.NoError(t, err)
+			if !tt.expRouted {
+				immediate, ok := resp.Response.(*extprocv3.ProcessingResponse_ImmediateResponse)
+				require.True(t, ok, "a path without a model is answered locally, never routed on client headers")
+				require.Equal(t, typev3.StatusCode_NotFound, immediate.ImmediateResponse.Status.Code)
+				require.JSONEq(t, `{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path"}}`, string(immediate.ImmediateResponse.Body))
+				require.Empty(t, p.originalModel)
+				return
+			}
+			rh, ok := resp.Response.(*extprocv3.ProcessingResponse_RequestHeaders)
+			require.True(t, ok)
+			require.Equal(t, tt.expModel, p.originalModel)
+			require.Equal(t, tt.expStream, p.stream)
+			common := rh.RequestHeaders.GetResponse()
+			require.True(t, common.GetClearRouteCache())
+			set := map[string]string{}
+			for _, h := range common.GetHeaderMutation().GetSetHeaders() {
+				require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, h.AppendAction)
+				set[h.Header.Key] = string(h.Header.RawValue)
+			}
+			require.Equal(t, map[string]string{
+				internalapi.ModelNameHeaderKeyDefault: tt.expModel,
+				internalapi.OriginalPathHeader:        tt.path,
+				internalapi.EnvoyOriginalPathHeader:   tt.path,
+			}, set)
+			require.Equal(t, tt.expModel, headers[internalapi.ModelNameHeaderKeyDefault])
+			require.Equal(t, tt.path, headers[internalapi.OriginalPathHeader])
+		})
+	}
+}
+
+func Test_routerProcessor_ProcessRequestBody_keepsPathModel(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		body      string
+		expModel  string
+		expStream bool
+	}{
+		{name: "body without model keeps path model", path: "/models/owner/app", body: `{"messages":[]}`, expModel: "owner/app"},
+		{name: "body model wins over path model", path: "/models/owner/router", body: `{"model":"other/model","messages":[]}`, expModel: "other/model"},
+		{name: "path stream survives non-streaming body", path: "/models/owner/app/stream", body: `{"messages":[]}`, expModel: "owner/app", expStream: true},
+		{name: "body stream without path stream", path: "/models/owner/router", body: `{"model":"m","stream":true,"messages":[]}`, expModel: "m", expStream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := map[string]string{":path": tt.path}
+			p := newPathModelChatRouterFilter(headers)
+			_, err := p.ProcessRequestHeaders(t.Context(), &corev3.HeaderMap{})
+			require.NoError(t, err)
+
+			resp, err := p.ProcessRequestBody(t.Context(), &extprocv3.HttpBody{Body: []byte(tt.body), EndOfStream: true})
+			require.NoError(t, err)
+			rb, ok := resp.Response.(*extprocv3.ProcessingResponse_RequestBody)
+			require.True(t, ok)
+			set := map[string]string{}
+			for _, h := range rb.RequestBody.GetResponse().GetHeaderMutation().GetSetHeaders() {
+				set[h.Header.Key] = string(h.Header.RawValue)
+			}
+			require.Equal(t, tt.expModel, set[internalapi.ModelNameHeaderKeyDefault])
+			require.Equal(t, tt.expModel, p.originalModel)
+			require.Equal(t, tt.expModel, headers[internalapi.ModelNameHeaderKeyDefault])
+			require.Equal(t, tt.expStream, p.stream)
+		})
+	}
 }

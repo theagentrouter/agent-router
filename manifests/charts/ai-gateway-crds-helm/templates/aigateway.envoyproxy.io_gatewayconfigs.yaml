@@ -1389,14 +1389,15 @@ spec:
                         the number of output tokens. Type: unsigned integer.\n\t*
                         total_tokens: the total number of tokens. Type: unsigned integer.\n\t*
                         reasoning_tokens: the number of reasoning tokens. Type: unsigned
-                        integer.\n\nFor example, the following expressions are valid:\n\n\t*
-                        \"model == 'llama' ?  input_tokens + output_token * 0.5 :
-                        total_tokens\"\n\t* \"backend == 'foo.default' ?  input_tokens
-                        + output_tokens : total_tokens\"\n\t* \"backend == 'bar.default'
-                        ?  (input_tokens - cached_input_tokens) + cached_input_tokens
-                        * 0.1 + cache_creation_input_tokens * 1.25 + output_tokens
-                        : total_tokens\"\n\t* \"input_tokens + output_tokens + total_tokens\"\n\t*
-                        \"input_tokens * output_tokens\""
+                        integer.\n\t* billable_units: billing units the provider reports
+                        (fal: X-Fal-Billable-Units), or 0. Type: double.\n\nFor example,
+                        the following expressions are valid:\n\n\t* \"model == 'llama'
+                        ?  input_tokens + output_token * 0.5 : total_tokens\"\n\t*
+                        \"backend == 'foo.default' ?  input_tokens + output_tokens
+                        : total_tokens\"\n\t* \"backend == 'bar.default' ?  (input_tokens
+                        - cached_input_tokens) + cached_input_tokens * 0.1 + cache_creation_input_tokens
+                        * 1.25 + output_tokens : total_tokens\"\n\t* \"input_tokens
+                        + output_tokens + total_tokens\"\n\t* \"input_tokens * output_tokens\""
                       type: string
                     metadataKey:
                       description: MetadataKey is the key of the metadata to store

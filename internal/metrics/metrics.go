@@ -153,8 +153,10 @@ type TokenUsage struct {
 	cacheCreationInputTokens uint32
 	// ReasoningTokens is the number of reasoning tokens consumed.
 	reasoningTokens uint32
+	// billableUnits is the provider-reported billing quantity, e.g. fal's X-Fal-Billable-Units.
+	billableUnits float64
 
-	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet, reasoningTokenSet bool
+	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet, reasoningTokenSet, billableUnitsSet bool
 }
 
 // InputTokens returns the number of input tokens and whether it was set.
@@ -223,6 +225,17 @@ func (u *TokenUsage) SetReasoningTokens(tokens uint32) {
 	u.reasoningTokenSet = true
 }
 
+// BillableUnits returns the number of billable units and whether it was set.
+func (u *TokenUsage) BillableUnits() (float64, bool) {
+	return u.billableUnits, u.billableUnitsSet
+}
+
+// SetBillableUnits sets the number of billable units and marks the field as set.
+func (u *TokenUsage) SetBillableUnits(units float64) {
+	u.billableUnits = units
+	u.billableUnitsSet = true
+}
+
 // AddInputTokens increments the recorded input tokens and marks the field as set.
 func (u *TokenUsage) AddInputTokens(tokens uint32) {
 	u.inputTokenSet = true
@@ -256,7 +269,7 @@ func (u *TokenUsage) AddReasoningTokens(tokens uint32) {
 // IsZero reports whether no token usage field has been set.
 func (u *TokenUsage) IsZero() bool {
 	return !u.inputTokenSet && !u.outputTokenSet && !u.totalTokenSet &&
-		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet
+		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet && !u.billableUnitsSet
 }
 
 // Override updates the TokenUsage fields with values from another TokenUsage instance.
@@ -285,6 +298,10 @@ func (u *TokenUsage) Override(other TokenUsage) {
 	if other.reasoningTokenSet {
 		u.reasoningTokens = other.reasoningTokens
 		u.reasoningTokenSet = true
+	}
+	if other.billableUnitsSet {
+		u.billableUnits = other.billableUnits
+		u.billableUnitsSet = true
 	}
 }
 

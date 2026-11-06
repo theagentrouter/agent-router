@@ -164,6 +164,16 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if r.Header.Get(ExpectedNoQueryHeaderKey) != "" && r.URL.RawQuery != "" {
+		s.logAndSendError(w, http.StatusBadRequest, "unexpected raw query: got %s, expected none", r.URL.RawQuery)
+		return
+	}
+
+	if expectedMethod := r.Header.Get(ExpectedMethodHeaderKey); expectedMethod != "" && r.Method != expectedMethod {
+		s.logAndSendError(w, http.StatusBadRequest, "unexpected method: got %s, expected %s", r.Method, expectedMethod)
+		return
+	}
+
 	requestBody, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.logAndSendError(w, http.StatusInternalServerError, "failed to read the request body: %v", err)
@@ -173,7 +183,7 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 
 	// At least for the endpoints we want to support, all requests should have a Content-Length header
 	// and should not use chunked transfer encoding.
-	if r.Header.Get("Content-Length") == "" {
+	if r.Header.Get("Content-Length") == "" && r.Method != http.MethodGet && r.Method != http.MethodHead {
 		// Endpoint pickers mutate the request body by sending them back to the client (due to the use of DUPLEX mode),
 		// and it will clear the Content-Length header. It should be fine to assume that these locally hosted endpoints
 		// are capable of reading the chunked transfer encoding unlike the GCP Anthropic.

@@ -15,6 +15,7 @@ import (
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/fal"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
@@ -46,6 +47,8 @@ type (
 		RerankTracer() RerankTracer
 		// SystemOneTracer creates spans for TypeSafe System One requests.
 		SystemOneTracer() SystemOneTracer
+		// FalTracer creates spans for fal run and queue requests.
+		FalTracer() FalTracer
 		// MessageTracer creates spans for Anthropic messages requests.
 		MessageTracer() MessageTracer
 		// TokenizeTracer creates spans for tokenize requests.
@@ -100,6 +103,8 @@ type (
 	RerankTracer = RequestTracer[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
 	// SystemOneTracer creates spans for TypeSafe System One requests.
 	SystemOneTracer = RequestTracer[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
+	// FalTracer creates spans for fal run and queue requests.
+	FalTracer = RequestTracer[fal.Request, fal.Response, struct{}]
 	// MessageTracer creates spans for Anthropic messages requests.
 	MessageTracer = RequestTracer[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeTracer creates spans for tokenize requests.
@@ -145,6 +150,8 @@ type (
 	RerankSpan = Span[cohere.RerankV2Response, struct{}]
 	// SystemOneSpan represents a TypeSafe System One request span. The chunk type is unused and therefore set to struct{}.
 	SystemOneSpan = Span[typesafe.SystemOneResponse, struct{}]
+	// FalSpan represents a fal run or queue request span. The chunk type is unused and therefore set to struct{}.
+	FalSpan = Span[fal.Response, struct{}]
 	// MessageSpan represents an Anthropic messages request span.
 	MessageSpan = Span[anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeSpan represents a tokenize request span. The chunk type is unused and therefore set to struct{}.
@@ -204,6 +211,8 @@ type (
 	RerankRecorder = SpanRecorder[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
 	// SystemOneRecorder records attributes to a span according to a semantic convention.
 	SystemOneRecorder = SpanRecorder[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
+	// FalRecorder records attributes to a span according to a semantic convention.
+	FalRecorder = SpanRecorder[fal.Request, fal.Response, struct{}]
 	// MessageRecorder records attributes to a span according to a semantic convention.
 	MessageRecorder = SpanRecorder[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// TokenizeRecorder records attributes to a span according to a semantic convention.
@@ -310,6 +319,11 @@ func (NoopTracing) SystemOneTracer() SystemOneTracer {
 	return NoopSystemOneTracer{}
 }
 
+// FalTracer implements Tracing.FalTracer.
+func (NoopTracing) FalTracer() FalTracer {
+	return NoopFalTracer{}
+}
+
 func (NoopTracing) MessageTracer() MessageTracer {
 	return NoopMessageTracer{}
 }
@@ -359,6 +373,8 @@ type (
 	NoopRerankTracer = NoopTracer[cohere.RerankV2Request, cohere.RerankV2Response, struct{}]
 	// NoopSystemOneTracer implements SystemOneTracer.
 	NoopSystemOneTracer = NoopTracer[typesafe.SystemOneRequest, typesafe.SystemOneResponse, struct{}]
+	// NoopFalTracer implements FalTracer.
+	NoopFalTracer = NoopTracer[fal.Request, fal.Response, struct{}]
 	// NoopMessageTracer implements MessageTracer.
 	NoopMessageTracer = NoopTracer[anthropicschema.MessagesRequest, anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	// NoopTokenizeTracer implements TokenizeTracer.

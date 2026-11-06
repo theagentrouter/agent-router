@@ -236,6 +236,19 @@ func Test_backendSecurityPolicyIndexFunc(t *testing.T) {
 			},
 			expKey: "some-aaaa.ns",
 		},
+		{
+			name: "fal api key",
+			backendSecurityPolicy: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "some-backend-security-policy-fal", Namespace: "ns"},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type: aigv1b1.BackendSecurityPolicyTypeFalAPIKey,
+					FalAPIKey: &aigv1b1.BackendSecurityPolicyFalAPIKey{
+						SecretRef: &gwapiv1.SecretObjectReference{Name: "some-fal"},
+					},
+				},
+			},
+			expKey: "some-fal.ns",
+		},
 	} {
 		t.Run(bsp.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().

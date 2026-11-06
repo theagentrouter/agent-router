@@ -220,6 +220,22 @@ func TestCredentialOverrideHandler_PerAuthType(t *testing.T) {
 		require.Equal(t, "per-req", headers["x-api-key"])
 	})
 
+	t.Run("fal sets Authorization Key", func(t *testing.T) {
+		inner, err := newFalAPIKeyHandler(&filterapi.FalAPIKeyAuth{Key: "static"})
+		require.NoError(t, err)
+
+		h := &credentialOverrideHandler{
+			inner:   inner,
+			config:  makeHeaderOverride("x-aigw-fal-api-key", false),
+			applyFn: applyFalCredential,
+		}
+
+		headers := map[string]string{"x-aigw-fal-api-key": "per-req"}
+		_, err = h.Do(t.Context(), headers, nil)
+		require.NoError(t, err)
+		require.Equal(t, "Key per-req", headers["Authorization"])
+	})
+
 	t.Run("azure api key sets api-key", func(t *testing.T) {
 		inner, err := newAzureAPIKeyHandler(&filterapi.AzureAPIKeyAuth{Key: "static"})
 		require.NoError(t, err)

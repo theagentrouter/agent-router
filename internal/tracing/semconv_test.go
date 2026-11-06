@@ -164,6 +164,7 @@ func requireAllRecordersSet(t *testing.T, r *recorderSet) {
 	require.NotNil(t, r.translation, "translation")
 	require.NotNil(t, r.rerank, "rerank")
 	require.NotNil(t, r.systemOne, "systemOne")
+	require.NotNil(t, r.fal, "fal")
 	require.NotNil(t, r.message, "message")
 	require.NotNil(t, r.tokenize, "tokenize")
 	require.NotNil(t, r.responsesInputTokens, "responsesInputTokens")
