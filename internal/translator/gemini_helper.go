@@ -303,8 +303,11 @@ func assistantMsgToGeminiParts(msg *openai.ChatCompletionAssistantMessageParam) 
 		}
 		knownToolCalls[*toolCall.ID] = toolCall.Function.Name
 		var parsedArgs map[string]any
-		if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &parsedArgs); err != nil {
-			return nil, nil, fmt.Errorf("%w: function arguments must be valid JSON", internalapi.ErrInvalidRequestBody)
+		// A tool without parameters can be sent back with empty arguments.
+		if strings.TrimSpace(toolCall.Function.Arguments) != "" {
+			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &parsedArgs); err != nil {
+				return nil, nil, fmt.Errorf("%w: function arguments must be valid JSON", internalapi.ErrInvalidRequestBody)
+			}
 		}
 
 		funcCallPart := genai.NewPartFromFunctionCall(toolCall.Function.Name, parsedArgs)
