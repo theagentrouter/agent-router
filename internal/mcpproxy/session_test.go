@@ -979,6 +979,72 @@ func TestStreamNotifications_AllBackends405(t *testing.T) {
 	require.Greater(t, heartbeatCount, 1, "expected heartbeats while waiting; got output: %s", out)
 }
 
+func TestStreamNotifications_OutlivesServerWriteTimeout(t *testing.T) {
+	originalHeartbeatInterval := heartbeatInterval
+	heartbeatInterval = 50 * time.Millisecond
+	t.Cleanup(func() { heartbeatInterval = originalHeartbeatInterval })
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	defer backend.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = backend.URL
+	s := &session{
+		reqCtx: proxy,
+		perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+			"backend1": {backendName: "backend1", sessionID: "s1"},
+		},
+		route: "test-route",
+	}
+
+	front := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = s.streamNotifications(r.Context(), w, proxy.toolChangeSignaler)
+	}))
+	front.Config.WriteTimeout = 200 * time.Millisecond
+	front.Start()
+	defer front.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, front.URL, nil)
+	require.NoError(t, err)
+	resp, err := front.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// The stream must stay open until the client gives up, well past the server's WriteTimeout.
+	body, err := io.ReadAll(resp.Body)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Greater(t, strings.Count(string(body), `"method":"ping"`), 10)
+}
+
+func TestServerWriteTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want time.Duration
+	}{
+		{name: "no server", ctx: t.Context(), want: 0},
+		{
+			name: "server without write timeout",
+			ctx:  context.WithValue(t.Context(), http.ServerContextKey, &http.Server{ReadHeaderTimeout: time.Second}),
+			want: 0,
+		},
+		{
+			name: "server with write timeout",
+			ctx:  context.WithValue(t.Context(), http.ServerContextKey, &http.Server{ReadHeaderTimeout: time.Second, WriteTimeout: 5 * time.Second}),
+			want: 5 * time.Second,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, serverWriteTimeout(tt.ctx))
+		})
+	}
+}
+
 func TestSendRequestPerBackend_ErrorStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
