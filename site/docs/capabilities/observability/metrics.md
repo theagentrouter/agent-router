@@ -25,6 +25,7 @@ Metrics are collected for the following LLM endpoints:
 - **`/v1/embeddings`** - Text embeddings
 - **`/cohere/v2/rerank`** - Rerank
 - **`/typesafe/v1/systemone`** - TypeSafe System One (Jev)
+- **`/cohere/v2/embed`** - Cohere embeddings
 - **`/anthropic/v1/messages`** - Anthropic messages (streaming and non-streaming)
 
 For example, the Agent Router collects metrics such as:
@@ -39,7 +40,7 @@ Each metric comes with some default attributes such as:
 - `gen_ai.operation.name`
   - `chat`: For `/v1/chat/completions` endpoint.
   - `completion`: For `/v1/completions` endpoint.
-  - `embedding`: For `/v1/embeddings` endpoint.
+  - `embedding`: For `/v1/embeddings` and `/cohere/v2/embed` endpoint.
   - `rerank`: For `/cohere/v2/rerank` endpoint.
   - `systemone`: For `/typesafe/v1/systemone` endpoint.
   - `image_generation`: For `/v1/images/generations` endpoint.
