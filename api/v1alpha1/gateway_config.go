@@ -107,6 +107,29 @@ type GatewayConfigForwardProxy struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Address string `json:"address"`
+
+	// NoProxy lists upstream destinations that bypass the forward proxy and egress directly,
+	// the equivalent of the no_proxy environment variable. Each entry is one of:
+	//
+	//   - "*": all upstream traffic bypasses the proxy.
+	//   - An IP address or CIDR range, e.g. "10.1.2.3", "10.0.0.0/8", "fd00::/8": matches
+	//     endpoints whose upstream address is a literal IP inside the range.
+	//   - A domain name, e.g. "example.com", with an optional leading dot (".example.com"):
+	//     matches endpoints whose hostname is the domain or any subdomain of it; a leading
+	//     dot is equivalent to no dot.
+	//
+	// IP entries do not match DNS-named endpoints and domain entries do not match IP
+	// endpoints, because upstream addresses are only known at configuration time. Ports play
+	// no role in matching: an entry matches the endpoint's hostname or IP address, not its
+	// port. Clusters whose endpoints cannot be inspected at translation time (e.g. EDS-managed
+	// clusters in standalone deployments) are always proxied.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="self.all(n, n == '*' || n.matches('^[.]?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?([.][a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$') || n.matches('^[0-9a-fA-F:.]+(/[0-9]{1,3})?$'))",message="each noProxy entry must be '*', a domain name, or an IP address or CIDR range"
+	NoProxy []string `json:"noProxy,omitempty"`
 }
 
 // GatewayConfigStatus defines the observed state of GatewayConfig.

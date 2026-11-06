@@ -1533,6 +1533,11 @@ GatewayConfigForwardProxy configures an HTTP CONNECT forward proxy for upstream 
   type="string"
   required="true"
   description="Address is the `host:port` of the HTTP CONNECT proxy. The host may be a hostname or an<br />IP address; the port is required. Upstream connections are tunnelled through this proxy<br />via Envoy's http_11_proxy transport socket, preserving the upstream TLS session."
+/><ApiField
+  name="noProxy"
+  type="string array"
+  required="false"
+  description="NoProxy lists upstream destinations that bypass the forward proxy and egress directly,<br />the equivalent of the no_proxy environment variable. Each entry is one of:<br />  - `*`: all upstream traffic bypasses the proxy.<br />  - An IP address or CIDR range, e.g. `10.1.2.3`, `10.0.0.0/8`, `fd00::/8`: matches<br />    endpoints whose upstream address is a literal IP inside the range.<br />  - A domain name, e.g. `example.com`, with an optional leading dot (`.example.com`):<br />    matches endpoints whose hostname is the domain or any subdomain of it; a leading<br />    dot is equivalent to no dot.<br />IP entries do not match DNS-named endpoints and domain entries do not match IP<br />endpoints, because upstream addresses are only known at configuration time. Ports play<br />no role in matching: an entry matches the endpoint's hostname or IP address, not its<br />port. Clusters whose endpoints cannot be inspected at translation time (e.g. EDS-managed<br />clusters in standalone deployments) are always proxied."
 />
 
 
@@ -4322,6 +4327,11 @@ GatewayConfigForwardProxy configures an HTTP CONNECT forward proxy for upstream 
   type="string"
   required="true"
   description="Address is the `host:port` of the HTTP CONNECT proxy. The host may be a hostname or an<br />IP address; the port is required. Upstream connections are tunnelled through this proxy<br />via Envoy's http_11_proxy transport socket, preserving the upstream TLS session."
+/><ApiField
+  name="noProxy"
+  type="string array"
+  required="false"
+  description="NoProxy lists upstream destinations that bypass the forward proxy and egress directly,<br />the equivalent of the no_proxy environment variable. Each entry is one of:<br />  - `*`: all upstream traffic bypasses the proxy.<br />  - An IP address or CIDR range, e.g. `10.1.2.3`, `10.0.0.0/8`, `fd00::/8`: matches<br />    endpoints whose upstream address is a literal IP inside the range.<br />  - A domain name, e.g. `example.com`, with an optional leading dot (`.example.com`):<br />    matches endpoints whose hostname is the domain or any subdomain of it; a leading<br />    dot is equivalent to no dot.<br />IP entries do not match DNS-named endpoints and domain entries do not match IP<br />endpoints, because upstream addresses are only known at configuration time. Ports play<br />no role in matching: an entry matches the endpoint's hostname or IP address, not its<br />port. Clusters whose endpoints cannot be inspected at translation time (e.g. EDS-managed<br />clusters in standalone deployments) are always proxied."
 />
 
 
