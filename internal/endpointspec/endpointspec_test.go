@@ -190,6 +190,45 @@ func TestCompletionsEndpointSpec_ParseBody(t *testing.T) {
 		require.NotNil(t, parsed)
 		require.Nil(t, mutated)
 	})
+
+	t.Run("streaming with cost configured forces include_usage", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"no stream_options":    `{"model":"m","prompt":"hi","stream":true}`,
+			"include_usage false":  `{"model":"m","prompt":"hi","stream":true,"stream_options":{"include_usage":false}}`,
+			"other options kept":   `{"model":"m","prompt":"hi","stream":true,"stream_options":{"continuous_usage_stats":true}}`,
+			"include_usage before": `{"stream_options":{"include_usage":false},"model":"m","prompt":"hi","stream":true}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				_, parsed, stream, mutated, err := spec.ParseBody([]byte(body), true)
+				require.NoError(t, err)
+				require.True(t, stream)
+				require.NotNil(t, parsed.StreamOptions)
+				require.True(t, parsed.StreamOptions.IncludeUsage)
+				require.NotNil(t, mutated)
+				require.Equal(t, 1, strings.Count(string(mutated), `"stream_options"`))
+				var mutatedReq openai.CompletionRequest
+				require.NoError(t, json.Unmarshal(mutated, &mutatedReq))
+				require.Equal(t, "m", mutatedReq.Model)
+				require.True(t, mutatedReq.Stream)
+				require.NotNil(t, mutatedReq.StreamOptions)
+				require.True(t, mutatedReq.StreamOptions.IncludeUsage)
+			})
+		}
+	})
+
+	t.Run("no rewrite when usage is already requested or not streaming", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"already true":  `{"model":"m","prompt":"hi","stream":true,"stream_options":{"include_usage":true}}`,
+			"not streaming": `{"model":"m","prompt":"hi"}`,
+			"stream false":  `{"model":"m","prompt":"hi","stream":false,"stream_options":{"include_usage":false}}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				_, _, _, mutated, err := spec.ParseBody([]byte(body), true)
+				require.NoError(t, err)
+				require.Nil(t, mutated)
+			})
+		}
+	})
 }
 
 func TestCompletionsEndpointSpec_GetTranslator(t *testing.T) {
