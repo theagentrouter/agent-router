@@ -620,6 +620,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 		ec.MCPConfig.SessionEncryption = c.mcpSessionEncryption()
 	}
 	hasEffectiveRoute = hasEffectiveRoute || effectiveMCPRoute
+	ec.FileIDEncryption = c.fileIDEncryption()
 
 	c.warnUndeclaredMetadataNamespaces(ec, declaredMetadataNamespaces, gatewayName, gatewayNamespace)
 

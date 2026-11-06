@@ -133,6 +133,8 @@ func newTestGatewayController(c client.Client, kube kubernetes.Interface, logger
 		MCPSessionEncryptionIterations:         100,
 		MCPFallbackSessionEncryptionSeed:       "fallback",
 		MCPFallbackSessionEncryptionIterations: 200,
+		FileIDEncryptionSeed:                   "file-seed",
+		FileIDEncryptionIterations:             100,
 	}
 	return NewGatewayController(c, kube, logger, ns, standAlone, uuidFn, opts, extProcAsSideCar)
 }
@@ -3692,6 +3694,8 @@ func TestGatewayController_reconcileFilterMCPConfigSecret(t *testing.T) {
 		FallbackSeed:       "fallback",
 		FallbackIterations: 200,
 	}, cfg.MCPConfig.SessionEncryption)
+	// The file id encryption config is delivered through the filter config Secrets as well.
+	require.Equal(t, &filterapi.FileIDEncryption{Seed: "file-seed", Iterations: 100}, cfg.FileIDEncryption)
 }
 
 func TestGatewayController_writeFilterConfigBundleShards(t *testing.T) {
