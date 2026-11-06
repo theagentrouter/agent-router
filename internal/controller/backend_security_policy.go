@@ -123,6 +123,15 @@ func (c *BackendSecurityPolicyController) reconcile(ctx context.Context, bsp *ai
 		}
 	}
 
+	// Skip rotation for Azure managed identity: the extproc obtains tokens with the managed identity
+	// of the data plane pod, so the controller's own identity is never used for the policy.
+	if bsp.Spec.Type == aigv1b1.BackendSecurityPolicyTypeAzureCredentials &&
+		bsp.Spec.AzureCredentials != nil && bsp.Spec.AzureCredentials.ManagedIdentity != nil {
+		c.logger.Info("Using Azure managed identity of the data plane, skipping rotation",
+			"namespace", bsp.Namespace, "name", bsp.Name)
+		requiresRotation = false
+	}
+
 	if requiresRotation {
 		res, err = c.rotateCredential(ctx, bsp)
 		if err != nil {
@@ -500,8 +509,8 @@ func getBSPGeneratedSecretName(bsp *aigv1b1.BackendSecurityPolicy) string {
 			return ""
 		}
 	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
-		if bsp.Spec.AzureCredentials.OIDCExchangeToken == nil {
-			return ""
+		if bsp.Spec.AzureCredentials.ManagedIdentity != nil {
+			return "" // The data plane obtains tokens itself, nothing is rotated into a secret.
 		}
 	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
 		if bsp.Spec.GCPCredentials.WorkloadIdentityFederationConfig == nil {
