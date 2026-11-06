@@ -18,6 +18,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -131,6 +132,35 @@ func (a *anthropicToAWSAnthropicTranslator) SetHeaderValueFilter(name, mode stri
 	}
 	a.betaFilterMode = mode
 	a.betaFilterValues = values
+}
+
+// ResponseError implements [AnthropicMessagesTranslator.ResponseError].
+//
+// Bedrock rejects a Messages request with its own JSON error body ({"message": ...}), which the embedded passthrough
+// translator would hand to the client as is. A JSON body that already is an Anthropic error envelope passes
+// through; any other JSON body is wrapped in one, using Bedrock's message when it has one and the raw body
+// otherwise. Non-JSON bodies are handled by the embedded translator.
+func (a *anthropicToAWSAnthropicTranslator) ResponseError(respHeaders map[string]string, body io.Reader) (
+	newHeaders []internalapi.Header, mutatedBody []byte, err error,
+) {
+	if !strings.Contains(respHeaders[contentTypeHeaderName], jsonContentType) {
+		return a.anthropicToAnthropicTranslator.ResponseError(respHeaders, body)
+	}
+	buf, err := io.ReadAll(body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read error body: %w", err)
+	}
+	var anthropicError anthropicschema.ErrorResponse
+	if json.Unmarshal(buf, &anthropicError) == nil && anthropicError.Type == "error" &&
+		(anthropicError.Error.Type != "" || anthropicError.Error.Message != "") {
+		return nil, nil, nil
+	}
+	message := string(buf)
+	var bedrockError awsbedrock.BedrockException
+	if json.Unmarshal(buf, &bedrockError) == nil && bedrockError.Message != "" {
+		message = bedrockError.Message
+	}
+	return anthropicErrorResponse(respHeaders[statusHeaderName], message)
 }
 
 // ResponseHeaders implements [AnthropicMessagesTranslator.ResponseHeaders].
