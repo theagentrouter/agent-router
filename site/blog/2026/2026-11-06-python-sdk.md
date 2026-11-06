@@ -11,7 +11,7 @@ og_code: from theagentrouter.compat import litellm
 image: /img/og/blog/python-sdk.png
 description: >-
   The Agent Router Python SDK keeps LiteLLM's API and sends every call through Agent Router, the
-  open-source AI gateway built on Envoy. Fallbacks, retries, rate limits and provider keys move out
+  open-source AI gateway built on Envoy. Fallbacks, retries, request limits and provider keys move out
   of your Python process and into the gateway. Moving over is usually one changed import.
 ---
 
@@ -54,8 +54,8 @@ That split buys you a few things a library can't:
 - **A much smaller footprint.** `theagentrouter-core` has exactly one runtime dependency: `httpx`.
   There are no provider SDKs, and the model catalog ships with each release instead of being
   downloaded on import. After this year's supply-chain incidents across the Python ecosystem,
-  including the compromised LiteLLM releases in March, a small dependency surface and keys that
-  never touch the client are worth more than ever.
+  including the [compromised LiteLLM releases in March](https://docs.litellm.ai/blog/security-update-march-2026),
+  a small dependency surface and keys that never touch the client are worth more than ever.
 - **One observability story.** Instead of per-library logging integrations, the gateway emits
   OpenTelemetry traces and metrics for every call.
 
@@ -190,7 +190,8 @@ Path("config.yaml").write_text(local_gateway.export_config(port=1975))
 ```
 
 The exported configuration can be used to run a gateway with the
-[Agent Router standalone mode](/docs/cli/aigwrun).
+[Agent Router standalone mode](/docs/cli/aigwrun). It checks one shared client key: pick any
+value, set it as `AGENTROUTER_API_KEY` on the server, and give your clients the same value.
 
 ## Locked down by default, even on your laptop
 
@@ -205,7 +206,7 @@ is configured that way:
 
 ## What's not there yet
 
-The SDK is in alpha (`0.1.0a11`), and at the time of writing these are the known limitations:
+The SDK is in alpha (`0.1.0a12`), and at the time of writing these are the known limitations:
 
 - The bundled local gateway runs on macOS 13+ on Apple Silicon and on Linux with glibc 2.36+
   (x86-64 and Arm). On Windows, Intel Macs and older Linux, the SDK installs without it and needs a
