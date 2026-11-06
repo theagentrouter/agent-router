@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"strconv"
 	"testing"
 	"unsafe"
 
@@ -2151,6 +2152,66 @@ func Test_buildBackendDynamicMetadata(t *testing.T) {
 		require.Equal(t, name, md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
 			GetStructValue().Fields["backend_name"].GetStringValue())
 	})
+}
+
+func Test_buildContentLengthDynamicMetadataOnRequest(t *testing.T) {
+	// The length must be stored as a decimal string: the header mutation filter
+	// formats this value with %DYNAMIC_METADATA(...)%, and Envoy prints a
+	// NumberValue in shortest double form, i.e. "1e+05" for 100000, which strict
+	// HTTP servers reject.
+	for _, contentLength := range []int{0, 1, 1000, 99999, 100000, 32000000} {
+		t.Run(strconv.Itoa(contentLength), func(t *testing.T) {
+			md := buildContentLengthDynamicMetadataOnRequest(contentLength)
+			require.NotNil(t, md)
+			value := md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+				GetStructValue().Fields["content_length"]
+			require.NotNil(t, value)
+			require.IsType(t, &structpb.Value_StringValue{}, value.Kind,
+				"content_length must be a string so Envoy emits plain digits")
+			require.Equal(t, strconv.Itoa(contentLength), value.GetStringValue())
+		})
+	}
+}
+
+func Test_chatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_contentLength(t *testing.T) {
+	// A retry re-runs the upstream filter's request header phase after the
+	// previous response replaced the body, which is exactly the path that
+	// restamps content-length from dynamic metadata. 100000 is the smallest
+	// round number Envoy would have rendered in exponent form ("1e+05").
+	roundNumberBody := bytes.Repeat([]byte("x"), 100000)
+	require.Len(t, roundNumberBody, 100000)
+
+	body := bodyFromModel(t, "some-model", false, nil)
+	var expBody openai.ChatCompletionRequest
+	require.NoError(t, json.Unmarshal(body, &expBody))
+
+	p := &chatCompletionProcessorUpstreamFilter{
+		parent: &chatCompletionProcessorRouterFilter{
+			config:                 &filterapi.RuntimeConfig{},
+			logger:                 slog.Default(),
+			originalRequestBodyRaw: body,
+			originalRequestBody:    &expBody,
+			originalModel:          "some-model",
+		},
+		requestHeaders: map[string]string{internalapi.ModelNameHeaderKeyDefault: "some-model"},
+		metrics:        &mockMetrics{},
+		translator:     &mockTranslator{t: t, expRequestBody: &expBody, retBodyMutation: roundNumberBody},
+	}
+
+	resp, err := p.ProcessRequestHeaders(t.Context(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	commonRes := resp.Response.(*extprocv3.ProcessingResponse_RequestHeaders).RequestHeaders.Response
+	require.Equal(t, extprocv3.CommonResponse_CONTINUE_AND_REPLACE, commonRes.Status)
+	require.Equal(t, roundNumberBody, commonRes.BodyMutation.GetBody())
+
+	value := resp.DynamicMetadata.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+		GetStructValue().Fields["content_length"]
+	require.NotNil(t, value)
+	require.IsType(t, &structpb.Value_StringValue{}, value.Kind,
+		"the retry's content_length must be a string, not a double")
+	require.Equal(t, "100000", value.GetStringValue())
 }
 
 func Test_chatCompletionProcessorUpstreamFilter_ProcessRequestHeaders_backendMetadata(t *testing.T) {
