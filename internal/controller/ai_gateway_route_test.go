@@ -1311,7 +1311,7 @@ func newQuotaPolicy(name, namespace string, limit uint, targets ...string) *aigv
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: aigv1a1.QuotaPolicySpec{
 			TargetRefs: refs,
-			ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+			ServiceQuota: &aigv1a1.ServiceQuotaDefinition{
 				Quota: aigv1a1.QuotaValue{Limit: limit, Duration: "1m"},
 			},
 		},
