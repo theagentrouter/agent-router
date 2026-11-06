@@ -33,6 +33,12 @@ Shows how to configure automatic failover between multiple AI providers for high
 
 Demonstrates usage-based rate limiting to control costs and prevent abuse.
 
+### [Agent Substrate: Per-Agent Token Budgets](./agent-substrate/)
+
+Puts Agent Router behind Agent Substrate's egress gateway: each agent (a Substrate actor) is
+identified by an actor JWT and gets its own daily token budget from one shared rate limit rule.
+Runs end to end on kind with a mock LLM.
+
 ### [Cache Control](cache/cache_control.md)
 
 Shows how to use prompt caching with Claude models to reduce costs and improve performance through provider-agnostic cache control.
