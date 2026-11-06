@@ -63,6 +63,9 @@ Commands:
   download-envoy [flags]
     Download Envoy binary for the Envoy Gateway default version.
 
+  validate <paths> ... [flags]
+    Validate AI Gateway config YAML file(s) without starting Envoy.
+
 Run "aigw <command> --help" for more information on a command.
 `,
 			expPanicCode: ptr.To(0),
@@ -201,10 +204,10 @@ Flags:
 			out := &bytes.Buffer{}
 			if tt.expPanicCode != nil {
 				require.PanicsWithValue(t, *tt.expPanicCode, func() {
-					doMain(t.Context(), out, os.Stderr, tt.args, func(code int) { panic(code) }, tt.rf, tt.hf, tt.df)
+					doMain(t.Context(), out, os.Stderr, tt.args, func(code int) { panic(code) }, tt.rf, tt.hf, tt.df, nil)
 				})
 			} else {
-				doMain(t.Context(), out, os.Stderr, tt.args, nil, tt.rf, tt.hf, tt.df)
+				doMain(t.Context(), out, os.Stderr, tt.args, nil, tt.rf, tt.hf, tt.df, nil)
 			}
 			fmt.Println(out.String())
 			require.Equal(t, tt.expOut, out.String())
