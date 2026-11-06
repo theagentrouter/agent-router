@@ -152,6 +152,15 @@ func TestGCPHandler_Do_WithTokenSource(t *testing.T) {
 	hdrsMap := stringPairsToMap(hdrs)
 	require.Equal(t, "Bearer adc-token", hdrsMap["Authorization"])
 	require.Equal(t, "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent", hdrsMap[":path"])
+
+	// A suffix with a leading slash, as the OpenAI translators emit for an
+	// OpenAI-compatible backend (a self-deployed Vertex AI endpoint), joins
+	// without a double slash.
+	requestHeaders[":path"] = "/endpoints/1234567890/chat/completions"
+	hdrs, err = handler.Do(t.Context(), requestHeaders, nil)
+	require.NoError(t, err)
+	hdrsMap = stringPairsToMap(hdrs)
+	require.Equal(t, "/v1/projects/test-project/locations/us-central1/endpoints/1234567890/chat/completions", hdrsMap[":path"])
 }
 
 func TestGCPHandler_Do_TokenSourceError(t *testing.T) {
