@@ -840,11 +840,25 @@ func (s *Server) patchListenerWithInferencePoolFilters(listener *listenerv3.List
 	}
 }
 
-// patchVirtualHostWithInferencePool adds the necessary per-route configuration to disable.
+// patchVirtualHostWithInferencePool adds the necessary per-route configuration to enable the inference pool
+// filter on the routes that use the pool, and to disable the other inference pool filters.
+//
+// The other filters are disabled with ExtProcPerRoute, not with FilterConfig.disabled. Envoy builds the filter
+// chain from the first route match, and any per-route config other than FilterConfig.disabled adds a filter that
+// is disabled by default to the chain. The AI Gateway filter can re-route the request after that, for example
+// from the route that matched before the model header was set to a pool route, so the filter has to be in the
+// chain on every route, and ExtProcPerRoute decides whether it runs on the final route.
 func (s *Server) patchVirtualHostWithInferencePool(vh *routev3.VirtualHost, inferencePools []*gwaiev1.InferencePool) error {
 	inferenceMatrix := make(map[string]*gwaiev1.InferencePool)
 	for _, pool := range inferencePools {
 		inferenceMatrix[httpFilterNameForInferencePool(pool)] = pool
+	}
+	// The inference pool filters are disabled by default on the listener, so enable the filter explicitly.
+	enableAny, err := toAny(&routev3.FilterConfig{
+		Config: &anypb.Any{},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal FilterConfig to Any: %w", err)
 	}
 	for _, route := range vh.Routes {
 		override := &extprocv3.ExtProcPerRoute{
@@ -867,12 +881,14 @@ func (s *Server) patchVirtualHostWithInferencePool(vh *routev3.VirtualHost, infe
 			}
 		} else {
 			for key, pool := range inferenceMatrix {
+				if route.TypedPerFilterConfig == nil {
+					route.TypedPerFilterConfig = make(map[string]*anypb.Any)
+				}
 				if key != httpFilterNameForInferencePool(inferencePool) {
 					s.log.Info("disabling inference pool filter", "route", route.Name, "filter", key, "pool", pool.Name)
-					if route.TypedPerFilterConfig == nil {
-						route.TypedPerFilterConfig = make(map[string]*anypb.Any)
-					}
 					route.TypedPerFilterConfig[key] = overrideAny
+				} else {
+					route.TypedPerFilterConfig[key] = enableAny
 				}
 			}
 		}
