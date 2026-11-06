@@ -943,7 +943,7 @@ func TestAppendAnthropicAssistantMessage_MultipleThinkingBlocks(t *testing.T) {
 	require.NotNil(t, msgs[0].OfAssistant)
 
 	assistantMsg := msgs[0].OfAssistant
-	assert.Equal(t, "First thought.\nSecond thought.", assistantMsg.ReasoningContent)
+	assert.Equal(t, "First thought.Second thought.", assistantMsg.ReasoningContent)
 	require.Len(t, assistantMsg.ThinkingBlocks, 2)
 	assert.Equal(t, openai.ThinkingBlock{Type: "thinking", Thinking: "First thought.", Signature: "s1"}, assistantMsg.ThinkingBlocks[0])
 	assert.Equal(t, openai.ThinkingBlock{Type: "thinking", Thinking: "Second thought.", Signature: "s2"}, assistantMsg.ThinkingBlocks[1])
