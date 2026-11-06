@@ -1,0 +1,206 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# This example demonstrates filtering anthropic-beta header values with headerValueFilters.
+#
+# Anthropic clients such as Claude Code send every beta feature they use in one comma-separated anthropic-beta header. AWS Bedrock and GCP Vertex AI reject the whole request with a 400 if any single value is unsupported, and support varies by provider and model. headerValueFilters removes individual values before the request reaches the backend.
+#
+# Filters are honored only by AWSAnthropic and GCPAnthropic backends, and only on /v1/messages requests.
+#
+# Prerequisites: apply aws.yaml and gcp_vertex.yaml first. This example reuses their Backend, BackendTLSPolicy and credential Secret resources.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: envoy-ai-gateway-anthropic-beta-filters
+  namespace: default
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway-basic
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: us.anthropic.claude-sonnet-4-6
+      backendRefs:
+        - name: envoy-ai-gateway-aws-anthropic-beta-filtered
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: claude-opus-4-6
+      backendRefs:
+        - name: envoy-ai-gateway-gcp-anthropic-beta-filtered
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: envoy-ai-gateway-aws-anthropic-beta-filtered
+  namespace: default
+spec:
+  schema:
+    name: AWSAnthropic
+    version: bedrock-2023-05-31
+  backendRef:
+    name: envoy-ai-gateway-basic-aws
+    kind: Backend
+    group: gateway.envoyproxy.io
+  # Allowlist forwards only the listed values and drops everything else. These match the deprecated built-in list that AWSAnthropic backends apply when no anthropic-beta filter is configured, so configuring this keeps that behavior after the built-in list is removed.
+  # Values are matched after Anthropic-API-only names are rewritten to Bedrock names (advanced-tool-use-2025-11-20 -> tool-search-tool-2025-10-19), so list the Bedrock name.
+  headerValueFilters:
+    - name: anthropic-beta
+      mode: Allowlist
+      values:
+        - afk-mode-2026-01-31
+        - computer-use-2024-10-22
+        - computer-use-2025-01-24
+        - context-1m-2025-08-07
+        - context-management-2025-06-27
+        - dangerous-tool-use-2026-09-03
+        - dev-full-thinking-2025-05-14
+        - fine-grained-tool-streaming-2025-05-14
+        - interleaved-thinking-2025-05-14
+        - mcp-client-2025-04-04
+        - mcp-client-2025-11-20
+        - model-context-window-exceeded-2025-08-26
+        - output-128k-2025-02-19
+        - pdfs-2024-09-25
+        - search-results-2025-06-09
+        - thinking-binding-controls-2026-08-01
+        - thinking-token-count-2026-05-13
+        - token-counting-2024-11-01
+        - token-efficient-tools-2025-02-19
+        - tool-search-tool-2025-10-19
+        - web-search-2025-03-05
+  # Alternative: Denylist drops only the listed values and forwards everything else. New values reach Bedrock without a config change, but any value Bedrock rejects must be added here.
+  # headerValueFilters:
+  #   - name: anthropic-beta
+  #     mode: Denylist
+  #     values:
+  #       - advisor-tool-2026-03-01
+  #       - code-execution-2025-05-22
+  #       - code-execution-2025-08-25
+  #       - extended-cache-ttl-2025-04-11
+  #       - fallback-credit-2026-07-01
+  #       - fast-mode-2026-02-01
+  #       - files-api-2025-04-14
+  #       - mcp-servers-2025-12-04
+  #       - memory-2025-08-18
+  #       - oauth-2025-04-20
+  #       - prompt-caching-2024-07-31
+  #       - prompt-caching-scope-2026-01-05
+  #       - server-side-fallback-2026-07-01
+  #       - skills-2025-10-02
+  #       - structured-output-2024-03-01
+  #       - thinking-display-updates-2026-08-18
+  #       - web-fetch-2025-09-10
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: envoy-ai-gateway-gcp-anthropic-beta-filtered
+  namespace: default
+spec:
+  schema:
+    name: GCPAnthropic
+    version: vertex-2023-10-16
+  backendRef:
+    name: envoy-ai-gateway-basic-gcp-us-east5
+    kind: Backend
+    group: gateway.envoyproxy.io
+  # GCPAnthropic has no built-in list, so without a filter every value is forwarded to Vertex AI unchanged.
+  # Allowlist forwards only the listed values and drops everything else, including values not listed here that Vertex AI does accept.
+  # One filter applies to every model served by the backend, so list a value only if all of those models accept it.
+  headerValueFilters:
+    - name: anthropic-beta
+      mode: Allowlist
+      values:
+        - afk-mode-2026-01-31
+        - advanced-tool-use-2025-11-20
+        - claude-code-20250219
+        - context-1m-2025-08-07
+        - context-management-2025-06-27
+        - dangerous-tool-use-2026-09-03
+        - effort-2025-11-24
+        - extended-cache-ttl-2025-04-11
+        - fallback-credit-2026-07-01
+        - fine-grained-tool-streaming-2025-05-14
+        - interleaved-thinking-2025-05-14
+        - mid-conversation-system-2026-04-07
+        - mid-conversation-tool-changes-2026-07-01
+        - model-context-window-exceeded-2025-08-26
+        - oauth-2025-04-20
+        - output-128k-2025-02-19
+        - pdfs-2024-09-25
+        - per-turn-control-2026-07-01
+        - prompt-caching-2024-07-31
+        - prompt-caching-scope-2026-01-05
+        - search-results-2025-06-09
+        - thinking-binding-controls-2026-08-01
+        - thinking-display-updates-2026-08-18
+        - thinking-token-count-2026-05-13
+        - token-counting-2024-11-01
+        - token-efficient-tools-2025-02-19
+        - tool-search-tool-2025-10-19
+        - web-search-2025-03-05
+  # Alternative: Denylist drops only the listed values and forwards everything else. New values reach Vertex AI without a config change, but any value Vertex AI rejects must be added here, including values rejected by only some of the backend's models.
+  # headerValueFilters:
+  #   - name: anthropic-beta
+  #     mode: Denylist
+  #     values:
+  #       - advisor-tool-2026-03-01
+  #       - code-execution-2025-05-22
+  #       - code-execution-2025-08-25
+  #       - computer-use-2024-10-22
+  #       - computer-use-2025-01-24
+  #       - dev-full-thinking-2025-05-14
+  #       - fast-mode-2026-02-01
+  #       - files-api-2025-04-14
+  #       - mcp-client-2025-04-04
+  #       - mcp-client-2025-11-20
+  #       - mcp-servers-2025-12-04
+  #       - memory-2025-08-18
+  #       - server-side-fallback-2026-07-01
+  #       - skills-2025-10-02
+  #       - structured-output-2024-03-01
+  #       - web-fetch-2025-09-10
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: envoy-ai-gateway-aws-anthropic-beta-filtered-credentials
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: envoy-ai-gateway-aws-anthropic-beta-filtered
+  type: AWSCredentials
+  awsCredentials:
+    region: us-east-1
+    credentialsFile:
+      secretRef:
+        name: envoy-ai-gateway-basic-aws-credentials
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: envoy-ai-gateway-gcp-anthropic-beta-filtered-credentials
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: envoy-ai-gateway-gcp-anthropic-beta-filtered
+  type: GCPCredentials
+  gcpCredentials:
+    projectName: GCP_PROJECT_NAME # Replace with your GCP project name
+    region: GCP_REGION # Replace with your GCP region
+    credentialsFile:
+      secretRef:
+        name: envoy-ai-gateway-basic-gcp-service-account-key-file
