@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
 var logger = log.New(os.Stdout, "[mcptestserver] ", 0)
@@ -82,6 +85,19 @@ func NewServer(opts *Options) (*http.Server, *mcp.Server) {
 			},
 		},
 	)
+
+	// Reject server/discover at the MCP method layer so go-sdk v1.7+ Connect
+	// falls back to the legacy initialize handshake. HTTP-level rejection alone
+	// is not enough because the Streamable handler may route discover before our
+	// wrapper sees modern headers consistently.
+	s.AddReceivingMiddleware(func(handler mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "server/discover" {
+				return nil, fmt.Errorf("server/discover is not supported by legacy testmcp server")
+			}
+			return handler(ctx, method, req)
+		}
+	})
 
 	// Setup API key auth when environment variable TEST_API_KEY is set.
 	apiKey := os.Getenv("TEST_API_KEY")
@@ -165,13 +181,18 @@ func NewServer(opts *Options) (*http.Server, *mcp.Server) {
 		return s
 	}, &mcp.StreamableHTTPOptions{JSONResponse: opts.ForceJSONResponse})
 
+	// Reject modern (2026-07-28) requests so go-sdk v1.7+ Connect falls back from
+	// server/discover to the legacy initialize handshake. Without this, dataplane
+	// legacy tests would silently exercise the modern path.
+	legacyOnly := rejectModernProtocol(handler)
+
 	// --- Streamable HTTP transport (default endpoint path is "/mcp").
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", opts.Port),
 		ReadHeaderTimeout: 3 * time.Second,
 		// Allow long-lived connections.
 		WriteTimeout: opts.WriteTimeout,
-		Handler:      handler,
+		Handler:      legacyOnly,
 		ConnState: func(conn net.Conn, state http.ConnState) {
 			if opts.DisableLog {
 				return
@@ -182,7 +203,9 @@ func NewServer(opts *Options) (*http.Server, *mcp.Server) {
 	go func() {
 		log.Printf("starting MCP Streamable-HTTP server on :%d at /mcp", opts.Port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server error: %v", err)
+			// Do not Fatalf: that aborts the entire test process and masks the
+			// real failure behind an opaque package-level FAIL.
+			log.Printf("server error: %v", err)
 		}
 	}()
 	return server, s
@@ -200,13 +223,15 @@ func newDumbServer(port int) (*http.Server, *mcp.Server) {
 		},
 	)
 
-	// Add a middleware that rejects logging/setLevel requests with an error.
-	// The dumb server does not advertise logging capability, so the gateway should never
-	// forward logging/setLevel to it. If it does, this middleware will cause a test-visible error.
+	// Reject server/discover and logging/setLevel so legacy dataplane tests stay
+	// on the initialize path and never forward unsupported methods to this server.
 	s.AddReceivingMiddleware(func(handler mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			if method == "logging/setLevel" {
 				return nil, fmt.Errorf("logging/setLevel is not supported by dumb-echo-server")
+			}
+			if method == "server/discover" {
+				return nil, fmt.Errorf("server/discover is not supported by dumb-echo-server")
 			}
 			return handler(ctx, method, req)
 		}
@@ -214,12 +239,43 @@ func newDumbServer(port int) (*http.Server, *mcp.Server) {
 
 	mcp.AddTool(s, ToolDumbEcho.Tool, ToolDumbEcho.Handler)
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{})
-	server := &http.Server{Addr: fmt.Sprintf(":%d", port), ReadHeaderTimeout: 3 * time.Second, Handler: handler}
+	server := &http.Server{Addr: fmt.Sprintf(":%d", port), ReadHeaderTimeout: 3 * time.Second, Handler: rejectModernProtocol(handler)}
 	go func() {
 		log.Printf("starting DUMB MCP Streamable-HTTP server on :%d at /mcp", port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server error: %v", err)
+			log.Printf("server error: %v", err)
 		}
 	}()
 	return server, s
+}
+
+// rejectModernProtocol wraps a legacy Streamable HTTP handler so that modern
+// (2026-07-28) requests — notably server/discover from go-sdk v1.7+ Connect —
+// are rejected. That forces the client to fall back to the initialize handshake,
+// keeping dataplane legacy tests on the legacy path.
+//
+// The JSON-RPC error MUST echo the request id. A null id makes go-sdk treat the
+// response as invalid and close the connection, so Connect never reaches
+// initialize (breaks BenchmarkMCP/Baseline_NoProxy).
+func rejectModernProtocol(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		version := r.Header.Get("Mcp-Protocol-Version")
+		method := r.Header.Get("Mcp-Method")
+		if version == "2026-07-28" || method == "server/discover" {
+			id := json.RawMessage("null")
+			if body, err := io.ReadAll(r.Body); err == nil {
+				var req struct {
+					ID json.RawMessage `json:"id"`
+				}
+				if json.Unmarshal(body, &req) == nil && len(req.ID) > 0 {
+					id = req.ID
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found: server/discover"}}`, id)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
