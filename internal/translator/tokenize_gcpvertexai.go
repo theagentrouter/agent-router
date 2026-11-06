@@ -118,9 +118,12 @@ func (o *ToGCPVertexAIV1Tokenize) RequestBody(_ []byte, tokenizeReq *tokenize.Re
 	}
 
 	// Build the correct path for GCP Vertex AI Count Tokens API
-	path := buildGCPModelPathSuffix(gcpModelPublisherGoogle, o.requestModel, gcpMethodCountTokens)
+	path, err := buildGCPGeminiPathSuffix(o.requestModel, gcpMethodCountTokens)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	gcpReq, err := o.tokenizeToGeminiCountToken(tokenizeReq.ChatRequest, o.requestModel)
+	gcpReq, err := o.tokenizeToGeminiCountToken(tokenizeReq.ChatRequest, gcpFeatureModel(o.requestModel))
 	if err != nil {
 		return nil, nil, fmt.Errorf("error converting to Gemini request: %w", err)
 	}

@@ -2768,3 +2768,97 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_ResponseBody_NullBody(t *
 		require.Equal(t, tokenUsageFrom(3, 0, -1, 1, 4, 0), tokenUsage)
 	})
 }
+
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody_EndpointResource(t *testing.T) {
+	const reqJSON = `{
+  "model": "client-model",
+  "stream": %t,
+  "reasoning_effort": "high",
+  "messages": [{"role": "user", "content": "ping"}],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {"name": "out", "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "additionalProperties": false}}
+  },
+  "tools": [{
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}, "additionalProperties": false}}
+  }]
+}`
+
+	tests := []struct {
+		name         string
+		model        string
+		stream       bool
+		wantPath     string
+		wantThinking bool
+	}{
+		{
+			name:         "endpoint resource",
+			model:        "endpoints/1234567890",
+			wantPath:     "endpoints/1234567890:generateContent",
+			wantThinking: true,
+		},
+		{
+			name:         "endpoint resource streaming",
+			model:        "endpoints/1234567890",
+			stream:       true,
+			wantPath:     "endpoints/1234567890:streamGenerateContent?alt=sse",
+			wantThinking: true,
+		},
+		{
+			name:         "publisher model keeps the publisher path",
+			model:        "gemini-3.5-flash",
+			wantPath:     "publishers/google/models/gemini-3.5-flash:generateContent",
+			wantThinking: true,
+		},
+		{
+			name:         "publisher model without feature support is unchanged",
+			model:        "gemini-1.5-pro",
+			wantPath:     "publishers/google/models/gemini-1.5-pro:generateContent",
+			wantThinking: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var req openai.ChatCompletionRequest
+			require.NoError(t, json.Unmarshal([]byte(strings.Replace(reqJSON, "%t", strconv.FormatBool(tc.stream), 1)), &req))
+
+			headers, body, err := NewChatCompletionOpenAIToGCPVertexAITranslator(tc.model).RequestBody(nil, &req, false)
+			require.NoError(t, err)
+
+			var gotPath string
+			for _, h := range headers {
+				if h.Key() == pathHeaderName {
+					gotPath = h.Value()
+				}
+			}
+			require.Equal(t, tc.wantPath, gotPath)
+
+			var got struct {
+				GenerationConfig map[string]any `json:"generationConfig"`
+				Tools            []struct {
+					FunctionDeclarations []map[string]any `json:"functionDeclarations"`
+				} `json:"tools"`
+			}
+			require.NoError(t, json.Unmarshal(body, &got))
+
+			_, hasJSONSchema := got.GenerationConfig["responseJsonSchema"]
+			require.Equal(t, tc.wantThinking, hasJSONSchema)
+			_, hasThinking := got.GenerationConfig["thinkingConfig"]
+			require.Equal(t, tc.wantThinking, hasThinking)
+			_, hasToolJSONSchema := got.Tools[0].FunctionDeclarations[0]["parametersJsonSchema"]
+			require.Equal(t, tc.wantThinking, hasToolJSONSchema)
+		})
+	}
+
+	t.Run("missing endpoint ID", func(t *testing.T) {
+		_, _, err := NewChatCompletionOpenAIToGCPVertexAITranslator("endpoints/").RequestBody(nil, &openai.ChatCompletionRequest{
+			Model: "client-model",
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{Role: openai.ChatMessageRoleUser, Content: openai.StringOrUserRoleContentUnion{Value: "ping"}}},
+			},
+		}, false)
+		require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+	})
+}
