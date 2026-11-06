@@ -1,0 +1,72 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent-router-demo
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: agent-router
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: agent-router
+  namespace: agent-router-demo
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      # A fixed Service name gives actors a stable URL:
+      # http://agent-router.envoy-gateway-system.svc.cluster.local
+      # (Envoy Gateway creates the Service in its own namespace.)
+      envoyService:
+        name: agent-router
+        type: ClusterIP
+      envoyDeployment:
+        container:
+          # Clear the default requests for a local cluster. Size these for production.
+          resources: {}
+  telemetry:
+    accessLog:
+      settings:
+        - sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+          format:
+            type: JSON
+            json:
+              start_time: "%START_TIME%"
+              actor: "%REQ(X-ACTOR-ID)%"
+              model: "%REQ(X-AI-EG-MODEL)%"
+              response_code: "%RESPONSE_CODE%"
+              response_flags: "%RESPONSE_FLAGS%"
+              total_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_total_token)%"
+              ratelimit_remaining: "%RESP(X-RATELIMIT-REMAINING)%"
+              duration_ms: "%DURATION%"
+              path: "%REQ(:PATH)%"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: agent-router
+  namespace: agent-router-demo
+spec:
+  gatewayClassName: agent-router
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: agent-router
