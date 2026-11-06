@@ -106,6 +106,14 @@ func (s *Server) maybeInjectQuotaRateLimiting(
 		s.log.Info("Added quota rate limit cluster", "cluster", quotaRateLimitClusterName)
 	}
 
+	// Stamp host_allowlist routing metadata on quota-governed (backend, model) endpoints and wrap the
+	// load balancing policy of each quota-backed cluster with the host_allowlist policy, so Envoy
+	// excludes quota-exhausted backends at host-selection time using the passedBackends list the rate
+	// limit service advertises in response dynamic metadata.
+	for _, c := range clusters {
+		s.applyHostAllowlistToQuotaCluster(ctx, c, quotaBackendPolicies)
+	}
+
 	// Patch routes and track which route configs had quota backends enabled.
 	quotaEnabledRoutes := make(map[string]bool)
 	for _, routeConfig := range routes {
@@ -452,6 +460,89 @@ func (s *Server) clusterHasQuotaBackend(ctx context.Context, clusterName string,
 		key := controller.NamespacedNameKey(backendRef.GetNamespace(info.namespace), backendRef.Name)
 		if _, ok := quotaBackendPolicies[key]; ok {
 			return true
+		}
+	}
+	return false
+}
+
+// applyHostAllowlistToQuotaCluster stamps host_allowlist routing metadata onto the endpoints of
+// quota-governed (backend, model) pairs in the cluster and, if the cluster has any such backend,
+// wraps its load balancing policy with the host_allowlist policy.
+//
+// Stamping is gated per (backend, model) rather than per cluster: only endpoints whose backend has an
+// enforceable quota for that backend's model get a backend_name. Non-quota backends keep an empty
+// backend_name so Envoy's host_allowlist policy always allows them (its empty-primary escape hatch).
+// The gate mirrors the (target + model) filter used when generating the rate limit descriptors in
+// enableQuotaRateLimitOnRoute, so the host metadata stays in lockstep with the descriptors - and thus
+// with the passedBackends list the rate limit service advertises.
+//
+// Endpoint groups are mapped to BackendRefs positionally, matching maybeModifyCluster: zero-weight
+// BackendRefs are omitted from the LoadAssignment by Envoy Gateway, so they are skipped here too.
+//
+// The cluster is wrapped only when at least one quota endpoint was actually stamped. A quota backend
+// whose endpoint group is not present (nil LoadAssignment for EDS clusters, or a stale revision with
+// fewer groups than BackendRefs) does not, on its own, trigger wrapping: an unstamped host carries an
+// empty backend_name and host_allowlist always allows it (its empty-primary escape hatch), so a wrap
+// with no stamped host is inert and would only add a no-op policy. Once the endpoint groups appear on
+// a later reconcile the endpoints get stamped and the wrap is applied then.
+func (s *Server) applyHostAllowlistToQuotaCluster(ctx context.Context, cluster *clusterv3.Cluster, quotaBackendPolicies map[string][]aigv1a1.QuotaPolicy) {
+	if cluster.Name == quotaRateLimitClusterName {
+		return
+	}
+	info := s.resolveClusterRule(ctx, cluster.Name)
+	if info == nil {
+		return
+	}
+
+	stamped := false
+	var lbEndpointIndex int
+	for _, backendRef := range info.rule.BackendRefs {
+		if backendRef.Weight != nil && *backendRef.Weight == 0 {
+			continue
+		}
+		var group *endpointv3.LocalityLbEndpoints
+		if cluster.LoadAssignment != nil && lbEndpointIndex < len(cluster.LoadAssignment.Endpoints) {
+			group = cluster.LoadAssignment.Endpoints[lbEndpointIndex]
+		}
+		lbEndpointIndex++
+		if group == nil {
+			continue
+		}
+		if !backendRefHasQuotaForModel(&backendRef, info.namespace, quotaBackendPolicies) {
+			continue
+		}
+		namespace := backendRef.GetNamespace(info.namespace)
+		for _, endpoint := range group.LbEndpoints {
+			setEndpointMetadataQuotaRouting(endpoint, namespace, backendRef.Name, backendRef.ModelNameOverride)
+			stamped = true
+		}
+	}
+
+	if stamped {
+		if err := wrapClusterLBInHostAllowlist(cluster); err != nil {
+			s.log.Error(err, "failed to wrap cluster LB in host_allowlist policy", "cluster", cluster.Name)
+		}
+	}
+}
+
+// backendRefHasQuotaForModel reports whether an authorized QuotaPolicy enforces a quota for the
+// (backend, model) pair this backendRef represents. A quota is considered enforceable only when the
+// matching PerModelQuota has bucket rules or a positive default bucket limit, mirroring the guard in
+// enableQuotaRateLimitOnRoute so host metadata and rate limit descriptors stay consistent.
+func backendRefHasQuotaForModel(backendRef *aigv1b1.AIGatewayRouteRuleBackendRef, routeNamespace string, quotaBackendPolicies map[string][]aigv1a1.QuotaPolicy) bool {
+	key := controller.NamespacedNameKey(backendRef.GetNamespace(routeNamespace), backendRef.Name)
+	policies, ok := quotaBackendPolicies[key]
+	if !ok {
+		return false
+	}
+	for i := range policies {
+		for _, pmq := range policies[i].Spec.PerModelQuotas {
+			if pmq.ModelName == nil || *pmq.ModelName != backendRef.ModelNameOverride {
+				continue
+			}
+			if len(pmq.Quota.BucketRules) > 0 || pmq.Quota.DefaultBucket.Limit > 0 {
+				return true
+			}
 		}
 	}
 	return false
