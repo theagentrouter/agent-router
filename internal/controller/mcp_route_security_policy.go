@@ -26,12 +26,12 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
 const (
-	oauthWellKnownProtectedResourceMetadataPath   = "/.well-known/oauth-protected-resource"
 	oauthWellKnownAuthorizationServerMetadataPath = "/.well-known/oauth-authorization-server"
 	oidcWellKnownMetadataPath                     = "/.well-known/openid-configuration"
 
@@ -240,7 +240,8 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context
 
 	// Build WWW-Authenticate header value based on RFC 9728 and MCP spec.
 	auth := mcpRoute.Spec.SecurityPolicy.OAuth
-	wwwAuthenticateValue := buildWWWAuthenticateHeaderValue(&auth.ProtectedResourceMetadata)
+	wwwAuthenticateValue := buildWWWAuthenticateHeaderValue(&auth.ProtectedResourceMetadata,
+		ptr.Deref(mcpRoute.Spec.Path, defaultMCPPath))
 
 	// Configure response override for 401 responses.
 	backendTrafficPolicy.Spec = egv1a1.BackendTrafficPolicySpec{
@@ -306,48 +307,35 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context
 	return nil
 }
 
-// buildResourceMetadataURL constructs the OAuth protected resource metadata URL using the resource identifier.
-// References:
-// * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-server-location
-// * https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-func buildResourceMetadataURL(metadata *aigv1b1.ProtectedResourceMetadata) string {
-	resourceURL := strings.TrimSuffix(metadata.Resource, "/")
-
-	var (
-		baseURL       string
-		prefixLen     int
-		pathComponent string
-	)
-	switch {
-	case strings.HasPrefix(resourceURL, "https://"):
-		prefixLen = 8
-	case strings.HasPrefix(resourceURL, "http://"):
-		prefixLen = 7
-	default: // should not happen as CEL validation should have caught it.
-		prefixLen = 0
-	}
-
-	if idx := strings.Index(resourceURL[prefixLen:], "/"); idx != -1 {
-		baseURL = resourceURL[:prefixLen+idx]
-		pathComponent = resourceURL[prefixLen+idx:]
-	} else {
-		baseURL = resourceURL
-	}
-
-	// Some agents do not expect the path component to be included in the resource_metadata URL, but according to the
-	// spec https://mcp.mintlify.app/specification/2025-11-25/basic/authorization#protected-resource-metadata-discovery-requirements
-	// they should honor hte value returned here.
-	// We can't expose these resource at the root, because there may be multiple MCP routes with different OAuth settings, so we need
-	// to rely on clients properly implementing the spec and using this value returned in the header.
-	return fmt.Sprintf("%s%s%s", baseURL, oauthWellKnownProtectedResourceMetadataPath, pathComponent)
+// envoyDerivedResourceMetadataURL is an Envoy substitution format string that resolves, at
+// response time, to the Protected Resource Metadata URL for the host the client actually used.
+//
+// The 401 challenge is produced by Envoy's JWT filter before the request ever reaches the MCP
+// proxy, so unlike every other place the resource identifier appears it cannot be computed in
+// Go. Envoy Gateway funnels a ResponseOverride's header values into the local response policy's
+// response_headers_to_add, where command operators are expanded.
+//
+// An absent header renders as "-", which would leave unauthenticated clients with an unusable
+// "-://host/..." URL, so the scheme falls back to the :scheme pseudo-header when
+// X-Forwarded-Proto is missing.
+//
+// Reference: https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log/usage#command-operators
+func envoyDerivedResourceMetadataURL(servingPath string) string {
+	return fmt.Sprintf("%%REQ(X-FORWARDED-PROTO?:SCHEME)%%://%%REQ(:AUTHORITY)%%%s%s",
+		internalapi.OAuthProtectedResourceMetadataPath, strings.TrimSuffix(servingPath, "/"))
 }
 
 // buildWWWAuthenticateHeaderValue constructs the WWW-Authenticate header value according to RFC 9728.
 // References:
 // * https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#protected-resource-metadata-discovery-requirements
 // * https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
-func buildWWWAuthenticateHeaderValue(metadata *aigv1b1.ProtectedResourceMetadata) string {
-	resourceMetadataURL := buildResourceMetadataURL(metadata)
+func buildWWWAuthenticateHeaderValue(metadata *aigv1b1.ProtectedResourceMetadata, servingPath string) string {
+	var resourceMetadataURL string
+	if metadata.Resource != "" {
+		resourceMetadataURL = internalapi.OAuthProtectedResourceMetadataURL(metadata.Resource)
+	} else {
+		resourceMetadataURL = envoyDerivedResourceMetadataURL(servingPath)
+	}
 	headerValue := `Bearer error="invalid_token", error_description="The access token is missing or invalid"`
 
 	// Add resource_metadata as per RFC 9728 Section 5.1.
@@ -361,63 +349,19 @@ func buildWWWAuthenticateHeaderValue(metadata *aigv1b1.ProtectedResourceMetadata
 	return headerValue
 }
 
-// ensureOAuthProtectedResourceMetadataHRF ensures that the HTTPRouteFilter resource exists with direct response for OAuth metadata.
-func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataHRF(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
-	if mcpRoute.Spec.SecurityPolicy == nil || mcpRoute.Spec.SecurityPolicy.OAuth == nil {
-		return nil
+// mcpRouteOAuth converts the MCPRoute OAuth configuration into the filter config the MCP proxy
+// consumes to serve the Protected Resource Metadata document.
+func mcpRouteOAuth(auth *aigv1b1.MCPRouteOAuth) *filterapi.MCPRouteOAuthProtectedResourceMetadata {
+	metadata := &auth.ProtectedResourceMetadata
+	return &filterapi.MCPRouteOAuthProtectedResourceMetadata{
+		Issuer:                            auth.Issuer,
+		Resource:                          metadata.Resource,
+		ResourceName:                      ptr.Deref(metadata.ResourceName, ""),
+		ScopesSupported:                   metadata.ScopesSupported,
+		ResourceSigningAlgValuesSupported: metadata.ResourceSigningAlgValuesSupported,
+		ResourceDocumentation:             ptr.Deref(metadata.ResourceDocumentation, ""),
+		ResourcePolicyURI:                 ptr.Deref(metadata.ResourcePolicyURI, ""),
 	}
-
-	var httpRouteFilter egv1a1.HTTPRouteFilter
-	httpRouteFilterName := oauthProtectedResourceMetadataName(mcpRoute.Name)
-	err := c.client.Get(ctx, client.ObjectKey{Name: httpRouteFilterName, Namespace: mcpRoute.Namespace}, &httpRouteFilter)
-	existingFilter := err == nil
-
-	if apierrors.IsNotFound(err) {
-		// HTTPRouteFilter doesn't exist, create it.
-		httpRouteFilter = egv1a1.HTTPRouteFilter{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      httpRouteFilterName,
-				Namespace: mcpRoute.Namespace,
-			},
-		}
-		// Set owner reference to mcpRoute for garbage collection.
-		if err = ctrlutil.SetControllerReference(mcpRoute, &httpRouteFilter, c.client.Scheme()); err != nil {
-			return fmt.Errorf("failed to set controller reference for HTTPRouteFilter: %w", err)
-		}
-	} else if err != nil {
-		return fmt.Errorf("failed to get HTTPRouteFilter: %w", err)
-	}
-
-	// Build OAuth protected resource metadata JSON response.
-	metadataJSON := buildOAuthProtectedResourceMetadataJSON(mcpRoute.Spec.SecurityPolicy.OAuth)
-
-	// Configure direct response with OAuth metadata.
-	httpRouteFilter.Spec = egv1a1.HTTPRouteFilterSpec{
-		DirectResponse: &egv1a1.HTTPDirectResponseFilter{
-			ContentType: ptr.To("application/json"),
-			StatusCode:  ptr.To(http.StatusOK),
-			Body: &egv1a1.CustomResponseBody{
-				Type:   ptr.To(egv1a1.ResponseValueTypeInline),
-				Inline: ptr.To(metadataJSON),
-			},
-			Header: &gwapiv1.HTTPHeaderFilter{},
-		},
-	}
-	ensureCORSHeaders(httpRouteFilter.Spec.DirectResponse.Header)
-
-	if existingFilter {
-		c.logger.Info("Updating HTTPRouteFilter", "namespace", httpRouteFilter.Namespace, "name", httpRouteFilter.Name)
-		if err = c.client.Update(ctx, &httpRouteFilter); err != nil {
-			return fmt.Errorf("failed to update HTTPRouteFilter: %w", err)
-		}
-	} else {
-		c.logger.Info("Creating HTTPRouteFilter", "namespace", httpRouteFilter.Namespace, "name", httpRouteFilter.Name)
-		if err = c.client.Create(ctx, &httpRouteFilter); err != nil {
-			return fmt.Errorf("failed to create HTTPRouteFilter: %w", err)
-		}
-	}
-
-	return nil
 }
 
 // ensureCORSHeaders ensures that the HTTPHeaderFilter resource exists with CORS headers.
@@ -492,40 +436,6 @@ func (c *MCPRouteController) ensureOAuthAuthServerMetadataHRF(ctx context.Contex
 	}
 
 	return nil
-}
-
-// buildOAuthProtectedResourceMetadataJSON constructs the OAuth protected resource metadata JSON response.
-// References:
-// * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-server-location
-// * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
-func buildOAuthProtectedResourceMetadataJSON(auth *aigv1b1.MCPRouteOAuth) string {
-	response := map[string]interface{}{
-		"resource":                 auth.ProtectedResourceMetadata.Resource,
-		"authorization_servers":    []string{auth.Issuer},
-		"bearer_methods_supported": []string{"header"},
-	}
-	if auth.ProtectedResourceMetadata.ResourceName != nil && *auth.ProtectedResourceMetadata.ResourceName != "" {
-		response["resource_name"] = auth.ProtectedResourceMetadata.ResourceName
-	}
-	if len(auth.ProtectedResourceMetadata.ScopesSupported) != 0 {
-		response["scopes_supported"] = auth.ProtectedResourceMetadata.ScopesSupported
-	}
-	if auth.ProtectedResourceMetadata.ResourceName != nil && *auth.ProtectedResourceMetadata.ResourceName != "" {
-		response["resource_name"] = auth.ProtectedResourceMetadata.ResourceName
-	}
-	if len(auth.ProtectedResourceMetadata.ResourceSigningAlgValuesSupported) > 0 {
-		response["resource_signing_alg_values_supported"] = auth.ProtectedResourceMetadata.ResourceSigningAlgValuesSupported
-	}
-	if auth.ProtectedResourceMetadata.ResourceDocumentation != nil && *auth.ProtectedResourceMetadata.ResourceDocumentation != "" {
-		response["resource_documentation"] = auth.ProtectedResourceMetadata.ResourceDocumentation
-	}
-	if auth.ProtectedResourceMetadata.ResourcePolicyURI != nil && *auth.ProtectedResourceMetadata.ResourcePolicyURI != "" {
-		response["resource_policy_uri"] = auth.ProtectedResourceMetadata.ResourcePolicyURI
-	}
-
-	// Convert to JSON string.
-	jsonBytes, _ := json.Marshal(response)
-	return string(jsonBytes)
 }
 
 // buildOAuthAuthServerMetadataJSON constructs the OAuth authorization server metadata JSON response.
@@ -612,14 +522,39 @@ func (c *MCPRouteController) ensureOAuthResources(ctx context.Context, mcpRoute 
 		return fmt.Errorf("failed to ensure BackendTrafficPolicy: %w", btpErr)
 	}
 
-	// Create HTTPRouteFilter for OAuth protected resource metadata endpoint.
-	if hrfErr := c.ensureOAuthProtectedResourceMetadataHRF(ctx, mcpRoute); hrfErr != nil {
-		return fmt.Errorf("failed to ensure HTTPRouteFilter: %w", hrfErr)
+	// The OAuth protected resource metadata document used to be served by an HTTPRouteFilter
+	// direct response. It is now served by the MCP proxy, which can derive the resource
+	// identifier from the request, so delete the filter left behind by an older version.
+	if delErr := c.deleteOAuthProtectedResourceMetadataHRF(ctx, mcpRoute); delErr != nil {
+		return fmt.Errorf("failed to delete legacy HTTPRouteFilter: %w", delErr)
 	}
 
 	// Create HTTPRouteFilter for OAuth authorization server metadata endpoint.
 	if hrfErr := c.ensureOAuthAuthServerMetadataHRF(ctx, mcpRoute); hrfErr != nil {
 		return fmt.Errorf("failed to ensure AuthServer HTTPRouteFilter: %w", hrfErr)
+	}
+	return nil
+}
+
+// deleteOAuthProtectedResourceMetadataHRF removes the HTTPRouteFilter that previously served
+// the protected resource metadata as a static direct response. It is a no-op once no such
+// filter exists, so it costs a single cached Get per reconcile after an upgrade.
+//
+// TODO: Remove this, along with its call sites and tests, after the v2.0 release.
+func (c *MCPRouteController) deleteOAuthProtectedResourceMetadataHRF(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
+	var httpRouteFilter egv1a1.HTTPRouteFilter
+	name := oauthProtectedResourceMetadataName(mcpRoute.Name)
+	err := c.client.Get(ctx, client.ObjectKey{Name: name, Namespace: mcpRoute.Namespace}, &httpRouteFilter)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get HTTPRouteFilter: %w", err)
+	}
+	c.logger.Info("Deleting superseded OAuth protected resource metadata HTTPRouteFilter",
+		"namespace", httpRouteFilter.Namespace, "name", httpRouteFilter.Name)
+	if err = c.client.Delete(ctx, &httpRouteFilter); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete HTTPRouteFilter: %w", err)
 	}
 	return nil
 }
@@ -638,17 +573,11 @@ func (c *MCPRouteController) cleanupOAuthResources(ctx context.Context, mcpRoute
 		return fmt.Errorf("failed to get BackendTrafficPolicy for deletion: %w", err)
 	}
 
-	// Delete OAuth protected resource HTTPRouteFilter.
-	httpRouteFilterName := oauthProtectedResourceMetadataName(mcpRoute.Name)
-	var httpRouteFilter egv1a1.HTTPRouteFilter
-	err = c.client.Get(ctx, client.ObjectKey{Name: httpRouteFilterName, Namespace: mcpRoute.Namespace}, &httpRouteFilter)
-	if err == nil {
-		c.logger.Info("Deleting HTTPRouteFilter", "namespace", httpRouteFilter.Namespace, "name", httpRouteFilter.Name)
-		if err = c.client.Delete(ctx, &httpRouteFilter); err != nil {
-			return fmt.Errorf("failed to delete HTTPRouteFilter: %w", err)
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to get HTTPRouteFilter for deletion: %w", err)
+	// TODO: Remove after the v2.0 release, together with deleteOAuthProtectedResourceMetadataHRF.
+	// If OAuth is disabled on an MCPRoute before the upgraded controller first reconciles it,
+	// ensureOAuthResources never runs, so the legacy HTTPRouteFilter has to be deleted here too.
+	if err = c.deleteOAuthProtectedResourceMetadataHRF(ctx, mcpRoute); err != nil {
+		return fmt.Errorf("failed to delete legacy HTTPRouteFilter: %w", err)
 	}
 
 	// Delete OAuth authorization server HTTPRouteFilter.
