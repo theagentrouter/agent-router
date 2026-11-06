@@ -176,7 +176,7 @@ func (m *mcpRequestContext) serverDELETE(w http.ResponseWriter, r *http.Request)
 }
 
 // doNotForwardResponseToBackends checks whether the given response doesn't need to be forwarded to the backends.
-// This is mostly because those are replies to Ping or ToolChange notifications initiated by hte gateway itself
+// This is mostly because those are replies to Ping or ToolChange notifications initiated by the gateway itself
 // (not the backends).
 func doNotForwardResponseToBackends(msg *jsonrpc.Response) bool {
 	str, ok := msg.ID.Raw().(string)
@@ -461,8 +461,8 @@ func errorType(err error) metrics.MCPErrorType {
 	if errors.Is(err, errBackendNotFound) || errors.Is(err, errSessionNotFound) || errors.Is(err, errInvalidToolName) || errors.Is(err, errInvalidPromptName) {
 		return metrics.MCPErrorInvalidParam
 	}
-	var toolCallValidaitonError *errToolCall
-	if errors.As(err, &toolCallValidaitonError) && toolCallValidaitonError.validationError {
+	var toolCallValidationError *errToolCall
+	if errors.As(err, &toolCallValidationError) && toolCallValidationError.validationError {
 		return metrics.MCPErrorInvalidParam
 	}
 

@@ -422,7 +422,7 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "nested schema in tool's defintions",
+			name: "nested schema in tool's definitions",
 			openAIReq: &openai.ChatCompletionRequest{
 				Tools: []openai.Tool{
 					{

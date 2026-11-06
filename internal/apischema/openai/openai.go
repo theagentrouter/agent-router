@@ -680,7 +680,7 @@ type ChatCompletionMessageToolCallParam struct {
 }
 
 // extractMessageRole extracts role from OpenAI message union types.
-func (c ChatCompletionMessageParamUnion) ExtractMessgaeRole() string {
+func (c ChatCompletionMessageParamUnion) ExtractMessageRole() string {
 	switch {
 	case c.OfDeveloper != nil:
 		return c.OfDeveloper.Role

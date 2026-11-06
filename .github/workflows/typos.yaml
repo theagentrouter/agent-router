@@ -1,0 +1,24 @@
+# Spell checks the whole repository with https://github.com/crate-ci/typos.
+# Exceptions live in `_typos.toml` at the repository root.
+name: Typos
+on:
+  pull_request:
+    branches:
+      - "main"
+      - "release/**"
+
+  push:
+    branches:
+      - "main"
+      - "release/**"
+
+permissions:
+  contents: read
+
+jobs:
+  typos:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1

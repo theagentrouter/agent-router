@@ -1,6 +1,6 @@
 # Inference Gateway API Extension Support
 
-## Propsal Summary
+## Proposal Summary
 
 This proposal extends Envoy AI Gateway (EAIG) to support the Gateway API Inference Extension (GAIE), enabling seamless integration of both egress (external AI providers) and ingress (internal Kubernetes LLM deployments) traffic management.
 

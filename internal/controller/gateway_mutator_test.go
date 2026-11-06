@@ -108,7 +108,7 @@ func TestGatewayMutator_mutatePod(t *testing.T) {
 							require.Nil(t, src.Secret.Optional) // index secret is not optional
 							continue
 						}
-						require.NotNil(t, src.Secret.Optional) // parital secrets are optional
+						require.NotNil(t, src.Secret.Optional) // partial secrets are optional
 						require.True(t, *src.Secret.Optional)
 					}
 				}

@@ -741,7 +741,7 @@ It can reference either an AIServiceBackend or an InferencePool resource.
   type="integer"
   required="false"
   defaultValue="0"
-  description="Priority is the priority of the backend. This sets the priority on the underlying endpoints.<br />See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/priority<br />Note: This will override the `faillback` property of the underlying Envoy Gateway Backend<br />This field is ignored when referencing InferencePool resources.<br />Default is 0."
+  description="Priority is the priority of the backend. This sets the priority on the underlying endpoints.<br />See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/priority<br />Note: This will override the `fallback` property of the underlying Envoy Gateway Backend<br />This field is ignored when referencing InferencePool resources.<br />Default is 0."
 />
 
 
@@ -2600,7 +2600,7 @@ QuotaValue defines the quota limits using sliding window.
   name="limit"
   type="integer"
   required="true"
-  description="The limit alloted for a specified time window.<br />This is the static baseline used by the rate limit service when<br />FromMetadata is absent or cannot be resolved."
+  description="The limit allotted for a specified time window.<br />This is the static baseline used by the rate limit service when<br />FromMetadata is absent or cannot be resolved."
 /><ApiField
   name="duration"
   type="string"
@@ -3354,7 +3354,7 @@ It can reference either an AIServiceBackend or an InferencePool resource.
   type="integer"
   required="false"
   defaultValue="0"
-  description="Priority is the priority of the backend. This sets the priority on the underlying endpoints.<br />See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/priority<br />Note: This will override the `faillback` property of the underlying Envoy Gateway Backend<br />This field is ignored when referencing InferencePool resources.<br />Default is 0."
+  description="Priority is the priority of the backend. This sets the priority on the underlying endpoints.<br />See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/priority<br />Note: This will override the `fallback` property of the underlying Envoy Gateway Backend<br />This field is ignored when referencing InferencePool resources.<br />Default is 0."
 />
 
 

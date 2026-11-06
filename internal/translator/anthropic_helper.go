@@ -524,7 +524,7 @@ func openAIToAnthropicMessages(openAIMsgs []openai.ChatCompletionMessageParamUni
 			// Aggregate all consecutive tool messages into a single user message
 			// to support parallel tool use.
 			var toolResultBlocks []anthropic.ContentBlockParamUnion
-			for i < len(openAIMsgs) && openAIMsgs[i].ExtractMessgaeRole() == openai.ChatMessageRoleTool {
+			for i < len(openAIMsgs) && openAIMsgs[i].ExtractMessageRole() == openai.ChatMessageRoleTool {
 				currentMsg := &openAIMsgs[i]
 				toolMsg := currentMsg.OfTool
 
@@ -591,7 +591,7 @@ func openAIToAnthropicMessages(openAIMsgs []openai.ChatCompletionMessageParamUni
 			}
 			anthropicMessages = append(anthropicMessages, anthropicMsg)
 		default:
-			err = fmt.Errorf("unsupported OpenAI role type: %s", msg.ExtractMessgaeRole())
+			err = fmt.Errorf("unsupported OpenAI role type: %s", msg.ExtractMessageRole())
 			return
 		}
 	}

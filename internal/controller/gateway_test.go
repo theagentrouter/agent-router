@@ -2174,10 +2174,10 @@ func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextCanceledLis
 
 func TestGatewayController_annotateGatewayPods(t *testing.T) {
 	egNamespace := "envoy-gateway-system"
-	gwName, gwNamepsace := "gw", "ns"
+	gwName, gwNamespace := "gw", "ns"
 	labels := map[string]string{
 		egOwningGatewayNameLabel:      gwName,
-		egOwningGatewayNamespaceLabel: gwNamepsace,
+		egOwningGatewayNamespaceLabel: gwNamespace,
 	}
 
 	fakeClient := requireNewFakeClientWithIndexes(t)
@@ -2976,10 +2976,10 @@ func newTestExtProcOptions(image, logLevel string) *Options {
 
 func TestGatewayController_annotateDaemonSetGatewayPods(t *testing.T) {
 	egNamespace := "envoy-gateway-system"
-	gwName, gwNamepsace := "gw", "ns"
+	gwName, gwNamespace := "gw", "ns"
 	labels := map[string]string{
 		egOwningGatewayNameLabel:      gwName,
-		egOwningGatewayNamespaceLabel: gwNamepsace,
+		egOwningGatewayNamespaceLabel: gwNamespace,
 	}
 
 	fakeClient := requireNewFakeClientWithIndexes(t)
