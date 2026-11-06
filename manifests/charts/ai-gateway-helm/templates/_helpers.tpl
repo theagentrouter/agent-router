@@ -42,12 +42,32 @@ Name of the Secret that holds the MCP session encryption seed.
 {{- end }}
 
 {{/*
+Name of the Secret that holds the Files/Batch API id encryption seed.
+*/}}
+{{- define "ai-gateway-helm.controller.fileIDEncryptionSecretName" -}}
+{{- if .Values.controller.fileIDEncryption.existingSecret }}
+{{- .Values.controller.fileIDEncryption.existingSecret }}
+{{- else }}
+{{- printf "%s-file-id-encryption" (include "ai-gateway-helm.controller.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Name of the Secret that holds the MCP session encryption fallback seed.
 The fullname is truncated first so the suffix is always kept; otherwise a long fullname would truncate this
 to the same name as the primary seed Secret.
 */}}
 {{- define "ai-gateway-helm.controller.mcpFallbackSessionEncryptionSecretName" -}}
 {{- printf "%s-mcp-session-encryption-fallback" (include "ai-gateway-helm.controller.fullname" . | trunc 31 | trimSuffix "-") }}
+{{- end }}
+
+{{/*
+Name of the Secret that holds the Files/Batch API id encryption fallback seed.
+The fullname is truncated first so the suffix is always kept; otherwise a long fullname would truncate this
+to the same name as the primary seed Secret.
+*/}}
+{{- define "ai-gateway-helm.controller.fileIDFallbackEncryptionSecretName" -}}
+{{- printf "%s-file-id-encryption-fallback" (include "ai-gateway-helm.controller.fullname" . | trunc 34 | trimSuffix "-") }}
 {{- end }}
 
 {{/*
