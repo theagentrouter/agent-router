@@ -128,6 +128,43 @@ kubectl apply -f mcp-route.yaml
 
 Now clients can connect to `http://<gateway-address>/mcp` and access GitHub tools.
 
+#### Secrets in another namespace
+
+A backend's `apiKey.secretRef` without `namespace` refers to a Secret in the MCPRoute's own namespace. A Secret in another namespace is named with its namespace on the backend:
+
+```yaml
+securityPolicy:
+  apiKey:
+    secretRef:
+      name: github-token
+      namespace: credentials # the Secret's namespace
+```
+
+It also needs a [ReferenceGrant](https://gateway-api.sigs.k8s.io/api-types/referencegrant/) in the Secret's namespace that allows the reference. Without it, the MCPRoute is marked `NotAccepted`. If the grant is removed later, or narrowed so that it no longer covers the Secret, the controller deletes the resources it generated for that backend, including its copy of the credential, and the backend stays unavailable until a grant allows the reference again.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-mcp-route-secrets
+  namespace: credentials # the Secret's namespace
+spec:
+  from:
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      namespace: default # the MCPRoute's namespace
+  to:
+    - group: ""
+      kind: Secret
+      name: github-token # the Secret's name
+```
+
+The `name` field limits the grant to that one Secret. Without it, the grant covers every Secret in the namespace. To allow several Secrets, add a `to` entry for each.
+
+The controller copies the referenced value into a managed Secret in the MCPRoute's namespace (header injection) or into the generated HTTPRoute (query parameter), so anyone who can read Secrets or HTTPRoutes in that namespace can read it. The controller does not watch for the deletion of the referenced Secret: the last copied value stays in place until the route's next reconcile, which then fails; remove the grant to cut access. A controller started with `--watchNamespaces` (Helm: `controller.watch.namespaces`) must watch the Secret's namespace as well; otherwise it cannot see the ReferenceGrant and the MCPRoute is `NotAccepted` with an error that names the unwatched namespace.
+
+With `aigw run`, put the ReferenceGrant in the configuration file.
+
 ### Tool Filtering
 
 Control which tools are exposed using the `toolSelector` field. You can use exact matches or regular expressions:
