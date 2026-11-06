@@ -18,8 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/ptr"
 
+	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/redaction"
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 )
 
@@ -699,6 +701,65 @@ func TestRedactBody(t *testing.T) {
 		// Verify original is completely unchanged
 		require.Equal(t, originalContentCopy, *resp.Choices[0].Message.Content)
 		require.NotContains(t, *resp.Choices[0].Message.Content, "[REDACTED")
+	})
+}
+
+func TestRedactBody_ThinkingBlocks(t *testing.T) {
+	const thinking = "reasoning-marker"
+	const signature = "signature-marker"
+	const data = "data-marker"
+	for _, tc := range []struct {
+		name       string
+		translator interface {
+			RedactBody(*openai.ChatCompletionResponse) *openai.ChatCompletionResponse
+		}
+	}{
+		{name: "openai", translator: &openAIToOpenAITranslatorV1ChatCompletion{}},
+		{name: "aws bedrock", translator: &openAIToAWSBedrockTranslatorV1ChatCompletion{}},
+		{name: "gcp vertex ai", translator: &openAIToGCPVertexAITranslatorV1ChatCompletion{}},
+		{name: "gcp anthropic", translator: &openAIToGCPAnthropicTranslatorV1ChatCompletion{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &openai.ChatCompletionResponse{
+				Choices: []openai.ChatCompletionResponseChoice{{
+					Message: openai.ChatCompletionResponseChoiceMessage{
+						Role: "assistant",
+						ThinkingBlocks: []openai.ThinkingBlock{
+							{Type: "thinking", Thinking: thinking, Signature: signature},
+							{Type: "redacted_thinking", Data: data},
+						},
+					},
+				}},
+			}
+
+			redacted := tc.translator.RedactBody(resp)
+
+			require.Equal(t, []openai.ThinkingBlock{
+				{Type: "thinking", Thinking: redaction.RedactString(thinking), Signature: redaction.RedactString(signature)},
+				{Type: "redacted_thinking", Data: redaction.RedactString(data)},
+			}, redacted.Choices[0].Message.ThinkingBlocks)
+			require.Equal(t, thinking, resp.Choices[0].Message.ThinkingBlocks[0].Thinking, "original must not be mutated")
+		})
+	}
+}
+
+func TestRedactReasoningContent_SignatureAndRedactedContent(t *testing.T) {
+	t.Run("reasoning text and signature", func(t *testing.T) {
+		rc := &openai.ReasoningContentUnion{Value: &openai.ReasoningContent{ReasoningContent: &awsbedrock.ReasoningContentBlock{
+			ReasoningText: &awsbedrock.ReasoningTextBlock{Text: "reasoning-marker", Signature: "signature-marker"},
+		}}}
+		redacted := redactReasoningContent(rc).Value.(*openai.ReasoningContent).ReasoningContent
+		require.Equal(t, redaction.RedactString("reasoning-marker"), redacted.ReasoningText.Text)
+		require.Equal(t, redaction.RedactString("signature-marker"), redacted.ReasoningText.Signature)
+		require.Equal(t, "signature-marker", rc.Value.(*openai.ReasoningContent).ReasoningContent.ReasoningText.Signature, "original must not be mutated")
+	})
+	t.Run("redacted content only", func(t *testing.T) {
+		rc := &openai.ReasoningContentUnion{Value: &openai.ReasoningContent{ReasoningContent: &awsbedrock.ReasoningContentBlock{
+			RedactedContent: []byte("encrypted-marker"),
+		}}}
+		redacted := redactReasoningContent(rc).Value.(*openai.ReasoningContent).ReasoningContent
+		require.Equal(t, []byte(redaction.RedactString("encrypted-marker")), redacted.RedactedContent)
+		require.Nil(t, redacted.ReasoningText)
 	})
 }
 

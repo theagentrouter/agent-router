@@ -737,6 +737,7 @@ func redactGCPResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) o
 	if msg.ReasoningContent != nil {
 		redactedMsg.ReasoningContent = redactReasoningContent(msg.ReasoningContent)
 	}
+	redactedMsg.ThinkingBlocks = redactThinkingBlocks(msg.ThinkingBlocks)
 
 	return redactedMsg
 }
