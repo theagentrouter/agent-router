@@ -214,6 +214,7 @@ following variables are available in a `costExpression`:
 | `cached_input_tokens`         | uint   | Input tokens served from the provider's cache.   |
 | `cache_creation_input_tokens` | uint   | Input tokens charged for writing to the cache.   |
 | `reasoning_tokens`            | uint   | Reasoning tokens (for reasoning-capable models). |
+| `billable_units`              | double | Provider-reported billing units, or 0.           |
 | `model`                       | string | The resolved model name.                         |
 | `backend`                     | string | The serving backend name.                        |
 | `route_name`                  | string | The route name.                                  |
@@ -238,6 +239,12 @@ The token variables are **unsigned integers**, so numeric literals must carry a 
 example `output_tokens * 6u`) and the expression must evaluate to a non-negative integer. Integer
 division truncates (`cached_input_tokens / 10u`); for an exact fractional weight, cast through
 floating point — for example `uint(double(cached_input_tokens) * 0.1)`.
+
+Cohere bills rerank in search units and reports no tokens, so the default `total_tokens` cost is
+always 0 for Cohere rerank models. The gateway reports their search units as `billable_units`, so
+use `costExpression: "uint(billable_units)"` for them instead. `billable_units` is a double: a bare
+`billable_units` does not evaluate to an integer and the expression is rejected, so always cast it,
+for example `total_tokens + uint(billable_units) * 1000u`.
 :::
 
 ### Bucket Mode
