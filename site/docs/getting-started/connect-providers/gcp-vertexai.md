@@ -215,6 +215,12 @@ spec:
         - name: envoy-ai-gateway-basic-gcp
 ```
 
+## Context Caching
+
+Gemini models on GCP Vertex AI support gateway-managed context caching through
+`cache_control` markers. It needs a Redis store; see
+[Prompt Caching: GCP Vertex AI Gemini](../../capabilities/llm-integrations/prompt-caching.md#gcp-vertex-ai-gemini).
+
 [AIGatewayRouteRule]: ../../api/api.mdx#aigatewayrouterule
 [model ID]: https://cloud.google.com/vertex-ai/generative-ai/docs/models
 [Anthropic Claude]: https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude
