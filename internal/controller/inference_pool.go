@@ -23,6 +23,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/inferencepool"
 )
 
 // InferencePoolController implements [reconcile.TypedReconciler] for [gwaiev1.InferencePool].
@@ -242,9 +243,7 @@ func (c *InferencePoolController) routeReferencesGateway(parentRefs []gwapiv1.Pa
 func (c *InferencePoolController) httpRouteReferencesInferencePool(route *gwapiv1.HTTPRoute, inferencePoolName string) bool {
 	for _, rule := range route.Spec.Rules {
 		for _, backendRef := range rule.BackendRefs {
-			if backendRef.Group != nil && string(*backendRef.Group) == "inference.networking.k8s.io" &&
-				backendRef.Kind != nil && string(*backendRef.Kind) == "InferencePool" &&
-				string(backendRef.Name) == inferencePoolName {
+			if inferencepool.IsBackendRef(&backendRef.BackendRef) && string(backendRef.Name) == inferencePoolName {
 				return true
 			}
 		}
@@ -397,8 +396,7 @@ func (c *InferencePoolController) httpRouteEventHandler(_ context.Context, obj c
 	var requests []reconcile.Request
 	for _, rule := range route.Spec.Rules {
 		for _, backendRef := range rule.BackendRefs {
-			if backendRef.Group != nil && string(*backendRef.Group) == "inference.networking.k8s.io" &&
-				backendRef.Kind != nil && string(*backendRef.Kind) == "InferencePool" {
+			if inferencepool.IsBackendRef(&backendRef.BackendRef) {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: client.ObjectKey{
 						Name:      string(backendRef.Name),

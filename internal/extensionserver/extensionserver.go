@@ -47,6 +47,10 @@ type Server struct {
 
 const serverName = "envoy-gateway-extension-server"
 
+// httpProtocolOptionsKey is the TypedExtensionProtocolOptions key of a cluster's
+// HttpProtocolOptions.
+const httpProtocolOptionsKey = "envoy.extensions.upstreams.http.v3.HttpProtocolOptions"
+
 // New creates a new instance of the extension server that implements the EnvoyGatewayExtensionServer interface.
 func New(k8sClient client.Client, logger logr.Logger, udsPath string, isStandAloneMode bool, requestHeaderAttributes, logRequestHeaderAttributes *string, quotaRateLimitServiceAddr string, quotaRateLimitTimeout int64, quotaRateLimitFailureModeDeny bool) (*Server, error) {
 	logger = logger.WithName(serverName)

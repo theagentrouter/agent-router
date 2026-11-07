@@ -20,6 +20,7 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/structpb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -711,4 +712,12 @@ func Test_maybeModifyCluster_rebuildsOwnFiltersOnExistingChain(t *testing.T) {
 		names = append(names, f.GetName())
 	}
 	require.Equal(t, []string{aiGatewayExtProcName, aiGatewayHeaderMutationName, "envoy.filters.http.upstream_codec"}, names)
+}
+
+func TestDisabledExtProcPerRoute(t *testing.T) {
+	want, err := toAny(&extprocv3.ExtProcPerRoute{Override: &extprocv3.ExtProcPerRoute_Disabled{Disabled: true}})
+	require.NoError(t, err)
+	got := disabledExtProcPerRoute()
+	require.True(t, proto.Equal(want, got))
+	require.NotSame(t, got, disabledExtProcPerRoute())
 }

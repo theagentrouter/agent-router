@@ -19,8 +19,8 @@ import (
 )
 
 // clusterRefInferencePool generates a unique reference for an InferencePool cluster.
-func clusterRefInferencePool(namespace, name, serviceName string, servicePort uint32, bodyMode string, allowModeOverride string) string {
-	return fmt.Sprintf("%s/%s/%s/%d/%s/%s", namespace, name, serviceName, servicePort, bodyMode, allowModeOverride)
+func clusterRefInferencePool(namespace, name, serviceName string, servicePort uint32, bodyMode, allowModeOverride, appProtocol string) string {
+	return fmt.Sprintf("%s/%s/%s/%d/%s/%s/%s", namespace, name, serviceName, servicePort, bodyMode, allowModeOverride, appProtocol)
 }
 
 // PostClusterModify is called by Envoy Gateway to allow extensions to modify clusters after they are generated.
@@ -45,19 +45,20 @@ func (s *Server) PostClusterModify(_ context.Context, req *egextension.PostClust
 	// BackendExtensionResources contains unstructured Kubernetes resources that were
 	// referenced in the AIGatewayRoute's BackendRefs with non-empty Group and Kind fields.
 	// If we found an InferencePool, configure the cluster for ORIGINAL_DST.
+	// Envoy Gateway builds one cluster per InferencePool backendRef and passes only that
+	// cluster's own pool here, even when the rule references several pools.
 	if inferencePools := s.constructInferencePoolsFrom(req.PostClusterContext.BackendExtensionResources); inferencePools != nil {
 		if len(inferencePools) != 1 {
-			return nil, fmt.Errorf("BUG: at most one inferencepool can be referenced per route rule")
+			return nil, fmt.Errorf("BUG: expected exactly one InferencePool per cluster but found %d", len(inferencePools))
 		}
 		pool := inferencePools[0]
+		// A rule with an InferencePool without an endpoint picker is rejected by PostRouteModify,
+		// so nothing routes to this cluster: leave it as Envoy Gateway generated it rather than
+		// wiring up EPP config that would panic on the nil reference.
 		if pool.Spec.EndpointPickerRef == nil {
-			// No endpoint picker configured for this InferencePool (spec.endpointPickerRef is
-			// optional as of Gateway API Inference Extension v1.5.0). We don't yet support
-			// routing traffic without one, so leave the cluster as Envoy Gateway generated it
-			// rather than wiring up EPP config that would panic on the nil reference.
 			return &egextension.PostClusterModifyResponse{Cluster: req.Cluster}, nil
 		}
-		if err := s.handleInferencePoolCluster(req.Cluster, inferencePools[0]); err != nil {
+		if err := s.handleInferencePoolCluster(req.Cluster, pool); err != nil {
 			return nil, err
 		}
 	}
@@ -112,6 +113,6 @@ func (s *Server) handleInferencePoolCluster(cluster *clusterv3.Cluster, inferenc
 	cluster.TypedExtensionProtocolOptions = protocolOptions
 
 	// Add InferencePool metadata to the cluster for reference by other components.
-	buildEPPMetadataForCluster(cluster, inferencePool)
+	buildEPPMetadataForCluster(cluster, []*gwaiev1.InferencePool{inferencePool})
 	return nil
 }
