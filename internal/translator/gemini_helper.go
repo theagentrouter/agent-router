@@ -883,6 +883,16 @@ func geminiCandidatesToOpenAIChoices(candidates []*genai.Candidate, responseMode
 	return choices, nil
 }
 
+// geminiPromptBlocked reports whether Gemini rejected the prompt before generating anything.
+// Such a response carries promptFeedback.blockReason and no candidates.
+func geminiPromptBlocked(resp *genai.GenerateContentResponse) bool {
+	if len(resp.Candidates) > 0 || resp.PromptFeedback == nil {
+		return false
+	}
+	reason := resp.PromptFeedback.BlockReason
+	return reason != "" && reason != genai.BlockedReasonUnspecified
+}
+
 // Define a type constraint that includes both stream and non-stream tool call slice types.
 type toolCallSlice interface {
 	[]openai.ChatCompletionMessageToolCallParam | []openai.ChatCompletionChunkChoiceDeltaToolCall

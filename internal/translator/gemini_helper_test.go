@@ -3525,3 +3525,51 @@ func TestMapReasoningEffortToThinkingLevel(t *testing.T) {
 		})
 	}
 }
+
+func TestGeminiPromptBlocked(t *testing.T) {
+	tests := []struct {
+		name string
+		resp *genai.GenerateContentResponse
+		want bool
+	}{
+		{
+			name: "blocked prompt",
+			resp: &genai.GenerateContentResponse{
+				PromptFeedback: &genai.GenerateContentResponsePromptFeedback{BlockReason: genai.BlockedReasonBlocklist},
+			},
+			want: true,
+		},
+		{
+			name: "no prompt feedback",
+			resp: &genai.GenerateContentResponse{},
+			want: false,
+		},
+		{
+			name: "prompt feedback without block reason",
+			resp: &genai.GenerateContentResponse{
+				PromptFeedback: &genai.GenerateContentResponsePromptFeedback{},
+			},
+			want: false,
+		},
+		{
+			name: "unspecified block reason",
+			resp: &genai.GenerateContentResponse{
+				PromptFeedback: &genai.GenerateContentResponsePromptFeedback{BlockReason: genai.BlockedReasonUnspecified},
+			},
+			want: false,
+		},
+		{
+			name: "block reason with candidates",
+			resp: &genai.GenerateContentResponse{
+				Candidates:     []*genai.Candidate{{FinishReason: genai.FinishReasonStop}},
+				PromptFeedback: &genai.GenerateContentResponsePromptFeedback{BlockReason: genai.BlockedReasonSafety},
+			},
+			want: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, geminiPromptBlocked(tc.resp))
+		})
+	}
+}
