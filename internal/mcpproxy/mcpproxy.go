@@ -90,16 +90,25 @@ func NewMCPProxy(l *slog.Logger, mcpMetrics metrics.MCPMetrics, tracer tracingap
 				requestHeaders: r.Header,
 				originalPath:   originalPathForRequest(r),
 			}
+			var serve http.HandlerFunc
 			switch r.Method {
 			case http.MethodGet:
-				proxy.serveGET(w, r)
+				serve = proxy.serveGET
 			case http.MethodPost:
-				proxy.servePOST(w, r)
+				serve = proxy.servePOST
 			case http.MethodDelete:
-				proxy.serverDELETE(w, r)
+				serve = proxy.serverDELETE
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
 			}
+			// The config bundle watcher tolerates an incomplete bundle on the initial load and retries on the next tick,
+			// so requests can arrive before any config is loaded, when there are no routes to serve them.
+			if !cfg.configLoaded.Load() {
+				http.Error(w, "MCP proxy config is not loaded yet", http.StatusServiceUnavailable)
+				return
+			}
+			serve(w, r)
 		})
 	return cfg, mux, nil
 }
