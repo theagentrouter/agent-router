@@ -24,6 +24,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/propagation"
+	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
@@ -1362,6 +1363,48 @@ func TestChatCompletionsProcessorRouterFilter_ProcessResponseHeaders_ProcessResp
 		require.NotNil(t, re.ResponseBody.Response)
 		require.IsType(t, &extprocv3.BodyMutation{}, re.ResponseBody.Response.BodyMutation)
 		require.IsType(t, &extprocv3.HeaderMutation{}, re.ResponseBody.Response.HeaderMutation)
+	})
+}
+
+func TestChatCompletionsProcessorRouterFilter_CompressedStreamingResponse(t *testing.T) {
+	events := sseEvents(3)
+	chunks := compressEvents(t, "gzip", events)
+	responseHeaders := map[string]string{":status": "200", "content-encoding": "gzip"}
+
+	startStream := func(t *testing.T) (*chatCompletionProcessorRouterFilter, *mockTranslator) {
+		mt := &mockTranslator{t: t, expHeaders: responseHeaders}
+		r := &chatCompletionProcessorRouterFilter{stream: true, config: &filterapi.RuntimeConfig{}}
+		r.upstreamFilter = &chatCompletionProcessorUpstreamFilter{translator: mt, metrics: &mockMetrics{}, parent: r}
+		headers := &corev3.HeaderMap{}
+		for k, v := range responseHeaders {
+			headers.Headers = append(headers.Headers, &corev3.HeaderValue{Key: k, Value: v})
+		}
+		resp, err := r.ProcessResponseHeaders(t.Context(), headers)
+		require.NoError(t, err)
+		require.Equal(t, extprocv3http.ProcessingMode_STREAMED, resp.ModeOverride.ResponseBodyMode)
+		return r, mt
+	}
+
+	t.Run("translator receives each event as its chunk arrives", func(t *testing.T) {
+		defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+		r, mt := startStream(t)
+		for i, e := range events {
+			mt.expResponseBody = &extprocv3.HttpBody{Body: []byte(e)}
+			_, err := r.ProcessResponseBody(t.Context(), &extprocv3.HttpBody{Body: chunks[i]})
+			require.NoError(t, err)
+		}
+		mt.expResponseBody = &extprocv3.HttpBody{Body: []byte{}}
+		_, err := r.ProcessResponseBody(t.Context(), &extprocv3.HttpBody{Body: chunks[len(events)], EndOfStream: true})
+		require.NoError(t, err)
+	})
+
+	t.Run("Close releases the decoder of a stream that ended early", func(t *testing.T) {
+		defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+		r, mt := startStream(t)
+		mt.expResponseBody = &extprocv3.HttpBody{Body: []byte(events[0])}
+		_, err := r.ProcessResponseBody(t.Context(), &extprocv3.HttpBody{Body: chunks[0]})
+		require.NoError(t, err)
+		require.NoError(t, r.Close())
 	})
 }
 

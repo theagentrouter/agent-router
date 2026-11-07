@@ -8,12 +8,17 @@ package extproc
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"testing"
 
+	"github.com/andybalholm/brotli"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 func TestIsGoodStatusCode(t *testing.T) {
@@ -107,70 +112,119 @@ func TestDecodeContentIfNeeded(t *testing.T) {
 	}
 }
 
-func TestStreamingGzipDecompression(t *testing.T) {
-	// Simulate a gzip-compressed SSE stream split into multiple chunks.
-	// This tests the same accumulate-and-redecode logic used by decodeStreamingContent.
-	messages := []string{
-		"event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
-		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"Hello\"}}\n\n",
-		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+// sseEvents returns n server-sent events of varying length.
+func sseEvents(n int) []string {
+	events := make([]string, n)
+	for i := range events {
+		events[i] = fmt.Sprintf("data: {\"index\":%d,\"delta\":%q}\n\n", i, strings.Repeat("token ", i%7+1))
 	}
+	return events
+}
 
-	// Produce per-chunk gzip output by flushing after each message.
-	var allCompressed bytes.Buffer
-	gz := gzip.NewWriter(&allCompressed)
-	var chunkBoundaries []int // byte offsets in allCompressed marking each chunk end
-	for _, msg := range messages {
-		_, err := gz.Write([]byte(msg))
+// compressEvents compresses events the way a streaming upstream does, flushing after each one, so
+// chunk i of the result decompresses to events[i]. The last chunk is what closing the stream wrote.
+func compressEvents(t *testing.T, contentEncoding string, events []string) [][]byte {
+	var buf bytes.Buffer
+	var w interface {
+		io.WriteCloser
+		Flush() error
+	}
+	switch contentEncoding {
+	case "gzip":
+		w = gzip.NewWriter(&buf)
+	case "br":
+		w = brotli.NewWriter(&buf)
+	default:
+		t.Fatalf("unsupported content encoding %q", contentEncoding)
+	}
+	chunks := make([][]byte, 0, len(events)+1)
+	for _, e := range events {
+		_, err := w.Write([]byte(e))
 		require.NoError(t, err)
-		require.NoError(t, gz.Flush())
-		chunkBoundaries = append(chunkBoundaries, allCompressed.Len())
+		require.NoError(t, w.Flush())
+		chunks = append(chunks, bytes.Clone(buf.Bytes()))
+		buf.Reset()
 	}
-	require.NoError(t, gz.Close())
-	fullCompressed := allCompressed.Bytes()
+	require.NoError(t, w.Close())
+	return append(chunks, bytes.Clone(buf.Bytes()))
+}
 
-	// Split the compressed output into chunks at flush boundaries,
-	// plus a final chunk with the gzip footer.
-	var chunks [][]byte
-	prev := 0
-	for _, boundary := range chunkBoundaries {
-		chunks = append(chunks, fullCompressed[prev:boundary])
-		prev = boundary
-	}
-	if prev < len(fullCompressed) {
-		// Remaining bytes contain the gzip footer.
-		chunks = append(chunks, fullCompressed[prev:])
-	}
+func TestStreamDecoder(t *testing.T) {
+	events := sseEvents(200)
+	plain := strings.Join(events, "")
+	for _, encoding := range []string{"gzip", "br"} {
+		chunks := compressEvents(t, encoding, events)
+		compressed := bytes.Join(chunks, nil)
 
-	// Simulate the accumulate-and-redecode algorithm from decodeStreamingContent.
-	var compressedBuf []byte
-	decompressedOffset := 0
-	var totalDecompressed string
-
-	for i, chunk := range chunks {
-		endOfStream := i == len(chunks)-1
-		compressedBuf = append(compressedBuf, chunk...)
-
-		result, err := decodeContentIfNeeded(compressedBuf, "gzip")
-		require.NoError(t, err)
-		require.True(t, result.isEncoded)
-
-		allDecompressed, readErr := io.ReadAll(result.reader)
-		if readErr != nil {
-			if endOfStream {
-				t.Fatalf("unexpected error on final chunk: %v", readErr)
+		t.Run(encoding+"/each flushed event decodes from its own chunk", func(t *testing.T) {
+			defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+			d := newStreamDecoder(encoding)
+			for i, e := range events {
+				out, err := d.decode(chunks[i], false)
+				require.NoError(t, err)
+				require.Equal(t, e, string(out), "chunk %d", i)
 			}
-			// io.ErrUnexpectedEOF is expected for non-final chunks.
-			require.ErrorIs(t, readErr, io.ErrUnexpectedEOF)
+			out, err := d.decode(chunks[len(events)], true)
+			require.NoError(t, err)
+			require.Empty(t, out)
+		})
+
+		for _, size := range []int{1, 3, 100, len(compressed)} {
+			t.Run(fmt.Sprintf("%s/chunks of %d bytes", encoding, size), func(t *testing.T) {
+				defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+				d := newStreamDecoder(encoding)
+				var got []byte
+				for chunk := range slices.Chunk(compressed, size) {
+					out, err := d.decode(chunk, false)
+					require.NoError(t, err)
+					got = append(got, out...)
+				}
+				out, err := d.decode(nil, true)
+				require.NoError(t, err)
+				require.Equal(t, plain, string(append(got, out...)))
+			})
 		}
 
-		newData := allDecompressed[decompressedOffset:]
-		decompressedOffset = len(allDecompressed)
-		totalDecompressed += string(newData)
+		t.Run(encoding+"/truncated at end of stream", func(t *testing.T) {
+			defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+			d := newStreamDecoder(encoding)
+			out, err := d.decode(bytes.Join(chunks[:len(events)], nil), false)
+			require.NoError(t, err)
+			require.Equal(t, plain, string(out))
+			_, err = d.decode(nil, true)
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+		})
+
+		t.Run(encoding+"/data after the compressed stream", func(t *testing.T) {
+			defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+			d := newStreamDecoder(encoding)
+			_, err := d.decode(append(bytes.Clone(compressed), "trailing"...), true)
+			require.Error(t, err)
+		})
+
+		t.Run(encoding+"/stop releases a stream that ended early", func(t *testing.T) {
+			defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+			d := newStreamDecoder(encoding)
+			out, err := d.decode(chunks[0], false)
+			require.NoError(t, err)
+			require.Equal(t, events[0], string(out))
+			d.stop()
+			require.ErrorIs(t, d.err, errStreamDecoderStopped)
+		})
 	}
 
-	expected := messages[0] + messages[1] + messages[2]
-	require.Equal(t, expected, totalDecompressed)
+	t.Run("unsupported encoding passes chunks through", func(t *testing.T) {
+		defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+		d := newStreamDecoder("deflate")
+		for _, chunk := range []string{"first", "second"} {
+			out, err := d.decode([]byte(chunk), false)
+			require.NoError(t, err)
+			require.Equal(t, chunk, string(out))
+		}
+		out, err := d.decode(nil, true)
+		require.NoError(t, err)
+		require.Empty(t, out)
+	})
 }
 
 func TestRemoveContentEncodingIfNeeded(t *testing.T) {
