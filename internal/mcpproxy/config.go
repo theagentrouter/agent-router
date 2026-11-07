@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
@@ -25,6 +26,9 @@ type (
 	// This implements [filterapi.ConfigReceiver] to gets the up-to-date configuration.
 	ProxyConfig struct {
 		*mcpProxyConfig
+		// configLoaded is set once mcpProxyConfig holds the first loaded config. Requests check it before they use
+		// the config, which is loaded on the config watcher's goroutine.
+		configLoaded       atomic.Bool
 		toolChangeSignaler changeSignaler // signals tool changes to active sessions.
 		l                  *slog.Logger
 		// sessionCrypto is the session crypto configured at startup (from command line flags). It is
@@ -360,6 +364,7 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 
 	toolsChanged := !p.sameTools(newConfig)
 	p.mcpProxyConfig = newConfig // This is racy, but we don't care.
+	p.configLoaded.Store(true)
 	if toolsChanged {
 		p.toolChangeSignaler.Signal()
 	}

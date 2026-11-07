@@ -9,10 +9,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +27,8 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/pprof"
+	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 )
 
 func Test_newLogHandler(t *testing.T) {
@@ -384,6 +390,78 @@ backends:
 	case err := <-errCh:
 		require.NoError(t, err, "extproc exited with error before startup message")
 	}
+}
+
+func TestExtProcNotReadyBeforeFirstConfigLoad(t *testing.T) {
+	// The config bundle watcher tolerates a bundle whose parts do not match the index checksum on the initial load,
+	// so the extproc starts without a config. Until it has one, the admin /health endpoint that the readiness probe
+	// calls must fail, and the MCP proxy must answer with a 503.
+	configRaw := []byte("\nversion: dev\n")
+	configBundlePath := filepath.Join(t.TempDir(), "config-bundle")
+	part := filterapi.ConfigBundlePart{Name: "config", Path: filterapi.ConfigBundlePartPath(0), SizeBytes: len(configRaw)}
+	partPath := filepath.Join(configBundlePath, filepath.FromSlash(part.Path))
+	require.NoError(t, os.MkdirAll(filepath.Dir(partPath), 0o700))
+	require.NoError(t, os.WriteFile(partPath, configRaw, 0o600))
+	indexRaw, err := filterapi.MarshalConfigBundleIndex(&filterapi.ConfigBundleIndex{
+		Checksum: filterapi.ConfigBundleChecksum([]byte("something else")),
+		Parts:    []filterapi.ConfigBundlePart{part},
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(configBundlePath, filterapi.ConfigBundleIndexFileName), indexRaw, 0o600))
+
+	// UNIX doesn't like the long socket paths, so create a temp directory for the sockets instead of t.TempDir.
+	socketTempDir := "/tmp/" + uuid.NewString()
+	t.Cleanup(func() { _ = os.RemoveAll(socketTempDir) })
+	require.NoError(t, os.MkdirAll(socketTempDir, 0o700))
+	mcpSocketPath := filepath.Join(socketTempDir, "mcp.sock")
+	adminPort := internaltesting.RequireRandomPorts(t, 1)[0]
+	t.Setenv(pprof.DisableEnvVarKey, "true")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Main(ctx, []string{
+			"-configBundlePath", configBundlePath,
+			"-extProcAddr", "unix://" + filepath.Join(socketTempDir, "extproc.sock"),
+			"-adminPort", strconv.Itoa(adminPort),
+			"-mcpAddr", "unix://" + mcpSocketPath,
+			"-logLevel", "info",
+		}, io.Discard)
+	}()
+
+	var healthStatus int
+	var healthBody string
+	require.Eventually(t, func() bool {
+		resp, getErr := http.Get(fmt.Sprintf("http://127.0.0.1:%d/health", adminPort))
+		if getErr != nil {
+			return false
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		healthStatus, healthBody = resp.StatusCode, string(body)
+		return true
+	}, 10*time.Second, 50*time.Millisecond)
+	require.Equal(t, http.StatusInternalServerError, healthStatus)
+	require.Contains(t, healthBody, "NOT_SERVING")
+
+	mcpClient := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", mcpSocketPath)
+	}}}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://mcp/mcp", strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set(internalapi.MCPRouteHeader, "default/some-route")
+	resp, err := mcpClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+	cancel()
+	<-errCh
 }
 
 type recordingConfigReceiver struct{ loaded int }
