@@ -330,6 +330,60 @@ func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming(t *testing.T) {
 	})
 }
 
+func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming_CachedTokens(t *testing.T) {
+	translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "")
+	reqBody := &anthropic.MessagesRequest{
+		Model:     "claude-3-haiku",
+		MaxTokens: 100,
+		Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
+	}
+	_, _, err := translator.RequestBody(nil, reqBody, false)
+	require.NoError(t, err)
+
+	content := "Hello"
+	respBytes, err := json.Marshal(openai.ChatCompletionResponse{
+		Model: "gpt-4o",
+		Choices: []openai.ChatCompletionResponseChoice{{
+			FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+			Message:      openai.ChatCompletionResponseChoiceMessage{Content: &content, Role: "assistant"},
+		}},
+		Usage: openai.Usage{
+			PromptTokens:        100,
+			CompletionTokens:    20,
+			PromptTokensDetails: &openai.PromptTokensDetails{CachedTokens: 60, CacheWriteTokens: 30},
+		},
+	})
+	require.NoError(t, err)
+
+	_, body, tokenUsage, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "application/json"}, bytes.NewReader(respBytes), true, nil)
+	require.NoError(t, err)
+
+	// The usage that request costs and quotas are computed from: the whole
+	// prompt as input, with the cache read and the cache write known.
+	input, ok := tokenUsage.InputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(100), input)
+	cached, ok := tokenUsage.CachedInputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(60), cached)
+	written, ok := tokenUsage.CacheCreationInputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(30), written)
+	total, ok := tokenUsage.TotalTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(120), total)
+
+	// The client sees the cache read and the cache write next to the
+	// uncached input.
+	var got anthropic.MessagesResponse
+	require.NoError(t, json.Unmarshal(body, &got))
+	require.NotNil(t, got.Usage)
+	assert.Equal(t, float64(10), got.Usage.InputTokens)
+	assert.Equal(t, float64(60), got.Usage.CacheReadInputTokens)
+	assert.Equal(t, float64(30), got.Usage.CacheCreationInputTokens)
+}
+
 func TestAnthropicToOpenAITranslator_ResponseBody_Streaming(t *testing.T) {
 	translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "claude-3-haiku")
 
