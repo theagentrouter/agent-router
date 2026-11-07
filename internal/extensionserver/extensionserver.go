@@ -11,6 +11,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	egextension "github.com/envoyproxy/gateway/proto/extension"
 	"github.com/go-logr/logr"
@@ -43,6 +44,8 @@ type Server struct {
 	quotaRateLimitTimeout int64
 	// quotaRateLimitFailureModeDeny sets the failure mode for the rate limit filter.
 	quotaRateLimitFailureModeDeny bool
+	// postTranslateModifyInvoked records whether Envoy Gateway has ever invoked [Server.PostTranslateModify].
+	postTranslateModifyInvoked atomic.Bool
 }
 
 const serverName = "envoy-gateway-extension-server"
@@ -71,6 +74,17 @@ func New(k8sClient client.Client, logger logr.Logger, udsPath string, isStandAlo
 		quotaRateLimitTimeout:         quotaRateLimitTimeout,
 		quotaRateLimitFailureModeDeny: quotaRateLimitFailureModeDeny,
 	}, nil
+}
+
+// PostTranslateModifyInvoked returns true once Envoy Gateway has invoked [Server.PostTranslateModify]
+// at least once.
+//
+// All of the xDS mutations that put traffic through the AI Gateway external processor, including the
+// insertion of its HTTP filter into the listener filter chains, happen inside that hook. Hence when this
+// returns false, Envoy Gateway is not wired to this extension server and requests bypass AI Gateway
+// entirely even though the external processor itself is running.
+func (s *Server) PostTranslateModifyInvoked() bool {
+	return s.postTranslateModifyInvoked.Load()
 }
 
 // parseHostPort splits a "host:port" string. If no port is present,
