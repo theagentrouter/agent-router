@@ -35,12 +35,15 @@ const posts = files
     return {
       file,
       slug: data.slug,
-      title: data.title,
+      // og_title lets a long post title use a shorter card headline
+      title: data.og_title ?? data.title,
       // subtitle: og_subtitle frontmatter wins, else the description
       subtitle: data.og_subtitle ?? data.description ?? '',
       tag: data.tags?.[0] ?? '',
       date,
       image: data.image,
+      logo: data.og_logo,
+      code: data.og_code,
     };
   })
   .filter(Boolean)
