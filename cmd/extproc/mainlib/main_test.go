@@ -386,6 +386,22 @@ backends:
 	}
 }
 
+func TestParseAndValidateFlags_ContextCache(t *testing.T) {
+	base := []string{"-configBundlePath", "/dev/null"}
+	f, err := parseAndValidateFlags(append(base, "-contextCacheStoreURL", "redis:6379"))
+	require.NoError(t, err)
+	require.Equal(t, "redis:6379", f.contextCacheStoreURL)
+	require.Equal(t, 300*time.Second, f.contextCacheDefaultTTL)
+
+	for _, bad := range []string{"30s", "90500ms"} {
+		_, err = parseAndValidateFlags(append(base, "-contextCacheStoreURL", "redis:6379", "-contextCacheDefaultTTL", bad))
+		require.ErrorContains(t, err, "contextCacheDefaultTTL", bad)
+	}
+	// The TTL is not validated when caching is off.
+	_, err = parseAndValidateFlags(append(base, "-contextCacheDefaultTTL", "30s"))
+	require.NoError(t, err)
+}
+
 type recordingConfigReceiver struct{ loaded int }
 
 func (r *recordingConfigReceiver) LoadConfig(context.Context, *filterapi.Config) error {

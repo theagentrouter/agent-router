@@ -557,6 +557,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 					b.Schema = schemaToFilterAPI(backendObj.Spec.APISchema)
 					b.HeaderValueFilters = headerValueFiltersToFilterAPI(backendObj.Spec.HeaderValueFilters)
+
 				}
 
 				if bsp != nil {

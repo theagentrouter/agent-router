@@ -19,11 +19,13 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/envoyproxy/ai-gateway/internal/contextcache"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
@@ -48,9 +50,103 @@ func requireNewServerWithMockProcessor(t *testing.T) (*Server, *mockProcessor) {
 func TestServer_LoadConfig(t *testing.T) {
 	config := &filterapi.Config{}
 	s := &Server{}
+	t.Cleanup(s.Close)
 	err := s.LoadConfig(t.Context(), config)
 	require.NoError(t, err)
 	require.NotNil(t, s.config)
+}
+
+// cachingServer returns a Server with context caching enabled against an in-memory store.
+func cachingServer(t *testing.T) *Server {
+	t.Helper()
+	s := &Server{}
+	s.EnableContextCache(contextcache.NoopStore{}, time.Minute)
+	t.Cleanup(s.Close)
+	return s
+}
+
+// gcpBackend builds a GCP Vertex AI backend with GCP credentials.
+func gcpBackend(name string) filterapi.Backend {
+	return filterapi.Backend{
+		Name:   name,
+		Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaGCPVertexAI},
+		Auth:   &filterapi.BackendAuth{GCPAuth: &filterapi.GCPAuth{AccessToken: "token"}},
+	}
+}
+
+// A resolver is attached only to GCP Vertex AI backends with GCP credentials.
+func TestServer_LoadConfig_CacheResolver(t *testing.T) {
+	s := cachingServer(t)
+	anthropic := gcpBackend("gcp-anthropic")
+	anthropic.Schema = filterapi.VersionedAPISchema{Name: filterapi.APISchemaGCPAnthropic}
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{Backends: []filterapi.Backend{
+		gcpBackend("gemini"),
+		anthropic,
+		{Name: "openai", Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}},
+	}}))
+
+	require.NotNil(t, s.config.Backends["gemini"].CacheResolver)
+	require.Nil(t, s.config.Backends["gcp-anthropic"].CacheResolver, "only Gemini uses resolved caches")
+	require.Nil(t, s.config.Backends["openai"].CacheResolver)
+}
+
+// Without EnableContextCache no backend gets a resolver.
+func TestServer_LoadConfig_CacheDisabled(t *testing.T) {
+	s := &Server{}
+	t.Cleanup(s.Close)
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{Backends: []filterapi.Backend{gcpBackend("gemini")}}))
+	require.Nil(t, s.config.Backends["gemini"].CacheResolver)
+	require.Empty(t, s.cacheResolvers)
+}
+
+// An unchanged backend keeps its resolver across reloads, and gets the reload's new
+// handler, since the controller rotates the access token.
+func TestServer_LoadConfig_CacheResolver_ReusedWithNewHandler(t *testing.T) {
+	s := cachingServer(t)
+	config := &filterapi.Config{Backends: []filterapi.Backend{gcpBackend("gemini")}}
+
+	require.NoError(t, s.LoadConfig(t.Context(), config))
+	first := s.config.Backends["gemini"].CacheResolver
+	firstHandler := s.config.Backends["gemini"].Handler
+
+	require.NoError(t, s.LoadConfig(t.Context(), config))
+	require.Same(t, first, s.config.Backends["gemini"].CacheResolver)
+	second := s.config.Backends["gemini"].Handler
+	require.NotSame(t, firstHandler, second, "the handler is rebuilt on every reload")
+	require.Equal(t, second, s.cacheResolvers["gemini"].GetAuth())
+}
+
+// A resolver evicted by a reload must have its background syncer stopped.
+func TestServer_LoadConfig_CacheResolver_EvictedIsClosed(t *testing.T) {
+	before := goleak.IgnoreCurrent()
+	s := &Server{}
+	s.EnableContextCache(contextcache.NoopStore{}, time.Minute)
+
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{Backends: []filterapi.Backend{
+		gcpBackend("a"), gcpBackend("b"),
+	}}))
+	kept := s.cacheResolvers["a"]
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{Backends: []filterapi.Backend{gcpBackend("a")}}))
+	require.Len(t, s.cacheResolvers, 1)
+	// If the evicted resolver had not been closed, its syncer would still be running.
+	require.NoError(t, kept.Close())
+	goleak.VerifyNone(t, before)
+}
+
+// The reload context is cancelled when the reload finishes; syncers must outlive it.
+func TestServer_LoadConfig_SyncerOutlivesReloadContext(t *testing.T) {
+	before := goleak.IgnoreCurrent()
+	s := &Server{}
+	s.EnableContextCache(contextcache.NoopStore{}, time.Minute)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	require.NoError(t, s.LoadConfig(ctx, &filterapi.Config{Backends: []filterapi.Backend{gcpBackend("gemini")}}))
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+	require.Error(t, goleak.Find(before), "the syncer must still be running after the reload context ends")
+
+	s.Close()
+	goleak.VerifyNone(t, before)
 }
 
 func TestServer_Check(t *testing.T) {

@@ -53,6 +53,19 @@ const (
 // Request Conversion Helper for OpenAI to GCP Gemini Translator
 // -------------------------------------------------------------.
 
+// OpenAIMessagesToGeminiContents converts OpenAI messages to Gemini Contents and SystemInstruction.
+// It is exported so that the gcpcache resolver can build the cached prefix in Gemini format
+// without duplicating conversion logic.
+func OpenAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParamUnion, requestModel internalapi.RequestModel) ([]genai.Content, *genai.Content, error) {
+	return openAIMessagesToGeminiContents(messages, requestModel)
+}
+
+// OpenAIToolsToGeminiTools converts OpenAI tools to Gemini tools.
+// It is exported so that the gcpcache resolver can include tools in the cached prefix.
+func OpenAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAvailable bool) ([]genai.Tool, error) {
+	return openAIToolsToGeminiTools(openaiTools, parametersJSONSchemaAvailable)
+}
+
 // openAIMessagesToGeminiContents converts OpenAI messages to Gemini Contents and SystemInstruction.
 func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParamUnion, requestModel internalapi.RequestModel) ([]genai.Content, *genai.Content, error) {
 	var gcpContents []genai.Content
