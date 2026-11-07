@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -119,9 +118,8 @@ type (
 		requestHeaders           map[string]string
 		responseHeaders          map[string]string
 		responseEncoding         string
-		compressedBuf            []byte // accumulates raw compressed bytes across streaming chunks
-		decompressedOffset       int    // tracks decompressed bytes already returned
-		responseStreamTerminated bool   // a terminal SSE error was returned; discard any later upstream chunks
+		streamDecoder            *streamDecoder // decompresses an encoded streaming response across chunks
+		responseStreamTerminated bool           // a terminal SSE error was returned; discard any later upstream chunks
 		translator               translator.Translator[ReqT, tracingapi.Span[RespT, RespChunkT]]
 		modelNameOverride        internalapi.ModelNameOverride
 		headerMutator            *headermutator.HeaderMutator
@@ -189,6 +187,15 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespons
 		resp, err = r.passThroughProcessor.ProcessResponseBody(ctx, body)
 	}
 	return
+}
+
+// Close implements [io.Closer]. It is called when the stream ends, which may be before the last
+// chunk of a streaming response, so the response decoder is released here.
+func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) Close() error {
+	if r.upstreamFilter != nil {
+		r.upstreamFilter.closeStreamDecoder()
+	}
+	return nil
 }
 
 // formatUserFacingErrorJSON formats a user-facing error as a JSON response body.
@@ -510,8 +517,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		u.responseEncoding = enc
 	}
 	// Reset streaming decompression state for new response (important for retries).
-	u.compressedBuf = nil
-	u.decompressedOffset = 0
+	u.closeStreamDecoder()
 	u.responseStreamTerminated = false
 	newHeaders, err := u.translator.ResponseHeaders(u.responseHeaders)
 	if err != nil {
@@ -706,27 +712,29 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 	return resp, nil
 }
 
-// decodeStreamingContent handles decompression for streaming responses with content-encoding.
-// It accumulates raw compressed bytes across chunks and re-decompresses from the beginning each time,
-// returning only the newly decompressed data. This is necessary because gzip streams are stateful
-// and a new decompressor cannot be created mid-stream without the full preceding data.
+// decodeStreamingContent handles decompression for streaming responses with content-encoding,
+// returning the data decompressed from this chunk. The decoder starts with the first non-empty
+// chunk, so an empty body decodes to nothing as in decodeContentIfNeeded.
 func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) decodeStreamingContent(chunk []byte, endOfStream bool) (contentDecodingResult, error) {
-	u.compressedBuf = append(u.compressedBuf, chunk...)
-	decodingResult, err := decodeContentIfNeeded(u.compressedBuf, u.responseEncoding)
-	if err != nil {
-		return contentDecodingResult{}, err
-	}
-	allDecompressed, readErr := io.ReadAll(decodingResult.reader)
-	if readErr != nil {
-		if endOfStream || !errors.Is(readErr, io.ErrUnexpectedEOF) {
-			return contentDecodingResult{}, fmt.Errorf("failed to decompress streaming content: %w", readErr)
+	if u.streamDecoder == nil {
+		if len(chunk) == 0 {
+			return contentDecodingResult{reader: bytes.NewReader(nil), isEncoded: true}, nil
 		}
-		// For non-final chunks, ErrUnexpectedEOF is expected: the gzip stream is incomplete
-		// (footer not yet received), but all data up to this point is valid.
+		u.streamDecoder = newStreamDecoder(u.responseEncoding)
 	}
-	newData := allDecompressed[u.decompressedOffset:]
-	u.decompressedOffset = len(allDecompressed)
+	newData, err := u.streamDecoder.decode(chunk, endOfStream)
+	if err != nil {
+		return contentDecodingResult{}, fmt.Errorf("failed to decompress streaming content: %w", err)
+	}
 	return contentDecodingResult{reader: bytes.NewReader(newData), isEncoded: true}, nil
+}
+
+// closeStreamDecoder releases the decoder of the current streaming response, if any.
+func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) closeStreamDecoder() {
+	if u.streamDecoder != nil {
+		u.streamDecoder.stop()
+		u.streamDecoder = nil
+	}
 }
 
 // SetBackend implements [Processor.SetBackend].
