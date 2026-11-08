@@ -374,7 +374,7 @@ func anthropicToolChoiceToOpenAI(tc anthropic.ToolChoice, hasTools bool) *openai
 	}
 }
 
-// The following are helper functions that convert an OpenAI ChatCompletionResponse to an Anthropic MessagesRepsonse
+// The following are helper functions that convert an OpenAI ChatCompletionResponse to an Anthropic MessagesResponse
 
 // openAIResponseToAnthropic converts an OpenAI ChatCompletionResponse to an Anthropic MessagesResponse.
 func openAIResponseToAnthropic(resp *openai.ChatCompletionResponse, model string) *anthropic.MessagesResponse {

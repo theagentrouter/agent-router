@@ -1,0 +1,52 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# Configuration for https://github.com/crate-ci/typos, run via `make spellcheck`.
+
+[files]
+extend-exclude = [
+    # Dependency manifests are full of version hashes.
+    "go.mod",
+    "go.sum",
+    "**/go.mod",
+    "**/go.sum",
+    # Recorded upstream API responses and traces contain opaque IDs and base64 payloads.
+    "tests/internal/testopenai/cassettes/",
+    "tests/internal/testopeninference/spans/",
+    # Binary-ish and generated assets.
+    "*.drawio",
+    "*.svg",
+    # Frozen snapshots of released docs and the generated API reference.
+    "site/versioned_docs/",
+    "site/versioned_sidebars/",
+    "site/i18n/",
+    # Generated from the Go API types; fix the typo at the source instead.
+    "manifests/charts/*/templates/*.yaml",
+    "site/docs/api/api.mdx",
+]
+
+[default]
+# Opaque tokens (JWTs, JWKS key material, signatures, base64 blobs) that are not prose.
+extend-ignore-re = [
+    "[A-Za-z0-9+/_-]{40,}={0,2}",
+    # Hex identifiers such as trace/span IDs and OpenAI `system_fingerprint` values (fp_0ba0d124f1).
+    "\\b[0-9a-f]{8,}\\b",
+    "\\bfp_[0-9a-f]+\\b",
+    # Base64 session IDs in MCP proxy docs, e.g. `backend1:MTIzNDU2`.
+    "backend[0-9]+:[A-Za-z0-9+/]+={0,2}",
+]
+
+[default.extend-words]
+# Short identifiers and fragments that are intentional.
+ba = "ba"        # Test fixtures ("^ba.*"), the `baIndex` variable and hex IDs.
+ot = "ot"        # Local variable for the "output text" union in the OpenAI schema.
+nin = "nin"      # The "not in" filter comparison operator.
+hel = "hel"      # Partial streaming deltas of "Hello" in transcription tests.
+respons = "respons"  # Prefix of the intentional `OfRespons...` OpenAI union field names.
+ded = "ded"      # Produced by splitting "ANDed" in API doc comments.
+# Accepted spellings flagged by typos.
+unparseable = "unparseable"
+requeueing = "requeueing"
+copute = "copute"  # Fictitious vendor name in the site's sample data.

@@ -174,7 +174,7 @@ type QuotaRule struct {
 
 // QuotaValue defines the quota limits using sliding window.
 type QuotaValue struct {
-	// The limit alloted for a specified time window.
+	// The limit allotted for a specified time window.
 	//
 	// This is the static baseline used by the rate limit service when
 	// FromMetadata is absent or cannot be resolved.

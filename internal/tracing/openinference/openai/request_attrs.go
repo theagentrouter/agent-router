@@ -56,7 +56,7 @@ func buildRequestAttributes(chatRequest *openai.ChatCompletionRequest, body stri
 	// Note: compound match here is from Python OpenInference OpenAI config.py.
 	if !config.HideInputs && !config.HideInputMessages {
 		for i, msg := range chatRequest.Messages {
-			role := msg.ExtractMessgaeRole()
+			role := msg.ExtractMessageRole()
 			attrs = append(attrs, attribute.String(openinference.InputMessageAttribute(i, openinference.MessageRole), role))
 
 			switch {

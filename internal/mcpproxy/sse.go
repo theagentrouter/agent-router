@@ -96,7 +96,7 @@ func (s *sseEventParser) next() (*sseEvent, error) {
 			if errors.Is(err, io.EOF) && len(s.buf) > 0 {
 				event, parseErr := s.parseEvent(s.buf)
 				s.buf = nil
-				return event, errors.Join(err, parseErr) // wil ignore parseErr if nil.
+				return event, errors.Join(err, parseErr) // will ignore parseErr if nil.
 			}
 			return nil, err
 		}

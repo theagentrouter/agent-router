@@ -56,6 +56,12 @@ lint: ## This runs the linter on the codebase.
 spellcheck:  ## Spell check the codebase.
 	@echo "misspell => ./..."
 	@git ls-files --cached --others --exclude-standard | (cd tools && go run ./ignorepaths ../.misspellignore) | xargs -n 100 $(GO_TOOL) misspell -error
+	@echo "typos => ./..."
+	@if command -v typos >/dev/null 2>&1; then \
+		typos; \
+	else \
+		echo "typos is not installed, skipping (CI still checks it). Install: https://github.com/crate-ci/typos#install"; \
+	fi
 
 # Some IDEs like Goland place `.go` files in the `.idea` directory when using code templates. Using a
 # git command to find the files ensures that only relevant files are formatted and that git-ignored

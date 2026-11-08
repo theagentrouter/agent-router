@@ -79,16 +79,16 @@ func (e *TestEnvironment) ExtProcAdminPort() int {
 // mainlib.Main instead of the built binary. This allows the benchmark test suite to directly do the profiling
 // without the extroc.
 func StartTestEnvironment(t testing.TB,
-	requireNewUpstream func(t testing.TB, out io.Writer, miscPorts map[string]int), miscPortDefauls map[string]int,
+	requireNewUpstream func(t testing.TB, out io.Writer, miscPorts map[string]int), miscPortDefaults map[string]int,
 	extprocConfig string, extprocEnv []string, envoyConfig string, okToDumpLogOnFailure, extProcInProcess bool,
 	mcpWriteTimeout time.Duration, extprocArgs ...string,
 ) *TestEnvironment {
 	// Get random ports for all services.
 	const defaultPortCount = 5
-	ports := internaltesting.RequireRandomPorts(t, defaultPortCount+len(miscPortDefauls))
+	ports := internaltesting.RequireRandomPorts(t, defaultPortCount+len(miscPortDefaults))
 	miscPorts := make(map[string]int)
 	index := 0
-	for key := range miscPortDefauls {
+	for key := range miscPortDefaults {
 		miscPorts[key] = ports[defaultPortCount+index]
 		index++
 	}
@@ -119,7 +119,7 @@ func StartTestEnvironment(t testing.TB,
 		envoyStderr:       buffers[3],
 		mcpWriteTimeout:   mcpWriteTimeout,
 		miscPorts:         miscPorts,
-		miscPortDefaults:  miscPortDefauls,
+		miscPortDefaults:  miscPortDefaults,
 	}
 
 	t.Logf("Starting test environment with ports: extproc=%d, envoyListener=%d, envoyAdmin=%d misc=%v",

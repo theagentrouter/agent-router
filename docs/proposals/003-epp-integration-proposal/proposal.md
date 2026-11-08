@@ -501,7 +501,7 @@ The second one, introduces the abilities for define the custom BackendRef in Env
 
 Reference: https://github.com/envoyproxy/gateway/pull/6342
 
-Cluste Modify Workflow is like:
+Cluster Modify Workflow is like:
 
 **Envoy Gateway**
 

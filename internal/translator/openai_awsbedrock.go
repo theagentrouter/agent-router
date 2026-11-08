@@ -192,7 +192,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) openAIMessageToBedrockMes
 	openAIReqMessageLen, i := len(openAIReq.Messages), 0
 	for i < openAIReqMessageLen {
 		msg := &openAIReq.Messages[i]
-		role := msg.ExtractMessgaeRole()
+		role := msg.ExtractMessageRole()
 		switch {
 		case msg.OfUser != nil:
 			userMessage := msg.OfUser
@@ -261,7 +261,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) openAIMessageToBedrockMes
 			// Coalesce consecutive tool messages following a user message.
 			for i+1 < openAIReqMessageLen {
 				nextMessage := &openAIReq.Messages[i+1]
-				if nextMessage.ExtractMessgaeRole() != openai.ChatMessageRoleTool {
+				if nextMessage.ExtractMessageRole() != openai.ChatMessageRoleTool {
 					break
 				}
 
@@ -278,7 +278,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) openAIMessageToBedrockMes
 
 			bedrockReq.Messages = append(bedrockReq.Messages, bedrockMessage)
 		default:
-			return fmt.Errorf("%w: unexpected role: %s", internalapi.ErrInvalidRequestBody, msg.ExtractMessgaeRole())
+			return fmt.Errorf("%w: unexpected role: %s", internalapi.ErrInvalidRequestBody, msg.ExtractMessageRole())
 		}
 
 		i++
