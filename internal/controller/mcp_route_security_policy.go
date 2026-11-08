@@ -40,6 +40,9 @@ const (
 
 	httpClientTimeout   = 5 * time.Second
 	maxRetryElapsedTime = 10 * time.Second
+	// maxMetadataResponseBytes caps how much of an authorization server metadata response is read.
+	// Real documents are a few KiB, and the URL is user-supplied, so we want to cap the read size.
+	maxMetadataResponseBytes = 1 << 20 // 1 MiB.
 )
 
 // syncMCPRouteSecurityPolicy reconciles MCPRouteSecurityPolicy and creates/updates its associated envoy gateway resources.
@@ -801,11 +804,15 @@ func fetchFirstUsableMetadata(candidateURLs []string, maxRetryElapsedTime time.D
 			return backoff.Permanent(&httpError{statusCode: resp.StatusCode, status: resp.Status})
 		}
 
-		// Read and parse the response body.
-		body, err := io.ReadAll(resp.Body)
+		// Read and parse the response body, reading one byte past the limit to detect oversized documents.
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxMetadataResponseBytes+1))
 		if err != nil {
 			// I/O errors during reading might be transient.
 			return err
+		}
+		if len(body) > maxMetadataResponseBytes {
+			// Retrying will not make the document smaller, so move to the next variant.
+			return backoff.Permanent(&invalidMetadataError{url: wellKnownURL, err: fmt.Errorf("response exceeds %d bytes", maxMetadataResponseBytes)})
 		}
 
 		var fetched OAuthAuthServerMetadata
