@@ -54,6 +54,35 @@ data: [DONE]
 	require.Equal(t, tokenUsageFrom(10, -1, -1, 5, 15, -1), tokenUsage)
 }
 
+func TestOpenAIToOpenAI_VLLMCacheCreationUsage(t *testing.T) {
+	testCases := []struct {
+		name          string
+		details       string
+		cachedTokens  int32
+		createdTokens int32
+	}{
+		{"cold prompt", `{"cached_tokens":0,"created_cache_tokens":1152}`, 0, 1152},
+		{"warm prompt", `{"cached_tokens":1152,"created_cache_tokens":0}`, 1152, 0},
+		{"overlapping aliases", `{"cached_tokens":0,"created_cache_tokens":1152,"cache_creation_input_tokens":1152,"cache_write_tokens":1152}`, 0, 1152},
+	}
+	for _, testCase := range testCases {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", testCase.name, stream), func(t *testing.T) {
+				translator := NewChatCompletionOpenAIToOpenAITranslator("v1", "").(*openAIToOpenAITranslatorV1ChatCompletion)
+				_, _, err := translator.RequestBody(nil, &openai.ChatCompletionRequest{Model: "qwen", Stream: stream}, false)
+				require.NoError(t, err)
+				body := fmt.Sprintf(`{"model":"qwen","choices":[],"usage":{"prompt_tokens":1218,"completion_tokens":2,"total_tokens":1220,"prompt_tokens_details":%s}}`, testCase.details)
+				if stream {
+					body = "data: " + body + "\n\ndata: [DONE]\n\n"
+				}
+				_, _, tokenUsage, _, err := translator.ResponseBody(nil, strings.NewReader(body), true, nil)
+				require.NoError(t, err)
+				require.Equal(t, tokenUsageFrom(1218, testCase.cachedTokens, testCase.createdTokens, 2, 1220, -1), tokenUsage)
+			})
+		}
+	}
+}
+
 // TestResponseModel_EmptyFallback tests the fallback to request model when response model is empty
 // This is a safeguard for test or non-compliant OpenAI backends that don't fill in the model field
 func TestResponseModel_EmptyFallback(t *testing.T) {

@@ -1944,6 +1944,40 @@ func TestPromptTokensDetails(t *testing.T) {
 }
 
 func TestCacheWriteTokensBackwardCompatibility(t *testing.T) {
+	t.Run("prompt token details accept vllm field", func(t *testing.T) {
+		var details PromptTokensDetails
+		err := json.Unmarshal([]byte(`{"cached_tokens":3,"created_cache_tokens":10}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, 3, details.CachedTokens)
+		require.Equal(t, 10, details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cached_tokens":3,"cache_write_tokens":10,"cache_creation_input_tokens":10}`, string(encoded))
+	})
+
+	t.Run("overlapping vllm aliases are not summed", func(t *testing.T) {
+		var details PromptTokensDetails
+		err := json.Unmarshal([]byte(`{"created_cache_tokens":13,"cache_creation_input_tokens":10,"cache_write_tokens":12}`), &details)
+		require.NoError(t, err)
+		require.Equal(t, 13, details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"cache_write_tokens":13,"cache_creation_input_tokens":13}`, string(encoded))
+	})
+
+	t.Run("zero vllm cache creation remains omitted", func(t *testing.T) {
+		var details PromptTokensDetails
+		err := json.Unmarshal([]byte(`{"created_cache_tokens":0}`), &details)
+		require.NoError(t, err)
+		require.Zero(t, details.CacheWriteTokensValue())
+
+		encoded, err := json.Marshal(details)
+		require.NoError(t, err)
+		require.JSONEq(t, `{}`, string(encoded))
+	})
+
 	t.Run("prompt token details accept legacy field", func(t *testing.T) {
 		var details PromptTokensDetails
 		err := json.Unmarshal([]byte(`{"cache_creation_input_tokens":10}`), &details)

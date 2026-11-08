@@ -1628,12 +1628,13 @@ type PromptTokensDetails struct {
 	CacheWriteTokens int `json:"cache_write_tokens,omitzero"`
 	// Deprecated: use CacheWriteTokens. This field will be removed in v1.3.0.
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitzero"`
+	CreatedCacheTokens  int `json:"created_cache_tokens,omitzero"`
 }
 
 // CacheWriteTokensValue returns the greatest cache-write token value reported
-// under either the OpenAI or legacy AI Gateway field.
+// under the OpenAI, legacy AI Gateway, or vLLM field.
 func (p *PromptTokensDetails) CacheWriteTokensValue() int {
-	return max(p.CacheWriteTokens, p.CacheCreationTokens)
+	return max(p.CacheWriteTokens, p.CacheCreationTokens, p.CreatedCacheTokens)
 }
 
 // MarshalJSON emits both cache-write field names with the same value for
@@ -1642,6 +1643,7 @@ func (p PromptTokensDetails) MarshalJSON() ([]byte, error) {
 	cacheWriteTokens := p.CacheWriteTokensValue()
 	p.CacheWriteTokens = cacheWriteTokens
 	p.CacheCreationTokens = cacheWriteTokens
+	p.CreatedCacheTokens = 0
 	type promptTokensDetails PromptTokensDetails
 	return json.Marshal(promptTokensDetails(p))
 }
