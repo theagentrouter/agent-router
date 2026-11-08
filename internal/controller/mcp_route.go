@@ -88,14 +88,18 @@ func (c *MCPRouteController) Reconcile(ctx context.Context, req reconcile.Reques
 func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
 	// On deletion, propagate to the referenced Gateways and clean up the shared Backend if this
 	// is the last MCPRoute in the namespace.
-	if handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted) {
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted)
+	if err != nil {
+		return err
+	}
+	if onDelete {
 		return nil
 	}
 
 	// Validate prefixMode=Never (whether set per-backend or inherited from the route-level
 	// default): each effectively-Never backend must declare toolSelector.include, and tool
 	// names must be unique across all effectively-Never backends on the route.
-	if err := validatePerBackendPrefixMode(mcpRoute); err != nil {
+	if err = validatePerBackendPrefixMode(mcpRoute); err != nil {
 		return err
 	}
 
