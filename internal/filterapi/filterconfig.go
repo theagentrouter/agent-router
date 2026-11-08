@@ -52,6 +52,34 @@ type Config struct {
 	UnscopedModels []Model `json:"unscopedModels,omitempty"`
 	// MCPConfig is the configuration for the MCPRoute implementations.
 	MCPConfig *MCPConfig `json:"mcpConfig,omitempty"`
+	// FileIDEncryption is the configuration used to encrypt Files/Batch API ids.
+	//
+	// It is delivered through the filter config (stored in Secrets) so the seeds are not exposed
+	// in the Pod spec or the process command line. When nil, the external processor uses its
+	// command line flags.
+	FileIDEncryption *FileIDEncryption `json:"fileIDEncryption,omitempty"`
+}
+
+// FileIDEncryption is the configuration for Files/Batch API id encryption.
+type FileIDEncryption struct {
+	// Seed is the seed used to derive the id encryption key.
+	Seed string `json:"seed"`
+	// Iterations is the number of PBKDF2 iterations used to derive the key from Seed.
+	Iterations int `json:"iterations"`
+	// FallbackSeed is the optional previous seed, tried on decode during seed rotation.
+	FallbackSeed string `json:"fallbackSeed,omitempty"`
+	// FallbackIterations is the number of PBKDF2 iterations used to derive the key from FallbackSeed.
+	FallbackIterations int `json:"fallbackIterations,omitempty"`
+}
+
+// LogValue implements slog.LogValuer for FileIDEncryption to redact sensitive information.
+func (e FileIDEncryption) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("seed", "[REDACTED]"),
+		slog.Int("iterations", e.Iterations),
+		slog.Bool("fallbackSeedSet", e.FallbackSeed != ""),
+		slog.Int("fallbackIterations", e.FallbackIterations),
+	)
 }
 
 // Model corresponds to the OpenAI model object in the OpenAI-compatible APIs
@@ -226,6 +254,8 @@ type BackendAuth struct {
 	AzureAuth *AzureAuth `json:"azure,omitempty"`
 	// GCPAuth specifies the location of GCP credential file.
 	GCPAuth *GCPAuth `json:"gcp,omitempty"`
+	// OpenAIAuth specifies the OpenAI access token obtained via token exchange.
+	OpenAIAuth *OpenAIAuth `json:"openai,omitempty"`
 	// CredentialOverride, when non-nil, sources the credential per-request instead of the
 	// static credential above. nil disables per-request sourcing (the default).
 	CredentialOverride *CredentialOverride `json:"credentialOverride,omitempty"`
@@ -313,6 +343,25 @@ type AzureAuth struct {
 // LogValue implements slog.LogValuer for AzureAuth to redact sensitive information.
 func (a AzureAuth) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("accessToken", "[REDACTED]"))
+}
+
+// OpenAIAuth defines the OpenAI access token and the optional organization and project headers.
+type OpenAIAuth struct {
+	// AccessToken is the access token as a literal string.
+	AccessToken string `json:"accessToken"`
+	// Organization is sent in the OpenAI-Organization header when set.
+	Organization string `json:"organization,omitempty"`
+	// Project is sent in the OpenAI-Project header when set.
+	Project string `json:"project,omitempty"`
+}
+
+// LogValue implements slog.LogValuer for OpenAIAuth to redact sensitive information.
+func (a OpenAIAuth) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("accessToken", "[REDACTED]"),
+		slog.String("organization", a.Organization),
+		slog.String("project", a.Project),
+	)
 }
 
 // GCPAuth defines the GCP authentication configuration used to access Google Cloud AI services.

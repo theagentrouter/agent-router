@@ -1,0 +1,94 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: envoy-ai-gateway-basic-openai-spiffe
+  namespace: default
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway-basic
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: gpt-4o-mini
+      backendRefs:
+        - name: envoy-ai-gateway-basic-openai-spiffe
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: envoy-ai-gateway-basic-openai-spiffe
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: envoy-ai-gateway-basic-openai-spiffe
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: envoy-ai-gateway-basic-openai-spiffe-credentials
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: envoy-ai-gateway-basic-openai-spiffe
+  type: OpenAICredentials
+  # The controller fetches a JWT-SVID for its own SPIFFE ID and exchanges it for a short-lived OpenAI
+  # access token via OpenAI Workload Identity Federation, rotating it before it expires. The SPIFFE
+  # Workload API socket must be mounted into the controller, with SPIFFE_ENDPOINT_SOCKET pointing at it
+  # (or set socketPath below).
+  #
+  # The identity provider (trusting your SPIFFE trust domain) and the service account mapping must be
+  # configured in your OpenAI organization:
+  # https://developers.openai.com/api/reference/workload-identity-federation
+  #
+  # The SPIFFE identity is owned by the controller, not by this policy (unlike oidcExchangeToken, where
+  # the policy supplies its own credentials). Every policy using spiffeJWTSVID authenticates as the
+  # controller, so only trusted cluster admins should be allowed to create them.
+  openAICredentials:
+    organization: OPENAI_ORGANIZATION_ID # Optional. Replace with your OpenAI organization ID, or remove.
+    project: OPENAI_PROJECT_ID # Optional. Replace with your OpenAI project ID, or remove.
+    workloadIdentityFederationConfig:
+      identityProviderID: OPENAI_IDENTITY_PROVIDER_ID # Replace with your OpenAI Workload Identity Provider ID.
+      serviceAccountID: OPENAI_SERVICE_ACCOUNT_ID # Replace with your OpenAI service account ID.
+      subjectToken:
+        spiffeJWTSVID:
+          audience: OPENAI_IDENTITY_PROVIDER_AUDIENCE # Replace with the audience configured for the identity provider.
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: envoy-ai-gateway-basic-openai-spiffe
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: api.openai.com
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: envoy-ai-gateway-basic-openai-spiffe-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: "gateway.envoyproxy.io"
+      kind: Backend
+      name: envoy-ai-gateway-basic-openai-spiffe
+  validation:
+    wellKnownCACertificates: "System"
+    hostname: api.openai.com
