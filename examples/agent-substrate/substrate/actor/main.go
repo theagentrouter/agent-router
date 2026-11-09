@@ -42,6 +42,9 @@ var (
 	echoHeaders = []string{"x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "x-envoy-ratelimited", "x-upstream-saw-actor-id", "x-upstream-auth"}
 )
 
+// maxBenchCalls caps POST /bench, which sizes a slice by the requested count.
+const maxBenchCalls = 10_000
+
 type callRequest struct {
 	URL     string            `json:"url"`
 	Model   string            `json:"model"`
@@ -77,8 +80,8 @@ func main() {
 			N int `json:"n"`
 			callRequest
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.N <= 0 {
-			http.Error(w, `want {"n": <positive int>, ...}`, http.StatusBadRequest)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.N <= 0 || req.N > maxBenchCalls {
+			http.Error(w, fmt.Sprintf(`want {"n": <1 to %d>, ...}`, maxBenchCalls), http.StatusBadRequest)
 			return
 		}
 		writeJSON(w, bench(r.Context(), req.N, req.callRequest))
