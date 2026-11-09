@@ -1252,6 +1252,37 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 			},
 		},
 		{
+			name: "test thinking between_tools config",
+			input: openai.ChatCompletionRequest{
+				Model: "bedrock.unit-test-model",
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{
+						OfUser: &openai.ChatCompletionUserMessageParam{
+							Role:    openai.ChatMessageRoleUser,
+							Content: openai.StringOrUserRoleContentUnion{Value: "Hello"},
+						},
+					},
+				},
+				Thinking: &openai.ThinkingUnion{
+					OfBetweenTools: &openai.ThinkingBetweenTools{
+						Type: "between_tools",
+					},
+				},
+			},
+			output: awsbedrock.ConverseInput{
+				AdditionalModelRequestFields: map[string]interface{}{
+					"thinking": map[string]interface{}{"type": "between_tools"},
+				},
+				InferenceConfig: &awsbedrock.InferenceConfiguration{},
+				Messages: []*awsbedrock.Message{
+					{
+						Role:    openai.ChatMessageRoleUser,
+						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("Hello")}},
+					},
+				},
+			},
+		},
+		{
 			name: "test assistant message with mixed text and thinking content",
 			input: openai.ChatCompletionRequest{
 				Model: "unit-test-model",
@@ -2914,4 +2945,19 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_ResponseBody_Mar
 	require.Error(t, err)
 	require.ErrorContains(t, err, "failed to marshal streaming event")
 	require.ErrorContains(t, err, "injected marshal error")
+}
+
+func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_NullContentBlock(t *testing.T) {
+	// A null element in the Converse content list must be skipped, not dereferenced.
+	respBody := []byte(`{"output":{"message":{"role":"assistant","content":[null,{"text":"Hello!"}]}},"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":20,"totalTokens":30}}`)
+	o := &openAIToAWSBedrockTranslatorV1ChatCompletion{}
+	var body []byte
+	var tokenUsage metrics.TokenUsage
+	var err error
+	require.NotPanics(t, func() {
+		_, body, tokenUsage, _, err = o.ResponseBody(nil, bytes.NewBuffer(respBody), false, nil)
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(body), "Hello!")
+	require.Equal(t, tokenUsageFrom(10, -1, -1, 20, 30, -1), tokenUsage)
 }

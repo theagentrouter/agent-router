@@ -63,7 +63,7 @@ services:
 
   # chat-completion is a simple curl-based test client for sending requests to aigw.
   chat-completion:
-    image: golang:1.26
+    image: golang:1.27
     container_name: chat-completion
     profiles: ["test"]
     env_file:
@@ -87,7 +87,7 @@ services:
 
   # completion is a simple curl-based test client for sending completion requests to aigw.
   completion:
-    image: golang:1.26
+    image: golang:1.27
     container_name: completion
     profiles: ["test"]
     env_file:
@@ -111,7 +111,7 @@ services:
 
   # embeddings is a simple curl-based test client for sending embeddings requests to aigw.
   embeddings:
-    image: golang:1.26
+    image: golang:1.27
     container_name: embeddings
     profiles: ["test"]
     env_file:

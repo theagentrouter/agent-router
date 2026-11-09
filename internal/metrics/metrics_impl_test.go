@@ -775,3 +775,33 @@ func TestAIServiceBackendAttribute(t *testing.T) {
 		require.Equal(t, uint64(1), count)
 	}
 }
+
+func TestAIServiceBackendAttributeUsesExplicitIdentity(t *testing.T) {
+	mr := metric.NewManualReader()
+	meter := metric.NewMeterProvider(metric.WithReader(mr)).Meter("test")
+	pm := NewMetricsFactory(meter, nil, GenAIOperationCompletion).NewMetrics().(*metricsImpl)
+
+	pm.StartRequest(nil)
+	pm.SetOriginalModel("test-model")
+	pm.SetRequestModel("test-model")
+	pm.SetResponseModel("test-model")
+	pm.SetBackend(&filterapi.Backend{
+		// Name is route-scoped and uses the route namespace.
+		Name:                 internalapi.PerRouteRuleRefBackendName("route-ns", "remote", "route", 0, 0),
+		AIServiceBackendName: "backend-ns/remote",
+		Schema:               filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
+	})
+	pm.RecordTokenUsage(t.Context(), TokenUsage{inputTokens: 10, inputTokenSet: true}, nil)
+
+	attrs := attribute.NewSet(
+		attribute.Key(genaiAttributeOperationName).String(string(GenAIOperationCompletion)),
+		attribute.Key(genaiAttributeProviderName).String(genaiProviderOpenAI),
+		attribute.Key(genaiAttributeOriginalModel).String("test-model"),
+		attribute.Key(genaiAttributeRequestModel).String("test-model"),
+		attribute.Key(genaiAttributeResponseModel).String("test-model"),
+		attribute.Key(genaiAttributeBackend).String("backend-ns/remote"),
+		attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeInput),
+	)
+	count, _ := testotel.GetHistogramValues(t, mr, genaiMetricClientTokenUsage, attrs)
+	require.Equal(t, uint64(1), count)
+}

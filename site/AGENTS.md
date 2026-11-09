@@ -49,6 +49,10 @@ All homepage copy lives in `src/data/home/` (`index.ts`, `providers.ts`);
 section components live in `src/components/home/`. To change homepage text,
 edit the data modules — do not hardcode copy in components.
 
+Adding a supported LLM provider touches the docs table, a logo, the homepage
+strip, and the repo README grid together — follow the checklist in
+`static/img/providers/README.md`.
+
 ## Project Structure
 
 ```

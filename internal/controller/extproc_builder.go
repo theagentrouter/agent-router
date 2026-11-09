@@ -11,7 +11,6 @@ import (
 	stdjson "encoding/json" //nolint: depguard // the webhook and reconciler need byte-stable hashing; sonic does not guarantee stable field order.
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -21,6 +20,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
@@ -75,6 +75,10 @@ func newExtProcBuilder(options *Options, extProcAsSideCar bool, logger logr.Logg
 		mcpSessionEncryptionIterations:         options.MCPSessionEncryptionIterations,
 		mcpFallbackSessionEncryptionSeed:       options.MCPFallbackSessionEncryptionSeed,
 		mcpFallbackSessionEncryptionIterations: options.MCPFallbackSessionEncryptionIterations,
+		fileIDEncryptionSeed:                   options.FileIDEncryptionSeed,
+		fileIDEncryptionIterations:             options.FileIDEncryptionIterations,
+		fileIDFallbackEncryptionSeed:           options.FileIDFallbackEncryptionSeed,
+		fileIDFallbackEncryptionIterations:     options.FileIDFallbackEncryptionIterations,
 	}
 }
 
@@ -105,6 +109,11 @@ type extProcBuilder struct {
 	mcpSessionEncryptionIterations         int
 	mcpFallbackSessionEncryptionSeed       string
 	mcpFallbackSessionEncryptionIterations int
+
+	fileIDEncryptionSeed               string
+	fileIDEncryptionIterations         int
+	fileIDFallbackEncryptionSeed       string
+	fileIDFallbackEncryptionIterations int
 }
 
 // extProcContainerInput is the per-gateway input for extproc injection.
@@ -202,6 +211,40 @@ func (b *extProcBuilder) buildExtProcContainer(input extProcContainerInput) core
 	return container
 }
 
+// mcpSessionEncryption returns the MCP session encryption configuration to deliver to the
+// extproc through the filter config, or nil if no seed is configured.
+func (b *extProcBuilder) mcpSessionEncryption() *filterapi.MCPSessionEncryption {
+	if b == nil || b.mcpSessionEncryptionSeed == "" {
+		return nil
+	}
+	e := &filterapi.MCPSessionEncryption{
+		Seed:       b.mcpSessionEncryptionSeed,
+		Iterations: b.mcpSessionEncryptionIterations,
+	}
+	if b.mcpFallbackSessionEncryptionSeed != "" {
+		e.FallbackSeed = b.mcpFallbackSessionEncryptionSeed
+		e.FallbackIterations = b.mcpFallbackSessionEncryptionIterations
+	}
+	return e
+}
+
+// fileIDEncryption returns the Files/Batch API id encryption configuration to deliver to the
+// extproc through the filter config, or nil if no seed is configured.
+func (b *extProcBuilder) fileIDEncryption() *filterapi.FileIDEncryption {
+	if b == nil || b.fileIDEncryptionSeed == "" {
+		return nil
+	}
+	e := &filterapi.FileIDEncryption{
+		Seed:       b.fileIDEncryptionSeed,
+		Iterations: b.fileIDEncryptionIterations,
+	}
+	if b.fileIDFallbackEncryptionSeed != "" {
+		e.FallbackSeed = b.fileIDFallbackEncryptionSeed
+		e.FallbackIterations = b.fileIDFallbackEncryptionIterations
+	}
+	return e
+}
+
 // extProcConfigDigest contains the config inputs that affect extproc injection.
 // It intentionally avoids hashing the full Kubernetes Container API object.
 type extProcConfigDigest struct {
@@ -210,52 +253,44 @@ type extProcConfigDigest struct {
 	LogLevel        string
 	// LogFormat is omitted when it is the default, so deployments that never asked for JSON keep
 	// the same hash as before this field existed and are not rolled on upgrade.
-	LogFormat                              string `json:",omitempty"`
-	EnableRedaction                        bool
-	UDSPath                                string
-	RequestHeaderAttributes                *string
-	SpanRequestHeaderAttributes            *string
-	MetricsRequestHeaderAttributes         *string
-	LogRequestHeaderAttributes             *string
-	RootPrefix                             string
-	EndpointPrefixes                       string
-	ExtraEnvVars                           []corev1.EnvVar
-	ImagePullSecrets                       []corev1.LocalObjectReference
-	MaxRecvMsgSize                         int
-	ExtProcAsSideCar                       bool
-	MCPSessionEncryptionSeed               string
-	MCPSessionEncryptionIterations         int
-	MCPFallbackSessionEncryptionSeed       string
-	MCPFallbackSessionEncryptionIterations int
-	NeedMCP                                bool
-	GatewayConfigExtProc                   *aigv1b1.GatewayConfigExtProc
+	LogFormat                      string `json:",omitempty"`
+	EnableRedaction                bool
+	UDSPath                        string
+	RequestHeaderAttributes        *string
+	SpanRequestHeaderAttributes    *string
+	MetricsRequestHeaderAttributes *string
+	LogRequestHeaderAttributes     *string
+	RootPrefix                     string
+	EndpointPrefixes               string
+	ExtraEnvVars                   []corev1.EnvVar
+	ImagePullSecrets               []corev1.LocalObjectReference
+	MaxRecvMsgSize                 int
+	ExtProcAsSideCar               bool
+	NeedMCP                        bool
+	GatewayConfigExtProc           *aigv1b1.GatewayConfigExtProc
 }
 
 // extProcContainerHash returns a stable hash of the extproc injection inputs.
 func (b *extProcBuilder) extProcContainerHash(input extProcContainerInput) string {
 	digest := extProcConfigDigest{
-		Image:                                  b.extProcImage(input),
-		ImagePullPolicy:                        b.imagePullPolicy,
-		LogLevel:                               b.logLevel,
-		LogFormat:                              b.nonDefaultLogFormat(),
-		EnableRedaction:                        b.enableRedaction,
-		UDSPath:                                b.udsPath,
-		RequestHeaderAttributes:                b.requestHeaderAttributes,
-		SpanRequestHeaderAttributes:            b.spanRequestHeaderAttributes,
-		MetricsRequestHeaderAttributes:         b.metricsRequestHeaderAttributes,
-		LogRequestHeaderAttributes:             b.logRequestHeaderAttributes,
-		RootPrefix:                             b.rootPrefix,
-		EndpointPrefixes:                       b.endpointPrefixes,
-		ExtraEnvVars:                           b.extraEnvVars,
-		ImagePullSecrets:                       b.imagePullSecrets,
-		MaxRecvMsgSize:                         b.maxRecvMsgSize,
-		ExtProcAsSideCar:                       b.extProcAsSideCar,
-		MCPSessionEncryptionSeed:               b.mcpSessionEncryptionSeed,
-		MCPSessionEncryptionIterations:         b.mcpSessionEncryptionIterations,
-		MCPFallbackSessionEncryptionSeed:       b.mcpFallbackSessionEncryptionSeed,
-		MCPFallbackSessionEncryptionIterations: b.mcpFallbackSessionEncryptionIterations,
-		NeedMCP:                                input.needMCP,
-		GatewayConfigExtProc:                   extProcSpecFromInput(input),
+		Image:                          b.extProcImage(input),
+		ImagePullPolicy:                b.imagePullPolicy,
+		LogLevel:                       b.logLevel,
+		LogFormat:                      b.nonDefaultLogFormat(),
+		EnableRedaction:                b.enableRedaction,
+		UDSPath:                        b.udsPath,
+		RequestHeaderAttributes:        b.requestHeaderAttributes,
+		SpanRequestHeaderAttributes:    b.spanRequestHeaderAttributes,
+		MetricsRequestHeaderAttributes: b.metricsRequestHeaderAttributes,
+		LogRequestHeaderAttributes:     b.logRequestHeaderAttributes,
+		RootPrefix:                     b.rootPrefix,
+		EndpointPrefixes:               b.endpointPrefixes,
+		ExtraEnvVars:                   b.extraEnvVars,
+		ImagePullSecrets:               b.imagePullSecrets,
+		MaxRecvMsgSize:                 b.maxRecvMsgSize,
+		ExtProcAsSideCar:               b.extProcAsSideCar,
+		NeedMCP:                        input.needMCP,
+		GatewayConfigExtProc:           extProcSpecFromInput(input),
 	}
 	marshaled, _ := stdjson.Marshal(digest)
 	sum := sha256.Sum256(marshaled)
@@ -295,21 +330,16 @@ func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {
 		"-rootPrefix", b.rootPrefix,
 		"-maxRecvMsgSize", fmt.Sprintf("%d", b.maxRecvMsgSize),
 	}
+	// The Files/Batch API id encryption seeds are not passed as arguments, for the same reason as
+	// the MCP seeds below. They are delivered in the filter config Secrets (see fileIDEncryption).
 	if f := b.nonDefaultLogFormat(); f != "" {
 		args = append(args, "-logFormat", f)
 	}
 	if needMCP {
-		args = append(args,
-			"-mcpAddr", ":"+strconv.Itoa(internalapi.MCPProxyPort),
-			"-mcpSessionEncryptionSeed", b.mcpSessionEncryptionSeed,
-			"-mcpSessionEncryptionIterations", strconv.Itoa(b.mcpSessionEncryptionIterations),
-		)
-		if b.mcpFallbackSessionEncryptionSeed != "" {
-			args = append(args,
-				"-mcpFallbackSessionEncryptionSeed", b.mcpFallbackSessionEncryptionSeed,
-				"-mcpFallbackSessionEncryptionIterations", strconv.Itoa(b.mcpFallbackSessionEncryptionIterations),
-			)
-		}
+		// The MCP session encryption seeds are intentionally not passed as arguments: they would be
+		// visible to anyone who can read the Pod spec or the process command line. They are delivered
+		// in the filter config Secrets instead (see mcpSessionEncryption).
+		args = append(args, "-mcpAddr", internalapi.MCPProxyAddr)
 	}
 
 	if b.requestHeaderAttributes != nil {

@@ -113,7 +113,10 @@ func (b *metricsImpl) SetBackend(backend *filterapi.Backend) {
 	default:
 		b.backend = backend.Name
 	}
-	b.aiServiceBackend = internalapi.AIServiceBackendName(backend.Name)
+	b.aiServiceBackend = backend.AIServiceBackendName
+	if b.aiServiceBackend == "" {
+		b.aiServiceBackend = internalapi.AIServiceBackendName(backend.Name)
+	}
 }
 
 // buildBaseAttributes creates the base attributes for metrics recording.

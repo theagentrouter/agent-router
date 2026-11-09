@@ -9,7 +9,7 @@ volumes:
 
 services:
   extproc-build:
-    image: golang:1.26
+    image: golang:1.27
     container_name: extproc-build
     working_dir: /workspace
     volumes:
@@ -67,7 +67,7 @@ services:
     command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "debug"]
 
   openai-client:
-    image: golang:1.26
+    image: golang:1.27
     container_name: openai-client
     profiles: ["test"]
     env_file:

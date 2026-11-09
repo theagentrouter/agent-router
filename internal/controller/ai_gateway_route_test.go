@@ -989,6 +989,93 @@ func TestAIGatewayRouteController_CrossNamespaceBackend_WithReferenceGrant(t *te
 	require.Equal(t, aigv1b1.ConditionTypeAccepted, updatedRoute.Status.Conditions[0].Type)
 }
 
+func TestHashQuotaPolicies(t *testing.T) {
+	policyA := &aigv1a1.QuotaPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name: "policy-a", Namespace: "namespace-a",
+	}}
+	policyB := &aigv1a1.QuotaPolicy{ObjectMeta: metav1.ObjectMeta{
+		Name: "policy-b", Namespace: "namespace-b",
+	}}
+
+	hash, err := hashQuotaPolicies([]*aigv1a1.QuotaPolicy{policyB, policyA})
+	require.NoError(t, err)
+	require.Len(t, hash, 16)
+
+	reversedHash, err := hashQuotaPolicies([]*aigv1a1.QuotaPolicy{policyA, policyB})
+	require.NoError(t, err)
+	require.Equal(t, hash, reversedHash)
+	require.Empty(t, policyA.Spec.TargetRefs)
+	require.Empty(t, policyB.Spec.TargetRefs)
+}
+
+func TestFetchEffectiveQuotaPoliciesForRoute(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewAIGatewayRouteController(fakeClient, fake2.NewClientset(), ctrl.Log, eventCh.Ch, "/v1")
+
+	policy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "route-ns"},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{
+				{Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "backend"},
+				{Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "remote", Namespace: ptr.To(gwapiv1a2.Namespace("backend-ns"))},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), policy))
+
+	grant := &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-route-ns", Namespace: "backend-ns"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{
+				Group: "aigateway.envoyproxy.io", Kind: "QuotaPolicy", Namespace: "route-ns",
+			}},
+			To: []gwapiv1b1.ReferenceGrantTo{{
+				Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: ptr.To(gwapiv1b1.ObjectName("remote")),
+			}},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), grant))
+
+	route := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "route-ns"},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{
+			{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+				{Name: "backend"},
+				{Name: "backend"},
+				{Name: "remote", Namespace: ptr.To(gwapiv1.Namespace("backend-ns"))},
+				{Name: "pool", Group: ptr.To("inference.networking.k8s.io"), Kind: ptr.To("InferencePool")},
+			}},
+		}},
+	}
+
+	policies, err := c.fetchEffectiveQuotaPoliciesForRoute(t.Context(), route)
+	require.NoError(t, err)
+	require.Len(t, policies, 1)
+	require.Equal(t, "route-ns/policy", policies[0].Namespace+"/"+policies[0].Name)
+	require.Len(t, policies[0].Spec.TargetRefs, 2)
+	require.Equal(t, "backend", string(policies[0].Spec.TargetRefs[0].Name))
+	require.Equal(t, "remote", string(policies[0].Spec.TargetRefs[1].Name))
+
+	// Removing a target must be reflected on the next lookup; deduplication
+	// must not retain the previously effective target set.
+	policy.Spec.TargetRefs = []gwapiv1a2.NamespacedPolicyTargetReference{{
+		Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "backend",
+	}}
+	require.NoError(t, fakeClient.Update(t.Context(), policy))
+	policies, err = c.fetchEffectiveQuotaPoliciesForRoute(t.Context(), route)
+	require.NoError(t, err)
+	require.Len(t, policies, 1)
+	require.Len(t, policies[0].Spec.TargetRefs, 1)
+	require.Equal(t, "backend", string(policies[0].Spec.TargetRefs[0].Name))
+
+	// Deleting the policy must remove it from the effective result entirely.
+	require.NoError(t, fakeClient.Delete(t.Context(), policy))
+	policies, err = c.fetchEffectiveQuotaPoliciesForRoute(t.Context(), route)
+	require.NoError(t, err)
+	require.Empty(t, policies)
+}
+
 func TestAIGatewayRouteController_CrossNamespaceBackend_WithoutReferenceGrant(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexes(t)
 	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
@@ -1212,9 +1299,9 @@ func TestAIGatewayRouteController_SameNamespaceBackend_NoReferenceGrantNeeded(t 
 
 // newQuotaPolicy is a small helper to build a QuotaPolicy targeting the given AIServiceBackends.
 func newQuotaPolicy(name, namespace string, limit uint, targets ...string) *aigv1a1.QuotaPolicy {
-	refs := make([]gwapiv1a2.LocalPolicyTargetReference, 0, len(targets))
+	refs := make([]gwapiv1a2.NamespacedPolicyTargetReference, 0, len(targets))
 	for _, tName := range targets {
-		refs = append(refs, gwapiv1a2.LocalPolicyTargetReference{
+		refs = append(refs, gwapiv1a2.NamespacedPolicyTargetReference{
 			Group: "aigateway.envoyproxy.io",
 			Kind:  "AIServiceBackend",
 			Name:  gwapiv1.ObjectName(tName),
@@ -1308,6 +1395,35 @@ func Test_computeQuotaPolicyHash(t *testing.T) {
 		after, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
 		require.NoError(t, err)
 		require.NotEqual(t, before, after, "a structural change must change the hash")
+	})
+
+	t.Run("fromMetadata-only change produces different hash", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		qp := newQuotaPolicy("qp", ns, 100, "apple")
+		qp.Spec.PerModelQuotas = []aigv1a1.PerModelQuota{{
+			ModelName: ptr.To("gpt-4"),
+			Quota: aigv1a1.QuotaDefinition{
+				DefaultBucket: aigv1a1.QuotaValue{
+					Limit: 10, Duration: "1m",
+					FromMetadata: &aigv1a1.QuotaLimitFromMetadata{
+						Namespace: "envoy.filters.http.ext_authz",
+						Key:       "total_limit",
+					},
+				},
+			},
+		}}
+		require.NoError(t, fakeClient.Create(t.Context(), qp))
+		before, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(qp), qp))
+		qp.Spec.PerModelQuotas[0].Quota.DefaultBucket.FromMetadata.Key = "other_limit"
+		require.NoError(t, fakeClient.Update(t.Context(), qp))
+
+		after, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.NotEqual(t, before, after, "changing only fromMetadata.key must change the hash")
 	})
 
 	t.Run("terminating policy is ignored", func(t *testing.T) {

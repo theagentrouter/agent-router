@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -105,12 +106,23 @@ type Options struct {
 	MCPFallbackSessionEncryptionSeed string
 	// MCPFallbackSessionEncryptionIterations is the number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.
 	MCPFallbackSessionEncryptionIterations int
+	// FileIDEncryptionSeed is the seed used to derive the encryption key for Files/Batch API ids.
+	FileIDEncryptionSeed string
+	// FileIDEncryptionIterations is the number of PBKDF2 iterations for Files/Batch API id encryption.
+	FileIDEncryptionIterations int
+	// FileIDFallbackEncryptionSeed is the optional fallback seed used for Files/Batch API id key rotation.
+	FileIDFallbackEncryptionSeed string
+	// FileIDFallbackEncryptionIterations is the number of PBKDF2 iterations for the fallback seed.
+	FileIDFallbackEncryptionIterations int
 	// EndpointPrefixes is the comma-separated key-value pairs for endpoint prefixes.
 	EndpointPrefixes string
 	// RateLimitRunner is the xDS runner that serves rate limit configs to the rate limit service.
 	RateLimitRunner *runner.Runner
 	// EnvoyGatewayNamespace is the namespace where Envoy Gateway is deployed.
 	EnvoyGatewayNamespace string
+	// CredentialPreRotationWindow is how long before expiry the BackendSecurityPolicy controller rotates
+	// short-lived credentials (AWS OIDC, Azure, GCP).
+	CredentialPreRotationWindow time.Duration
 }
 
 // StartControllers starts the controllers for the AI Gateway.
@@ -178,7 +190,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	backendSecurityPolicyEventChan := make(chan event.GenericEvent, 100)
 	inferencePoolEventChan := make(chan event.GenericEvent, 100)
 	backendSecurityPolicyC := NewBackendSecurityPolicyController(c, kubernetes.NewForConfigOrDie(config), logger.
-		WithName("backend-security-policy"), aiServiceBackendEventChan, inferencePoolEventChan)
+		WithName("backend-security-policy"), aiServiceBackendEventChan, inferencePoolEventChan, options.CredentialPreRotationWindow)
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.BackendSecurityPolicy{}).
 		WatchesRawSource(source.Channel(
 			backendSecurityPolicyEventChan,
@@ -248,18 +260,25 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 		return fmt.Errorf("failed to create controller for GatewayConfig: %w", err)
 	}
 
+	var quotaPolicyEventChan chan event.GenericEvent
 	// QuotaPolicy controller for backend quota rate limiting.
 	if options.RateLimitRunner != nil {
+		quotaPolicyEventChan = make(chan event.GenericEvent, 100)
 		quotaPolicyC := NewQuotaPolicyController(c, kube, logger.WithName("quota-policy"), options.RateLimitRunner, aiGatewayRouteEventChan)
 		if err = TypedControllerBuilderForCRD(mgr, &aigv1a1.QuotaPolicy{}).
 			Watches(&aigv1b1.AIServiceBackend{}, handler.EnqueueRequestsFromMapFunc(quotaPolicyC.BackendToQuotaPolicy)).
+			WatchesRawSource(source.Channel(
+				quotaPolicyEventChan,
+				&handler.EnqueueRequestForObject{},
+			)).
 			Complete(quotaPolicyC); err != nil {
 			return fmt.Errorf("failed to create controller for QuotaPolicy: %w", err)
 		}
 	}
 
-	// ReferenceGrant controller for cross-namespace access validation
-	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan)
+	// ReferenceGrant changes can authorize or revoke AIGatewayRoute,
+	// BackendSecurityPolicy, and QuotaPolicy references.
+	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan, quotaPolicyEventChan)
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1b1.ReferenceGrant{}).
 		Complete(referenceGrantC); err != nil {
 		return fmt.Errorf("failed to create controller for ReferenceGrant: %w", err)
@@ -312,6 +331,9 @@ const (
 	// k8sClientIndexAIServiceBackendToTargetingQuotaPolicy is the index name that maps from an AIServiceBackend
 	// to the QuotaPolicy whose targetRefs contains the AIServiceBackend.
 	k8sClientIndexAIServiceBackendToTargetingQuotaPolicy = "AIServiceBackendToTargetingQuotaPolicy"
+	// k8sClientIndexQuotaPolicyTargetNamespace maps a target namespace to
+	// QuotaPolicies that contain a targetRef resolved to that namespace.
+	k8sClientIndexQuotaPolicyTargetNamespace = "QuotaPolicyTargetNamespace"
 	// k8sClientIndexGatewayToGatewayConfig maps from a GatewayConfig name to Gateways referencing it.
 	k8sClientIndexGatewayToGatewayConfig = "GatewayToGatewayConfig"
 
@@ -359,6 +381,11 @@ func ApplyIndexing(ctx context.Context, indexer func(ctx context.Context, obj cl
 		k8sClientIndexAIServiceBackendToTargetingQuotaPolicy, quotaPolicyTargetRefsIndexFunc)
 	if err != nil {
 		return fmt.Errorf("failed to index field for QuotaPolicy targetRefs: %w", err)
+	}
+	err = indexer(ctx, &aigv1a1.QuotaPolicy{},
+		k8sClientIndexQuotaPolicyTargetNamespace, quotaPolicyTargetNamespaceIndexFunc)
+	if err != nil {
+		return fmt.Errorf("failed to index QuotaPolicy target namespaces: %w", err)
 	}
 
 	err = indexer(ctx, &gwapiv1.Gateway{},
@@ -462,6 +489,12 @@ func namespacedNameIndexKey(name, namespace string) string {
 	return fmt.Sprintf("%s.%s", name, namespace)
 }
 
+// NamespacedNameKey returns the "namespace/name" key used for namespaced
+// resource identities.
+func NamespacedNameKey(namespace, name string) string {
+	return fmt.Sprintf("%s/%s", namespace, name)
+}
+
 func aiGatewayRouteIndexFunc(o client.Object) []string {
 	aiGatewayRoute := o.(*aigv1b1.AIGatewayRoute)
 	var ret []string
@@ -545,9 +578,24 @@ func quotaPolicyTargetRefsIndexFunc(o client.Object) []string {
 	quotaPolicy := o.(*aigv1a1.QuotaPolicy)
 	var ret []string
 	for _, targetRef := range quotaPolicy.Spec.TargetRefs {
-		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), quotaPolicy.Namespace))
+		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), TargetNamespace(targetRef, quotaPolicy.Namespace)))
 	}
 	return ret
+}
+
+func quotaPolicyTargetNamespaceIndexFunc(o client.Object) []string {
+	quotaPolicy := o.(*aigv1a1.QuotaPolicy)
+	namespaces := make([]string, 0, len(quotaPolicy.Spec.TargetRefs))
+	seen := make(map[string]struct{}, len(quotaPolicy.Spec.TargetRefs))
+	for _, targetRef := range quotaPolicy.Spec.TargetRefs {
+		namespace := TargetNamespace(targetRef, quotaPolicy.Namespace)
+		if _, ok := seen[namespace]; ok {
+			continue
+		}
+		seen[namespace] = struct{}{}
+		namespaces = append(namespaces, namespace)
+	}
+	return namespaces
 }
 
 func getReferenceGrantIndexKey(namespace, kind string) string {

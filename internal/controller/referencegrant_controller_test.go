@@ -21,8 +21,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 )
 
@@ -83,7 +85,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -110,7 +112,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKey{
@@ -178,7 +180,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -243,7 +245,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -327,7 +329,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -363,15 +365,17 @@ func TestNewReferenceGrantController(t *testing.T) {
 
 	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
 	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
+	quotaPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
 
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, quotaPolicyChan)
 
 	require.NotNil(t, controller)
 	require.Equal(t, fakeClient, controller.client)
 	require.Equal(t, logger, controller.logger)
 	require.Equal(t, aiGatewayRouteChan, controller.aiGatewayRouteChan)
 	require.Equal(t, backendSecurityPolicyChan, controller.backendSecurityPolicyChan)
+	require.Equal(t, quotaPolicyChan, controller.quotaPolicyChan)
 }
 
 // TestReferenceGrantController_Reconcile_GetError tests reconcile when Get returns error
@@ -389,7 +393,7 @@ func TestReferenceGrantController_Reconcile_GetError(t *testing.T) {
 	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
 
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 	// Try to reconcile a non-existent ReferenceGrant - this should be handled gracefully
 	req := reconcile.Request{
@@ -441,7 +445,7 @@ func TestReferenceGrantController_Reconcile_GetAffectedRoutesError(t *testing.T)
 	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
 
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 	req := reconcile.Request{
 		NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -634,7 +638,7 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 			aiGatewayRouteChan := make(chan event.GenericEvent, 10)
 			backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 			logger := logr.Discard()
-			controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+			controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 			affectedRoutes, err := controller.getAffectedAIGatewayRoutes(
 				context.Background(),
@@ -663,7 +667,7 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 		routes, err := controller.getAffectedAIGatewayRoutes(context.Background(), "backend-ns")
 		require.Error(t, err)
@@ -725,7 +729,7 @@ func TestReferenceGrantController_Reconcile_BackendSecurityPolicy(t *testing.T) 
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -791,7 +795,7 @@ func TestReferenceGrantController_Reconcile_BackendSecurityPolicy(t *testing.T) 
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -852,7 +856,7 @@ func TestReferenceGrantController_Reconcile_BackendSecurityPolicy(t *testing.T) 
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -956,7 +960,7 @@ func TestReferenceGrantController_GetAffectedBackendSecurityPolicies(t *testing.
 	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
 	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
 
 	affected, err := controller.getAffectedBackendSecurityPolicies(context.Background(), grant.Namespace)
 	require.NoError(t, err)
@@ -1014,7 +1018,7 @@ func TestReferenceGrantController_RevokedAccessIsReconciled(t *testing.T) {
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, bsp, narrowedGrant).Build()
 		routeChan := make(chan event.GenericEvent, 10)
 		bspChan := make(chan event.GenericEvent, 10)
-		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan)
+		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan, nil)
 
 		_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(narrowedGrant)})
 		require.NoError(t, err)
@@ -1028,7 +1032,7 @@ func TestReferenceGrantController_RevokedAccessIsReconciled(t *testing.T) {
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, bsp).Build()
 		routeChan := make(chan event.GenericEvent, 10)
 		bspChan := make(chan event.GenericEvent, 10)
-		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan)
+		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan, nil)
 
 		_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKey{Namespace: "shared", Name: "grant"}})
 		require.NoError(t, err)
@@ -1059,4 +1063,109 @@ func TestReferenceGrantController_BackendSecurityPolicyReferencesNamespace_OIDC(
 	}
 	require.True(t, c.backendSecurityPolicyReferencesNamespace(bsp, "shared"))
 	require.False(t, c.backendSecurityPolicyReferencesNamespace(bsp, "other"))
+}
+
+func TestReferenceGrantController_AffectedQuotaPolicies(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, gwapiv1b1.Install(scheme))
+	require.NoError(t, aigv1a1.AddToScheme(scheme))
+	require.NoError(t, aigv1b1.AddToScheme(scheme))
+
+	remote := ptr.To(gwapiv1.Namespace("providers"))
+	remotePolicy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "remote", Namespace: "platform"},
+		Spec: aigv1a1.QuotaPolicySpec{TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+			Name: "provider", Namespace: remote,
+		}}},
+	}
+	localPolicy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: "providers"},
+		Spec: aigv1a1.QuotaPolicySpec{TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+			Name: "provider",
+		}}},
+	}
+	builder := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(remotePolicy, localPolicy).
+		WithIndex(&aigv1a1.QuotaPolicy{}, k8sClientIndexQuotaPolicyTargetNamespace, quotaPolicyTargetNamespaceIndexFunc)
+	c := NewReferenceGrantController(builder.Build(), logr.Discard(),
+		make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10))
+
+	affected, err := c.getAffectedQuotaPolicies(t.Context(), "providers")
+	require.NoError(t, err)
+	require.Len(t, affected, 1)
+	require.Equal(t, "remote", affected[0].Name)
+}
+
+func TestReferenceGrantController_Reconcile_QuotaPolicyReferenceGrantChanges(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, gwapiv1b1.Install(scheme))
+	require.NoError(t, aigv1a1.AddToScheme(scheme))
+	require.NoError(t, aigv1b1.AddToScheme(scheme))
+
+	remotePolicy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "remote", Namespace: "platform"},
+		Spec: aigv1a1.QuotaPolicySpec{TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+			Group:     aiServiceBackendGroup,
+			Kind:      aiServiceBackendKind,
+			Name:      "provider",
+			Namespace: ptr.To(gwapiv1a2.Namespace("providers")),
+		}}},
+	}
+	localPolicy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: "providers"},
+		Spec: aigv1a1.QuotaPolicySpec{TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+			Group: aiServiceBackendGroup,
+			Kind:  aiServiceBackendKind,
+			Name:  "provider",
+		}}},
+	}
+	referenceGrant := &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "provider-grant", Namespace: "providers"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{
+				Group:     "aigateway.envoyproxy.io",
+				Kind:      "QuotaPolicy",
+				Namespace: "platform",
+			}},
+			To: []gwapiv1b1.ReferenceGrantTo{{
+				Group: aiServiceBackendGroup,
+				Kind:  aiServiceBackendKind,
+				Name:  ptr.To(gwapiv1b1.ObjectName("provider")),
+			}},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(remotePolicy, localPolicy, referenceGrant).
+		WithIndex(&aigv1a1.QuotaPolicy{}, k8sClientIndexQuotaPolicyTargetNamespace, quotaPolicyTargetNamespaceIndexFunc).
+		Build()
+	quotaPolicyChan := make(chan event.GenericEvent, 10)
+	controller := NewReferenceGrantController(
+		fakeClient,
+		logr.Discard(),
+		make(chan event.GenericEvent, 10),
+		make(chan event.GenericEvent, 10),
+		quotaPolicyChan,
+	)
+	request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(referenceGrant)}
+
+	// A grant creation must enqueue the cross-namespace QuotaPolicy, but not
+	// the same-namespace policy that does not require a grant.
+	_, err := controller.Reconcile(t.Context(), request)
+	require.NoError(t, err)
+	require.Len(t, quotaPolicyChan, 1)
+	eventObject := (<-quotaPolicyChan).Object.(*aigv1a1.QuotaPolicy)
+	require.Equal(t, "platform/remote", eventObject.Namespace+"/"+eventObject.Name)
+
+	// A grant deletion must enqueue the previously authorized policy again so
+	// its stale cross-namespace configuration can be removed.
+	var currentGrant gwapiv1b1.ReferenceGrant
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(referenceGrant), &currentGrant))
+	require.NoError(t, fakeClient.Delete(t.Context(), &currentGrant))
+	_, err = controller.Reconcile(t.Context(), request)
+	require.NoError(t, err)
+	require.Len(t, quotaPolicyChan, 1)
+	eventObject = (<-quotaPolicyChan).Object.(*aigv1a1.QuotaPolicy)
+	require.Equal(t, "platform/remote", eventObject.Namespace+"/"+eventObject.Name)
 }

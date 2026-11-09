@@ -16,6 +16,7 @@ Agent Router provides integration to multiple LLM Providers. This section provid
 
 - **[Vendor-Specific Fields](./vendor-specific-fields.md)** - Use backend-specific parameters and access provider-unique capabilities in your OpenAI-compatible requests
 - **[Prompt Caching](./prompt-caching.md)** - Provider-agnostic prompt caching using unified cache_control API
+- **[Files API](./files-api.md)** - Upload, list, retrieve, download, and delete files with backend-sticky routing
 
 ## Getting Started with Provider Connectivity
 
