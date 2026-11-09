@@ -8,6 +8,7 @@ package translator
 import (
 	"bytes"
 	"cmp"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -45,12 +46,8 @@ func chatCompletionToResponse(chatResp *openai.ChatCompletionResponse, requestMo
 		Text:      defaultTextConfig,
 	}
 
-	if chatResp.Usage.PromptTokens != 0 || chatResp.Usage.CompletionTokens != 0 || chatResp.Usage.TotalTokens != 0 {
-		resp.Usage = &openai.ResponseUsage{
-			InputTokens:  int64(chatResp.Usage.PromptTokens),
-			OutputTokens: int64(chatResp.Usage.CompletionTokens),
-			TotalTokens:  int64(chatResp.Usage.TotalTokens),
-		}
+	if chatResp.Usage != (openai.Usage{}) {
+		resp.Usage = responsesUsage(&chatResp.Usage)
 	}
 
 	for i := range chatResp.Choices {
@@ -81,6 +78,35 @@ func chatCompletionToResponse(chatResp *openai.ChatCompletionResponse, requestMo
 	}
 
 	return resp
+}
+
+func responsesUsage(usage *openai.Usage) *openai.ResponseUsage {
+	if usage == nil {
+		return nil
+	}
+	result := &openai.ResponseUsage{
+		InputTokens: int64(usage.PromptTokens), OutputTokens: int64(usage.CompletionTokens), TotalTokens: int64(usage.TotalTokens),
+	}
+	if details := usage.PromptTokensDetails; details != nil {
+		result.InputTokensDetails.CachedTokens = int64(details.CachedTokens)
+		result.InputTokensDetails.CacheWriteTokens = int64(details.CacheWriteTokensValue())
+	}
+	if details := usage.CompletionTokensDetails; details != nil {
+		result.OutputTokensDetails.ReasoningTokens = int64(details.ReasoningTokens)
+	}
+	return result
+}
+
+func applyResponsesRequestSettings(resp *openai.Response, req *openai.ResponseRequest) {
+	if req == nil {
+		return
+	}
+	resp.Temperature = ptr.Deref(req.Temperature, 1)
+	resp.TopP = ptr.Deref(req.TopP, 1)
+	resp.Text = openai.ResponseTextConfig{Format: req.Text.Format, Verbosity: req.Text.Verbosity}
+	if resp.Text.Format == (openai.ResponseFormatTextConfigUnionParam{}) {
+		resp.Text.Format = defaultTextConfig.Format
+	}
 }
 
 func responsesMessageItem(id, text, status string) openai.ResponseOutputItemUnion {
@@ -128,6 +154,7 @@ type chatCompletionStreamToResponsesConverter struct {
 	pendingStatus  string
 	stopReason     openai.ChatCompletionChoicesFinishReason
 	requestModel   string
+	requestConfig  *openai.ResponseRequest
 }
 
 func (c *chatCompletionStreamToResponsesConverter) nextSeq() int64 {
@@ -176,9 +203,21 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 		return nil
 	}
 
-	chunk := &openai.ChatCompletionResponseChunk{}
+	chunk := &struct {
+		openai.ChatCompletionResponseChunk
+		Error *openai.ErrorType `json:"error"`
+	}{}
 	if err := json.Unmarshal(data, chunk); err != nil {
 		return nil
+	}
+	if chunk.Error != nil {
+		c.finished = false
+		c.pendingStatus = ""
+		return marshalSSEEvent("error", openai.ResponseErrorEvent{
+			Type: "error", SequenceNumber: c.nextSeq(),
+			Code:    cmp.Or(ptr.Deref(chunk.Error.Code, ""), chunk.Error.Type),
+			Message: chunk.Error.Message, Param: ptr.Deref(chunk.Error.Param, ""),
+		})
 	}
 
 	if chunk.Model != "" {
@@ -368,13 +407,8 @@ func (c *chatCompletionStreamToResponsesConverter) buildFinalResponse(status str
 		Text:      defaultTextConfig,
 	}
 	resp.IncompleteDetails.Reason = responsesIncompleteReason(c.stopReason)
-	if usage != nil {
-		resp.Usage = &openai.ResponseUsage{
-			InputTokens:  int64(usage.PromptTokens),
-			OutputTokens: int64(usage.CompletionTokens),
-			TotalTokens:  int64(usage.TotalTokens),
-		}
-	}
+	resp.Usage = responsesUsage(usage)
+	applyResponsesRequestSettings(&resp, c.requestConfig)
 
 	var outputItems []openai.ResponseOutputItemUnion
 	if c.messageStarted {
@@ -413,6 +447,9 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 		MaxCompletionTokens: req.MaxOutputTokens,
 		Stream:              req.Stream,
 		ParallelToolCalls:   req.ParallelToolCalls,
+	}
+	if req.PreviousResponseID != "" {
+		return chatReq, fmt.Errorf("%w: previous_response_id is not supported by Chat Completion backends; provide the conversation in input", internalapi.ErrInvalidRequestBody)
 	}
 
 	format := req.Text.Format
@@ -480,21 +517,22 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 
 	for i := range req.Tools {
 		tool := &req.Tools[i]
-		if tool.OfFunction != nil {
-			parameters, strict, err := responsesFunctionParameters(tool.OfFunction)
-			if err != nil {
-				return chatReq, fmt.Errorf("%w: invalid function parameters: %w", internalapi.ErrInvalidRequestBody, err)
-			}
-			chatReq.Tools = append(chatReq.Tools, openai.Tool{
-				Type: openai.ToolTypeFunction,
-				Function: &openai.FunctionDefinition{
-					Name:        tool.OfFunction.Name,
-					Description: tool.OfFunction.Description,
-					Parameters:  parameters,
-					Strict:      strict,
-				},
-			})
+		if tool.OfFunction == nil {
+			return chatReq, fmt.Errorf("%w: only function tools are supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
 		}
+		parameters, strict, err := responsesFunctionParameters(tool.OfFunction)
+		if err != nil {
+			return chatReq, fmt.Errorf("%w: invalid function parameters: %w", internalapi.ErrInvalidRequestBody, err)
+		}
+		chatReq.Tools = append(chatReq.Tools, openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        tool.OfFunction.Name,
+				Description: tool.OfFunction.Description,
+				Parameters:  parameters,
+				Strict:      strict,
+			},
+		})
 	}
 
 	return chatReq, nil
@@ -558,15 +596,20 @@ func convertInputItemsToMessages(items []openai.ResponseInputItemUnionParam, mes
 	for i := range items {
 		item := &items[i]
 		switch {
-		case item.OfMessage != nil:
-			messages = append(messages, convertEasyInputMessage(item.OfMessage))
-
-		case item.OfInputMessage != nil:
-			msg := item.OfInputMessage
-			messages = append(messages, convertEasyInputMessage(&openai.EasyInputMessageParam{
-				Role:    msg.Role,
-				Content: openai.EasyInputMessageContentUnionParam{OfInputItemContentList: msg.Content},
-			}))
+		case item.OfMessage != nil || item.OfInputMessage != nil:
+			msg := item.OfMessage
+			if msg == nil {
+				msg = &openai.EasyInputMessageParam{
+					Role:    item.OfInputMessage.Role,
+					Content: openai.EasyInputMessageContentUnionParam{OfInputItemContentList: item.OfInputMessage.Content},
+				}
+			}
+			for _, part := range msg.Content.OfInputItemContentList {
+				if part.OfInputText == nil && part.OfInputImage == nil {
+					return nil, fmt.Errorf("%w: only text and image message content is supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
+				}
+			}
+			messages = append(messages, convertEasyInputMessage(msg))
 
 		case item.OfOutputMessage != nil:
 			messages = append(messages, convertOutputMessage(item.OfOutputMessage))
@@ -718,6 +761,9 @@ func (t *responsesViaChatCompletionTranslator) RequestBody(_ []byte, req *openai
 	t.requestModel = req.Model
 	t.stream = req.Stream
 	t.streamConverter.requestModel = req.Model
+	t.streamConverter.requestConfig = &openai.ResponseRequest{
+		Temperature: req.Temperature, TopP: req.TopP, Text: req.Text,
+	}
 
 	chatReq, err := responsesRequestToChatCompletionRequest(req, req.Model)
 	if err != nil {
@@ -746,7 +792,7 @@ func (t *responsesViaChatCompletionTranslator) ResponseHeaders(headers map[strin
 	return t.inner.ResponseHeaders(headers)
 }
 
-func (t *responsesViaChatCompletionTranslator) ResponseBody(respHeaders map[string]string, body io.Reader, endOfStream bool, _ tracingapi.ResponsesSpan) (
+func (t *responsesViaChatCompletionTranslator) ResponseBody(respHeaders map[string]string, body io.Reader, endOfStream bool, span tracingapi.ResponsesSpan) (
 	newHeaders []internalapi.Header, newBody []byte, tokenUsage metrics.TokenUsage, responseModel string, err error,
 ) {
 	if body == nil {
@@ -761,7 +807,8 @@ func (t *responsesViaChatCompletionTranslator) ResponseBody(respHeaders map[stri
 	innerHeaders, innerBody, tokenUsage, innerModel, innerErr := t.inner.ResponseBody(
 		respHeaders, bytes.NewReader(rawBody), endOfStream, nil,
 	)
-	if innerErr != nil {
+	var overloaded *StreamOverloadedError
+	if innerErr != nil && (!t.stream || !errors.As(innerErr, &overloaded)) {
 		return innerHeaders, innerBody, tokenUsage, cmp.Or(innerModel, t.requestModel), innerErr
 	}
 
@@ -781,9 +828,13 @@ func (t *responsesViaChatCompletionTranslator) ResponseBody(respHeaders map[stri
 		}
 		fallbackModel := cmp.Or(innerModel, t.requestModel)
 		responsesResp := chatCompletionToResponse(resp, fallbackModel)
+		applyResponsesRequestSettings(responsesResp, t.streamConverter.requestConfig)
 		newBody, err = json.Marshal(responsesResp)
 		if err != nil {
 			return nil, nil, tokenUsage, fallbackModel, fmt.Errorf("failed to marshal response: %w", err)
+		}
+		if span != nil {
+			span.RecordResponse(responsesResp)
 		}
 		return withContentLengthHeader(innerHeaders, len(newBody)), newBody, tokenUsage, fallbackModel, nil
 	}
@@ -802,8 +853,18 @@ func (t *responsesViaChatCompletionTranslator) ResponseBody(respHeaders map[stri
 	if endOfStream && t.streamConverter.finished {
 		newBody = t.streamConverter.appendTerminalEvent(newBody, t.streamConverter.pendingStatus, nil)
 	}
+	if span != nil {
+		for line := range bytes.SplitSeq(newBody, []byte("\n")) {
+			if data, ok := cutSSEDataPrefix(line); ok {
+				var event openai.ResponseStreamEventUnion
+				if err := json.Unmarshal(data, &event); err == nil {
+					span.RecordResponseChunk(&event)
+				}
+			}
+		}
+	}
 	responseModel = cmp.Or(t.streamConverter.model, innerModel, t.requestModel)
-	return innerHeaders, newBody, tokenUsage, responseModel, nil
+	return innerHeaders, newBody, tokenUsage, responseModel, innerErr
 }
 
 func (t *responsesViaChatCompletionTranslator) ResponseError(respHeaders map[string]string, body io.Reader) ([]internalapi.Header, []byte, error) {

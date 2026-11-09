@@ -44,6 +44,146 @@ func newResponsesChatCompletionTestTranslator() OpenAIResponsesTranslator {
 	return NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToOpenAITranslator("v1", ""))
 }
 
+func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
+	for _, tc := range []struct{ name, request string }{
+		{"continuation", `{"previous_response_id":"resp_1","input":"Continue"}`},
+		{"web search", `{"tools":[{"type":"web_search"}]}`},
+		{"file search", `{"tools":[{"type":"file_search","vector_store_ids":["vs_1"]}]}`},
+		{"mixed tools", `{"tools":[{"type":"function","name":"weather"},{"type":"web_search"}]}`},
+		{"file only", `{"input":[{"role":"user","content":[{"type":"input_file","file_id":"file_1"}]}]}`},
+		{"text and file", `{"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Summarize this"},{"type":"input_file","file_id":"file_1"}]}]}`},
+		{"system file", `{"input":[{"type":"message","role":"system","content":[{"type":"input_file","file_id":"file_1"}]}]}`},
+		{"developer file", `{"input":[{"role":"developer","content":[{"type":"input_file","file_id":"file_1"}]}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var req openai.ResponseRequest
+			require.NoError(t, json.Unmarshal([]byte(tc.request), &req))
+			headers, body, err := newResponsesChatCompletionTestTranslator().RequestBody(nil, &req, false)
+			require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+			require.Nil(t, headers)
+			require.Nil(t, body)
+		})
+	}
+}
+
+type responsesRecordingSpan struct {
+	responses []*openai.Response
+	events    []*openai.ResponseStreamEventUnion
+}
+
+func (s *responsesRecordingSpan) RecordResponse(resp *openai.Response) {
+	s.responses = append(s.responses, resp)
+}
+
+func (s *responsesRecordingSpan) RecordResponseChunk(event *openai.ResponseStreamEventUnion) {
+	s.events = append(s.events, event)
+}
+
+func (*responsesRecordingSpan) EndSpanOnError(int, []byte) {}
+func (*responsesRecordingSpan) EndSpan()                   {}
+
+func TestResponsesViaChatCompletion_ResponseDetails(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, cacheField := range []string{"cache_write_tokens", "cache_creation_input_tokens"} {
+			t.Run(fmt.Sprintf("stream=%t/%s", stream, cacheField), func(t *testing.T) {
+				var req openai.ResponseRequest
+				require.NoError(t, json.Unmarshal([]byte(`{"model":"model","temperature":0.4,"top_p":0.8,"text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"}}}}`), &req))
+				req.Stream = stream
+				translator := newResponsesChatCompletionTestTranslator()
+				_, _, err := translator.RequestBody(nil, &req, false)
+				require.NoError(t, err)
+				usage := fmt.Sprintf(`{"prompt_tokens":12,"completion_tokens":6,"total_tokens":18,"prompt_tokens_details":{"cached_tokens":3,%q:4},"completion_tokens_details":{"reasoning_tokens":2}}`, cacheField)
+				body := `{"id":"chat_1","model":"model","choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],"usage":` + usage + `}`
+				if stream {
+					body = "data: {\"id\":\"chat_1\",\"model\":\"model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"}}]}\n\n" +
+						"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+						"data: {\"choices\":[],\"usage\":" + usage + "}\n\n"
+				}
+				span := &responsesRecordingSpan{}
+				_, translated, _, _, err := translator.ResponseBody(nil, strings.NewReader(body), true, span)
+				require.NoError(t, err)
+				var response openai.Response
+				if stream {
+					events := parseSSEEventsFromBytes(translated)
+					require.Len(t, span.events, len(events))
+					require.Empty(t, span.responses)
+					for i, event := range events {
+						require.Equal(t, event.eventType, span.events[i].GetEventType())
+					}
+					require.NotNil(t, span.events[0].OfResponseCreated)
+					require.NotNil(t, span.events[len(events)-1].OfResponseCompleted)
+					response = span.events[len(events)-1].OfResponseCompleted.Response
+					require.Equal(t, req.Text.Format, span.events[0].OfResponseCreated.Response.Text.Format)
+					require.InDelta(t, 0.4, span.events[0].OfResponseCreated.Response.Temperature, 0.001)
+					require.InDelta(t, 0.8, span.events[0].OfResponseCreated.Response.TopP, 0.001)
+				} else {
+					require.Len(t, span.responses, 1)
+					require.Empty(t, span.events)
+					require.NoError(t, json.Unmarshal(translated, &response))
+					recorded, err := json.Marshal(span.responses[0])
+					require.NoError(t, err)
+					require.JSONEq(t, string(translated), string(recorded))
+				}
+				require.InDelta(t, 0.4, response.Temperature, 0.001)
+				require.InDelta(t, 0.8, response.TopP, 0.001)
+				require.Equal(t, req.Text.Format, response.Text.Format)
+				require.Equal(t, int64(12), response.Usage.InputTokens)
+				require.Equal(t, int64(6), response.Usage.OutputTokens)
+				require.Equal(t, int64(18), response.Usage.TotalTokens)
+				require.Equal(t, int64(3), response.Usage.InputTokensDetails.CachedTokens)
+				require.Equal(t, int64(4), response.Usage.InputTokensDetails.CacheWriteTokensValue())
+				require.Equal(t, int64(2), response.Usage.OutputTokensDetails.ReasoningTokens)
+			})
+		}
+	}
+}
+
+func TestResponsesViaChatCompletion_Overloaded(t *testing.T) {
+	for _, beforeContent := range []bool{false, true} {
+		for _, split := range []bool{false, true} {
+			t.Run(fmt.Sprintf("beforeContent=%t/split=%t", beforeContent, split), func(t *testing.T) {
+				translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPAnthropicTranslator("v1", ""))
+				_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "claude", Stream: true}, false)
+				require.NoError(t, err)
+				stream := "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n"
+				if !beforeContent {
+					stream = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude\",\"content\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n" +
+						"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n" + stream
+				}
+				step := len(stream)
+				if split {
+					step = 1
+				}
+				span := &responsesRecordingSpan{}
+				var output []byte
+				for offset := 0; offset < len(stream); offset += step {
+					end := min(offset+step, len(stream))
+					_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader(stream[offset:end]), false, span)
+					output = append(output, body...)
+					if end == len(stream) {
+						var overloaded *StreamOverloadedError
+						require.ErrorAs(t, err, &overloaded)
+					} else {
+						require.NoError(t, err)
+					}
+				}
+				events := parseSSEEventsFromBytes(output)
+				require.NotEmpty(t, events)
+				require.Equal(t, "error", events[len(events)-1].eventType)
+				requireJSONFields(t, `{"type":"error","code":"overloaded_error","message":"busy"}`, []byte(events[len(events)-1].data))
+				require.NotContains(t, string(output), `"choices"`)
+				require.NotContains(t, string(output), `"error":{`)
+				require.NotContains(t, string(output), "event: response.completed")
+				require.Len(t, span.events, len(events))
+				require.NotNil(t, span.events[len(events)-1].OfError)
+				if !beforeContent {
+					require.Contains(t, string(output), "event: response.output_text.delta")
+				}
+			})
+		}
+	}
+}
+
 func TestResponsesRequestToChatCompletionRequest_Controls(t *testing.T) {
 	const parameters = `{"type":"object","properties":{"location":{"type":"object","properties":{"city":{"type":"string"}}},"days":{"type":"array","items":{"type":"object","properties":{"date":{"type":"string"}}}}}}`
 	const strictParameters = `{"type":"object","additionalProperties":false,"required":["days","location"],"properties":{"location":{"type":"object","additionalProperties":false,"required":["city"],"properties":{"city":{"type":"string"}}},"days":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["date"],"properties":{"date":{"type":"string"}}}}}}`
