@@ -17,9 +17,24 @@ spec:
       {{- include "ai-gateway-helm.controller.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.controller.podAnnotations }}
+      {{- $mcpFallback := .Values.controller.mcp.sessionEncryption.fallback.seed }}
+      {{- $fileIDFallback := .Values.controller.fileIDEncryption.fallback.seed }}
+      {{- if or .Values.controller.podAnnotations $mcpFallback $fileIDFallback }}
       annotations:
+        {{- with .Values.controller.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $mcpFallback }}
+        # The MCP session encryption seeds are read from Secrets at startup, so changing them does not change
+        # the pod template. While a fallback seed is set (i.e. during a seed rotation), restart the controller
+        # on every upgrade so that seed changes take effect. The release revision is used instead of a checksum
+        # of the seeds so that nothing derived from the seeds is exposed in the Deployment.
+        aigateway.envoyproxy.io/mcp-session-encryption-revision: {{ .Release.Revision | quote }}
+        {{- end }}
+        {{- if $fileIDFallback }}
+        # Same as above, for the Files/Batch API id encryption seeds.
+        aigateway.envoyproxy.io/file-id-encryption-revision: {{ .Release.Revision | quote }}
+        {{- end }}
       {{- end }}
       labels:
         {{- include "ai-gateway-helm.controller.selectorLabels" . | nindent 8 }}
@@ -112,15 +127,22 @@ spec:
             - --maxRecvMsgSize={{ .Values.controller.maxRecvMsgSize }}
             {{- end }}
             - --cacheSyncTimeout={{ .Values.controller.watch.cacheSyncTimeout }}
+            - --credentialPreRotationWindow={{ .Values.controller.credentialPreRotationWindow }}
             - --watchNamespaces={{ join "," .Values.controller.watch.namespaces }}
             - --quotaRateLimitServiceAddr={{ .Values.controller.quotaRateLimitServiceAddr }}
             - --quotaRateLimitTimeout={{ .Values.controller.quotaRateLimitTimeout }}
             - --quotaRateLimitFailureModeDeny={{ .Values.controller.quotaRateLimitFailureModeDeny }}
-            - --mcpSessionEncryptionSeed=$(MCP_SESSION_ENCRYPTION_SEED)
+            # The MCP session encryption seeds are read from the MCP_SESSION_ENCRYPTION_SEED and
+            # MCP_FALLBACK_SESSION_ENCRYPTION_SEED environment variables, so they are not exposed in the command line.
             - --mcpSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.iterations }}
             {{- if .Values.controller.mcp.sessionEncryption.fallback.seed }}
-            - --mcpFallbackSessionEncryptionSeed={{ .Values.controller.mcp.sessionEncryption.fallback.seed }}
             - --mcpFallbackSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.fallback.iterations }}
+            {{- end }}
+            # The Files/Batch API id encryption seeds are read from the FILE_ID_ENCRYPTION_SEED and
+            # FILE_ID_FALLBACK_ENCRYPTION_SEED environment variables, so they are not exposed in the command line.
+            - --fileIDEncryptionIterations={{ .Values.controller.fileIDEncryption.iterations }}
+            {{- if .Values.controller.fileIDEncryption.fallback.seed }}
+            - --fileIDFallbackEncryptionIterations={{ .Values.controller.fileIDEncryption.fallback.iterations }}
             {{- end }}
           # Allow the default two-minute cache sync timeout plus startup overhead.
           startupProbe:
@@ -143,6 +165,25 @@ spec:
                 secretKeyRef:
                   name: {{ include "ai-gateway-helm.controller.mcpSessionEncryptionSecretName" . }}
                   key: seed
+            - name: FILE_ID_ENCRYPTION_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-gateway-helm.controller.fileIDEncryptionSecretName" . }}
+                  key: seed
+            {{- if .Values.controller.mcp.sessionEncryption.fallback.seed }}
+            - name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-gateway-helm.controller.mcpFallbackSessionEncryptionSecretName" . }}
+                  key: seed
+            {{- end }}
+            {{- if .Values.controller.fileIDEncryption.fallback.seed }}
+            - name: FILE_ID_FALLBACK_ENCRYPTION_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-gateway-helm.controller.fileIDFallbackEncryptionSecretName" . }}
+                  key: seed
+            {{- end }}
           {{- if .Values.controller.podEnv }}
           {{- range $key, $val := .Values.controller.podEnv }}
             - name: {{ $key }}

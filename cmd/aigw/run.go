@@ -81,6 +81,8 @@ type runCmdContext struct {
 	fakeClientSet *fake.Clientset
 	// mcpSessionEncryptionIterations is the number of iterations for MCP session encryption key derivation.
 	mcpSessionEncryptionIterations int
+	// fileIDEncryptionIterations is the number of iterations for Files/Batch API id encryption key derivation.
+	fileIDEncryptionIterations int
 }
 
 // run starts the AI Gateway locally for a given configuration.
@@ -148,6 +150,7 @@ func run(ctx context.Context, c *cmdRun, o *runOpts, stdout, stderr io.Writer) e
 		adminPort:                      c.AdminPort,
 		extProcLauncher:                o.extProcLauncher,
 		mcpSessionEncryptionIterations: c.MCPSessionEncryptionIterations,
+		fileIDEncryptionIterations:     c.FileIDEncryptionIterations,
 	}
 	// If any of the configured MCP servers is using stdio, set up the streamable HTTP proxies for them
 	if err = proxyStdioMCPServers(ctx, debugLogger, c.mcpConfig); err != nil {
@@ -378,11 +381,34 @@ func (runCtx *runCmdContext) writeEnvoyResourcesAndRunExtProc(ctx context.Contex
 	return fakeClient, done, runCtx.tryFindEnvoyListenerPort(gw), nil
 }
 
+const (
+	// fileIDEncryptionSeedEnvVar sets the Files/Batch API id encryption seed for `aigw run`.
+	fileIDEncryptionSeedEnvVar = "AIGW_FILE_ID_ENCRYPTION_SEED"
+	// mcpSessionEncryptionSeedEnvVar sets the MCP session encryption seed for `aigw run`.
+	mcpSessionEncryptionSeedEnvVar = "AIGW_MCP_SESSION_ENCRYPTION_SEED"
+)
+
+// setEncryptionSeeds puts the encryption seeds from the environment into the filter config. They are
+// delivered through the config bundle rather than as extproc arguments, so they never appear on a
+// process command line. When unset, the extproc falls back to its default seeds.
+func (runCtx *runCmdContext) setEncryptionSeeds(filterCfg *filterapi.Config) {
+	if seed := os.Getenv(fileIDEncryptionSeedEnvVar); seed != "" {
+		filterCfg.FileIDEncryption = &filterapi.FileIDEncryption{Seed: seed, Iterations: runCtx.fileIDEncryptionIterations}
+	}
+	if seed := os.Getenv(mcpSessionEncryptionSeedEnvVar); seed != "" && filterCfg.MCPConfig != nil {
+		filterCfg.MCPConfig.SessionEncryption = &filterapi.MCPSessionEncryption{
+			Seed:       seed,
+			Iterations: runCtx.mcpSessionEncryptionIterations,
+		}
+	}
+}
+
 // mustStartExtProc starts the external process with the given working directory, port, and filter configuration.
 func (runCtx *runCmdContext) mustStartExtProc(
 	ctx context.Context,
 	filterCfg *filterapi.Config,
 ) <-chan error {
+	runCtx.setEncryptionSeeds(filterCfg)
 	marshaled, err := yaml.Marshal(filterCfg)
 	if err != nil {
 		panic(fmt.Sprintf("BUG: failed to marshal filter config: %v", err))

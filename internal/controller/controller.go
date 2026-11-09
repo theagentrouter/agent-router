@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -105,12 +106,23 @@ type Options struct {
 	MCPFallbackSessionEncryptionSeed string
 	// MCPFallbackSessionEncryptionIterations is the number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.
 	MCPFallbackSessionEncryptionIterations int
+	// FileIDEncryptionSeed is the seed used to derive the encryption key for Files/Batch API ids.
+	FileIDEncryptionSeed string
+	// FileIDEncryptionIterations is the number of PBKDF2 iterations for Files/Batch API id encryption.
+	FileIDEncryptionIterations int
+	// FileIDFallbackEncryptionSeed is the optional fallback seed used for Files/Batch API id key rotation.
+	FileIDFallbackEncryptionSeed string
+	// FileIDFallbackEncryptionIterations is the number of PBKDF2 iterations for the fallback seed.
+	FileIDFallbackEncryptionIterations int
 	// EndpointPrefixes is the comma-separated key-value pairs for endpoint prefixes.
 	EndpointPrefixes string
 	// RateLimitRunner is the xDS runner that serves rate limit configs to the rate limit service.
 	RateLimitRunner *runner.Runner
 	// EnvoyGatewayNamespace is the namespace where Envoy Gateway is deployed.
 	EnvoyGatewayNamespace string
+	// CredentialPreRotationWindow is how long before expiry the BackendSecurityPolicy controller rotates
+	// short-lived credentials (AWS OIDC, Azure, GCP).
+	CredentialPreRotationWindow time.Duration
 }
 
 // StartControllers starts the controllers for the AI Gateway.
@@ -178,7 +190,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	backendSecurityPolicyEventChan := make(chan event.GenericEvent, 100)
 	inferencePoolEventChan := make(chan event.GenericEvent, 100)
 	backendSecurityPolicyC := NewBackendSecurityPolicyController(c, kubernetes.NewForConfigOrDie(config), logger.
-		WithName("backend-security-policy"), aiServiceBackendEventChan, inferencePoolEventChan)
+		WithName("backend-security-policy"), aiServiceBackendEventChan, inferencePoolEventChan, options.CredentialPreRotationWindow)
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.BackendSecurityPolicy{}).
 		WatchesRawSource(source.Channel(
 			backendSecurityPolicyEventChan,
