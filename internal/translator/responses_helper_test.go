@@ -30,6 +30,20 @@ func requirePathHeader(t *testing.T, headers []internalapi.Header, expectedPath 
 	require.True(t, found, "expected :path header to be present")
 }
 
+func requireJSONFields(t *testing.T, expectedJSON string, body []byte) {
+	t.Helper()
+	var actual, expected map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(body, &actual))
+	require.NoError(t, json.Unmarshal([]byte(expectedJSON), &expected))
+	for key, value := range expected {
+		require.JSONEq(t, string(value), string(actual[key]))
+	}
+}
+
+func newResponsesChatCompletionTestTranslator() OpenAIResponsesTranslator {
+	return NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToOpenAITranslator("v1", ""))
+}
+
 func TestResponsesRequestToChatCompletionRequest_Controls(t *testing.T) {
 	const parameters = `{"type":"object","properties":{"location":{"type":"object","properties":{"city":{"type":"string"}}},"days":{"type":"array","items":{"type":"object","properties":{"date":{"type":"string"}}}}}}`
 	const strictParameters = `{"type":"object","additionalProperties":false,"required":["days","location"],"properties":{"location":{"type":"object","additionalProperties":false,"required":["city"],"properties":{"city":{"type":"string"}}},"days":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["date"],"properties":{"date":{"type":"string"}}}}}}`
@@ -51,24 +65,19 @@ func TestResponsesRequestToChatCompletionRequest_Controls(t *testing.T) {
 		{"default no parameters", `{"tools":[{"type":"function","name":"weather"}]}`, `{"tools":[{"type":"function","function":{"name":"weather","strict":true,"parameters":{"type":"object","required":[],"additionalProperties":false}}}]}`},
 		{"default strict", `{"tools":[{"type":"function","name":"weather","parameters":` + parameters + `}]}`, `{"tools":[{"type":"function","function":{"name":"weather","strict":true,"parameters":` + strictParameters + `}}]}`},
 		{"incompatible default strict", `{"tools":[{"type":"function","name":"weather","parameters":` + incompatibleParameters + `}]}`, `{"tools":[{"type":"function","function":{"name":"weather","parameters":` + incompatibleParameters + `}}]}`},
+		{"consecutive tool calls", `{"input":[{"type":"function_call","call_id":"call_1","name":"weather","arguments":"{}"},{"type":"function_call","call_id":"call_2","name":"weather","arguments":"{}"}]}`, `{"messages":[{"role":"assistant","content":null,"tool_calls":[{"type":"function","id":"call_1","function":{"name":"weather","arguments":"{}"}},{"type":"function","id":"call_2","function":{"name":"weather","arguments":"{}"}}]}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var req openai.ResponseRequest
 			require.NoError(t, json.Unmarshal([]byte(tc.request), &req))
 			original, err := json.Marshal(req.Tools)
 			require.NoError(t, err)
-			_, chatReq := responsesOpenAIRequestBody(t, "", &req)
+			_, body, err := newResponsesChatCompletionTestTranslator().RequestBody(nil, &req, false)
+			require.NoError(t, err)
 			unchanged, err := json.Marshal(req.Tools)
 			require.NoError(t, err)
 			require.JSONEq(t, string(original), string(unchanged))
-			body, err := json.Marshal(chatReq)
-			require.NoError(t, err)
-			var actual, expected map[string]json.RawMessage
-			require.NoError(t, json.Unmarshal(body, &actual))
-			require.NoError(t, json.Unmarshal([]byte(tc.expected), &expected))
-			for key, value := range expected {
-				require.JSONEq(t, string(value), string(actual[key]))
-			}
+			requireJSONFields(t, tc.expected, body)
 		})
 	}
 }
@@ -88,7 +97,7 @@ func TestResponsesRequestToChatCompletionRequest_ToolOutputs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var req openai.ResponseRequest
 			require.NoError(t, json.Unmarshal([]byte(`{"input":[{"type":"function_call_output","call_id":"call_1","output":`+tc.output+`}]}`), &req))
-			translator := NewResponsesOpenAIToChatCompletionTranslator("v1", "")
+			translator := newResponsesChatCompletionTestTranslator()
 			_, body, err := translator.RequestBody(nil, &req, false)
 			if tc.invalid {
 				require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
@@ -104,7 +113,7 @@ func TestResponsesRequestToChatCompletionRequest_ToolOutputs(t *testing.T) {
 	t.Run("unsupported tool choice", func(t *testing.T) {
 		var req openai.ResponseRequest
 		require.NoError(t, json.Unmarshal([]byte(`{"tool_choice":{"type":"file_search"}}`), &req))
-		_, _, err := NewResponsesOpenAIToChatCompletionTranslator("v1", "").RequestBody(nil, &req, false)
+		_, _, err := newResponsesChatCompletionTestTranslator().RequestBody(nil, &req, false)
 		require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
 	})
 }
@@ -163,7 +172,7 @@ func TestResponsesViaChatCompletion_Incomplete(t *testing.T) {
 			for _, tool := range []bool{false, true} {
 				for _, usage := range []bool{false, true} {
 					t.Run(fmt.Sprintf("tool=%t/usage=%t", tool, usage), func(t *testing.T) {
-						translator := NewResponsesOpenAIToChatCompletionTranslator("v1", "")
+						translator := newResponsesChatCompletionTestTranslator()
 						_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "model", Stream: true}, false)
 						require.NoError(t, err)
 						delta := `{"content":"partial"}`

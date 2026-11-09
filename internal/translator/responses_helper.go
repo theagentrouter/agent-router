@@ -76,26 +76,24 @@ func chatCompletionToResponse(chatResp *openai.ChatCompletionResponse, requestMo
 		}
 
 		if choice.Message.Content != nil && *choice.Message.Content != "" {
-			resp.Output = append(resp.Output, openai.ResponseOutputItemUnion{
-				OfOutputMessage: &openai.ResponseOutputMessage{
-					ID:   fmt.Sprintf("msg_%s", chatResp.ID),
-					Role: "assistant",
-					Type: "message",
-					Content: openai.ResponseOutputMessageContentUnion{
-						OfContentArray: []openai.ResponseOutputMessageContentArrayUnion{
-							{OfOutputText: &openai.ResponseOutputTextParam{
-								Text: *choice.Message.Content,
-								Type: "output_text",
-							}},
-						},
-					},
-					Status: status,
-				},
-			})
+			resp.Output = append(resp.Output, responsesMessageItem("msg_"+chatResp.ID, *choice.Message.Content, status))
 		}
 	}
 
 	return resp
+}
+
+func responsesMessageItem(id, text, status string) openai.ResponseOutputItemUnion {
+	content := []openai.ResponseOutputMessageContentArrayUnion{}
+	if text != "" {
+		content = append(content, openai.ResponseOutputMessageContentArrayUnion{
+			OfOutputText: &openai.ResponseOutputTextParam{Text: text, Type: "output_text"},
+		})
+	}
+	return openai.ResponseOutputItemUnion{OfOutputMessage: &openai.ResponseOutputMessage{
+		ID: id, Role: "assistant", Type: "message", Status: status,
+		Content: openai.ResponseOutputMessageContentUnion{OfContentArray: content},
+	}}
 }
 
 func responsesIncompleteReason(reason openai.ChatCompletionChoicesFinishReason) string {
@@ -137,17 +135,6 @@ func (c *chatCompletionStreamToResponsesConverter) nextSeq() int64 {
 	return c.seqNum
 }
 
-func (c *chatCompletionStreamToResponsesConverter) emptyResponse() openai.Response {
-	return openai.Response{
-		ID:        c.responseID,
-		Object:    "response",
-		Model:     cmp.Or(c.model, c.requestModel),
-		CreatedAt: c.created,
-		Status:    "in_progress",
-		Text:      defaultTextConfig,
-	}
-}
-
 func formatSSEEvent(eventType string, data []byte) []byte {
 	var buf []byte
 	buf = append(buf, "event: "...)
@@ -180,18 +167,18 @@ func (c *chatCompletionStreamToResponsesConverter) appendTerminalEvent(output []
 	return output
 }
 
-func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (output []byte, usage *openai.Usage) {
+func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (output []byte) {
 	if !bytes.HasPrefix(line, sseDataPrefix) {
-		return nil, nil
+		return nil
 	}
 	data := bytes.TrimPrefix(line, sseDataPrefix)
 	if bytes.Equal(data, sseDoneMessage) {
-		return nil, nil
+		return nil
 	}
 
 	chunk := &openai.ChatCompletionResponseChunk{}
 	if err := json.Unmarshal(data, chunk); err != nil {
-		return nil, nil
+		return nil
 	}
 
 	if chunk.Model != "" {
@@ -204,7 +191,7 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 		c.created = chunk.Created
 		c.messageID = fmt.Sprintf("msg_%s", c.responseID)
 
-		resp := c.emptyResponse()
+		resp := c.buildFinalResponse("in_progress", nil)
 		output = append(output, marshalSSEEvent("response.created", openai.ResponseCreatedEvent{
 			Response:       resp,
 			SequenceNumber: c.nextSeq(),
@@ -217,15 +204,15 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 		})...)
 	}
 
-	if chunk.Usage != nil {
-		usage = chunk.Usage
+	usage := chunk.Usage
+	if usage != nil {
 		if c.finished {
 			output = c.appendTerminalEvent(output, c.pendingStatus, usage)
 		}
 	}
 
 	if len(chunk.Choices) == 0 {
-		return output, usage
+		return output
 	}
 
 	choice := chunk.Choices[0]
@@ -235,17 +222,7 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 		if !c.messageStarted {
 			c.messageStarted = true
 			output = append(output, marshalSSEEvent("response.output_item.added", openai.ResponseOutputItemAddedEvent{
-				Item: openai.ResponseOutputItemUnion{
-					OfOutputMessage: &openai.ResponseOutputMessage{
-						ID:   c.messageID,
-						Role: "assistant",
-						Type: "message",
-						Content: openai.ResponseOutputMessageContentUnion{
-							OfContentArray: []openai.ResponseOutputMessageContentArrayUnion{},
-						},
-						Status: "in_progress",
-					},
-				},
+				Item:           responsesMessageItem(c.messageID, "", "in_progress"),
 				OutputIndex:    c.outputIndex,
 				SequenceNumber: c.nextSeq(),
 				Type:           "response.output_item.added",
@@ -378,7 +355,7 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 		}
 	}
 
-	return output, usage
+	return output
 }
 
 func (c *chatCompletionStreamToResponsesConverter) buildFinalResponse(status string, usage *openai.Usage) openai.Response {
@@ -401,21 +378,9 @@ func (c *chatCompletionStreamToResponsesConverter) buildFinalResponse(status str
 
 	var outputItems []openai.ResponseOutputItemUnion
 	if c.messageStarted {
-		outputItems = append(outputItems, openai.ResponseOutputItemUnion{
-			OfOutputMessage: &openai.ResponseOutputMessage{
-				ID:   c.messageID,
-				Role: "assistant",
-				Type: "message",
-				Content: openai.ResponseOutputMessageContentUnion{
-					OfContentArray: []openai.ResponseOutputMessageContentArrayUnion{
-						{OfOutputText: &openai.ResponseOutputTextParam{Text: c.accText.String(), Type: "output_text"}},
-					},
-				},
-				Status: status,
-			},
-		})
+		outputItems = append(outputItems, responsesMessageItem(c.messageID, c.accText.String(), status))
 	}
-	for _, idx := range sortedToolCallKeys(c.toolCalls) {
+	for _, idx := range slices.Sorted(maps.Keys(c.toolCalls)) {
 		state := c.toolCalls[idx]
 		itemID := cmp.Or(state.id, fmt.Sprintf("fc_%d", idx))
 		outputItems = append(outputItems, openai.ResponseOutputItemUnion{
@@ -431,15 +396,6 @@ func (c *chatCompletionStreamToResponsesConverter) buildFinalResponse(status str
 	}
 	resp.Output = outputItems
 	return resp
-}
-
-func sortedToolCallKeys(toolCalls map[int64]*streamingToolCallState) []int64 {
-	keys := make([]int64, 0, len(toolCalls))
-	for idx := range toolCalls {
-		keys = append(keys, idx)
-	}
-	slices.Sort(keys)
-	return keys
 }
 
 func boolToInt64(b bool) int64 {
@@ -599,35 +555,25 @@ func responsesFunctionParameters(tool *openai.FunctionToolParam) (map[string]any
 }
 
 func convertInputItemsToMessages(items []openai.ResponseInputItemUnionParam, messages []openai.ChatCompletionMessageParamUnion) ([]openai.ChatCompletionMessageParamUnion, error) {
-	var pendingToolCalls []openai.ChatCompletionMessageToolCallParam
-
 	for i := range items {
 		item := &items[i]
 		switch {
 		case item.OfMessage != nil:
-			if len(pendingToolCalls) > 0 {
-				messages = appendToolCallsAsAssistantMessage(messages, pendingToolCalls)
-				pendingToolCalls = nil
-			}
 			messages = append(messages, convertEasyInputMessage(item.OfMessage))
 
 		case item.OfInputMessage != nil:
-			if len(pendingToolCalls) > 0 {
-				messages = appendToolCallsAsAssistantMessage(messages, pendingToolCalls)
-				pendingToolCalls = nil
-			}
-			messages = append(messages, convertInputItemMessage(item.OfInputMessage))
+			msg := item.OfInputMessage
+			messages = append(messages, convertEasyInputMessage(&openai.EasyInputMessageParam{
+				Role:    msg.Role,
+				Content: openai.EasyInputMessageContentUnionParam{OfInputItemContentList: msg.Content},
+			}))
 
 		case item.OfOutputMessage != nil:
-			if len(pendingToolCalls) > 0 {
-				messages = appendToolCallsAsAssistantMessage(messages, pendingToolCalls)
-				pendingToolCalls = nil
-			}
 			messages = append(messages, convertOutputMessage(item.OfOutputMessage))
 
 		case item.OfFunctionCall != nil:
 			fc := item.OfFunctionCall
-			pendingToolCalls = append(pendingToolCalls, openai.ChatCompletionMessageToolCallParam{
+			messages = appendToolCallAsAssistantMessage(messages, openai.ChatCompletionMessageToolCallParam{
 				ID: ptr.To(fc.CallID),
 				Function: openai.ChatCompletionMessageToolCallFunctionParam{
 					Name:      fc.Name,
@@ -637,10 +583,6 @@ func convertInputItemsToMessages(items []openai.ResponseInputItemUnionParam, mes
 			})
 
 		case item.OfFunctionCallOutput != nil:
-			if len(pendingToolCalls) > 0 {
-				messages = appendToolCallsAsAssistantMessage(messages, pendingToolCalls)
-				pendingToolCalls = nil
-			}
 			fco := item.OfFunctionCallOutput
 			var content string
 			if fco.Output.OfString != nil {
@@ -665,29 +607,25 @@ func convertInputItemsToMessages(items []openai.ResponseInputItemUnionParam, mes
 		}
 	}
 
-	if len(pendingToolCalls) > 0 {
-		messages = appendToolCallsAsAssistantMessage(messages, pendingToolCalls)
-	}
-
 	return messages, nil
 }
 
-func appendToolCallsAsAssistantMessage(messages []openai.ChatCompletionMessageParamUnion, toolCalls []openai.ChatCompletionMessageToolCallParam) []openai.ChatCompletionMessageParamUnion {
+func appendToolCallAsAssistantMessage(messages []openai.ChatCompletionMessageParamUnion, toolCall openai.ChatCompletionMessageToolCallParam) []openai.ChatCompletionMessageParamUnion {
 	n := len(messages)
 	if n > 0 && messages[n-1].OfAssistant != nil {
-		messages[n-1].OfAssistant.ToolCalls = append(messages[n-1].OfAssistant.ToolCalls, toolCalls...)
+		messages[n-1].OfAssistant.ToolCalls = append(messages[n-1].OfAssistant.ToolCalls, toolCall)
 		return messages
 	}
 	return append(messages, openai.ChatCompletionMessageParamUnion{
 		OfAssistant: &openai.ChatCompletionAssistantMessageParam{
 			Role:      openai.ChatMessageRoleAssistant,
-			ToolCalls: toolCalls,
+			ToolCalls: []openai.ChatCompletionMessageToolCallParam{toolCall},
 		},
 	})
 }
 
 func convertEasyInputMessage(msg *openai.EasyInputMessageParam) openai.ChatCompletionMessageParamUnion {
-	contentValue := extractEasyInputText(msg.Content)
+	contentValue := ptr.Deref(msg.Content.OfString, extractInputContentText(msg.Content.OfInputItemContentList))
 	switch msg.Role {
 	case openai.ChatMessageRoleAssistant:
 		return openai.ChatCompletionMessageParamUnion{
@@ -715,84 +653,6 @@ func convertEasyInputMessage(msg *openai.EasyInputMessageParam) openai.ChatCompl
 			OfUser: &openai.ChatCompletionUserMessageParam{
 				Role:    openai.ChatMessageRoleUser,
 				Content: convertEasyInputContent(msg.Content),
-			},
-		}
-	}
-}
-
-func extractEasyInputText(content openai.EasyInputMessageContentUnionParam) string {
-	if content.OfString != nil {
-		return *content.OfString
-	}
-	if content.OfInputItemContentList != nil {
-		var parts []string
-		for _, c := range content.OfInputItemContentList {
-			if c.OfInputText != nil {
-				parts = append(parts, c.OfInputText.Text)
-			}
-		}
-		return strings.Join(parts, "\n\n")
-	}
-	return ""
-}
-
-func convertInputItemMessage(msg *openai.ResponseInputItemMessageParam) openai.ChatCompletionMessageParamUnion {
-	switch msg.Role {
-	case openai.ChatMessageRoleUser:
-		var parts []openai.ChatCompletionContentPartUserUnionParam
-		for _, c := range msg.Content {
-			switch {
-			case c.OfInputText != nil:
-				parts = append(parts, openai.ChatCompletionContentPartUserUnionParam{
-					OfText: &openai.ChatCompletionContentPartTextParam{
-						Text: c.OfInputText.Text,
-						Type: string(openai.ChatCompletionContentPartTextTypeText),
-					},
-				})
-			case c.OfInputImage != nil:
-				parts = append(parts, openai.ChatCompletionContentPartUserUnionParam{
-					OfImageURL: &openai.ChatCompletionContentPartImageParam{
-						ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
-							URL:    c.OfInputImage.ImageURL,
-							Detail: openai.ChatCompletionContentPartImageImageURLDetail(c.OfInputImage.Detail),
-						},
-						Type: openai.ChatCompletionContentPartImageTypeImageURL,
-					},
-				})
-			}
-		}
-		return openai.ChatCompletionMessageParamUnion{
-			OfUser: &openai.ChatCompletionUserMessageParam{
-				Role:    openai.ChatMessageRoleUser,
-				Content: openai.StringOrUserRoleContentUnion{Value: parts},
-			},
-		}
-	case openai.ChatMessageRoleAssistant:
-		return openai.ChatCompletionMessageParamUnion{
-			OfAssistant: &openai.ChatCompletionAssistantMessageParam{
-				Role:    openai.ChatMessageRoleAssistant,
-				Content: openai.StringOrAssistantRoleContentUnion{Value: extractInputContentText(msg.Content)},
-			},
-		}
-	case openai.ChatMessageRoleSystem:
-		return openai.ChatCompletionMessageParamUnion{
-			OfSystem: &openai.ChatCompletionSystemMessageParam{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: openai.ContentUnion{Value: extractInputContentText(msg.Content)},
-			},
-		}
-	case openai.ChatMessageRoleDeveloper:
-		return openai.ChatCompletionMessageParamUnion{
-			OfDeveloper: &openai.ChatCompletionDeveloperMessageParam{
-				Role:    openai.ChatMessageRoleDeveloper,
-				Content: openai.ContentUnion{Value: extractInputContentText(msg.Content)},
-			},
-		}
-	default:
-		return openai.ChatCompletionMessageParamUnion{
-			OfUser: &openai.ChatCompletionUserMessageParam{
-				Role:    openai.ChatMessageRoleUser,
-				Content: openai.StringOrUserRoleContentUnion{Value: extractInputContentText(msg.Content)},
 			},
 		}
 	}
@@ -845,12 +705,11 @@ func NewResponsesViaChatCompletionTranslator(inner OpenAIChatCompletionTranslato
 }
 
 type responsesViaChatCompletionTranslator struct {
-	inner                  OpenAIChatCompletionTranslator
-	requestModel           internalapi.RequestModel
-	stream                 bool
-	buffered               []byte
-	streamConverter        chatCompletionStreamToResponsesConverter
-	streamingResponseModel internalapi.ResponseModel
+	inner           OpenAIChatCompletionTranslator
+	requestModel    internalapi.RequestModel
+	stream          bool
+	buffered        []byte
+	streamConverter chatCompletionStreamToResponsesConverter
 }
 
 func (t *responsesViaChatCompletionTranslator) RequestBody(_ []byte, req *openai.ResponseRequest, _ bool) (
@@ -938,21 +797,12 @@ func (t *responsesViaChatCompletionTranslator) ResponseBody(respHeaders map[stri
 		}
 		line := t.buffered[:i]
 		t.buffered = t.buffered[i+1:]
-		if len(line) == 0 {
-			continue
-		}
-		converted, _ := t.streamConverter.processLine(line)
-		if converted != nil {
-			newBody = append(newBody, converted...)
-		}
+		newBody = append(newBody, t.streamConverter.processLine(line)...)
 	}
 	if endOfStream && t.streamConverter.finished {
 		newBody = t.streamConverter.appendTerminalEvent(newBody, t.streamConverter.pendingStatus, nil)
 	}
-	if t.streamConverter.model != "" {
-		t.streamingResponseModel = t.streamConverter.model
-	}
-	responseModel = cmp.Or(t.streamingResponseModel, innerModel, t.requestModel)
+	responseModel = cmp.Or(t.streamConverter.model, innerModel, t.requestModel)
 	return innerHeaders, newBody, tokenUsage, responseModel, nil
 }
 
