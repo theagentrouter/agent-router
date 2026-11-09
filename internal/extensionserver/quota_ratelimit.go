@@ -501,8 +501,8 @@ func (s *Server) applyHostAllowlistToQuotaCluster(ctx context.Context, cluster *
 			continue
 		}
 		var group *endpointv3.LocalityLbEndpoints
-		if cluster.LoadAssignment != nil && lbEndpointIndex < len(cluster.LoadAssignment.Endpoints) {
-			group = cluster.LoadAssignment.Endpoints[lbEndpointIndex]
+		if la := cluster.GetLoadAssignment(); la != nil && lbEndpointIndex < len(la.Endpoints) {
+			group = la.Endpoints[lbEndpointIndex]
 		}
 		lbEndpointIndex++
 		if group == nil {
@@ -512,7 +512,7 @@ func (s *Server) applyHostAllowlistToQuotaCluster(ctx context.Context, cluster *
 			continue
 		}
 		namespace := backendRef.GetNamespace(info.namespace)
-		for _, endpoint := range group.LbEndpoints {
+		for _, endpoint := range group.GetLbEndpoints() {
 			setEndpointMetadataQuotaRouting(endpoint, namespace, backendRef.Name, backendRef.ModelNameOverride)
 			stamped = true
 		}
