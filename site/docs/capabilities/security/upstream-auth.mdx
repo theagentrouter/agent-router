@@ -165,11 +165,22 @@ gateway reads and strips before forwarding the request to the backend it authent
     fromRequestHeaders: {} # reads x-aigw-api-key for type: APIKey
 ```
 
+The gateway strips the header from every backend of its AI routes, not only the one whose policy
+reads it. The injecting filter runs before routing, and Envoy replays the original request
+headers when it retries or falls back to another backend, so the header can reach any of them.
+The header name therefore must not be one another backend needs to receive:
+`header: authorization` strips `Authorization` from all AI traffic on the gateway. The default
+`x-aigw-*` names avoid this.
+
+Plain HTTPRoutes on the same Gateway have no AI Gateway processor and forward the header as is.
+Attach the injecting filter (for example an ext_authz `SecurityPolicy`) to the AI routes rather
+than to the whole Gateway.
+
 Because any client can set request headers, this source is only safe when the trusted boundary
 overwrites or rejects client-supplied values of the configured header. The header also travels
-with the request through the filter chain, and stripping is configured per backend — so on
-routes with multiple backends (for example provider fallback), prefer `fromDynamicMetadata`,
-which has neither exposure.
+with the request through the filter chain and can surface wherever request headers do, such as
+access logs and traces. Where the producing filter can write dynamic metadata, prefer
+`fromDynamicMetadata`, which has neither exposure.
 
 ### Fallback Behaviour
 

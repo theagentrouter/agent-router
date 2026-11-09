@@ -23,7 +23,6 @@ func makeHeaderOverride(headerName string, fallback bool) *filterapi.CredentialO
 	return &filterapi.CredentialOverride{
 		HeaderName:           headerName,
 		FallbackToConfigured: fallback,
-		InputHeadersToRemove: []string{headerName},
 	}
 }
 
@@ -558,11 +557,6 @@ func TestAWSCredentialOverrideHandler_FromDynamicMetadata(t *testing.T) {
 
 		_, err := h.Do(ctx, awsRequestHeaders(), nil)
 		require.ErrorIs(t, err, ErrCredentialMissing)
-	})
-
-	t.Run("metadata source strips no headers", func(t *testing.T) {
-		// The credential never touches the request, so nothing to remove.
-		require.Empty(t, makeMetadataOverride(namespace, key, true).InputHeadersToRemove)
 	})
 }
 
