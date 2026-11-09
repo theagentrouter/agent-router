@@ -28,6 +28,8 @@ import (
 	upstream_codecv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/upstream_codec/v3"
 	httpconnectionmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -51,6 +53,13 @@ const (
 	// Metadata Envoy Gateway stamps on the resources it builds, naming the objects each came from.
 	envoyGatewayMetadataNamespace    = "envoy-gateway"
 	envoyGatewayMetadataResourcesKey = "resources"
+
+	// headerOrderLbPolicyName is the registered name of the custom Envoy LoadBalancingPolicy
+	// extension. Requires a custom Envoy build; see
+	// source/extensions/load_balancing_policies/header_order in the Envoy checkout.
+	headerOrderLbPolicyName = "envoy.load_balancing_policies.header_order"
+	// headerOrderLbConfigTypeURL is the Any type URL for the header_order extension's config proto.
+	headerOrderLbConfigTypeURL = "type.googleapis.com/envoy.extensions.load_balancing_policies.header_order.v3.HeaderOrder"
 )
 
 type aiGatewayClusterName struct {
@@ -146,6 +155,14 @@ func (s *Server) PostTranslateModify(ctx context.Context, req *egextension.PostT
 	// Apply the per-rule stream idle timeout to the generated routes.
 	if err = s.applyStreamIdleTimeouts(ctx, req.Routes); err != nil {
 		return nil, fmt.Errorf("failed to apply stream idle timeouts: %w", err)
+	}
+
+	// Attach the header_order LoadBalancingPolicy extension to clusters generated for
+	// AIGatewayRoute rules whose backends use more than one distinct Priority, enabling
+	// per-attempt (initial attempt and every retry) custom ordering driven by the
+	// EndpointOrderMetadataNamespace/EndpointOrderMetadataKey dynamic metadata.
+	if err = s.applyHeaderOrderLoadBalancingPolicy(ctx, req.Clusters); err != nil {
+		return nil, fmt.Errorf("failed to apply header order load balancing policy: %w", err)
 	}
 
 	// Ensure the AI Gateway external processor UDS cluster exists.
@@ -287,6 +304,150 @@ func (s *Server) maybeSetStreamIdleTimeout(ctx context.Context, route *routev3.R
 	}
 	action.RetryPolicy.PerTryIdleTimeout = durationpb.New(timeout)
 	return nil
+}
+
+// applyHeaderOrderLoadBalancingPolicy walks the generated clusters and, for every cluster
+// generated for an AIGatewayRoute rule whose backends use more than one distinct Priority,
+// wraps the cluster's existing LoadBalancingPolicy with a custom Envoy LoadBalancingPolicy
+// extension (envoy.load_balancing_policies.header_order). That extension reads an ordered
+// list of priority indices from the EndpointOrderMetadataNamespace/EndpointOrderMetadataKey
+// dynamic metadata (set by a custom ext_proc upstream of the router) and forces *every*
+// attempt -- the initial attempt and every retry alike -- to target the priority at the
+// corresponding position in that list, delegating actual host selection within that priority
+// (and full fallback, if the metadata is absent/malformed) to the cluster's original
+// LoadBalancingPolicy.
+//
+// Unlike a RetryPriority extension (only consulted on retries), this is a full LoadBalancer
+// extension, so it also covers the initial attempt.
+//
+// This requires a custom Envoy build with the envoy.load_balancing_policies.header_order
+// extension registered; see source/extensions/load_balancing_policies/header_order in the
+// Envoy checkout.
+func (s *Server) applyHeaderOrderLoadBalancingPolicy(ctx context.Context, clusters []*clusterv3.Cluster) error {
+	cache := make(map[client.ObjectKey]*aigv1b1.AIGatewayRoute)
+	for _, cluster := range clusters {
+		if err := s.maybeSetHeaderOrderLoadBalancingPolicy(ctx, cluster, cache); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// maybeSetHeaderOrderLoadBalancingPolicy wraps the cluster's LoadBalancingPolicy with the
+// header_order extension when the cluster was generated for an AIGatewayRoute rule that
+// configures more than one distinct BackendRef Priority, and the cluster already has a
+// LoadBalancingPolicy to use as the child/fallback policy.
+func (s *Server) maybeSetHeaderOrderLoadBalancingPolicy(ctx context.Context, cluster *clusterv3.Cluster, cache map[client.ObjectKey]*aigv1b1.AIGatewayRoute) error {
+	clusterName, err := parseAIGatewayClusterName(cluster.Name)
+	if err != nil {
+		// Not an AIGatewayRoute-owned cluster (e.g. the extproc-uds or InferencePool EPP
+		// clusters).
+		return nil
+	}
+	if clusterName.backendRefIndex != noBackendRefIndex {
+		// A dedicated per-backendRef cluster (Envoy Gateway's NeedsClusterPerSetting case):
+		// there is no single PrioritySet spanning all of the rule's backends here, so
+		// header_order has nothing useful to reorder for this cluster.
+		return nil
+	}
+
+	aigwRoute, err := s.retrieveAndCacheAIGatewayRoute(ctx, cache, client.ObjectKey{Namespace: clusterName.namespace, Name: clusterName.routeName})
+	if err != nil {
+		return err
+	}
+	if aigwRoute == nil {
+		// Not an AIGatewayRoute-owned cluster, or it was deleted during translation.
+		return nil
+	}
+
+	// The list of rules in the AIGatewayRoute may have changed since this cluster was
+	// generated, so we check the rule index is still valid before applying the extension.
+	if clusterName.ruleIndex >= len(aigwRoute.Spec.Rules) {
+		return nil
+	}
+
+	rule := aigwRoute.Spec.Rules[clusterName.ruleIndex]
+	if countDistinctBackendPriorities(rule.BackendRefs) < 2 {
+		// Nothing to reorder: all backends share the same Priority tier.
+		return nil
+	}
+
+	if cluster.LoadBalancingPolicy == nil || len(cluster.LoadBalancingPolicy.Policies) == 0 {
+		// Nothing safe to wrap as the child/fallback policy. Rather than guessing at an
+		// equivalent LoadBalancingPolicy for whatever legacy Cluster.LbPolicy enum value
+		// might be in effect, leave the cluster's load balancing untouched.
+		s.log.Info("skipping header_order load balancing policy: cluster has no LoadBalancingPolicy to wrap",
+			"cluster", cluster.Name)
+		return nil
+	}
+
+	headerOrderAny, err := buildHeaderOrderLoadBalancingPolicyAny(
+		internalapi.EndpointOrderMetadataNamespace, internalapi.EndpointOrderMetadataKey, cluster.LoadBalancingPolicy)
+	if err != nil {
+		return fmt.Errorf("failed to build header_order load balancing policy config: %w", err)
+	}
+
+	cluster.LoadBalancingPolicy = &clusterv3.LoadBalancingPolicy{
+		Policies: []*clusterv3.LoadBalancingPolicy_Policy{{
+			TypedExtensionConfig: &corev3.TypedExtensionConfig{
+				Name:        headerOrderLbPolicyName,
+				TypedConfig: headerOrderAny,
+			},
+		}},
+	}
+	return nil
+}
+
+// countDistinctBackendPriorities returns the number of distinct Priority values among the
+// given AIServiceBackend refs, skipping InferencePool refs (their fallback is handled by the
+// endpoint picker, not Priority tiers). A ref with an unset Priority is treated as Priority 0.
+func countDistinctBackendPriorities(refs []aigv1b1.AIGatewayRouteRuleBackendRef) int {
+	distinctPriorities := make(map[uint32]struct{})
+	for i := range refs {
+		ref := &refs[i]
+		if ref.IsInferencePool() {
+			continue
+		}
+		var priority uint32
+		if ref.Priority != nil {
+			priority = *ref.Priority
+		}
+		distinctPriorities[priority] = struct{}{}
+	}
+	return len(distinctPriorities)
+}
+
+// buildHeaderOrderLoadBalancingPolicyAny hand-encodes the Any payload for
+// envoy.extensions.load_balancing_policies.header_order.v3.HeaderOrder{metadata_namespace:
+// metadataNamespace, metadata_key: metadataKey, fallback_policy: fallbackPolicy}.
+//
+// This is a temporary workaround: the header_order extension is a custom Envoy addition (see
+// source/extensions/load_balancing_policies/header_order in the Envoy checkout) that does not
+// yet have generated Go bindings in github.com/envoyproxy/go-control-plane. Rather than a
+// generic recursive protobuf encoder, this only needs to hand-encode our own message's three
+// top-level fields: two plain strings (field numbers 1 and 2) and one embedded submessage
+// (field number 3) whose *contents* are produced by the real, generated
+// clusterv3.LoadBalancingPolicy type via proto.Marshal -- so no part of fallbackPolicy's own
+// (arbitrarily complex) wire format needs to be hand-rolled. Field lengths are encoded with
+// protowire's varint helpers, so this is not limited to short strings. Once a fork/vendor of
+// go-control-plane ships generated types for this extension, replace this with a normal
+// toAny(&header_orderv3.HeaderOrder{...}) call using the toAny helper in extensionserver.go.
+func buildHeaderOrderLoadBalancingPolicyAny(metadataNamespace, metadataKey string, fallbackPolicy *clusterv3.LoadBalancingPolicy) (*anypb.Any, error) {
+	fallbackBytes, err := proto.Marshal(fallbackPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal fallback LoadBalancingPolicy: %w", err)
+	}
+	var b []byte
+	b = protowire.AppendTag(b, 1, protowire.BytesType) // metadata_namespace
+	b = protowire.AppendString(b, metadataNamespace)
+	b = protowire.AppendTag(b, 2, protowire.BytesType) // metadata_key
+	b = protowire.AppendString(b, metadataKey)
+	b = protowire.AppendTag(b, 3, protowire.BytesType) // fallback_policy
+	b = protowire.AppendBytes(b, fallbackBytes)
+	return &anypb.Any{
+		TypeUrl: headerOrderLbConfigTypeURL,
+		Value:   b,
+	}, nil
 }
 
 // retrieveAndCacheAIGatewayRoute returns the AIGatewayRoute for the key and saves the result.
