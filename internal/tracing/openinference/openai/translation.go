@@ -97,5 +97,5 @@ func (r *TranslationRecorder) RecordResponse(span trace.Span, resp *openai.Trans
 
 // RecordResponseOnError implements the same method as defined in tracingapi.TranslationRecorder.
 func (r *TranslationRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
