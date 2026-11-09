@@ -1012,6 +1012,37 @@ func TestJsonSchemaToGeminiIntegration(t *testing.T) {
 		},
 
 		{
+			name: "allOf preserves sibling fields for ResponseSchema",
+			input: json.RawMessage(`{
+    "type": "object",
+    "properties": {
+        "paragraph_id": {
+            "allOf": [
+                {
+                    "type": "string"
+                }
+            ],
+            "title": "Paragraph Id",
+            "description": "Unique identifier for the paragraph"
+        }
+    },
+    "required": [
+        "paragraph_id"
+    ]
+}`),
+			expectedResponseSchema: &genai.Schema{
+				Properties: map[string]*genai.Schema{
+					"paragraph_id": {
+						Type:        "string",
+						Title:       "Paragraph Id",
+						Description: "Unique identifier for the paragraph",
+					},
+				},
+				Required: []string{"paragraph_id"},
+				Type:     "object",
+			},
+		},
+		{
 			name: "allOf with not a list",
 			input: json.RawMessage(`{
     "type": "object",

@@ -447,7 +447,12 @@ func jsonSchemaToGapic(schema map[string]any, allowedSchemaFieldsSet map[string]
 			if err != nil {
 				return nil, err
 			}
-			return convertedAllOf, nil
+			// Merge the allOf result without overwriting sibling fields set on the outer schema.
+			for k, v := range convertedAllOf {
+				if _, exists := convertedSchema[k]; !exists {
+					convertedSchema[k] = v
+				}
+			}
 
 		case "anyOf":
 			convertedAnyOf, err := processJSONSchemaAnyOfField(value, allowedSchemaFieldsSet)
