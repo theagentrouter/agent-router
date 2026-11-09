@@ -314,6 +314,22 @@ focused on retrieval and semantic analysis.
 
 See [docker-compose-otel.yaml][docker-compose-otel.yaml] for a complete example configuration.
 
+### Encryption seeds
+
+`aigw run` encrypts Files/Batch API ids and MCP session ids with keys derived from seeds. By default
+it uses a well-known public seed, which lets anyone decrypt and forge these ids. Set your own secret,
+randomly generated seeds with these environment variables:
+
+| Environment Variable               | Purpose                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------ |
+| `AIGW_FILE_ID_ENCRYPTION_SEED`     | Seed for [Files API](../capabilities/llm-integrations/files-api.md) ids. |
+| `AIGW_MCP_SESSION_ENCRYPTION_SEED` | Seed for MCP session ids. Used only when MCP is configured.              |
+
+The seeds are passed to the external processor through its configuration file, not its command line.
+The key derivation iterations are set with `--file-id-encryption-iterations` and
+`--mcp-session-encryption-iterations` (default `100000`). File ids issued under one seed stop working
+when the seed changes.
+
 ## Configuration
 
 ### File Locations
