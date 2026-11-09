@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -456,4 +457,50 @@ func testRunOpts(t *testing.T, extProcLauncher func(context.Context, []string, i
 	opts, err := newRunOpts(dirs, "test-run", "", extProcLauncher)
 	require.NoError(t, err)
 	return opts
+}
+
+func Test_setEncryptionSeeds(t *testing.T) {
+	runCtx := &runCmdContext{mcpSessionEncryptionIterations: 1234, fileIDEncryptionIterations: 5678}
+
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "")
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "")
+		cfg := &filterapi.Config{MCPConfig: &filterapi.MCPConfig{}}
+		runCtx.setEncryptionSeeds(cfg)
+		require.Nil(t, cfg.FileIDEncryption)
+		require.Nil(t, cfg.MCPConfig.SessionEncryption)
+	})
+	t.Run("set", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "file-seed")
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "mcp-seed")
+		cfg := &filterapi.Config{MCPConfig: &filterapi.MCPConfig{}}
+		runCtx.setEncryptionSeeds(cfg)
+		require.Equal(t, &filterapi.FileIDEncryption{Seed: "file-seed", Iterations: 5678}, cfg.FileIDEncryption)
+		require.Equal(t, &filterapi.MCPSessionEncryption{Seed: "mcp-seed", Iterations: 1234}, cfg.MCPConfig.SessionEncryption)
+	})
+	t.Run("no MCP config", func(t *testing.T) {
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "mcp-seed")
+		cfg := &filterapi.Config{}
+		runCtx.setEncryptionSeeds(cfg)
+		require.Nil(t, cfg.MCPConfig)
+	})
+}
+
+func Test_mustStartExtProc_seedNotOnCommandLine(t *testing.T) {
+	t.Setenv(fileIDEncryptionSeedEnvVar, "file-seed")
+	var capturedArgs []string
+	runCtx := &runCmdContext{
+		stderrLogger: slog.New(slog.DiscardHandler),
+		stderr:       io.Discard,
+		tmpdir:       t.TempDir(),
+		adminPort:    1064,
+		extProcLauncher: func(_ context.Context, args []string, _ io.Writer) error {
+			capturedArgs = args
+			return errors.New("mock error")
+		},
+	}
+	<-runCtx.mustStartExtProc(t.Context(), &filterapi.Config{Version: version.Parse()})
+	require.NotContains(t, strings.Join(capturedArgs, " "), "file-seed")
+	cfg := requireExtProcConfigBundle(t, findFlagValue(capturedArgs, "--configBundlePath"))
+	require.Equal(t, "file-seed", cfg.FileIDEncryption.Seed)
 }
