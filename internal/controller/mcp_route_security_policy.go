@@ -319,10 +319,24 @@ func (c *MCPRouteController) ensureOAuthProtectedResourceMetadataBTP(ctx context
 // "-://host/..." URL, so the scheme falls back to the :scheme pseudo-header when
 // X-Forwarded-Proto is missing.
 //
+// The serving path is appended as data. It may contain percent-encoded octets (the MCP proxy
+// advertises those via URL.EscapedPath), and a single "%" that does not begin a valid operator
+// is rejected by Envoy's substitution parser, which fails the listener update carrying this
+// header. Any value containing % is parsed with the substitution formatter, whose command regex is %([A-Z0-9_]+)(...)%
+// Doubling each "%" makes Envoy emit it literally, while the %REQ operators above stay
+// single so they still expand.
+//
 // Reference: https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log/usage#command-operators
 func envoyDerivedResourceMetadataURL(servingPath string) string {
 	return fmt.Sprintf("%%REQ(X-FORWARDED-PROTO?:SCHEME)%%://%%REQ(:AUTHORITY)%%%s%s",
-		internalapi.OAuthProtectedResourceMetadataPath, strings.TrimSuffix(servingPath, "/"))
+		internalapi.OAuthProtectedResourceMetadataPath,
+		escapeEnvoySubstitutionLiteral(strings.TrimSuffix(servingPath, "/")))
+}
+
+// escapeEnvoySubstitutionLiteral doubles every "%" so Envoy's substitution parser emits it as a
+// literal percent instead of treating it as the start of a command operator.
+func escapeEnvoySubstitutionLiteral(value string) string {
+	return strings.ReplaceAll(value, "%", "%%")
 }
 
 // buildWWWAuthenticateHeaderValue constructs the WWW-Authenticate header value according to RFC 9728.
@@ -332,7 +346,10 @@ func envoyDerivedResourceMetadataURL(servingPath string) string {
 func buildWWWAuthenticateHeaderValue(metadata *aigv1b1.ProtectedResourceMetadata, servingPath string) string {
 	var resourceMetadataURL string
 	if metadata.Resource != "" {
-		resourceMetadataURL = internalapi.OAuthProtectedResourceMetadataURL(metadata.Resource)
+		// A pinned resource is a concrete URL, so unlike the derived form it contains no %REQ
+		// operators. Every "%" in it is percent-encoding and must be doubled or Envoy rejects
+		// the listener update. See escapeEnvoySubstitutionLiteral.
+		resourceMetadataURL = escapeEnvoySubstitutionLiteral(internalapi.OAuthProtectedResourceMetadataURL(metadata.Resource))
 	} else {
 		resourceMetadataURL = envoyDerivedResourceMetadataURL(servingPath)
 	}
@@ -342,8 +359,9 @@ func buildWWWAuthenticateHeaderValue(metadata *aigv1b1.ProtectedResourceMetadata
 	headerValue = fmt.Sprintf(`%s, resource_metadata="%s"`, headerValue, resourceMetadataURL)
 
 	if len(metadata.ScopesSupported) > 0 {
-		// Add scope as per RFC 6750 Section 3.
-		headerValue = fmt.Sprintf(`%s, scope="%s"`, headerValue, strings.Join(metadata.ScopesSupported, " "))
+		// Add scope as per RFC 6750 Section 3. Scope tokens are data in the same substitution
+		// format string, so a "%" in one is escaped the same way.
+		headerValue = fmt.Sprintf(`%s, scope="%s"`, headerValue, escapeEnvoySubstitutionLiteral(strings.Join(metadata.ScopesSupported, " ")))
 	}
 
 	return headerValue

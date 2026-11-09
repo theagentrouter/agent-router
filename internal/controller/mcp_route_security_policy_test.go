@@ -773,6 +773,21 @@ func Test_buildWWWAuthenticateHeaderValue(t *testing.T) {
 			},
 			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp", scope="read write"`,
 		},
+		{
+			name: "pinned resource with a percent-encoded path",
+			metadata: &aigv1b1.ProtectedResourceMetadata{
+				Resource: "https://api.example.com/my%20mcp",
+			},
+			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/my%%20mcp"`,
+		},
+		{
+			name: "scope containing a percent sign",
+			metadata: &aigv1b1.ProtectedResourceMetadata{
+				Resource:        "https://api.example.com/mcp",
+				ScopesSupported: []string{"read%write"},
+			},
+			expected: `Bearer error="invalid_token", error_description="The access token is missing or invalid", resource_metadata="https://api.example.com/.well-known/oauth-protected-resource/mcp", scope="read%%write"`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -798,6 +813,15 @@ func Test_buildWWWAuthenticateHeaderValue(t *testing.T) {
 			buildWWWAuthenticateHeaderValue(&aigv1b1.ProtectedResourceMetadata{
 				ScopesSupported: []string{"read"},
 			}, "/tenant/mcp"))
+	})
+
+	// A percent-encoded serving path must survive as data. Envoy treats a single "%" as the
+	// start of a command operator, so the path's "%" is doubled and the %REQ operators are not.
+	t.Run("resource omitted with a percent-encoded path", func(t *testing.T) {
+		require.Equal(t,
+			`Bearer error="invalid_token", error_description="The access token is missing or invalid", `+
+				`resource_metadata="%REQ(X-FORWARDED-PROTO?:SCHEME)%://%REQ(:AUTHORITY)%/.well-known/oauth-protected-resource/my%%20mcp"`,
+			buildWWWAuthenticateHeaderValue(&aigv1b1.ProtectedResourceMetadata{}, "/my%20mcp/"))
 	})
 }
 
