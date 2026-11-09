@@ -152,8 +152,8 @@ func buildBackendDescriptorKeyed(
 		allKeyed = append(allKeyed, keyed...)
 	}
 
-	if policy.Spec.ServiceQuota.Quota.Limit > 0 {
-		desc, err := buildServiceQuotaDescriptor(&policy.Spec.ServiceQuota)
+	if policy.Spec.ServiceQuota != nil && policy.Spec.ServiceQuota.Quota.Limit > 0 {
+		desc, err := buildServiceQuotaDescriptor(policy.Spec.ServiceQuota)
 		if err != nil {
 			return nil, nil, fmt.Errorf("service quota: %w", err)
 		}

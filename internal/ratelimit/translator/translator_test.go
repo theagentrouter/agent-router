@@ -551,7 +551,7 @@ func TestBuildBackendDescriptor(t *testing.T) {
 	t.Run("service quota adds catch-all descriptor", func(t *testing.T) {
 		policy := &aigv1a1.QuotaPolicy{
 			Spec: aigv1a1.QuotaPolicySpec{
-				ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				ServiceQuota: &aigv1a1.ServiceQuotaDefinition{
 					Quota: aigv1a1.QuotaValue{Limit: 5000, Duration: "1h"},
 				},
 			},
@@ -585,7 +585,7 @@ func TestBuildBackendDescriptor(t *testing.T) {
 						},
 					},
 				},
-				ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				ServiceQuota: &aigv1a1.ServiceQuotaDefinition{
 					Quota: aigv1a1.QuotaValue{Limit: 10000, Duration: "1h"},
 				},
 			},
@@ -607,7 +607,7 @@ func TestBuildBackendDescriptor(t *testing.T) {
 	t.Run("service quota with zero limit is not added", func(t *testing.T) {
 		policy := &aigv1a1.QuotaPolicy{
 			Spec: aigv1a1.QuotaPolicySpec{
-				ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				ServiceQuota: &aigv1a1.ServiceQuotaDefinition{
 					Quota: aigv1a1.QuotaValue{Limit: 0, Duration: "1h"},
 				},
 			},
@@ -646,7 +646,7 @@ func TestBuildBackendDescriptor(t *testing.T) {
 	t.Run("invalid service quota duration returns wrapped error", func(t *testing.T) {
 		policy := &aigv1a1.QuotaPolicy{
 			Spec: aigv1a1.QuotaPolicySpec{
-				ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				ServiceQuota: &aigv1a1.ServiceQuotaDefinition{
 					Quota: aigv1a1.QuotaValue{Limit: 100, Duration: "xyz"},
 				},
 			},
@@ -786,7 +786,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 						},
 					},
 				},
-				ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				ServiceQuota: &aigv1a1.ServiceQuotaDefinition{
 					Quota: aigv1a1.QuotaValue{Limit: 10000, Duration: "1h"},
 				},
 			},
@@ -843,7 +843,7 @@ func TestBuildRateLimitConfigs(t *testing.T) {
 	t.Run("only service quota", func(t *testing.T) {
 		policy := &aigv1a1.QuotaPolicy{
 			Spec: aigv1a1.QuotaPolicySpec{
-				ServiceQuota: aigv1a1.ServiceQuotaDefinition{
+				ServiceQuota: &aigv1a1.ServiceQuotaDefinition{
 					Quota: aigv1a1.QuotaValue{Limit: 5000, Duration: "1h"},
 				},
 			},
