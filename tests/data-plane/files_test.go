@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
@@ -167,7 +168,7 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 			method:              http.MethodPost,
 			path:                "/v1/files",
 			expStatus:           http.StatusBadRequest,
-			expResponseContains: `"model"`,
+			expResponseContains: `'model'`,
 		},
 
 		// ---------------------------------------------------------------
@@ -192,7 +193,7 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 			method:              http.MethodGet,
 			path:                "/v1/files",
 			expStatus:           http.StatusBadRequest,
-			expResponseContains: `"model"`,
+			expResponseContains: `'model'`,
 		},
 
 		// ---------------------------------------------------------------
@@ -314,7 +315,7 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 
 			var lastBody []byte
 			var lastStatus int
-			require.Eventually(t, func() bool {
+			assert.Eventually(&noopT{}, func() bool {
 				resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 				if doErr != nil {
 					return false
@@ -326,8 +327,8 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 				lastBody = buf.Bytes()
 				lastStatus = resp.StatusCode
 				return resp.StatusCode == tc.expStatus
-			}, eventuallyTimeout, eventuallyInterval,
-				"expected status %d, got %d, body: %s", tc.expStatus, lastStatus, lastBody)
+			}, eventuallyTimeout, eventuallyInterval)
+			require.Equal(t, tc.expStatus, lastStatus, "body: %s", lastBody)
 
 			if tc.expResponseContains != "" {
 				require.Contains(t, string(lastBody), tc.expResponseContains)
@@ -375,7 +376,8 @@ func TestFilesAPI_UploadResponseIDDecodes(t *testing.T) {
 		base64.StdEncoding.EncodeToString([]byte(upstreamResponse)))
 
 	var respBody []byte
-	require.Eventually(t, func() bool {
+	var lastStatus int
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -384,8 +386,10 @@ func TestFilesAPI_UploadResponseIDDecodes(t *testing.T) {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(resp.Body)
 		respBody = buf.Bytes()
+		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval, "upload did not return 200, last body: %s", respBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus, "last body: %s", respBody)
 
 	// The response body must contain a gateway-encoded id (not the native id).
 	respStr := string(respBody)
@@ -426,7 +430,7 @@ func TestFilesAPI_InvalidAfterCursor(t *testing.T) {
 			require.NoError(t, err)
 
 			var lastStatus int
-			require.Eventually(t, func() bool {
+			assert.Eventually(&noopT{}, func() bool {
 				resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 				if doErr != nil {
 					return false
@@ -434,8 +438,8 @@ func TestFilesAPI_InvalidAfterCursor(t *testing.T) {
 				defer resp.Body.Close()
 				lastStatus = resp.StatusCode
 				return resp.StatusCode == http.StatusBadRequest
-			}, eventuallyTimeout, eventuallyInterval,
-				"expected 400 for after=%s, got %d", badAfter, lastStatus)
+			}, eventuallyTimeout, eventuallyInterval)
+			require.Equal(t, http.StatusBadRequest, lastStatus)
 		})
 	}
 }
@@ -458,7 +462,7 @@ func TestFilesAPI_ListModelStrippedFromUpstream(t *testing.T) {
 
 	var lastStatus int
 	var lastBody []byte
-	require.Eventually(t, func() bool {
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -469,8 +473,8 @@ func TestFilesAPI_ListModelStrippedFromUpstream(t *testing.T) {
 		lastBody = buf.Bytes()
 		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval,
-		"expected 200, got %d, body: %s", lastStatus, lastBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus, "body: %s", lastBody)
 
 	require.NotContains(t, string(lastBody), "model=", "model param must not appear in upstream body")
 }
@@ -498,7 +502,7 @@ func TestFilesAPI_RetrieveNativePath(t *testing.T) {
 
 	var lastStatus int
 	var lastBody []byte
-	require.Eventually(t, func() bool {
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -509,8 +513,8 @@ func TestFilesAPI_RetrieveNativePath(t *testing.T) {
 		lastBody = buf.Bytes()
 		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval,
-		"expected 200, got %d, body: %s", lastStatus, lastBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus, "body: %s", lastBody)
 
 	// Response must contain a gateway id, not the native id.
 	require.NotContains(t, string(lastBody), nativeID,
@@ -543,7 +547,7 @@ func TestFilesAPI_UploadModelStrippedFromBody(t *testing.T) {
 	// but we verify the gateway does not 400 or 5xx (i.e., stripping succeeded).
 
 	var lastStatus int
-	require.Eventually(t, func() bool {
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -551,8 +555,8 @@ func TestFilesAPI_UploadModelStrippedFromBody(t *testing.T) {
 		defer resp.Body.Close()
 		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval,
-		"expected 200, got %d", lastStatus)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus)
 }
 
 // TestFilesAPI_UpstreamErrorPassThrough verifies that a non-2xx upstream response is returned to
@@ -571,7 +575,7 @@ func TestFilesAPI_UpstreamErrorPassThrough(t *testing.T) {
 
 	var lastStatus int
 	var lastBody []byte
-	require.Eventually(t, func() bool {
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -582,7 +586,8 @@ func TestFilesAPI_UpstreamErrorPassThrough(t *testing.T) {
 		lastBody = buf.Bytes()
 		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusBadRequest
-	}, eventuallyTimeout, eventuallyInterval, "expected 400, got %d, body: %s", lastStatus, lastBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusBadRequest, lastStatus, "body: %s", lastBody)
 	require.JSONEq(t, upstreamErr, string(lastBody))
 }
 
@@ -602,7 +607,8 @@ func TestFilesAPI_StableIDs(t *testing.T) {
 		[]byte(fmt.Sprintf(`{"id":%q,"object":"file"}`, nativeID))))
 
 	var lastBody []byte
-	require.Eventually(t, func() bool {
+	var lastStatus int
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -611,7 +617,9 @@ func TestFilesAPI_StableIDs(t *testing.T) {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(resp.Body)
 		lastBody = buf.Bytes()
+		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval, "body: %s", lastBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus, "body: %s", lastBody)
 	require.Contains(t, string(lastBody), fmt.Sprintf(`"id":%q`, gwID))
 }
