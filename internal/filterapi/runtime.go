@@ -195,6 +195,8 @@ func NewRuntimeConfig(ctx context.Context, config *Config, fn NewBackendAuthHand
 			MaxPayloadBytes: guardrailMaxPayloadBytes(g.MaxPayloadBytes),
 			Evaluator:       evaluator,
 		})
+	}
+
 	var fileIDCodec idcodec.Codec
 	if e := config.FileIDEncryption; e != nil {
 		var err error
