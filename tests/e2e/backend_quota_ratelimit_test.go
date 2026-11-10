@@ -111,6 +111,22 @@ func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
 		requireQuotaUsage(t, "quota-test-model", 20)
 	})
 
+	// A non-2xx (failed) response must not charge token quota. The extproc
+	// error path emits token costs of 0 (no tokens were consumed), so even though
+	// the stream-done rate-limit descriptor now fires on failed requests, its
+	// hits_addend is 0. If the failed request's 100 total_tokens were charged,
+	// the 10-token limit would be exceeded and the next request would 429.
+	t.Run("non-2xx response does not charge token quota", func(t *testing.T) {
+		flushQuotaKeys(t)
+		// Upstream returns 500 with a body claiming 100 total_tokens.
+		errHdr := http.Header{}
+		errHdr.Set(testupstreamlib.ResponseStatusKey, "500")
+		makeRequest("quota-test-model", 100, http.StatusInternalServerError, errHdr)
+		// The subsequent request must succeed: the failed request's 0 tokens
+		// did not count against the 10-token-per-hour quota.
+		makeRequest("quota-test-model", 2, http.StatusOK)
+	})
+
 	// The AI Gateway controller stamps a hash of the applicable QuotaPolicies onto the generated HTTPRoute
 	// (the "gateway.envoyproxy.io/quota-policy-hash" annotation). A QuotaPolicy change must re-stamp a
 	// different hash, which is what forces Envoy Gateway to re-translate and re-run the extension
