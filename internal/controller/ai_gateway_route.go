@@ -58,6 +58,7 @@ const (
 	httpRouteQuotaPolicyHashAnnotationKey = egAnnotationPrefix + "quota-policy-hash"
 	egOwningGatewayNameLabel              = egAnnotationPrefix + "owning-gateway-name"
 	egOwningGatewayNamespaceLabel         = egAnnotationPrefix + "owning-gateway-namespace"
+	routeNotFoundHTTPRouteRuleName        = "route-not-found"
 	// apiKeyInSecret is the key to store OpenAI API key.
 	apiKeyInSecret = "apiKey"
 	// GatewayConfigAnnotationKey is the annotation key used on Gateway objects to reference a GatewayConfig.
@@ -361,7 +362,7 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 	}
 
 	rules = append(rules, gwapiv1.HTTPRouteRule{
-		Name:    ptr.To[gwapiv1.SectionName]("route-not-found"),
+		Name:    ptr.To[gwapiv1.SectionName](routeNotFoundHTTPRouteRuleName),
 		Matches: []gwapiv1.HTTPRouteMatch{{Path: &gwapiv1.HTTPPathMatch{Value: &c.rootPrefix}}},
 		Filters: []gwapiv1.HTTPRouteFilter{{
 			Type: gwapiv1.HTTPRouteFilterExtensionRef,
