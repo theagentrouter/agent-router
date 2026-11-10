@@ -895,12 +895,16 @@ func httpStatusToAnthropicErrorType(statusCode string) string {
 		return "permission_error"
 	case "404":
 		return "not_found_error"
+	case "413":
+		return "request_too_large"
 	case "429":
 		return "rate_limit_error"
 	case "500":
 		return "internal_server_error"
 	case "503":
 		return "service_unavailable_error"
+	case "529":
+		return "overloaded_error"
 	default:
 		return "internal_server_error"
 	}

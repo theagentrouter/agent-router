@@ -677,6 +677,16 @@ func TestAnthropicToAWSAnthropicTranslator_ResponseError(t *testing.T) {
 			wantType: "rate_limit_error", wantMessage: "Too many requests, please wait before trying again.",
 		},
 		{
+			name: "too large", status: "413", contentType: "application/json",
+			body:     `{"message":"Input is too long for requested model."}`,
+			wantType: "request_too_large", wantMessage: "Input is too long for requested model.",
+		},
+		{
+			name: "overloaded", status: "529", contentType: "application/json",
+			body:     `{"message":"Service is overloaded."}`,
+			wantType: "overloaded_error", wantMessage: "Service is overloaded.",
+		},
+		{
 			name: "malformed JSON", status: "400", contentType: "application/json",
 			body:     `{"message":`,
 			wantType: "invalid_request_error", wantMessage: `{"message":`,
