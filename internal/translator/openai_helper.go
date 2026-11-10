@@ -384,7 +384,9 @@ func anthropicToolChoiceToOpenAI(tc anthropic.ToolChoice, hasTools bool) *openai
 func splitPromptTokens(promptTokens int, details *openai.PromptTokensDetails) (uncached, cacheRead, cacheWrite int) {
 	if details != nil {
 		cacheRead, cacheWrite = max(details.CachedTokens, 0), max(details.CacheWriteTokensValue(), 0)
-		if cacheRead+cacheWrite > promptTokens {
+		// One count at a time: the sum of two large counts could overflow
+		// and pass the check.
+		if cacheRead > promptTokens || cacheWrite > promptTokens-cacheRead {
 			cacheRead, cacheWrite = 0, 0
 		}
 	}

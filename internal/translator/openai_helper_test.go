@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"testing"
 
@@ -718,6 +719,8 @@ func TestSplitPromptTokens(t *testing.T) {
 		{name: "more than the prompt is ignored", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: 70, CacheWriteTokens: 31}, uncached: 100},
 		{name: "negative read is taken as 0", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: -1, CacheWriteTokens: 30}, uncached: 70, write: 30},
 		{name: "negative write is taken as 0", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: 60, CacheWriteTokens: -1}, uncached: 40, read: 60},
+		{name: "counts whose sum overflows are ignored", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: math.MaxInt, CacheWriteTokens: math.MaxInt}, uncached: 100},
+		{name: "a read that overflows with the write is ignored", prompt: 100, details: &openai.PromptTokensDetails{CachedTokens: math.MaxInt, CacheWriteTokens: 1}, uncached: 100},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			uncached, read, write := splitPromptTokens(tc.prompt, tc.details)
