@@ -670,7 +670,7 @@ type streamToolCall struct {
 func (s *openAIStreamToAnthropicState) processBuffer(out *[]byte, endOfStream bool) error {
 	// Loop through all event blocks that are separated by a blank line
 	for {
-		eventBlock, remaining, found := bytes.Cut(s.buffer.Bytes(), []byte("\n\n"))
+		eventBlock, remaining, found := nextSSEEvent(s.buffer.Bytes())
 		if !found {
 			break
 		}
@@ -698,7 +698,7 @@ func (s *openAIStreamToAnthropicState) processBuffer(out *[]byte, endOfStream bo
 	return nil
 }
 
-// processEventBlock processes a single SSE event block (data between consecutive \n\n separators).
+// processEventBlock processes a single SSE event block delimited by a blank line.
 func (s *openAIStreamToAnthropicState) processEventBlock(block []byte, out *[]byte) error {
 	var eventData []byte
 	for line := range bytes.SplitSeq(block, []byte("\n")) {

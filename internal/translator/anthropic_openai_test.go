@@ -18,6 +18,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
 func TestAnthropicToOpenAITranslator_RequestBody(t *testing.T) {
@@ -331,19 +332,7 @@ func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming(t *testing.T) {
 }
 
 func TestAnthropicToOpenAITranslator_ResponseBody_Streaming(t *testing.T) {
-	translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "claude-3-haiku")
-
-	// Initialize streaming mode via RequestBody.
-	reqBody := &anthropic.MessagesRequest{
-		Model:     "claude-3-haiku",
-		MaxTokens: 100,
-		Stream:    true,
-		Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hello"}}},
-	}
-	_, _, err := translator.RequestBody(nil, reqBody, false)
-	require.NoError(t, err)
-
-	// Feed all OpenAI SSE chunks at once.
+	// OpenAI SSE events containing text, a stop reason, usage, and the done marker.
 	// Chunk 1: text delta → message_start + content_block_start + content_block_delta
 	// Chunk 2: finish_reason → stores stop reason
 	// Chunk 3: usage-only → content_block_stop + message_delta + message_stop
@@ -353,40 +342,84 @@ func TestAnthropicToOpenAITranslator_ResponseBody_Streaming(t *testing.T) {
 		"data: {\"id\":\"chatcmpl-xyz\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n" +
 		"data: [DONE]\n\n"
 
-	_, body, tokenUsage, responseModel, err := translator.ResponseBody(
-		map[string]string{"content-type": "text/event-stream"},
-		strings.NewReader(input),
-		true,
-		nil,
-	)
-	require.NoError(t, err)
-	require.NotEmpty(t, body)
+	for _, tc := range []struct {
+		name  string
+		input string
+	}{
+		{name: "LF", input: input},
+		{name: "CRLF", input: strings.ReplaceAll(input, "\n", "\r\n")},
+		{name: "mixed", input: strings.Replace(input, "\n\n", "\r\n\r\n", 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, delivery := range []string{"whole response", "one byte at a time"} {
+				t.Run(delivery, func(t *testing.T) {
+					translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "claude-3-haiku")
 
-	// Model should come from the OpenAI chunk, not the model override.
-	assert.Equal(t, "gpt-4o", responseModel)
+					// Initialize streaming mode via RequestBody.
+					reqBody := &anthropic.MessagesRequest{
+						Model:     "claude-3-haiku",
+						MaxTokens: 100,
+						Stream:    true,
+						Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hello"}}},
+					}
+					_, _, err := translator.RequestBody(nil, reqBody, false)
+					require.NoError(t, err)
 
-	// Verify token usage extracted from the usage chunk.
-	inputTokens, inputSet := tokenUsage.InputTokens()
-	outputTokens, outputSet := tokenUsage.OutputTokens()
-	assert.True(t, inputSet)
-	assert.Equal(t, uint32(10), inputTokens)
-	assert.True(t, outputSet)
-	assert.Equal(t, uint32(5), outputTokens)
+					chunkSize := len(tc.input)
+					if delivery == "one byte at a time" {
+						chunkSize = 1
+					}
+					var body []byte
+					var tokenUsage metrics.TokenUsage
+					var responseModel string
+					for offset := 0; offset < len(tc.input); offset += chunkSize {
+						end := min(offset+chunkSize, len(tc.input))
+						_, chunk, usage, model, err := translator.ResponseBody(
+							map[string]string{"content-type": "text/event-stream"},
+							strings.NewReader(tc.input[offset:end]),
+							end == len(tc.input),
+							nil,
+						)
+						require.NoError(t, err)
+						body = append(body, chunk...)
+						tokenUsage, responseModel = usage, model
+						// A complete text event must reach the client before the stream ends.
+						if end < len(tc.input) && (strings.HasSuffix(tc.input[:end], "}\n\n") ||
+							strings.HasSuffix(tc.input[:end], "}\r\n\r\n")) {
+							require.Contains(t, string(body), "Hello!")
+						}
+					}
+					require.NotEmpty(t, body)
 
-	// Verify output SSE event sequence.
-	events := parseSSEEventsFromBytes(body)
-	require.Len(t, events, 6)
-	assert.Equal(t, "message_start", events[0].eventType)
-	assert.Equal(t, "content_block_start", events[1].eventType)
-	assert.Equal(t, "content_block_delta", events[2].eventType)
-	assert.Equal(t, "content_block_stop", events[3].eventType)
-	assert.Equal(t, "message_delta", events[4].eventType)
-	assert.Equal(t, "message_stop", events[5].eventType)
+					// Model should come from the OpenAI chunk, not the model override.
+					assert.Equal(t, "gpt-4o", responseModel)
 
-	// Spot-check specific event data.
-	require.JSONEq(t, `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}`, events[2].data)
-	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":10,"output_tokens":5}}`, events[4].data)
-	require.JSONEq(t, `{"type":"message_stop"}`, events[5].data)
+					// Verify token usage extracted from the usage chunk.
+					inputTokens, inputSet := tokenUsage.InputTokens()
+					outputTokens, outputSet := tokenUsage.OutputTokens()
+					assert.True(t, inputSet)
+					assert.Equal(t, uint32(10), inputTokens)
+					assert.True(t, outputSet)
+					assert.Equal(t, uint32(5), outputTokens)
+
+					// Verify output SSE event sequence.
+					events := parseSSEEventsFromBytes(body)
+					require.Len(t, events, 6)
+					assert.Equal(t, "message_start", events[0].eventType)
+					assert.Equal(t, "content_block_start", events[1].eventType)
+					assert.Equal(t, "content_block_delta", events[2].eventType)
+					assert.Equal(t, "content_block_stop", events[3].eventType)
+					assert.Equal(t, "message_delta", events[4].eventType)
+					assert.Equal(t, "message_stop", events[5].eventType)
+
+					// Spot-check specific event data.
+					require.JSONEq(t, `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}`, events[2].data)
+					require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":10,"output_tokens":5}}`, events[4].data)
+					require.JSONEq(t, `{"type":"message_stop"}`, events[5].data)
+				})
+			}
+		})
+	}
 }
 
 func TestAnthropicToOpenAITranslator_ResponseBody_StreamingRequestModelFallback(t *testing.T) {
