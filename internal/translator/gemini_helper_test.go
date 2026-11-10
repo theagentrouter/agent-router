@@ -2959,6 +2959,24 @@ func TestMapReasoningEffortToThinkingLevel(t *testing.T) {
 			expectedErrorMsg: "reasoning effort 'none' is only supported for Gemini Flash models",
 		},
 		{
+			name:             "minimal effort on Flash maps to ThinkingLevelMinimal",
+			reasoningEffort:  "minimal",
+			model:            "gemini-3-flash",
+			expectedThinking: genai.ThinkingLevelMinimal,
+		},
+		{
+			name:             "minimal effort on Flash-Lite Image maps to ThinkingLevelMinimal",
+			reasoningEffort:  "minimal",
+			model:            "gemini-3.1-flash-lite-image",
+			expectedThinking: genai.ThinkingLevelMinimal,
+		},
+		{
+			name:             "minimal effort on Pro returns error",
+			reasoningEffort:  "minimal",
+			model:            "gemini-3-pro",
+			expectedErrorMsg: "reasoning effort 'minimal' is only supported for Gemini Flash models",
+		},
+		{
 			name:             "low effort maps to ThinkingLevelLow",
 			reasoningEffort:  openai.ReasoningEffortLow,
 			model:            "gemini-3-flash",

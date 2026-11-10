@@ -39,13 +39,14 @@ func chatCompletionToResponse(chatResp *openai.ChatCompletionResponse, requestMo
 	}
 
 	resp := &openai.Response{
-		ID:        chatResp.ID,
-		Object:    "response",
-		Model:     cmp.Or(chatResp.Model, requestModel),
-		CreatedAt: chatResp.Created,
-		Status:    "completed",
-		Text:      defaultTextConfig,
-		Output:    []openai.ResponseOutputItemUnion{},
+		ID:          chatResp.ID,
+		Object:      "response",
+		Model:       cmp.Or(chatResp.Model, requestModel),
+		CreatedAt:   chatResp.Created,
+		Status:      "completed",
+		Text:        defaultTextConfig,
+		Output:      []openai.ResponseOutputItemUnion{},
+		ServiceTier: chatResp.ServiceTier,
 	}
 
 	if chatResp.Usage != (openai.Usage{}) {
@@ -109,6 +110,8 @@ func applyResponsesRequestSettings(resp *openai.Response, req *openai.ResponseRe
 	}
 	resp.Temperature = ptr.Deref(req.Temperature, 1)
 	resp.TopP = ptr.Deref(req.TopP, 1)
+	resp.PresencePenalty = req.PresencePenalty
+	resp.FrequencyPenalty = req.FrequencyPenalty
 	resp.Store = ptr.To(false)
 	resp.MaxOutputTokens = req.MaxOutputTokens
 	resp.Reasoning = req.Reasoning
@@ -176,6 +179,7 @@ func applyResponsesFinishReason(resp *openai.Response, reason openai.ChatComplet
 }
 
 type streamingToolCallState struct {
+	itemID      string
 	id          string
 	name        string
 	arguments   strings.Builder
@@ -196,6 +200,7 @@ type chatCompletionStreamToResponsesConverter struct {
 	started        bool
 	responseID     string
 	model          string
+	serviceTier    string
 	created        openai.JSONUNIXTime
 	seqNum         int64
 	messageStarted bool
@@ -293,6 +298,9 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 
 	if chunk.Model != "" {
 		c.model = chunk.Model
+	}
+	if chunk.ServiceTier != "" {
+		c.serviceTier = chunk.ServiceTier
 	}
 
 	if !c.started {
@@ -404,19 +412,24 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 		for _, tc := range delta.ToolCalls {
 			state, exists := c.toolCalls[tc.Index]
 			if !exists {
-				state = &streamingToolCallState{outputIndex: c.itemCount}
-				c.itemCount++
-				if tc.ID != nil {
-					state.id = *tc.ID
+				state = &streamingToolCallState{
+					outputIndex: c.itemCount,
+					itemID:      cmp.Or(ptr.Deref(tc.ID, ""), fmt.Sprintf("fc_%d", tc.Index)),
 				}
-				state.name = tc.Function.Name
+				c.itemCount++
 				c.toolCalls[tc.Index] = state
-
-				itemID := cmp.Or(state.id, fmt.Sprintf("fc_%d", tc.Index))
+			}
+			if id := ptr.Deref(tc.ID, ""); id != "" {
+				state.id = id
+			}
+			if tc.Function.Name != "" {
+				state.name = tc.Function.Name
+			}
+			if !exists {
 				output = append(output, marshalSSEEvent("response.output_item.added", openai.ResponseOutputItemAddedEvent{
 					Item: openai.ResponseOutputItemUnion{
 						OfFunctionCall: &openai.ResponseFunctionToolCall{
-							ID:        itemID,
+							ID:        state.itemID,
 							CallID:    state.id,
 							Name:      state.name,
 							Arguments: "",
@@ -431,10 +444,9 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 			}
 			if tc.Function.Arguments != "" {
 				state.arguments.WriteString(tc.Function.Arguments)
-				itemID := cmp.Or(state.id, fmt.Sprintf("fc_%d", tc.Index))
 				output = append(output, marshalSSEEvent("response.function_call_arguments.delta", openai.ResponseFunctionCallArgumentsDeltaEvent{
 					Delta:          tc.Function.Arguments,
-					ItemID:         itemID,
+					ItemID:         state.itemID,
 					OutputIndex:    state.outputIndex,
 					SequenceNumber: c.nextSeq(),
 					Type:           "response.function_call_arguments.delta",
@@ -520,12 +532,13 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 
 func (c *chatCompletionStreamToResponsesConverter) buildFinalResponse(status string, usage *openai.Usage) openai.Response {
 	resp := openai.Response{
-		ID:        c.responseID,
-		Object:    "response",
-		Model:     cmp.Or(c.model, c.requestModel),
-		CreatedAt: c.created,
-		Status:    status,
-		Text:      defaultTextConfig,
+		ID:          c.responseID,
+		Object:      "response",
+		Model:       cmp.Or(c.model, c.requestModel),
+		CreatedAt:   c.created,
+		Status:      status,
+		Text:        defaultTextConfig,
+		ServiceTier: c.serviceTier,
 	}
 	itemStatus := status
 	if c.stopReason != "" {
@@ -551,11 +564,10 @@ func (c *chatCompletionStreamToResponsesConverter) buildFinalResponse(status str
 		}
 		outputItems[c.messageIndex] = responsesMessageItem(c.messageID, content, itemStatus)
 	}
-	for idx, state := range c.toolCalls {
-		itemID := cmp.Or(state.id, fmt.Sprintf("fc_%d", idx))
+	for _, state := range c.toolCalls {
 		outputItems[state.outputIndex] = openai.ResponseOutputItemUnion{
 			OfFunctionCall: &openai.ResponseFunctionToolCall{
-				ID:        itemID,
+				ID:        state.itemID,
 				CallID:    state.id,
 				Name:      state.name,
 				Arguments: state.arguments.String(),
@@ -580,6 +592,7 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 		Stream:              req.Stream,
 		ParallelToolCalls:   req.ParallelToolCalls,
 		ReasoningEffort:     openai.ReasoningEffort(req.Reasoning.Effort),
+		ServiceTier:         req.ServiceTier,
 	}
 	if req.PreviousResponseID != "" {
 		return chatReq, fmt.Errorf("%w: previous_response_id is not supported by Chat Completion backends; provide the conversation in input", internalapi.ErrInvalidRequestBody)
@@ -976,6 +989,7 @@ func (t *responsesViaChatCompletionTranslator) RequestBody(_ []byte, req *openai
 	t.streamConverter.requestModel = req.Model
 	t.streamConverter.requestConfig = &openai.ResponseRequest{
 		Temperature: req.Temperature, TopP: req.TopP, Text: req.Text, Reasoning: req.Reasoning,
+		PresencePenalty: req.PresencePenalty, FrequencyPenalty: req.FrequencyPenalty,
 	}
 
 	chatReq, err := responsesRequestToChatCompletionRequest(req, req.Model)

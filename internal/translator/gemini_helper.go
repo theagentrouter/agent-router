@@ -595,7 +595,7 @@ func supportsMediumThinkingLevel(model internalapi.RequestModel) bool {
 
 // mapReasoningEffortToThinkingLevel converts OpenAI reasoning effort levels to Gemini thinking levels.
 // The mapping depends on the model type:
-// - "none" → ThinkingLevelMinimal (Gemini Flash only)
+// - "none" or "minimal" → ThinkingLevelMinimal (Gemini Flash only)
 // - "low" → ThinkingLevelLow
 // - "medium" → ThinkingLevelMedium, except ThinkingLevelHigh for Gemini 3 Pro and 3.1 Flash-Lite Image, which have no medium level
 // - "high" → ThinkingLevelHigh (every Gemini 3 model; it is the Pro default)
@@ -604,9 +604,9 @@ func mapReasoningEffortToThinkingLevel(reasonEffort openai.ReasoningEffort, mode
 	isFlash := isGeminiFlashModel(model)
 
 	switch reasonEffort {
-	case openai.ReasoningEffortNone:
+	case openai.ReasoningEffortNone, openai.ReasoningEffortMinimal:
 		if !isFlash {
-			return "", fmt.Errorf("%w: reasoning effort 'none' is only supported for Gemini Flash models", internalapi.ErrInvalidRequestBody)
+			return "", fmt.Errorf("%w: reasoning effort '%s' is only supported for Gemini Flash models", internalapi.ErrInvalidRequestBody, reasonEffort)
 		}
 		return genai.ThinkingLevelMinimal, nil
 	case openai.ReasoningEffortLow:
@@ -619,7 +619,7 @@ func mapReasoningEffortToThinkingLevel(reasonEffort openai.ReasoningEffort, mode
 	case openai.ReasoningEffortHigh:
 		return genai.ThinkingLevelHigh, nil
 	default:
-		return "", fmt.Errorf("%w: unsupported reasoning effort level: %q (supported: none, low, medium, high)", internalapi.ErrInvalidRequestBody, reasonEffort)
+		return "", fmt.Errorf("%w: unsupported reasoning effort level: %q (supported: none, minimal, low, medium, high)", internalapi.ErrInvalidRequestBody, reasonEffort)
 	}
 }
 

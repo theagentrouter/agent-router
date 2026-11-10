@@ -319,26 +319,34 @@ func TestResponsesViaChatCompletion_AnthropicSettings(t *testing.T) {
 }
 
 func TestResponsesViaChatCompletion_GeminiSettings(t *testing.T) {
-	translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPVertexAITranslator(""))
-	var req openai.ResponseRequest
-	require.NoError(t, json.Unmarshal([]byte(`{"model":"gemini-3-flash","input":"Hello","reasoning":{"effort":"high"},"presence_penalty":0.5,"frequency_penalty":-0.25}`), &req))
-	_, body, err := translator.RequestBody(nil, &req, false)
-	require.NoError(t, err)
-	var params struct {
-		GenerationConfig struct {
-			PresencePenalty  *float32 `json:"presencePenalty"`
-			FrequencyPenalty *float32 `json:"frequencyPenalty"`
-			MaxOutputTokens  *int64   `json:"maxOutputTokens"`
-			ThinkingConfig   struct {
-				ThinkingLevel string `json:"thinkingLevel"`
-			} `json:"thinkingConfig"`
-		} `json:"generationConfig"`
+	for _, tc := range []struct{ model, effort, level string }{
+		{"gemini-3-flash", "high", "HIGH"},
+		{"gemini-3-flash", "minimal", "MINIMAL"},
+		{"gemini-3.1-flash-lite-image", "minimal", "MINIMAL"},
+	} {
+		t.Run(tc.model+"/"+tc.effort, func(t *testing.T) {
+			translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPVertexAITranslator(""))
+			var req openai.ResponseRequest
+			require.NoError(t, json.Unmarshal([]byte(fmt.Sprintf(`{"model":%q,"input":"Hello","reasoning":{"effort":%q},"presence_penalty":0.5,"frequency_penalty":-0.25}`, tc.model, tc.effort)), &req))
+			_, body, err := translator.RequestBody(nil, &req, false)
+			require.NoError(t, err)
+			var params struct {
+				GenerationConfig struct {
+					PresencePenalty  *float32 `json:"presencePenalty"`
+					FrequencyPenalty *float32 `json:"frequencyPenalty"`
+					MaxOutputTokens  *int64   `json:"maxOutputTokens"`
+					ThinkingConfig   struct {
+						ThinkingLevel string `json:"thinkingLevel"`
+					} `json:"thinkingConfig"`
+				} `json:"generationConfig"`
+			}
+			require.NoError(t, json.Unmarshal(body, &params))
+			require.Equal(t, tc.level, params.GenerationConfig.ThinkingConfig.ThinkingLevel)
+			require.Nil(t, params.GenerationConfig.MaxOutputTokens)
+			require.Equal(t, ptr.To(float32(0.5)), params.GenerationConfig.PresencePenalty)
+			require.Equal(t, ptr.To(float32(-0.25)), params.GenerationConfig.FrequencyPenalty)
+		})
 	}
-	require.NoError(t, json.Unmarshal(body, &params))
-	require.Equal(t, "HIGH", params.GenerationConfig.ThinkingConfig.ThinkingLevel)
-	require.Nil(t, params.GenerationConfig.MaxOutputTokens)
-	require.Equal(t, ptr.To(float32(0.5)), params.GenerationConfig.PresencePenalty)
-	require.Equal(t, ptr.To(float32(-0.25)), params.GenerationConfig.FrequencyPenalty)
 }
 
 func TestResponsesViaChatCompletion_GeminiModelError(t *testing.T) {
@@ -510,12 +518,95 @@ func (s *responsesRecordingSpan) RecordResponseChunk(event *openai.ResponseStrea
 func (*responsesRecordingSpan) EndSpanOnError(int, []byte) {}
 func (*responsesRecordingSpan) EndSpan()                   {}
 
+func TestResponsesViaChatCompletion_LateToolMetadata(t *testing.T) {
+	for _, initial := range []string{`{"index":0}`, `{"index":0,"id":"call_0"}`, `{"index":0,"function":{"name":"weather"}}`} {
+		for _, step := range []int{1, 10000} {
+			t.Run(fmt.Sprintf("%s/step=%d", initial, step), func(t *testing.T) {
+				translator := newResponsesChatCompletionTestTranslator()
+				_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "model", Stream: true}, false)
+				require.NoError(t, err)
+				stream := fmt.Sprintf("data: {\"id\":\"chat_1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[%s]}}]}\n\n", initial)
+				stream += "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_1\",\"function\":{\"name\":\"clock\",\"arguments\":\"{}\"}},{\"index\":0,\"function\":{\"arguments\":\"{\"}}]}}]}\n\n" +
+					"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_0\",\"function\":{\"name\":\"weather\",\"arguments\":\"}\"}}]}}]}\n\n" +
+					"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"\",\"function\":{\"name\":\"\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"
+				span := &responsesRecordingSpan{}
+				for offset := 0; offset < len(stream); offset += step {
+					end := min(offset+step, len(stream))
+					_, _, _, _, err := translator.ResponseBody(nil, strings.NewReader(stream[offset:end]), end == len(stream), span)
+					require.NoError(t, err)
+				}
+				ids := map[int64]string{}
+				for _, event := range span.events {
+					if added := event.OfResponseOutputItemAdded; added != nil {
+						ids[added.OutputIndex] = added.Item.OfFunctionCall.ID
+					}
+					if delta := event.OfResponseFunctionCallArgumentsDelta; delta != nil {
+						require.Equal(t, ids[delta.OutputIndex], delta.ItemID)
+					}
+					if done := event.OfResponseFunctionCallArgumentsDone; done != nil {
+						require.Equal(t, ids[done.OutputIndex], done.ItemID)
+					}
+					if done := event.OfResponseOutputItemDone; done != nil {
+						require.Equal(t, ids[done.OutputIndex], done.Item.OfFunctionCall.ID)
+					}
+				}
+				response := span.events[len(span.events)-1].OfResponseCompleted.Response
+				require.Len(t, response.Output, 2)
+				for i, name := range []string{"weather", "clock"} {
+					tool := response.Output[i].OfFunctionCall
+					require.Equal(t, ids[int64(i)], tool.ID)
+					require.Equal(t, fmt.Sprintf("call_%d", i), tool.CallID)
+					require.Equal(t, name, tool.Name)
+					require.JSONEq(t, `{}`, tool.Arguments)
+				}
+				requireReplayableResponsesOutput(t, response.Output)
+			})
+		}
+	}
+}
+
+func TestResponsesViaChatCompletion_ServiceTier(t *testing.T) {
+	for _, tier := range []string{"", "flex", "default"} {
+		for _, mode := range []string{"non-stream", "stream", "late-tier"} {
+			t.Run(mode+"/"+tier, func(t *testing.T) {
+				translator := newResponsesChatCompletionTestTranslator()
+				_, request, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "model", Stream: mode != "non-stream", ServiceTier: "priority"}, false)
+				require.NoError(t, err)
+				requireJSONFields(t, `{"service_tier":"priority"}`, request)
+				body := fmt.Sprintf(`{"id":"chat_1","service_tier":%q,"choices":[{"index":0,"message":{"content":"answer"},"finish_reason":"stop"}]}`, tier)
+				if mode != "non-stream" {
+					first, last := tier, ""
+					if mode == "late-tier" {
+						first, last = "", tier
+					}
+					body = fmt.Sprintf("data: {\"id\":\"chat_1\",\"service_tier\":%q,\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"service_tier\":%q,\"choices\":[],\"usage\":{\"total_tokens\":1}}\n\n", first, last)
+				}
+				span := &responsesRecordingSpan{}
+				_, converted, _, _, err := translator.ResponseBody(nil, strings.NewReader(body), true, span)
+				require.NoError(t, err)
+				var response openai.Response
+				if mode == "non-stream" {
+					require.NoError(t, json.Unmarshal(converted, &response))
+				} else {
+					response = span.events[len(span.events)-1].OfResponseCompleted.Response
+					if mode == "stream" {
+						require.Equal(t, tier, span.events[0].OfResponseCreated.Response.ServiceTier)
+					}
+				}
+				require.Equal(t, tier, response.ServiceTier)
+				require.Nil(t, response.PresencePenalty)
+				require.Nil(t, response.FrequencyPenalty)
+			})
+		}
+	}
+}
+
 func TestResponsesViaChatCompletion_ResponseDetails(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, cacheField := range []string{"cache_write_tokens", "cache_creation_input_tokens"} {
 			t.Run(fmt.Sprintf("stream=%t/%s", stream, cacheField), func(t *testing.T) {
 				var req openai.ResponseRequest
-				require.NoError(t, json.Unmarshal([]byte(`{"model":"model","temperature":0.4,"top_p":0.8,"text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"}}}}`), &req))
+				require.NoError(t, json.Unmarshal([]byte(`{"model":"model","temperature":0.4,"top_p":0.8,"presence_penalty":0.5,"frequency_penalty":0,"text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"}}}}`), &req))
 				req.Stream = stream
 				translator := newResponsesChatCompletionTestTranslator()
 				_, _, err := translator.RequestBody(nil, &req, false)
@@ -544,6 +635,16 @@ func TestResponsesViaChatCompletion_ResponseDetails(t *testing.T) {
 					require.Equal(t, req.Text.Format, span.events[0].OfResponseCreated.Response.Text.Format)
 					require.InDelta(t, 0.4, span.events[0].OfResponseCreated.Response.Temperature, 0.001)
 					require.InDelta(t, 0.8, span.events[0].OfResponseCreated.Response.TopP, 0.001)
+					for _, event := range span.events {
+						if created := event.OfResponseCreated; created != nil {
+							require.Equal(t, req.PresencePenalty, created.Response.PresencePenalty)
+							require.Equal(t, req.FrequencyPenalty, created.Response.FrequencyPenalty)
+						}
+						if progress := event.OfResponseInProgress; progress != nil {
+							require.Equal(t, req.PresencePenalty, progress.Response.PresencePenalty)
+							require.Equal(t, req.FrequencyPenalty, progress.Response.FrequencyPenalty)
+						}
+					}
 				} else {
 					require.Len(t, span.responses, 1)
 					require.Empty(t, span.events)
@@ -554,6 +655,8 @@ func TestResponsesViaChatCompletion_ResponseDetails(t *testing.T) {
 				}
 				require.InDelta(t, 0.4, response.Temperature, 0.001)
 				require.InDelta(t, 0.8, response.TopP, 0.001)
+				require.Equal(t, req.PresencePenalty, response.PresencePenalty)
+				require.Equal(t, req.FrequencyPenalty, response.FrequencyPenalty)
 				require.Equal(t, req.Text.Format, response.Text.Format)
 				require.Equal(t, int64(12), response.Usage.InputTokens)
 				require.Equal(t, int64(6), response.Usage.OutputTokens)
@@ -642,6 +745,9 @@ func TestResponsesRequestToChatCompletionRequest_Controls(t *testing.T) {
 		{"no context changes", `{"truncation":"disabled","context_management":[],"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
 		{"null conversation", `{"conversation":null,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
 		{"reasoning effort", `{"reasoning":{"effort":"high"}}`, `{"reasoning_effort":"high"}`},
+		{"flex service tier", `{"service_tier":"flex"}`, `{"service_tier":"flex"}`},
+		{"priority service tier", `{"service_tier":"priority"}`, `{"service_tier":"priority"}`},
+		{"auto service tier", `{"service_tier":"auto"}`, `{"service_tier":"auto"}`},
 		{"generation controls", `{"presence_penalty":0.5,"frequency_penalty":-0.25,"text":{"verbosity":"low"}}`, `{"presence_penalty":0.5,"frequency_penalty":-0.25,"verbosity":"low"}`},
 		{"zero penalties", `{"presence_penalty":0,"frequency_penalty":0}`, `{"presence_penalty":0,"frequency_penalty":0}`},
 		{"no obfuscation", `{"stream":true,"stream_options":{"include_obfuscation":false}}`, `{"stream":true,"stream_options":{"include_usage":true}}`},

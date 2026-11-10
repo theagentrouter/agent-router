@@ -96,7 +96,9 @@ Reasoning text is returned separately from the visible answer, as reasoning outp
 
 Automatic truncation, `context_management`, reasoning-summary controls (`reasoning.summary` and `reasoning.generate_summary`), and `stream_options.include_obfuscation: true` are also rejected. Bridged streams do not include obfuscation padding. Provider in-stream errors are translated before the response stream is closed.
 
-Presence and frequency penalties and `text.verbosity` are forwarded to the Chat Completions backend. Support for these controls depends on the selected provider and model.
+Presence and frequency penalties, `text.verbosity`, and `service_tier` are forwarded to the Chat Completions backend. Support for these controls depends on the selected provider and model. Returned Responses objects include the requested penalties and the service tier reported by the backend, which can differ from the requested tier.
+
+For Gemini Flash models that support thinking levels, `reasoning.effort: minimal` selects minimal thinking.
 
 `AWSAnthropic`, `GCPAnthropic`, and `GCPVertexAI` already use the bridge for Responses requests and do not need this setting.
 
