@@ -116,6 +116,10 @@ func applyResponsesRequestSettings(resp *openai.Response, req *openai.ResponseRe
 	resp.ToolChoice = req.ToolChoice
 	resp.ParallelToolCalls = req.ParallelToolCalls
 	resp.User = req.User
+	resp.Metadata = req.Metadata
+	if req.Instructions != "" {
+		resp.Instructions.OfString = ptr.To(req.Instructions)
+	}
 	resp.Store = ptr.To(false)
 	resp.MaxOutputTokens = req.MaxOutputTokens
 	resp.Reasoning = req.Reasoning
@@ -1002,6 +1006,7 @@ func (t *responsesViaChatCompletionTranslator) RequestBody(_ []byte, req *openai
 		Temperature: req.Temperature, TopP: req.TopP, Text: req.Text, Reasoning: req.Reasoning,
 		PresencePenalty: req.PresencePenalty, FrequencyPenalty: req.FrequencyPenalty,
 		Tools: req.Tools, ToolChoice: req.ToolChoice, ParallelToolCalls: req.ParallelToolCalls, User: req.User,
+		Instructions: req.Instructions, Metadata: req.Metadata,
 	}
 
 	chatReq, err := responsesRequestToChatCompletionRequest(req, req.Model)

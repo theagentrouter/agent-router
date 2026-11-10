@@ -712,6 +712,10 @@ func TestResponsesViaChatCompletion_ResponseDetails(t *testing.T) {
 				require.NoError(t, json.Unmarshal([]byte(`{"model":"model","user":"user-123","temperature":0.4,"top_p":0.8,"presence_penalty":0.5,"frequency_penalty":0,"tools":[{"type":"function","name":"weather","strict":false,"parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"weather"},"text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"}}}}`), &req))
 				req.Stream = stream
 				req.ParallelToolCalls = ptr.To(cacheField == "cache_write_tokens")
+				if cacheField == "cache_write_tokens" {
+					req.Instructions = "Keep answers short."
+					req.Metadata = map[string]string{"run": "evaluation-123"}
+				}
 				translator := newResponsesChatCompletionTestTranslator()
 				_, _, err := translator.RequestBody(nil, &req, false)
 				require.NoError(t, err)
@@ -767,6 +771,8 @@ func TestResponsesViaChatCompletion_ResponseDetails(t *testing.T) {
 					settings = append(settings, span.events[0].OfResponseCreated.Response, span.events[1].OfResponseInProgress.Response)
 				}
 				for _, actual := range settings {
+					require.Equal(t, req.Instructions, ptr.Deref(actual.Instructions.OfString, ""))
+					require.Equal(t, req.Metadata, actual.Metadata)
 					require.Equal(t, req.Tools, actual.Tools)
 					require.Equal(t, req.ToolChoice, actual.ToolChoice)
 					require.Equal(t, req.ParallelToolCalls, actual.ParallelToolCalls)
