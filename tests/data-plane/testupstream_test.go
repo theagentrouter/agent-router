@@ -7,10 +7,13 @@ package dataplane
 
 import (
 	"cmp"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -19,6 +22,7 @@ import (
 
 	openaigo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
@@ -26,6 +30,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/version"
+	"github.com/envoyproxy/ai-gateway/tests/internal/dataplaneenv"
 	"github.com/envoyproxy/ai-gateway/tests/internal/testupstreamlib"
 )
 
@@ -2113,19 +2118,119 @@ func TestMalformedUpstreamResponseDoesNotTerminateExtProc(t *testing.T) {
 	}
 }
 
+// TestRequestsBeforeTheFirstConfigLoad starts the external processor on an incomplete config bundle, as when a pod
+// mounts the bundle while it is being rewritten. The config watcher tolerates a part that does not match the index
+// checksum, or a listed part that is missing, on the initial load and retries on every tick, so requests can arrive
+// before any config is loaded.
+func TestRequestsBeforeTheFirstConfigLoad(t *testing.T) {
+	configBytes, err := yaml.Marshal(&filterapi.Config{Version: version.Parse(), Backends: []filterapi.Backend{testUpstreamOpenAIBackend}})
+	require.NoError(t, err)
+	part := filterapi.ConfigBundlePart{Name: "config", Path: filterapi.ConfigBundlePartPath(0), SizeBytes: len(configBytes)}
+	writeIndex := func(t *testing.T, bundlePath string, checksumOf []byte) {
+		indexRaw, err := filterapi.MarshalConfigBundleIndex(&filterapi.ConfigBundleIndex{
+			Checksum: filterapi.ConfigBundleChecksum(checksumOf),
+			Parts:    []filterapi.ConfigBundlePart{part},
+		})
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(bundlePath, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(bundlePath, filterapi.ConfigBundleIndexFileName), indexRaw, 0o600))
+	}
+	writePart := func(t *testing.T, bundlePath string, content []byte) {
+		partPath := filepath.Join(bundlePath, filepath.FromSlash(part.Path))
+		require.NoError(t, os.MkdirAll(filepath.Dir(partPath), 0o700))
+		require.NoError(t, os.WriteFile(partPath, content, 0o600))
+	}
+	const (
+		chatRequest  = `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`
+		chatResponse = `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`
+	)
+
+	for _, tc := range []struct {
+		name          string
+		start, repair func(t *testing.T, bundlePath string)
+	}{
+		{
+			name: "index checksum does not match the part",
+			start: func(t *testing.T, bundlePath string) {
+				writePart(t, bundlePath, configBytes)
+				writeIndex(t, bundlePath, []byte("something else"))
+			},
+			repair: func(t *testing.T, bundlePath string) { writeIndex(t, bundlePath, configBytes) },
+		},
+		{
+			name: "part does not match the index checksum",
+			start: func(t *testing.T, bundlePath string) {
+				writePart(t, bundlePath, []byte("version: stale\n"))
+				writeIndex(t, bundlePath, configBytes)
+			},
+			repair: func(t *testing.T, bundlePath string) { writePart(t, bundlePath, configBytes) },
+		},
+		{
+			name:   "listed part missing",
+			start:  func(t *testing.T, bundlePath string) { writeIndex(t, bundlePath, configBytes) },
+			repair: func(t *testing.T, bundlePath string) { writePart(t, bundlePath, configBytes) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundlePath := filepath.Join(t.TempDir(), "extproc-config-bundle")
+			tc.start(t, bundlePath)
+
+			// The last -configBundlePath wins, so the external processor reads this bundle instead of the harness's own.
+			env := dataplaneenv.StartTestEnvironment(t, requireUpstream, map[string]int{"upstream": 8080}, string(configBytes), nil,
+				envoyConfig, true, false, 120*time.Second, "-configBundlePath", bundlePath)
+			listenerAddress := fmt.Sprintf("http://localhost:%d", env.EnvoyListenerPort())
+			health := func() int {
+				resp, err := http.Get(fmt.Sprintf("http://localhost:%d/health", env.ExtProcAdminPort()))
+				require.NoError(t, err)
+				_ = resp.Body.Close()
+				return resp.StatusCode
+			}
+
+			// Until a config is loaded, every AI request gets a retryable 503 and the readiness endpoint reports not ready.
+			for range 3 {
+				status, body := postToTestUpstream(t, listenerAddress, "openai", "/v1/chat/completions", chatRequest, chatResponse, "/v1/chat/completions")
+				require.Equal(t, http.StatusServiceUnavailable, status, "body: %s", body)
+				require.Contains(t, body, "the filter config is not loaded yet, retry the request")
+			}
+			require.Equal(t, http.StatusInternalServerError, health())
+
+			// Once the bundle is consistent, the next watcher tick loads it and the same request succeeds.
+			tc.repair(t, bundlePath)
+			require.EventuallyWithT(t, func(c *assert.CollectT) {
+				status, body, err := tryPostToTestUpstream(t.Context(), listenerAddress, "openai", "/v1/chat/completions",
+					chatRequest, chatResponse, "/v1/chat/completions")
+				assert.NoError(c, err)
+				assert.Equal(c, http.StatusOK, status, "body: %s", body)
+			}, 30*time.Second, 200*time.Millisecond)
+			require.Equal(t, http.StatusOK, health())
+		})
+	}
+}
+
 // postToTestUpstream sends a request through Envoy to the test upstream, telling it which response body to
 // return and which path to expect, and returns the status code and body the client received.
 func postToTestUpstream(t *testing.T, listenerAddress, backend, path, requestBody, responseBody, expPath string) (int, string) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, listenerAddress+path, strings.NewReader(requestBody))
+	status, body, err := tryPostToTestUpstream(t.Context(), listenerAddress, backend, path, requestBody, responseBody, expPath)
 	require.NoError(t, err)
+	return status, body
+}
+
+// tryPostToTestUpstream is postToTestUpstream returning the error, for callers that must not stop the test, such as
+// the condition of require.EventuallyWithT, which runs on another goroutine.
+func tryPostToTestUpstream(ctx context.Context, listenerAddress, backend, path, requestBody, responseBody, expPath string) (int, string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, listenerAddress+path, strings.NewReader(requestBody))
+	if err != nil {
+		return 0, "", err
+	}
 	req.Header.Set("x-test-backend", backend)
 	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(responseBody)))
 	req.Header.Set(testupstreamlib.ExpectedPathHeaderKey, base64.StdEncoding.EncodeToString([]byte(expPath)))
 	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
+	if err != nil {
+		return 0, "", err
+	}
 	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	return resp.StatusCode, string(body)
+	return resp.StatusCode, string(body), err
 }
