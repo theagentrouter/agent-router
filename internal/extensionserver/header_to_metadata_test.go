@@ -146,4 +146,32 @@ func TestInsertRequestHeaderToMetadataFilter(t *testing.T) {
 		err = s.insertRequestHeaderToMetadataFilter(listener)
 		require.EqualError(t, err, "header_to_metadata filter missing typed_config")
 	})
+	t.Run("skip-non-hcm-chain", func(t *testing.T) {
+		s := &Server{logRequestHeaderAttributes: map[string]string{"x-tenant-id": "tenant.id"}}
+		hcm := &httpconnectionmanagerv3.HttpConnectionManager{
+			HttpFilters: []*httpconnectionmanagerv3.HttpFilter{{Name: wellknown.Router}},
+		}
+		hcmAny, err := toAny(hcm)
+		require.NoError(t, err)
+		listener := &listenerv3.Listener{
+			FilterChains: []*listenerv3.FilterChain{
+				// TCP proxy chain without an HCM must be skipped, not fail the walk.
+				{Filters: []*listenerv3.Filter{{Name: "envoy.filters.network.tcp_proxy"}}},
+				{
+					Filters: []*listenerv3.Filter{{
+						Name:       wellknown.HTTPConnectionManager,
+						ConfigType: &listenerv3.Filter_TypedConfig{TypedConfig: hcmAny},
+					}},
+				},
+			},
+		}
+		require.NoError(t, s.insertRequestHeaderToMetadataFilter(listener))
+		// The HTTP chain got the filter; the TCP chain is untouched.
+		hcmAfter := &httpconnectionmanagerv3.HttpConnectionManager{}
+		require.NoError(t, listener.FilterChains[1].Filters[0].GetTypedConfig().UnmarshalTo(hcmAfter))
+		require.Len(t, hcmAfter.HttpFilters, 2)
+		require.Equal(t, headerToMetadataFilterName, hcmAfter.HttpFilters[0].Name)
+		require.Len(t, listener.FilterChains[0].Filters, 1)
+		require.Equal(t, "envoy.filters.network.tcp_proxy", listener.FilterChains[0].Filters[0].Name)
+	})
 }

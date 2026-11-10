@@ -1,0 +1,15 @@
+{
+  "name": "og-generator",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Renders brand OG images (1200x630) for blog posts from their frontmatter.",
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "dependencies": {
+    "glob": "^11.0.0",
+    "gray-matter": "^4.0.3",
+    "playwright-core": "^1.49.0"
+  }
+}

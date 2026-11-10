@@ -7,7 +7,7 @@ sidebar_position: 7
 import CodeBlock from '@theme/CodeBlock';
 import vars from '../../\_vars.json';
 
-Envoy AI Gateway's router joins and records distributed traces when supplied
+Agent Router's router joins and records distributed traces when supplied
 with an [OpenTelemetry](https://opentelemetry.io/) collector endpoint.
 
 This guide provides an overview of the spans recorded by the AI Gateway and how
@@ -15,7 +15,7 @@ export them to your choice of OpenTelemetry collector.
 
 ## Overview
 
-Envoy AI Gateway's router joins and records distributed traces when supplied
+Agent Router's router joins and records distributed traces when supplied
 with an [OpenTelemetry](https://opentelemetry.io/) collector endpoint.
 
 Requests to the OpenAI Chat Completions, Completions (legacy), and Embeddings
@@ -104,7 +104,110 @@ kubectl port-forward -n envoy-ai-gateway-system svc/phoenix-svc 6006:6006
 
 Then open http://localhost:6006 in your browser to explore the traces.
 
+## Semantic Conventions
+
+Spans are recorded using [OpenInference semantic conventions][openinference] by
+default. You can instead emit the
+[OpenTelemetry GenAI semantic conventions][otel-genai], which use `gen_ai.*`
+attributes and are consumed by OpenTelemetry-native backends:
+
+```yaml
+extProc:
+  extraEnvVars:
+    - name: AI_GATEWAY_TRACING_SEMCONV
+      value: "gen_ai"
+```
+
+| Value                    | Behavior                           |
+| ------------------------ | ---------------------------------- |
+| unset or `openinference` | OpenInference attributes (default) |
+| `gen_ai`                 | OpenTelemetry GenAI attributes     |
+
+Any other value fails startup rather than silently falling back, so a typo is
+reported immediately instead of producing traces nobody is watching.
+
+Only one convention is emitted at a time. Choosing `gen_ai` changes the shape of
+your spans, so update dashboards and alerts before switching:
+
+|           | OpenInference            | OpenTelemetry GenAI                             |
+| --------- | ------------------------ | ----------------------------------------------- |
+| Span name | `ChatCompletion`         | `chat {model}`                                  |
+| Span kind | `INTERNAL`               | `CLIENT`                                        |
+| Model     | `llm.model_name`         | `gen_ai.request.model`, `gen_ai.response.model` |
+| Provider  | `llm.system`             | `gen_ai.provider.name`                          |
+| Tokens    | `llm.token_count.prompt` | `gen_ai.usage.input_tokens`                     |
+| Messages  | `llm.input_messages.N.*` | `gen_ai.input.messages` (single JSON value)     |
+| Errors    | `exception` event        | `error.type` attribute                          |
+
+Note that the GenAI conventions are still marked Development upstream, so
+attribute names may change in future releases.
+
+Since span names include the model, they are higher cardinality than
+OpenInference's fixed names. This matters for backends that index on span name.
+
+### Capturing message content with GenAI
+
+Unlike OpenInference, which records request and response content by default, the
+GenAI conventions treat message content as opt-in because it routinely contains
+sensitive data. Enable it explicitly:
+
+```yaml
+extProc:
+  extraEnvVars:
+    - name: AI_GATEWAY_TRACING_SEMCONV
+      value: "gen_ai"
+    - name: OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+      value: "true"
+```
+
+Token counts and sampling parameters are recorded either way, since the
+conventions treat those as metadata rather than content.
+
+Message content is currently mapped for chat completions and Anthropic
+messages. Other endpoints record operation, model, usage and sampling
+parameters. Several — image generation, speech, transcription, translation and
+rerank and TypeSafe System One — have no content attributes defined by the conventions at all.
+
+The `OPENINFERENCE_HIDE_*` variables described below apply only to the
+OpenInference convention. They have no effect when `gen_ai` is selected.
+
+### MCP spans
+
+`AI_GATEWAY_TRACING_SEMCONV` selects the vocabulary for MCP spans as well as for
+the LLM endpoints. OpenInference defines no MCP conventions, so the default keeps
+the gateway-specific attributes MCP spans have always used; `gen_ai` opts into
+the [OpenTelemetry MCP semantic conventions][otel-mcp].
+
+|               | default (`openinference`) | `gen_ai`                                       |
+| ------------- | ------------------------- | ---------------------------------------------- |
+| Span name     | `CallTool`, `ListTools`   | `tools/call {tool}`, `tools/list`              |
+| Tool name     | `mcp.tool.name`           | `gen_ai.tool.name` + `gen_ai.operation.name`   |
+| Prompt name   | `mcp.prompt.name`         | `gen_ai.prompt.name`                           |
+| Request ID    | `mcp.request.id`          | `jsonrpc.request.id`                           |
+| Transport     | `mcp.transport`           | `network.transport`, `network.protocol.*`      |
+| Errors        | `exception` event         | `error.type`, `rpc.response.status_code`       |
+| Session       | on the per-backend event  | also `mcp.session.id` on the span              |
+| List sizes    | not recorded              | `mcp.tools.count`, `mcp.resources.count`, ...  |
+| Tool call I/O | not recorded              | `gen_ai.tool.call.arguments`/`.result`, opt-in |
+
+Tool call arguments and results are message content, so under `gen_ai` they
+follow the same `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` opt-in as
+the LLM endpoints. The default convention never records them.
+
+:::note Deprecation
+The gateway-specific MCP attributes are deprecated in favor of the OpenTelemetry
+MCP conventions. They remain the default for now; a future release will announce
+a version in which the default flips. Migrate by setting
+`AI_GATEWAY_TRACING_SEMCONV=gen_ai` once your dashboards query the new names.
+:::
+
 ## Privacy Configuration
+
+:::note
+This section applies to the default OpenInference convention. See
+[Capturing message content with GenAI](#capturing-message-content-with-genai)
+for the `gen_ai` equivalent.
+:::
 
 Control sensitive data in traces by adding
 [OpenInference configuration][openinference-config] to Helm values when you
@@ -157,7 +260,7 @@ There's no standard name for session ID headers, but there is a common attribute
 in OpenTelemetry, [session.id][otel-session], which has special handling in some
 OpenTelemetry platforms such as [Phoenix][phoenix-session].
 
-To bridge this gap, Envoy AI Gateway lets you map HTTP request headers to
+To bridge this gap, Agent Router lets you map HTTP request headers to
 OpenTelemetry attributes. You can define a base mapping shared by metrics,
 spans, and access logs, plus optional per-signal mappings for metrics, spans,
 and access logs.
@@ -252,6 +355,8 @@ on `GatewayConfig` usage, including environment variable precedence and shared c
 ---
 
 [openinference]: https://github.com/Arize-ai/openinference/tree/main/spec
+[otel-genai]: https://github.com/open-telemetry/semantic-conventions-genai
+[otel-mcp]: https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/mcp.md
 [openinference-config]: https://github.com/Arize-ai/openinference/blob/main/spec/configuration.md
 [openinference-embeddings]: https://github.com/Arize-ai/openinference/blob/main/spec/embedding_spans.md
 [otel-config]: https://opentelemetry.io/docs/specs/otel/configuration/sdk-environment-variables/

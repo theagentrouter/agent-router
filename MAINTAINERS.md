@@ -19,7 +19,7 @@ Please reach out to them for any questions, issues, or contributions related to 
   - Area: Control Plane, Inference Pool & Gateway API Inference Extension
   - [Envoy Gateway](https://github.com/envoyproxy/gateway) Maintainer
 - Ignasi Barrera ([@nacx](https://github.com/nacx))
-  - Area: MCP, aigw CLI (standalone mode)
+  - Area: Everything, with special focus on Security, MCP, aigw CLI (standalone mode)
 - Johnu George ([@johnugeorge](https://github.com/johnugeorge))
   - Area: Enterprise features and integration, LLM features
   - [Kubeflow](https://github.com/kubeflow/kubeflow) Steering Committee member

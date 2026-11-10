@@ -15,6 +15,7 @@ import (
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/stretchr/testify/require"
 
+	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -58,6 +59,49 @@ func TestModels_ProcessRequestHeaders(t *testing.T) {
 		require.Equal(t, m.Name, models.Data[i].ID)
 		require.Equal(t, now.Unix(), time.Time(models.Data[i].Created).Unix())
 		require.Equal(t, m.OwnedBy, models.Data[i].OwnedBy)
+	}
+}
+
+func TestAnthropicModels_ProcessRequestHeaders(t *testing.T) {
+	now := time.Now()
+	cfg := &filterapi.RuntimeConfig{DeclaredModels: []filterapi.Model{
+		{
+			Name:      "claude-opus-4-8",
+			OwnedBy:   "anthropic",
+			CreatedAt: now,
+		},
+		{
+			Name:      "aws-bedrock",
+			OwnedBy:   "aws",
+			CreatedAt: now,
+		},
+	}}
+	p, err := NewAnthropicModelsProcessor(cfg, nil, slog.Default(), false, false)
+	require.NoError(t, err)
+	res, err := p.ProcessRequestHeaders(t.Context(), &corev3.HeaderMap{
+		Headers: []*corev3.HeaderValue{{Key: "foo", Value: "bar"}},
+	})
+	require.NoError(t, err)
+
+	ir, ok := res.Response.(*extprocv3.ProcessingResponse_ImmediateResponse)
+	require.True(t, ok)
+	require.Equal(t, typev3.StatusCode(200), ir.ImmediateResponse.Status.Code)
+	require.Equal(t, uint32(0), ir.ImmediateResponse.GrpcStatus.Status)
+
+	respHeaders := headers(ir.ImmediateResponse.Headers.SetHeaders)
+	require.Equal(t, "application/json", respHeaders["content-type"])
+
+	var models anthropic.ModelList
+	require.NoError(t, json.Unmarshal(ir.ImmediateResponse.Body, &models))
+	require.False(t, models.HasMore)
+	require.Equal(t, "claude-opus-4-8", models.FirstID)
+	require.Equal(t, "aws-bedrock", models.LastID)
+	require.Len(t, models.Data, len(cfg.DeclaredModels))
+	for i, m := range cfg.DeclaredModels {
+		require.Equal(t, "model", models.Data[i].Type)
+		require.Equal(t, m.Name, models.Data[i].ID)
+		require.Equal(t, m.Name, models.Data[i].DisplayName)
+		require.Equal(t, now.UTC().Format(time.RFC3339), models.Data[i].CreatedAt)
 	}
 }
 

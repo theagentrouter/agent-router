@@ -8,7 +8,6 @@ package e2emcp
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -43,14 +42,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "failed to start tests: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Check if Goose CLI is available.
-	cmd := exec.Command("goose", "--version")
-	if err := cmd.Run(); err != nil {
-		log.Printf("Goose CLI is not available: %v\n", err)
-		os.Exit(1)
-	}
-	log.Printf("Goose CLI is available\n")
 
 	os.Exit(m.Run())
 }

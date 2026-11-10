@@ -45,6 +45,6 @@ func TestOtelAzureOpenAIChatCompletions_metrics(t *testing.T) {
 	requestModel := originalModel
 	responseModel := getSpanAttributeString(span.Attributes, "llm.model_name")
 
-	verifyTokenUsageMetricsWithProvider(t, "chat", "azure.openai", metrics, span, originalModel, requestModel, responseModel, false)
-	verifyRequestDurationMetricsWithProvider(t, "chat", "azure.openai", metrics, span, originalModel, requestModel, responseModel, false)
+	verifyTokenUsageMetricsWithProvider(t, "chat", "azure.openai", "azure-openai", metrics, span, originalModel, requestModel, responseModel, false)
+	verifyRequestDurationMetricsWithProvider(t, "chat", "azure.openai", "azure-openai", metrics, span, originalModel, requestModel, responseModel, false)
 }

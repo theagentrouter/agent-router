@@ -65,7 +65,7 @@ type ConfigData struct {
 	OpenAI         *OpenAIConfig    // OpenAI-specific configuration (nil when not present)
 	Anthropic      *AnthropicConfig // Anthropic-specific configuration (nil when not present)
 	MCPBackendRefs []MCPBackendRef  // MCP routing configuration (nil/empty for OpenAI-only or Anthropic-only mode)
-	Debug          bool             // Enable debug logging for Envoy (includes component-level logging for ext_proc, http, connection)
+	Debug          bool             // Enable debug logging for Envoy (the http and ext_proc components are capped at "info" to keep injected credential headers out of the debug log)
 	EnvoyVersion   string           // Explicitly configure the version of Envoy to use.
 	OTELLog        *otelLogConfig   // OpenTelemetry access log configuration (nil => file sink).
 }
@@ -119,18 +119,18 @@ func parseURL(baseURL string) (*parsedURL, error) {
 		return nil, fmt.Errorf("invalid base URL: missing hostname")
 	}
 	hostname, ip := splitHost(host)
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("invalid base URL: unsupported scheme %q", u.Scheme)
+	}
 
 	// Determine port
 	portStr := u.Port()
 	var port int
 	if portStr == "" {
-		switch u.Scheme {
-		case "https":
+		if u.Scheme == "https" {
 			port = 443
-		case "http":
+		} else {
 			port = 80
-		default:
-			return nil, fmt.Errorf("invalid base URL: unsupported scheme %q", u.Scheme)
 		}
 	} else {
 		var err error

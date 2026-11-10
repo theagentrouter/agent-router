@@ -67,9 +67,7 @@ func (o *openAIToOpenAITranslatorV1Transcription) RequestBody(original []byte, r
 
 	newHeaders = append(newHeaders, internalapi.Header{pathHeaderName, o.path})
 
-	if forceBodyMutation && len(newBody) == 0 {
-		newBody = original
-	}
+	newBody = forceOriginalBodyIfEmpty(forceBodyMutation, newBody, original)
 
 	if len(newBody) > 0 && o.modelNameOverride == "" {
 		newHeaders = append(newHeaders, internalapi.Header{contentLengthHeaderName, strconv.Itoa(len(newBody))})
@@ -134,10 +132,10 @@ func (o *openAIToOpenAITranslatorV1Transcription) recordTranscriptionStreamChunk
 		o.sseBuffer = o.sseBuffer[i+1:]
 		// Some servers terminate SSE lines with \r\n; strip the trailing CR before JSON decode.
 		line = bytes.TrimRight(line, "\r")
-		if !bytes.HasPrefix(line, sseDataPrefix) {
+		payload, ok := cutSSEDataPrefix(line)
+		if !ok {
 			continue
 		}
-		payload := bytes.TrimPrefix(line, sseDataPrefix)
 		if len(payload) == 0 || bytes.Equal(payload, sseDoneMessage) {
 			continue
 		}

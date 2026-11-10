@@ -51,9 +51,7 @@ func (o *openAIToOpenAIImageGenerationTranslator) RequestBody(original []byte, p
 	o.requestModel = cmp.Or(o.modelNameOverride, p.Model)
 
 	// Always set the path header to the images generations endpoint so that the request is routed correctly.
-	if forceBodyMutation && len(newBody) == 0 {
-		newBody = original
-	}
+	newBody = forceOriginalBodyIfEmpty(forceBodyMutation, newBody, original)
 	newHeaders = []internalapi.Header{{pathHeaderName, o.path}}
 
 	if len(newBody) > 0 {
@@ -82,6 +80,11 @@ func (o *openAIToOpenAIImageGenerationTranslator) ResponseBody(_ map[string]stri
 	resp := &openai.ImageGenerationResponse{}
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
 		return nil, nil, tokenUsage, responseModel, fmt.Errorf("failed to decode response body: %w", err)
+	}
+	// A JSON `null` body decodes into a nil *resp without an error (the decode target is a
+	// **ImageGenerationResponse). Treat it as an empty response instead of dereferencing nil below.
+	if resp == nil {
+		resp = &openai.ImageGenerationResponse{}
 	}
 
 	// Populate token usage if provided (GPT-Image-1); otherwise remain zero.

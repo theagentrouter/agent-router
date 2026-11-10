@@ -15,6 +15,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
+	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
 func TestChatCompletionSpan_RecordResponseChunk(t *testing.T) {
@@ -45,6 +46,50 @@ func TestChatCompletionSpan_RecordResponse(t *testing.T) {
 		attribute.Int("statusCode", 200),
 		attribute.Int("respBodyLen", len(respBytes)),
 	}, actualSpan.Attributes)
+}
+
+// TestChatCompletionSpan_RecordBackend pins that the backend only reaches the
+// span when the convention's recorder asks for it. The backend is resolved for
+// every request, so a recorder whose convention defines no backend attributes
+// must not be required to implement the interface, and must not be called.
+func TestChatCompletionSpan_RecordBackend(t *testing.T) {
+	backend := tracingapi.Backend{Schema: "OpenAI", Name: "some-backend"}
+
+	t.Run("recorder that records backends", func(t *testing.T) {
+		s := &chatCompletionSpan{recorder: testBackendChatCompletionRecorder{}}
+		actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+			s.span = span
+			s.RecordBackend(backend)
+			return false // Recording the backend must not end the span.
+		})
+		require.Equal(t, []attribute.KeyValue{
+			attribute.String("backendSchema", "OpenAI"),
+			attribute.String("backendName", "some-backend"),
+		}, actualSpan.Attributes)
+	})
+
+	t.Run("recorder that does not", func(t *testing.T) {
+		s := &chatCompletionSpan{recorder: testChatCompletionRecorder{}}
+		actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+			s.span = span
+			s.RecordBackend(backend)
+			return false
+		})
+		require.Empty(t, actualSpan.Attributes)
+	})
+}
+
+// testBackendChatCompletionRecorder is a testChatCompletionRecorder whose
+// convention also records the resolved backend.
+type testBackendChatCompletionRecorder struct {
+	testChatCompletionRecorder
+}
+
+func (testBackendChatCompletionRecorder) RecordBackend(span oteltrace.Span, backend tracingapi.Backend) {
+	span.SetAttributes(
+		attribute.String("backendSchema", backend.Schema),
+		attribute.String("backendName", backend.Name),
+	)
 }
 
 func TestChatCompletionSpan_EndSpanOnError(t *testing.T) {

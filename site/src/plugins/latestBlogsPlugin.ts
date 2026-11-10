@@ -41,6 +41,12 @@ export default function latestBlogsPlugin(context: LoadContext): Plugin {
               return null;
             }
 
+            // Skip drafts — Docusaurus doesn't render them, so linking
+            // to their permalink would break the build.
+            if (data.draft === true) {
+              return null;
+            }
+
             // Extract date from filename (YYYY-MM-DD-slug.md)
             const dateMatch = file.match(/(\d{4}-\d{2}-\d{2})/);
             const date = dateMatch?.[1] || '';

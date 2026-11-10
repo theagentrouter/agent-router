@@ -85,9 +85,9 @@ func (r *TokenizeRecorder) RecordResponse(span trace.Span, resp *tokenize.Respon
 func buildTokenizeRequestAttributes(req *tokenize.RequestUnion, body string, config *openinference.TraceConfig) []attribute.KeyValue {
 	var attrs []attribute.KeyValue
 
-	// Set span kind to LLM since tokenization is an LLM operation
+	// Set span kind to token counter since tokenization is a token counting operation
 	attrs = append(attrs,
-		attribute.String(openinference.SpanKind, openinference.SpanKindLLM),
+		attribute.String(openinference.SpanKind, openinference.SpanKindTokenCounter),
 		attribute.String(openinference.LLMSystem, openinference.LLMSystemOpenAI),
 	)
 

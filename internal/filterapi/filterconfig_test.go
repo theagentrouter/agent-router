@@ -63,6 +63,15 @@ func TestVersionedAPISchemaAnthropicPrefix(t *testing.T) {
 	}.AnthropicPrefix())
 }
 
+func TestVersionedAPISchemaOpenAIPrefix(t *testing.T) {
+	require.Empty(t, filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}.OpenAIPrefix())
+	require.Equal(t, "openai/v1", filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI}.OpenAIPrefix())
+	require.Equal(t, "custom/v1", filterapi.VersionedAPISchema{
+		Name:   filterapi.APISchemaAWSOpenAI,
+		Prefix: "custom/v1",
+	}.OpenAIPrefix())
+}
+
 // logAttrs extracts the key→value map from a slog.KindGroup Value.
 func logAttrs(v slog.Value) map[string]string {
 	result := make(map[string]string)
@@ -77,6 +86,32 @@ func TestAWSAuthLogValue(t *testing.T) {
 	attrs := logAttrs(a.LogValue())
 	require.Equal(t, "[REDACTED]", attrs["credentialFileLiteral"])
 	require.Equal(t, "us-east-1", attrs["region"])
+}
+
+func TestMCPSessionEncryptionLogValue(t *testing.T) {
+	e := filterapi.MCPSessionEncryption{Seed: "my-seed", Iterations: 100, FallbackSeed: "my-fallback", FallbackIterations: 200}
+	attrs := logAttrs(e.LogValue())
+	require.Equal(t, "[REDACTED]", attrs["seed"])
+	require.Equal(t, "100", attrs["iterations"])
+	require.Equal(t, "true", attrs["fallbackSeedSet"])
+	require.Equal(t, "200", attrs["fallbackIterations"])
+	for _, v := range attrs {
+		require.NotContains(t, v, "my-seed")
+		require.NotContains(t, v, "my-fallback")
+	}
+}
+
+func TestFileIDEncryptionLogValue(t *testing.T) {
+	e := filterapi.FileIDEncryption{Seed: "my-seed", Iterations: 100, FallbackSeed: "my-fallback", FallbackIterations: 200}
+	attrs := logAttrs(e.LogValue())
+	require.Equal(t, "[REDACTED]", attrs["seed"])
+	require.Equal(t, "100", attrs["iterations"])
+	require.Equal(t, "true", attrs["fallbackSeedSet"])
+	require.Equal(t, "200", attrs["fallbackIterations"])
+	for _, v := range attrs {
+		require.NotContains(t, v, "my-seed")
+		require.NotContains(t, v, "my-fallback")
+	}
 }
 
 func TestAPIKeyAuthLogValue(t *testing.T) {
@@ -102,6 +137,14 @@ func TestAzureAuthLogValue(t *testing.T) {
 	a := filterapi.AzureAuth{AccessToken: "my-access-token"}
 	attrs := logAttrs(a.LogValue())
 	require.Equal(t, "[REDACTED]", attrs["accessToken"])
+}
+
+func TestOpenAIAuthLogValue(t *testing.T) {
+	a := filterapi.OpenAIAuth{AccessToken: "my-access-token", Organization: "org-123", Project: "proj_456"}
+	attrs := logAttrs(a.LogValue())
+	require.Equal(t, "[REDACTED]", attrs["accessToken"])
+	require.Equal(t, "org-123", attrs["organization"])
+	require.Equal(t, "proj_456", attrs["project"])
 }
 
 func TestGCPAuthLogValue(t *testing.T) {

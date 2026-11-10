@@ -24,6 +24,14 @@ var (
 		URI:      "file:///another-dummy.txt",
 	}
 
+	// UIRendererResource is a UI resource as defined by the MCP Apps extension,
+	// which requires the ui:// scheme to be preserved end-to-end.
+	UIRendererResource = &mcp.Resource{
+		Name:     "ui-renderer",
+		MIMEType: "text/html",
+		URI:      "ui://prefab/tool/renderer.html",
+	}
+
 	DummyResourceTemplate = &mcp.ResourceTemplate{
 		Name:        "dummy-template",
 		Description: "A dummy resource template for testing",
@@ -50,7 +58,14 @@ func DummyResourceHandler() mcp.ResourceHandler {
 					Blob: []byte("another-dummy"),
 				},
 			}}, nil
-
+		case UIRendererResource.URI:
+			return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{
+				{
+					URI:      req.Params.URI,
+					MIMEType: UIRendererResource.MIMEType,
+					Blob:     []byte("<html>renderer</html>"),
+				},
+			}}, nil
 		}
 
 		return nil, mcp.ResourceNotFoundError(req.Params.URI)
