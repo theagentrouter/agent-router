@@ -18,6 +18,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
 func TestAnthropicToOpenAITranslator_RequestBody(t *testing.T) {
@@ -330,7 +331,11 @@ func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming(t *testing.T) {
 	})
 }
 
-func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming_CachedTokens(t *testing.T) {
+// translateNonStreaming sends one non-streaming request through the
+// translator and returns the token usage and the Anthropic response for an
+// OpenAI answer with the given usage.
+func translateNonStreaming(t *testing.T, usage openai.Usage) (metrics.TokenUsage, anthropic.MessagesResponse) {
+	t.Helper()
 	translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "")
 	reqBody := &anthropic.MessagesRequest{
 		Model:     "claude-3-haiku",
@@ -347,17 +352,26 @@ func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming_CachedTokens(t *t
 			FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
 			Message:      openai.ChatCompletionResponseChoiceMessage{Content: &content, Role: "assistant"},
 		}},
-		Usage: openai.Usage{
-			PromptTokens:        100,
-			CompletionTokens:    20,
-			PromptTokensDetails: &openai.PromptTokensDetails{CachedTokens: 60, CacheWriteTokens: 30},
-		},
+		Usage: usage,
 	})
 	require.NoError(t, err)
 
 	_, body, tokenUsage, _, err := translator.ResponseBody(
 		map[string]string{"content-type": "application/json"}, bytes.NewReader(respBytes), true, nil)
 	require.NoError(t, err)
+
+	var got anthropic.MessagesResponse
+	require.NoError(t, json.Unmarshal(body, &got))
+	require.NotNil(t, got.Usage)
+	return tokenUsage, got
+}
+
+func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming_CachedTokens(t *testing.T) {
+	tokenUsage, got := translateNonStreaming(t, openai.Usage{
+		PromptTokens:        100,
+		CompletionTokens:    20,
+		PromptTokensDetails: &openai.PromptTokensDetails{CachedTokens: 60, CacheWriteTokens: 30},
+	})
 
 	// The usage that request costs and quotas are computed from: the whole
 	// prompt as input, with the cache read and the cache write known.
@@ -376,12 +390,28 @@ func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming_CachedTokens(t *t
 
 	// The client sees the cache read and the cache write next to the
 	// uncached input.
-	var got anthropic.MessagesResponse
-	require.NoError(t, json.Unmarshal(body, &got))
-	require.NotNil(t, got.Usage)
 	assert.Equal(t, float64(10), got.Usage.InputTokens)
 	assert.Equal(t, float64(60), got.Usage.CacheReadInputTokens)
 	assert.Equal(t, float64(30), got.Usage.CacheCreationInputTokens)
+}
+
+func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming_NoTokenDetails(t *testing.T) {
+	// A backend that sends no prompt_tokens_details, such as vLLM without
+	// --enable-prompt-tokens-details, says nothing about a cache. The cache
+	// counts stay unset, so the metrics record no cache samples for it.
+	tokenUsage, got := translateNonStreaming(t, openai.Usage{PromptTokens: 100, CompletionTokens: 20})
+
+	input, ok := tokenUsage.InputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(100), input)
+	_, ok = tokenUsage.CachedInputTokens()
+	assert.False(t, ok, "cache read must stay unset without prompt_tokens_details")
+	_, ok = tokenUsage.CacheCreationInputTokens()
+	assert.False(t, ok, "cache write must stay unset without prompt_tokens_details")
+
+	assert.Equal(t, float64(100), got.Usage.InputTokens)
+	assert.Zero(t, got.Usage.CacheReadInputTokens)
+	assert.Zero(t, got.Usage.CacheCreationInputTokens)
 }
 
 func TestAnthropicToOpenAITranslator_ResponseBody_Streaming(t *testing.T) {
