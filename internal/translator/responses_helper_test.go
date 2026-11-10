@@ -47,6 +47,12 @@ func newResponsesChatCompletionTestTranslator() OpenAIResponsesTranslator {
 func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
 	for _, tc := range []struct{ name, request string }{
 		{"continuation", `{"previous_response_id":"resp_1","input":"Continue"}`},
+		{"conversation ID", `{"conversation":"conv_1","input":"Continue"}`},
+		{"conversation object", `{"conversation":{"id":"conv_1"},"input":"Continue"}`},
+		{"background", `{"background":true}`},
+		{"reasoning item", `{"input":[{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"encrypted"}]}`},
+		{"item reference", `{"input":[{"type":"item_reference","id":"msg_1"}]}`},
+		{"hosted tool call", `{"input":[{"type":"file_search_call","id":"fs_1","queries":["test"],"status":"completed"}]}`},
 		{"web search", `{"tools":[{"type":"web_search"}]}`},
 		{"file search", `{"tools":[{"type":"file_search","vector_store_ids":["vs_1"]}]}`},
 		{"mixed tools", `{"tools":[{"type":"function","name":"weather"},{"type":"web_search"}]}`},
@@ -54,6 +60,9 @@ func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
 		{"text and file", `{"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Summarize this"},{"type":"input_file","file_id":"file_1"}]}]}`},
 		{"system file", `{"input":[{"type":"message","role":"system","content":[{"type":"input_file","file_id":"file_1"}]}]}`},
 		{"developer file", `{"input":[{"role":"developer","content":[{"type":"input_file","file_id":"file_1"}]}]}`},
+		{"image file ID", `{"input":[{"role":"user","content":[{"type":"input_image","file_id":"file_1"}]}]}`},
+		{"typed image file ID", `{"input":[{"type":"message","role":"user","content":[{"type":"input_image","file_id":"file_1"}]}]}`},
+		{"mixed image file ID", `{"input":[{"role":"user","content":[{"type":"input_text","text":"Describe this"},{"type":"input_image","file_id":"file_1"}]}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var req openai.ResponseRequest
@@ -63,6 +72,216 @@ func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
 			require.Nil(t, headers)
 			require.Nil(t, body)
 		})
+	}
+}
+
+func TestResponsesViaChatCompletion_AnthropicSettings(t *testing.T) {
+	for _, provider := range []string{"aws", "gcp"} {
+		for _, limit := range []*int64{nil, ptr.To(int64(128))} {
+			t.Run(fmt.Sprintf("%s/limit=%v", provider, ptr.Deref(limit, 4096)), func(t *testing.T) {
+				inner := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+				if provider == "gcp" {
+					inner = NewChatCompletionOpenAIToGCPAnthropicTranslator("v1", "")
+				}
+				translator := NewResponsesViaChatCompletionTranslator(inner)
+				var req openai.ResponseRequest
+				require.NoError(t, json.Unmarshal([]byte(`{"model":"claude-sonnet-4-6","input":"Hello","reasoning":{"effort":"high"},"tools":[{"type":"function","name":"weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]}`), &req))
+				req.MaxOutputTokens = limit
+				_, body, err := translator.RequestBody(nil, &req, false)
+				require.NoError(t, err)
+				var params struct {
+					MaxTokens int64 `json:"max_tokens"`
+					Tools     []struct {
+						Strict      bool `json:"strict"`
+						InputSchema struct {
+							Required []string `json:"required"`
+						} `json:"input_schema"`
+					} `json:"tools"`
+					OutputConfig struct {
+						Effort string `json:"effort"`
+					} `json:"output_config"`
+				}
+				require.NoError(t, json.Unmarshal(body, &params))
+				require.Equal(t, ptr.Deref(limit, 4096), params.MaxTokens)
+				require.Len(t, params.Tools, 1)
+				require.True(t, params.Tools[0].Strict)
+				require.Equal(t, []string{"city"}, params.Tools[0].InputSchema.Required)
+				require.Equal(t, "high", params.OutputConfig.Effort)
+				require.Equal(t, limit, req.MaxOutputTokens)
+			})
+		}
+	}
+}
+
+func TestResponsesViaChatCompletion_GeminiSettings(t *testing.T) {
+	translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPVertexAITranslator(""))
+	var req openai.ResponseRequest
+	require.NoError(t, json.Unmarshal([]byte(`{"model":"gemini-3-flash","input":"Hello","reasoning":{"effort":"high"}}`), &req))
+	_, body, err := translator.RequestBody(nil, &req, false)
+	require.NoError(t, err)
+	var params struct {
+		GenerationConfig struct {
+			MaxOutputTokens *int64 `json:"maxOutputTokens"`
+			ThinkingConfig  struct {
+				ThinkingLevel string `json:"thinkingLevel"`
+			} `json:"thinkingConfig"`
+		} `json:"generationConfig"`
+	}
+	require.NoError(t, json.Unmarshal(body, &params))
+	require.Equal(t, "HIGH", params.GenerationConfig.ThinkingConfig.ThinkingLevel)
+	require.Nil(t, params.GenerationConfig.MaxOutputTokens)
+}
+
+func TestResponsesViaChatCompletion_GeminiModelError(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPVertexAITranslator(""))
+			_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "gemini-3-flash", Stream: stream, Input: openai.ResponseNewParamsInputUnion{OfString: ptr.To("Hello")}}, false)
+			require.NoError(t, err)
+			body := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]},"finishReason":"OTHER"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}` + "\n"
+			span := &responsesRecordingSpan{}
+			_, translated, _, _, err := translator.ResponseBody(nil, strings.NewReader(body), true, span)
+			require.NoError(t, err)
+			var response openai.Response
+			if stream {
+				events := parseSSEEventsFromBytes(translated)
+				require.Equal(t, "response.failed", events[len(events)-1].eventType)
+				require.NotNil(t, span.events[len(span.events)-1].OfResponseFailed)
+				response = span.events[len(span.events)-1].OfResponseFailed.Response
+			} else {
+				require.NoError(t, json.Unmarshal(translated, &response))
+			}
+			require.Equal(t, "failed", response.Status)
+			require.Equal(t, "server_error", response.Error.Code)
+			require.Equal(t, "incomplete", response.Output[0].OfOutputMessage.Status)
+		})
+	}
+}
+
+func requireReplayableResponsesOutput(t *testing.T, output []openai.ResponseOutputItemUnion) {
+	t.Helper()
+	encoded, err := json.Marshal(output)
+	require.NoError(t, err)
+	var input []openai.ResponseInputItemUnionParam
+	require.NoError(t, json.Unmarshal(encoded, &input))
+	var calls []string
+	for i := range output {
+		if tool := output[i].OfFunctionCall; tool != nil {
+			calls = append(calls, tool.CallID)
+			input = append(input, openai.ResponseInputItemUnionParam{OfFunctionCallOutput: &openai.ResponseInputItemFunctionCallOutputParam{
+				CallID: tool.CallID, Output: openai.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: ptr.To("done")},
+			}})
+		}
+	}
+	chat, err := responsesRequestToChatCompletionRequest(&openai.ResponseRequest{Input: openai.ResponseNewParamsInputUnion{OfInputItemList: input}}, "model")
+	require.NoError(t, err)
+	require.Len(t, chat.Messages, len(calls)+1)
+	require.NotNil(t, chat.Messages[0].OfAssistant)
+	require.Len(t, chat.Messages[0].OfAssistant.ToolCalls, len(calls))
+	for i, call := range calls {
+		require.Equal(t, call, chat.Messages[i+1].OfTool.ToolCallID)
+	}
+}
+
+func TestResponsesViaChatCompletion_OutputOrder(t *testing.T) {
+	for _, textFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("textFirst=%t", textFirst), func(t *testing.T) {
+			translator := newResponsesChatCompletionTestTranslator()
+			_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "model", Stream: true}, false)
+			require.NoError(t, err)
+			deltas := []string{
+				`{"tool_calls":[{"index":7,"id":"call_7","function":{"name":"weather","arguments":"{"}}]}`,
+				`{"tool_calls":[{"index":2,"id":"call_2","function":{"name":"weather","arguments":"{}"}}]}`,
+			}
+			ids := []string{"call_7", "call_2", "msg_chat_1"}
+			text := `{"content":"hello"}`
+			if textFirst {
+				deltas = append([]string{text}, deltas...)
+				ids = []string{"msg_chat_1", "call_7", "call_2"}
+			} else {
+				deltas = append(deltas, text)
+			}
+			deltas = append(deltas, `{"tool_calls":[{"index":7,"function":{"arguments":"}"}}]}`)
+			var stream string
+			for _, delta := range deltas {
+				stream += "data: {\"id\":\"chat_1\",\"choices\":[{\"index\":0,\"delta\":" + delta + "}]}\n\n"
+			}
+			stream += "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"
+			_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader(stream), true, nil)
+			require.NoError(t, err)
+			var added, done []string
+			events := parseSSEEventsFromBytes(body)
+			for i, event := range events {
+				var payload struct {
+					OutputIndex    int64  `json:"output_index"`
+					SequenceNumber int64  `json:"sequence_number"`
+					ItemID         string `json:"item_id"`
+					Item           struct {
+						ID string `json:"id"`
+					} `json:"item"`
+				}
+				require.NoError(t, json.Unmarshal([]byte(event.data), &payload))
+				require.Equal(t, int64(i), payload.SequenceNumber)
+				id := payload.ItemID
+				if payload.Item.ID != "" {
+					id = payload.Item.ID
+				}
+				if id != "" {
+					require.GreaterOrEqual(t, payload.OutputIndex, int64(0))
+					require.Less(t, payload.OutputIndex, int64(len(ids)))
+					require.Equal(t, ids[payload.OutputIndex], id)
+				}
+				if event.eventType == "response.output_item.added" {
+					added = append(added, id)
+				}
+				if event.eventType == "response.output_item.done" {
+					done = append(done, id)
+				}
+			}
+			require.Equal(t, ids, added)
+			require.Equal(t, ids, done)
+			var terminal openai.ResponseCompletedEvent
+			require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].data), &terminal))
+			require.Len(t, terminal.Response.Output, len(ids))
+			for i := range terminal.Response.Output {
+				item := &terminal.Response.Output[i]
+				if item.OfFunctionCall != nil {
+					require.Equal(t, ids[i], item.OfFunctionCall.ID)
+					require.JSONEq(t, `{}`, item.OfFunctionCall.Arguments)
+				} else {
+					require.Equal(t, ids[i], item.OfOutputMessage.ID)
+				}
+			}
+			requireReplayableResponsesOutput(t, terminal.Response.Output)
+		})
+	}
+	response := chatCompletionToResponse(&openai.ChatCompletionResponse{ID: "chat_1", Choices: []openai.ChatCompletionResponseChoice{{
+		FinishReason: openai.ChatCompletionChoicesFinishReasonToolCalls,
+		Message: openai.ChatCompletionResponseChoiceMessage{
+			Content:   ptr.To("hello"),
+			ToolCalls: []openai.ChatCompletionMessageToolCallParam{{ID: ptr.To("call_1"), Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "weather", Arguments: `{}`}}},
+		},
+	}}}, "model")
+	require.NotNil(t, response.Output[0].OfOutputMessage)
+	requireReplayableResponsesOutput(t, response.Output)
+}
+
+func TestResponsesViaChatCompletion_EmptyOutput(t *testing.T) {
+	response := chatCompletionToResponse(&openai.ChatCompletionResponse{}, "model")
+	body, err := json.Marshal(response)
+	require.NoError(t, err)
+	requireJSONFields(t, `{"output":[]}`, body)
+	translator := newResponsesChatCompletionTestTranslator()
+	_, _, err = translator.RequestBody(nil, &openai.ResponseRequest{Stream: true}, false)
+	require.NoError(t, err)
+	_, body, _, _, err = translator.ResponseBody(nil, strings.NewReader("data: {\"id\":\"chat_1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"), true, nil)
+	require.NoError(t, err)
+	events := parseSSEEventsFromBytes(body)
+	require.Len(t, events, 3)
+	for _, event := range events {
+		var payload map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(event.data), &payload))
+		requireJSONFields(t, `{"output":[]}`, payload["response"])
 	}
 }
 
@@ -200,6 +419,9 @@ func TestResponsesRequestToChatCompletionRequest_Controls(t *testing.T) {
 		{"named function", `{"tool_choice":{"type":"function","name":"weather"}}`, `{"tool_choice":{"type":"function","function":{"name":"weather"}}}`},
 		{"no parallel calls", `{"parallel_tool_calls":false}`, `{"parallel_tool_calls":false}`},
 		{"parallel calls", `{"parallel_tool_calls":true}`, `{"parallel_tool_calls":true}`},
+		{"foreground", `{"background":false,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
+		{"null conversation", `{"conversation":null,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
+		{"reasoning effort", `{"reasoning":{"effort":"high"}}`, `{"reasoning_effort":"high"}`},
 		{"strict true", `{"tools":[{"type":"function","name":"weather","strict":true}]}`, `{"tools":[{"type":"function","function":{"name":"weather","strict":true,"parameters":null}}]}`},
 		{"strict false", `{"tools":[{"type":"function","name":"weather","strict":false}]}`, `{"tools":[{"type":"function","function":{"name":"weather","parameters":null}}]}`},
 		{"default no parameters", `{"tools":[{"type":"function","name":"weather"}]}`, `{"tools":[{"type":"function","function":{"name":"weather","strict":true,"parameters":{"type":"object","required":[],"additionalProperties":false}}}]}`},
@@ -295,18 +517,24 @@ func TestResponsesViaChatCompletion_Buffering(t *testing.T) {
 	}
 }
 
-func TestResponsesViaChatCompletion_Incomplete(t *testing.T) {
-	for _, reason := range []openai.ChatCompletionChoicesFinishReason{openai.ChatCompletionChoicesFinishReasonLength, openai.ChatCompletionChoicesFinishReasonContentFilter} {
+func TestResponsesViaChatCompletion_Termination(t *testing.T) {
+	for _, reason := range []openai.ChatCompletionChoicesFinishReason{openai.ChatCompletionChoicesFinishReasonLength, openai.ChatCompletionChoicesFinishReasonContentFilter, openai.ChatCompletionChoicesFinishReasonError} {
 		t.Run(string(reason), func(t *testing.T) {
 			response := chatCompletionToResponse(&openai.ChatCompletionResponse{Choices: []openai.ChatCompletionResponseChoice{{
 				FinishReason: reason,
 				Message:      openai.ChatCompletionResponseChoiceMessage{Content: ptr.To("partial")},
 			}}}, "model")
-			require.Equal(t, "incomplete", response.Status)
+			expectedStatus := "incomplete"
 			expectedReason := "max_output_tokens"
 			if reason == openai.ChatCompletionChoicesFinishReasonContentFilter {
 				expectedReason = "content_filter"
 			}
+			if reason == openai.ChatCompletionChoicesFinishReasonError {
+				expectedStatus = "failed"
+				expectedReason = ""
+				require.Equal(t, "server_error", response.Error.Code)
+			}
+			require.Equal(t, expectedStatus, response.Status)
 			require.Equal(t, expectedReason, response.IncompleteDetails.Reason)
 			require.Equal(t, "incomplete", response.Output[0].OfOutputMessage.Status)
 			for _, tool := range []bool{false, true} {
@@ -327,12 +555,18 @@ func TestResponsesViaChatCompletion_Incomplete(t *testing.T) {
 						require.NoError(t, err)
 						require.NotContains(t, string(body), "response.completed")
 						events := parseSSEEventsFromBytes(body)
-						require.Equal(t, "response.incomplete", events[len(events)-1].eventType)
-						var terminal openai.ResponseIncompleteEvent
+						require.Equal(t, "response."+expectedStatus, events[len(events)-1].eventType)
+						var terminal struct {
+							Type     string          `json:"type"`
+							Response openai.Response `json:"response"`
+						}
 						require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].data), &terminal))
-						require.Equal(t, "response.incomplete", terminal.Type)
-						require.Equal(t, "incomplete", terminal.Response.Status)
+						require.Equal(t, "response."+expectedStatus, terminal.Type)
+						require.Equal(t, expectedStatus, terminal.Response.Status)
 						require.Equal(t, expectedReason, terminal.Response.IncompleteDetails.Reason)
+						if expectedStatus == "failed" {
+							require.Equal(t, "server_error", terminal.Response.Error.Code)
+						}
 						var done openai.ResponseOutputItemDoneEvent
 						require.NoError(t, json.Unmarshal([]byte(events[len(events)-2].data), &done))
 						require.Equal(t, "response.output_item.done", done.Type)

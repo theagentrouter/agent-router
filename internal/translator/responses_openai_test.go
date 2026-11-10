@@ -131,7 +131,7 @@ func TestResponsesOpenAIToChatCompletion_Stream(t *testing.T) {
 			require.Len(t, events, len(expectedEvents))
 			for i, event := range events {
 				require.Equal(t, expectedEvents[i], event.eventType)
-				requireJSONFields(t, fmt.Sprintf(`{"type":%q,"sequence_number":%d}`, event.eventType, i+1), []byte(event.data))
+				requireJSONFields(t, fmt.Sprintf(`{"type":%q,"sequence_number":%d}`, event.eventType, i), []byte(event.data))
 			}
 			var completed openai.ResponseCompletedEvent
 			require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].data), &completed))
@@ -139,7 +139,7 @@ func TestResponsesOpenAIToChatCompletion_Stream(t *testing.T) {
 			require.Equal(t, model, completed.Response.Model)
 			require.Len(t, completed.Response.Output, 1)
 			if tool {
-				require.JSONEq(t, `{"type":"response.function_call_arguments.done","item_id":"call_1","name":"weather","arguments":"{\"city\":\"Berlin\"}","output_index":0,"sequence_number":6}`, events[5].data)
+				require.JSONEq(t, `{"type":"response.function_call_arguments.done","item_id":"call_1","name":"weather","arguments":"{\"city\":\"Berlin\"}","output_index":0,"sequence_number":5}`, events[5].data)
 				require.Equal(t, "call_1", completed.Response.Output[0].OfFunctionCall.CallID)
 				require.JSONEq(t, `{"city":"Berlin"}`, completed.Response.Output[0].OfFunctionCall.Arguments)
 			} else {

@@ -44,6 +44,7 @@ func chatCompletionToResponse(chatResp *openai.ChatCompletionResponse, requestMo
 		CreatedAt: chatResp.Created,
 		Status:    "completed",
 		Text:      defaultTextConfig,
+		Output:    []openai.ResponseOutputItemUnion{},
 	}
 
 	if chatResp.Usage != (openai.Usage{}) {
@@ -52,11 +53,9 @@ func chatCompletionToResponse(chatResp *openai.ChatCompletionResponse, requestMo
 
 	for i := range chatResp.Choices {
 		choice := &chatResp.Choices[i]
-		status := "completed"
-		if reason := responsesIncompleteReason(choice.FinishReason); reason != "" {
-			status = "incomplete"
-			resp.Status = "incomplete"
-			resp.IncompleteDetails.Reason = reason
+		status := applyResponsesFinishReason(resp, choice.FinishReason)
+		if choice.Message.Content != nil && *choice.Message.Content != "" {
+			resp.Output = append(resp.Output, responsesMessageItem("msg_"+chatResp.ID, *choice.Message.Content, status))
 		}
 
 		for _, tc := range choice.Message.ToolCalls {
@@ -70,10 +69,6 @@ func chatCompletionToResponse(chatResp *openai.ChatCompletionResponse, requestMo
 					Status:    status,
 				},
 			})
-		}
-
-		if choice.Message.Content != nil && *choice.Message.Content != "" {
-			resp.Output = append(resp.Output, responsesMessageItem("msg_"+chatResp.ID, *choice.Message.Content, status))
 		}
 	}
 
@@ -103,6 +98,8 @@ func applyResponsesRequestSettings(resp *openai.Response, req *openai.ResponseRe
 	}
 	resp.Temperature = ptr.Deref(req.Temperature, 1)
 	resp.TopP = ptr.Deref(req.TopP, 1)
+	resp.MaxOutputTokens = req.MaxOutputTokens
+	resp.Reasoning = req.Reasoning
 	resp.Text = openai.ResponseTextConfig{Format: req.Text.Format, Verbosity: req.Text.Verbosity}
 	if resp.Text.Format == (openai.ResponseFormatTextConfigUnionParam{}) {
 		resp.Text.Format = defaultTextConfig.Format
@@ -133,10 +130,28 @@ func responsesIncompleteReason(reason openai.ChatCompletionChoicesFinishReason) 
 	}
 }
 
+func applyResponsesFinishReason(resp *openai.Response, reason openai.ChatCompletionChoicesFinishReason) string {
+	if reason == openai.ChatCompletionChoicesFinishReasonError {
+		resp.Status = "failed"
+		resp.Error = openai.ResponseError{Code: "server_error", Message: "upstream model terminated with an error"}
+		resp.IncompleteDetails = openai.ResponseIncompleteDetails{}
+		return "incomplete"
+	}
+	if incomplete := responsesIncompleteReason(reason); incomplete != "" {
+		if resp.Status != "failed" {
+			resp.Status = "incomplete"
+			resp.IncompleteDetails.Reason = incomplete
+		}
+		return "incomplete"
+	}
+	return "completed"
+}
+
 type streamingToolCallState struct {
-	id        string
-	name      string
-	arguments strings.Builder
+	id          string
+	name        string
+	arguments   strings.Builder
+	outputIndex int64
 }
 
 type chatCompletionStreamToResponsesConverter struct {
@@ -148,7 +163,8 @@ type chatCompletionStreamToResponsesConverter struct {
 	messageStarted bool
 	messageID      string
 	accText        strings.Builder
-	outputIndex    int64
+	messageIndex   int64
+	itemCount      int64
 	toolCalls      map[int64]*streamingToolCallState
 	finished       bool
 	pendingStatus  string
@@ -159,7 +175,7 @@ type chatCompletionStreamToResponsesConverter struct {
 
 func (c *chatCompletionStreamToResponsesConverter) nextSeq() int64 {
 	c.seqNum++
-	return c.seqNum
+	return c.seqNum - 1
 }
 
 func formatSSEEvent(eventType string, data []byte) []byte {
@@ -260,16 +276,18 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 	if delta != nil && delta.Content != nil && *delta.Content != "" {
 		if !c.messageStarted {
 			c.messageStarted = true
+			c.messageIndex = c.itemCount
+			c.itemCount++
 			output = append(output, marshalSSEEvent("response.output_item.added", openai.ResponseOutputItemAddedEvent{
 				Item:           responsesMessageItem(c.messageID, "", "in_progress"),
-				OutputIndex:    c.outputIndex,
+				OutputIndex:    c.messageIndex,
 				SequenceNumber: c.nextSeq(),
 				Type:           "response.output_item.added",
 			})...)
 			output = append(output, marshalSSEEvent("response.content_part.added", openai.ResponseContentPartAddedEvent{
 				ContentIndex: 0,
 				ItemID:       c.messageID,
-				OutputIndex:  c.outputIndex,
+				OutputIndex:  c.messageIndex,
 				Part: openai.ResponseContentPartAddedEventPartUnion{
 					OfResponseOutputText: &openai.ResponseOutputTextParam{
 						Text: "",
@@ -285,7 +303,7 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 			ContentIndex:   0,
 			Delta:          *delta.Content,
 			ItemID:         c.messageID,
-			OutputIndex:    c.outputIndex,
+			OutputIndex:    c.messageIndex,
 			SequenceNumber: c.nextSeq(),
 			Type:           "response.output_text.delta",
 		})...)
@@ -298,7 +316,8 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 		for _, tc := range delta.ToolCalls {
 			state, exists := c.toolCalls[tc.Index]
 			if !exists {
-				state = &streamingToolCallState{}
+				state = &streamingToolCallState{outputIndex: c.itemCount}
+				c.itemCount++
 				if tc.ID != nil {
 					state.id = *tc.ID
 				}
@@ -317,7 +336,7 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 							Status:    "in_progress",
 						},
 					},
-					OutputIndex:    int64(len(c.toolCalls)) - 1 + boolToInt64(c.messageStarted),
+					OutputIndex:    state.outputIndex,
 					SequenceNumber: c.nextSeq(),
 					Type:           "response.output_item.added",
 				})...)
@@ -325,11 +344,10 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 			if tc.Function.Arguments != "" {
 				state.arguments.WriteString(tc.Function.Arguments)
 				itemID := cmp.Or(state.id, fmt.Sprintf("fc_%d", tc.Index))
-				outIdx := tc.Index + boolToInt64(c.messageStarted)
 				output = append(output, marshalSSEEvent("response.function_call_arguments.delta", openai.ResponseFunctionCallArgumentsDeltaEvent{
 					Delta:          tc.Function.Arguments,
 					ItemID:         itemID,
-					OutputIndex:    outIdx,
+					OutputIndex:    state.outputIndex,
 					SequenceNumber: c.nextSeq(),
 					Type:           "response.function_call_arguments.delta",
 				})...)
@@ -339,15 +357,12 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 
 	if choice.FinishReason != "" {
 		c.stopReason = choice.FinishReason
-		responseStatus := "completed"
-		if responsesIncompleteReason(c.stopReason) != "" {
-			responseStatus = "incomplete"
-		}
+		response := c.buildFinalResponse("completed", nil)
 		if c.messageStarted {
 			output = append(output, marshalSSEEvent("response.output_text.done", openai.ResponseTextDoneEvent{
 				ContentIndex:   0,
 				ItemID:         c.messageID,
-				OutputIndex:    c.outputIndex,
+				OutputIndex:    c.messageIndex,
 				SequenceNumber: c.nextSeq(),
 				Text:           c.accText.String(),
 				Type:           "response.output_text.done",
@@ -355,7 +370,7 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 			output = append(output, marshalSSEEvent("response.content_part.done", openai.ResponseContentPartDoneEvent{
 				ContentIndex: 0,
 				ItemID:       c.messageID,
-				OutputIndex:  c.outputIndex,
+				OutputIndex:  c.messageIndex,
 				Part: openai.ResponseContentPartDoneEventPartUnion{
 					OfResponseOutputText: &openai.ResponseOutputTextParam{
 						Text: c.accText.String(),
@@ -366,7 +381,7 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 				Type:           "response.content_part.done",
 			})...)
 		}
-		items := c.buildFinalResponse(responseStatus, nil).Output
+		items := response.Output
 		for i := range items {
 			item := &items[i]
 			if tool := item.OfFunctionCall; tool != nil {
@@ -387,10 +402,10 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 			})...)
 		}
 		if usage != nil {
-			output = c.appendTerminalEvent(output, responseStatus, usage)
+			output = c.appendTerminalEvent(output, response.Status, usage)
 		} else {
 			c.finished = true
-			c.pendingStatus = responseStatus
+			c.pendingStatus = response.Status
 		}
 	}
 
@@ -406,37 +421,32 @@ func (c *chatCompletionStreamToResponsesConverter) buildFinalResponse(status str
 		Status:    status,
 		Text:      defaultTextConfig,
 	}
-	resp.IncompleteDetails.Reason = responsesIncompleteReason(c.stopReason)
+	itemStatus := status
+	if c.stopReason != "" {
+		itemStatus = applyResponsesFinishReason(&resp, c.stopReason)
+	}
 	resp.Usage = responsesUsage(usage)
 	applyResponsesRequestSettings(&resp, c.requestConfig)
 
-	var outputItems []openai.ResponseOutputItemUnion
+	outputItems := make([]openai.ResponseOutputItemUnion, c.itemCount)
 	if c.messageStarted {
-		outputItems = append(outputItems, responsesMessageItem(c.messageID, c.accText.String(), status))
+		outputItems[c.messageIndex] = responsesMessageItem(c.messageID, c.accText.String(), itemStatus)
 	}
-	for _, idx := range slices.Sorted(maps.Keys(c.toolCalls)) {
-		state := c.toolCalls[idx]
+	for idx, state := range c.toolCalls {
 		itemID := cmp.Or(state.id, fmt.Sprintf("fc_%d", idx))
-		outputItems = append(outputItems, openai.ResponseOutputItemUnion{
+		outputItems[state.outputIndex] = openai.ResponseOutputItemUnion{
 			OfFunctionCall: &openai.ResponseFunctionToolCall{
 				ID:        itemID,
 				CallID:    state.id,
 				Name:      state.name,
 				Arguments: state.arguments.String(),
 				Type:      "function_call",
-				Status:    status,
+				Status:    itemStatus,
 			},
-		})
+		}
 	}
 	resp.Output = outputItems
 	return resp
-}
-
-func boolToInt64(b bool) int64 {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model string) (openai.ChatCompletionRequest, error) {
@@ -447,9 +457,16 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 		MaxCompletionTokens: req.MaxOutputTokens,
 		Stream:              req.Stream,
 		ParallelToolCalls:   req.ParallelToolCalls,
+		ReasoningEffort:     openai.ReasoningEffort(req.Reasoning.Effort),
 	}
 	if req.PreviousResponseID != "" {
 		return chatReq, fmt.Errorf("%w: previous_response_id is not supported by Chat Completion backends; provide the conversation in input", internalapi.ErrInvalidRequestBody)
+	}
+	if req.Conversation.OfConversationObject != nil || ptr.Deref(req.Conversation.OfString, "") != "" {
+		return chatReq, fmt.Errorf("%w: conversation is not supported by Chat Completion backends; provide the conversation in input", internalapi.ErrInvalidRequestBody)
+	}
+	if ptr.Deref(req.Background, false) {
+		return chatReq, fmt.Errorf("%w: background mode is not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
 	}
 
 	format := req.Text.Format
@@ -575,7 +592,11 @@ func responsesFunctionParameters(tool *openai.FunctionToolParam) (map[string]any
 			}
 		}
 		if properties, ok := current["properties"].(map[string]any); ok || current["type"] == "object" {
-			current["required"] = append([]string{}, slices.Sorted(maps.Keys(properties))...)
+			required := make([]any, 0, len(properties))
+			for _, name := range slices.Sorted(maps.Keys(properties)) {
+				required = append(required, name)
+			}
+			current["required"] = required
 			current["additionalProperties"] = false
 		}
 		if items, ok := current["items"].(map[string]any); ok {
@@ -608,11 +629,24 @@ func convertInputItemsToMessages(items []openai.ResponseInputItemUnionParam, mes
 				if part.OfInputText == nil && part.OfInputImage == nil {
 					return nil, fmt.Errorf("%w: only text and image message content is supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
 				}
+				if image := part.OfInputImage; image != nil && (image.FileID != "" || image.ImageURL == "") {
+					return nil, fmt.Errorf("%w: image inputs must use image_url; file_id is not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
+				}
 			}
 			messages = append(messages, convertEasyInputMessage(msg))
 
 		case item.OfOutputMessage != nil:
-			messages = append(messages, convertOutputMessage(item.OfOutputMessage))
+			message := convertOutputMessage(item.OfOutputMessage)
+			if n := len(messages); n > 0 && messages[n-1].OfAssistant != nil && len(messages[n-1].OfAssistant.ToolCalls) > 0 {
+				previous := messages[n-1].OfAssistant
+				text := message.OfAssistant.Content.Value.(string)
+				if before, ok := previous.Content.Value.(string); ok && before != "" {
+					text = before + "\n\n" + text
+				}
+				previous.Content = openai.StringOrAssistantRoleContentUnion{Value: text}
+			} else {
+				messages = append(messages, message)
+			}
 
 		case item.OfFunctionCall != nil:
 			fc := item.OfFunctionCall
@@ -647,6 +681,8 @@ func convertInputItemsToMessages(items []openai.ResponseInputItemUnionParam, mes
 					ToolCallID: fco.CallID,
 				},
 			})
+		default:
+			return nil, fmt.Errorf("%w: unsupported Responses input item at index %d", internalapi.ErrInvalidRequestBody, i)
 		}
 	}
 
@@ -762,13 +798,20 @@ func (t *responsesViaChatCompletionTranslator) RequestBody(_ []byte, req *openai
 	t.stream = req.Stream
 	t.streamConverter.requestModel = req.Model
 	t.streamConverter.requestConfig = &openai.ResponseRequest{
-		Temperature: req.Temperature, TopP: req.TopP, Text: req.Text,
+		Temperature: req.Temperature, TopP: req.TopP, Text: req.Text, Reasoning: req.Reasoning,
 	}
 
 	chatReq, err := responsesRequestToChatCompletionRequest(req, req.Model)
 	if err != nil {
 		return nil, nil, err
 	}
+	if chatReq.MaxCompletionTokens == nil {
+		switch t.inner.(type) {
+		case *openAIToAWSAnthropicTranslatorV1ChatCompletion, *openAIToGCPAnthropicTranslatorV1ChatCompletion:
+			chatReq.MaxCompletionTokens = ptr.To(int64(4096))
+		}
+	}
+	t.streamConverter.requestConfig.MaxOutputTokens = chatReq.MaxCompletionTokens
 
 	raw, err := json.Marshal(chatReq)
 	if err != nil {
