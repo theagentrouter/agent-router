@@ -570,6 +570,77 @@ func Test_rewriteToolsCallResult(t *testing.T) {
 	})
 }
 
+func Test_rewritePromptsGetResult(t *testing.T) {
+	backend := filterapi.MCPBackendName("backend1")
+
+	t.Run("rewrites resource link, embedded resource, and metadata", func(t *testing.T) {
+		in := json.RawMessage(`{
+			"description":"review",
+			"messages":[
+				{"role":"user","content":{"type":"text","text":"look"}},
+				{"role":"user","content":{"type":"resource_link","uri":"file:///data","name":"data","_meta":{"ui":{"resourceUri":"ui://app/link"},"keep":"yes"}}},
+				{"role":"assistant","content":{"type":"resource","resource":{"uri":"ui://prefab/embed.html","text":"x","mimeType":"text/html"}}}
+			],
+			"_meta":{"ui":{"resourceUri":"ui://app/view"},"ui/resourceUri":"ui://app/flat","customKey":"keep-me"},
+			"ttlMs":1000
+		}`)
+		out, ok := rewritePromptsGetResult(in, backend)
+		require.True(t, ok)
+
+		var m map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(out, &m))
+		require.Equal(t, `"review"`, string(m["description"]))
+		require.Equal(t, `1000`, string(m["ttlMs"]))
+
+		var meta map[string]any
+		require.NoError(t, json.Unmarshal(m["_meta"], &meta))
+		require.Equal(t, "keep-me", meta["customKey"])
+		require.Equal(t, downstreamResourceURI("ui://app/view", "backend1"), meta["ui"].(map[string]any)["resourceUri"])
+		require.Equal(t, downstreamResourceURI("ui://app/flat", "backend1"), meta["ui/resourceUri"])
+
+		var messages []map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(m["messages"], &messages))
+		require.Len(t, messages, 3)
+		require.Equal(t, `"user"`, string(messages[0]["role"]))
+		require.JSONEq(t, `{"type":"text","text":"look"}`, string(messages[0]["content"]))
+
+		var link map[string]any
+		require.NoError(t, json.Unmarshal(messages[1]["content"], &link))
+		require.Equal(t, downstreamResourceURI("file:///data", "backend1"), link["uri"])
+		require.Equal(t, "data", link["name"])
+		linkMeta := link["_meta"].(map[string]any)
+		require.Equal(t, "yes", linkMeta["keep"])
+		require.Equal(t, downstreamResourceURI("ui://app/link", "backend1"), linkMeta["ui"].(map[string]any)["resourceUri"])
+
+		var embedded map[string]any
+		require.NoError(t, json.Unmarshal(messages[2]["content"], &embedded))
+		resource := embedded["resource"].(map[string]any)
+		require.Equal(t, downstreamResourceURI("ui://prefab/embed.html", "backend1"), resource["uri"])
+		require.Equal(t, "x", resource["text"])
+		require.Equal(t, "text/html", resource["mimeType"])
+	})
+
+	t.Run("text-only result is left untouched", func(t *testing.T) {
+		in := json.RawMessage(`{"messages":[{"role":"user","content":{"type":"text","text":"hi"}}]}`)
+		out, ok := rewritePromptsGetResult(in, backend)
+		require.False(t, ok)
+		require.Nil(t, out)
+	})
+
+	t.Run("input_required passes through verbatim", func(t *testing.T) {
+		in := json.RawMessage(`{"resultType":"input_required","inputRequests":{"q":{"type":"text"}},"messages":[{"role":"user","content":{"type":"resource_link","uri":"file:///data"}}]}`)
+		out, ok := rewritePromptsGetResult(in, backend)
+		require.False(t, ok)
+		require.Nil(t, out)
+	})
+
+	t.Run("non-object payload passes through", func(t *testing.T) {
+		out, ok := rewritePromptsGetResult(json.RawMessage(`["nope"]`), backend)
+		require.False(t, ok)
+		require.Nil(t, out)
+	})
+}
+
 func TestExtractForwardHeaders(t *testing.T) {
 	// Test that extractForwardHeaders correctly reads headers from the request.
 	tests := []struct {
@@ -838,6 +909,22 @@ func TestServePOST_InvalidJSONRPC(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	require.Contains(t, rr.Body.String(), "invalid JSON-RPC message")
+	require.Contains(t, rr.Body.String(), `"code":-32700`)
+	require.NotContains(t, rr.Body.String(), `"code":-32600`)
+}
+
+func TestServePOST_InvalidJSONRPCShape(t *testing.T) {
+	proxy := newTestMCPProxy()
+	// Valid JSON that is not a JSON-RPC 2.0 message is an invalid request, not a parse error.
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"1.0","method":"ping","id":1}`))
+	rr := httptest.NewRecorder()
+
+	proxy.servePOST(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "invalid JSON-RPC message")
+	require.Contains(t, rr.Body.String(), `"code":-32600`)
+	require.NotContains(t, rr.Body.String(), `"code":-32700`)
 }
 
 // TestServePOST_EraDispatch covers the era detection branch in servePOST:

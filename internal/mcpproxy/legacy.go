@@ -908,7 +908,7 @@ func (m *mcpRequestContext) maybeUpdateProgressTokenMetadata(ctx context.Context
 
 // maybeResponseModify modifies the client->server response to include the backend name where needed.
 // URI rewriting uses the same raw-JSON helpers as the modern path so unknown
-// fields on tools/call and resources/read results are preserved.
+// fields on tools/call, prompts/get, and resources/read results are preserved.
 func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.Request, msg *jsonrpc.Response, backend filterapi.MCPBackendName) error {
 	if msg.Result == nil {
 		return nil
@@ -920,6 +920,10 @@ func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.
 		}
 	case "tools/call":
 		if rewritten, ok := rewriteToolsCallResult(json.RawMessage(msg.Result), backend); ok {
+			msg.Result = []byte(rewritten)
+		}
+	case "prompts/get":
+		if rewritten, ok := rewritePromptsGetResult(json.RawMessage(msg.Result), backend); ok {
 			msg.Result = []byte(rewritten)
 		}
 	}
@@ -1212,7 +1216,7 @@ func (m *mcpRequestContext) handlePromptGetRequest(ctx context.Context, s *sessi
 		return result, fmt.Errorf("%w: unknown backend %s in prompt name %s", errBackendNotFound, backendName, p.Name)
 	}
 	if !m.promptAllowed(s.route, backendName, promptName) {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", p.Name))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", p.Name))
 		return result, fmt.Errorf("%w: %s", errInvalidPromptName, p.Name)
 	}
 	cse := s.getCompositeSessionEntry(backendName)
@@ -1265,7 +1269,7 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 		return result, fmt.Errorf("%w: unknown backend %s in resource name %s", errBackendNotFound, backendName, cmp.Or(param.Ref.Name, param.Ref.URI))
 	}
 	if param.Ref.Type == "ref/prompt" && !m.promptAllowed(s.route, backendName, param.Ref.Name) {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", promptName))
+		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", promptName))
 		return result, fmt.Errorf("%w: %s", errInvalidPromptName, promptName)
 	}
 

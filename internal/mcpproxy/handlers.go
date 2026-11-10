@@ -175,7 +175,15 @@ func (m *mcpRequestContext) servePOST(w http.ResponseWriter, r *http.Request) {
 
 	rawMsg, err := jsonrpc.DecodeMessage(body)
 	if err != nil {
-		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON-RPC message: %v", err))
+		// Syntax failures are -32700 Parse Error. Valid JSON that is not a
+		// JSON-RPC message (wrong version, bad id, and so on) stays -32600
+		// Invalid Request, which is what onErrorResponse maps HTTP 400 to.
+		code := errCodeInvalidRequest
+		var probe any
+		if json.Unmarshal(body, &probe) != nil {
+			code = errCodeParseError
+		}
+		writeJSONRPCError(w, http.StatusBadRequest, code, fmt.Sprintf("invalid JSON-RPC message: %v", err), nil)
 		m.recordPOSTCompletion(&postCompletion{
 			ctx:     r.Context(),
 			errType: metrics.MCPErrorInvalidJSONRPC,
@@ -425,35 +433,141 @@ func rewriteToolsCallResult(resp json.RawMessage, backendName filterapi.MCPBacke
 		if json.Unmarshal(raw, &contents) == nil {
 			contentChanged := false
 			for _, c := range contents {
-				var typ string
-				if tRaw, ok := c["type"]; ok {
-					_ = json.Unmarshal(tRaw, &typ)
-				}
-				switch typ {
-				case "resource_link":
-					if rewriteRawURIField(c, "uri", backendName) {
-						contentChanged = true
-					}
-				case "resource":
-					resRaw, ok := c["resource"]
-					if !ok {
-						continue
-					}
-					var resource map[string]json.RawMessage
-					if json.Unmarshal(resRaw, &resource) != nil {
-						continue
-					}
-					if rewriteRawURIField(resource, "uri", backendName) {
-						if out, err := json.Marshal(resource); err == nil {
-							c["resource"] = out
-							contentChanged = true
-						}
-					}
+				if rewriteContentResourceURI(c, backendName) {
+					contentChanged = true
 				}
 			}
 			if contentChanged {
 				if out, err := json.Marshal(contents); err == nil {
 					m["content"] = out
+					changed = true
+				}
+			}
+		}
+	}
+
+	if raw, ok := m["_meta"]; ok {
+		var meta map[string]any
+		if json.Unmarshal(raw, &meta) == nil && rewriteMetaResourceURIs(mcp.Meta(meta), backendName) {
+			if out, err := json.Marshal(meta); err == nil {
+				m["_meta"] = out
+				changed = true
+			}
+		}
+	}
+
+	if !changed {
+		return nil, false
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// rewriteContentResourceURI re-prefixes the resource URI carried by one content
+// object: resource_link.uri, or resource.resource.uri for an embedded resource.
+// Other content types are left unchanged. Returns true when a URI was rewritten.
+// Shared by tools/call content entries and prompts/get message content so both
+// namespace URIs the same way.
+func rewriteContentResourceURI(c map[string]json.RawMessage, backendName filterapi.MCPBackendName) bool {
+	var typ string
+	if tRaw, ok := c["type"]; ok {
+		_ = json.Unmarshal(tRaw, &typ)
+	}
+	switch typ {
+	case "resource_link":
+		return rewriteRawURIField(c, "uri", backendName)
+	case "resource":
+		resRaw, ok := c["resource"]
+		if !ok {
+			return false
+		}
+		var resource map[string]json.RawMessage
+		if json.Unmarshal(resRaw, &resource) != nil {
+			return false
+		}
+		if !rewriteRawURIField(resource, "uri", backendName) {
+			return false
+		}
+		out, err := json.Marshal(resource)
+		if err != nil {
+			return false
+		}
+		c["resource"] = out
+		return true
+	default:
+		return false
+	}
+}
+
+// rewritePromptsGetResult re-prefixes resource URIs in a complete prompts/get
+// result into the gateway's downstream namespace, matching rewriteToolsCallResult.
+// A prompt message carries a single content object rather than a content array.
+// Resource-link and embedded-resource URIs are namespaced, as are the _meta
+// resource URIs tools/call rewrites, both on the result and on each message's
+// content. A later resources/read routes on the gateway prefix, and a bare URI
+// is ambiguous across backends.
+//
+// Returns (rewritten, true) when at least one URI changed, or (nil, false) when
+// the caller should pass the result through verbatim: a non-complete (MRTR
+// input_required) result, a non-object payload, or a result with no URIs to rewrite.
+func rewritePromptsGetResult(resp json.RawMessage, backendName filterapi.MCPBackendName) (json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(resp, &m) != nil {
+		return nil, false
+	}
+	// Non-complete (input_required) results are not standard prompt results and
+	// must pass through untouched so MRTR state survives.
+	if rt, ok := m["resultType"]; ok {
+		var s string
+		if json.Unmarshal(rt, &s) == nil && s != "" && s != "complete" {
+			return nil, false
+		}
+	}
+	if _, ok := m["inputRequests"]; ok {
+		return nil, false
+	}
+
+	changed := false
+
+	if raw, ok := m["messages"]; ok {
+		var messages []map[string]json.RawMessage
+		if json.Unmarshal(raw, &messages) == nil {
+			messagesChanged := false
+			for _, msg := range messages {
+				contentRaw, ok := msg["content"]
+				if !ok {
+					continue
+				}
+				var content map[string]json.RawMessage
+				if json.Unmarshal(contentRaw, &content) != nil {
+					continue
+				}
+				contentChanged := rewriteContentResourceURI(content, backendName)
+				if metaRaw, ok := content["_meta"]; ok {
+					var meta map[string]any
+					if json.Unmarshal(metaRaw, &meta) == nil && rewriteMetaResourceURIs(mcp.Meta(meta), backendName) {
+						if out, err := json.Marshal(meta); err == nil {
+							content["_meta"] = out
+							contentChanged = true
+						}
+					}
+				}
+				if !contentChanged {
+					continue
+				}
+				out, err := json.Marshal(content)
+				if err != nil {
+					continue
+				}
+				msg["content"] = out
+				messagesChanged = true
+			}
+			if messagesChanged {
+				if out, err := json.Marshal(messages); err == nil {
+					m["messages"] = out
 					changed = true
 				}
 			}
