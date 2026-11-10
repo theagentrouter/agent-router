@@ -90,9 +90,9 @@ Clients continue calling `POST /v1/responses`. Agent Router converts requests to
 
 Leaving this field unset, or setting it to `Responses`, keeps the native Responses API for these schemas. There is no automatic detection or retry to another API. This setting does not change other incoming endpoints, such as `/v1/chat/completions`.
 
-The bridge supports only the features available through the selected Chat Completions backend. Hosted tools, `previous_response_id`, `conversation`, background execution, file inputs, file-ID images, and reasoning-item replay are rejected. Send prior messages and tool results explicitly in `input` for multi-turn conversations.
+The bridge supports only the features available through the selected Chat Completions backend. Hosted tools, `previous_response_id`, `conversation`, background execution, reusable `prompt` references, `store: true`, file inputs, file-ID images, and reasoning-item replay are rejected. Send prior messages and tool results explicitly in `input` for multi-turn conversations. Image URL inputs are supported only in user messages.
 
-Reasoning text is returned separately from the visible answer, as reasoning output items and streaming events. `include` and `top_logprobs` requests are not supported by the bridge and are rejected.
+Reasoning text is returned separately from the visible answer, as reasoning output items and streaming events. Model refusals are preserved as refusal content parts. `include` and `top_logprobs` requests are not supported by the bridge and are rejected.
 
 `AWSAnthropic`, `GCPAnthropic`, and `GCPVertexAI` already use the bridge for Responses requests and do not need this setting.
 

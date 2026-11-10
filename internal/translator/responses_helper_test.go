@@ -50,6 +50,11 @@ func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
 		{"conversation ID", `{"conversation":"conv_1","input":"Continue"}`},
 		{"conversation object", `{"conversation":{"id":"conv_1"},"input":"Continue"}`},
 		{"background", `{"background":true}`},
+		{"stored prompt", `{"prompt":{"id":"pmpt_1","variables":{"name":"Sam"}},"input":"Hello"}`},
+		{"response storage", `{"store":true,"input":"Hello"}`},
+		{"assistant image", `{"input":[{"role":"assistant","content":[{"type":"input_image","image_url":"https://example.com/image.png"}]}]}`},
+		{"system image", `{"input":[{"role":"system","content":[{"type":"input_image","image_url":"https://example.com/image.png"}]}]}`},
+		{"developer image", `{"input":[{"role":"developer","content":[{"type":"input_text","text":"Look"},{"type":"input_image","image_url":"https://example.com/image.png"}]}]}`},
 		{"top logprobs", `{"top_logprobs":5}`},
 		{"zero top logprobs", `{"top_logprobs":0}`},
 		{"included logprobs", `{"include":["message.output_text.logprobs"]}`},
@@ -176,6 +181,97 @@ func TestResponsesViaChatCompletion_Reasoning(t *testing.T) {
 				require.Equal(t, "answer", response.Output[1].OfOutputMessage.Content.OfContentArray[0].OfOutputText.Text)
 			})
 		}
+	}
+}
+
+func TestResponsesViaChatCompletion_Refusal(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		stream, text, refusalFirst bool
+	}{
+		{"non-stream", false, false, false},
+		{"non-stream mixed", false, true, false},
+		{"stream", true, false, false},
+		{"stream mixed", true, true, false},
+		{"stream refusal first", true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			translator := newResponsesChatCompletionTestTranslator()
+			_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "model", Stream: tc.stream}, false)
+			require.NoError(t, err)
+			content := "null"
+			if tc.text {
+				content = `"answer"`
+			}
+			body := `{"id":"chat_1","choices":[{"index":0,"message":{"role":"assistant","content":` + content + `,"refusal":"not allowed"},"finish_reason":"stop"}]}`
+			if tc.stream {
+				deltas := []string{`{"refusal":"not "}`, `{"refusal":"allowed"}`}
+				if tc.text {
+					if tc.refusalFirst {
+						deltas = append(deltas, `{"content":"answer"}`)
+					} else {
+						deltas = append([]string{`{"content":"answer"}`}, deltas...)
+					}
+				}
+				body = ""
+				for _, delta := range deltas {
+					body += "data: {\"id\":\"chat_1\",\"choices\":[{\"index\":0,\"delta\":" + delta + "}]}\n\n"
+				}
+				body += "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+			}
+			span := &responsesRecordingSpan{}
+			step := len(body)
+			if tc.stream {
+				step = 1
+			}
+			var output []byte
+			for offset := 0; offset < len(body); offset += step {
+				end := min(offset+step, len(body))
+				_, converted, _, _, err := translator.ResponseBody(nil, strings.NewReader(body[offset:end]), end == len(body), span)
+				require.NoError(t, err)
+				output = append(output, converted...)
+			}
+			var response openai.Response
+			refusalIndex := 0
+			if tc.text && !tc.refusalFirst {
+				refusalIndex = 1
+			}
+			if tc.stream {
+				var refusal string
+				var done bool
+				for _, event := range span.events {
+					if delta := event.OfResponseRefusalDelta; delta != nil {
+						refusal += delta.Delta
+						require.Equal(t, int64(refusalIndex), delta.ContentIndex)
+					}
+					if end := event.OfResponseRefusalDone; end != nil {
+						done = true
+						require.Equal(t, "not allowed", end.Refusal)
+						require.Equal(t, int64(refusalIndex), end.ContentIndex)
+					}
+				}
+				require.Equal(t, "not allowed", refusal)
+				require.True(t, done)
+				response = span.events[len(span.events)-1].OfResponseCompleted.Response
+				if !tc.text {
+					require.NotContains(t, string(output), "event: response.output_text.")
+				}
+			} else {
+				require.NoError(t, json.Unmarshal(output, &response))
+				require.Len(t, span.responses, 1)
+			}
+			require.Equal(t, "completed", response.Status)
+			require.False(t, *response.Store)
+			require.Len(t, response.Output, 1)
+			parts := response.Output[0].OfOutputMessage.Content.OfContentArray
+			require.Equal(t, "not allowed", parts[refusalIndex].OfRefusal.Refusal)
+			if tc.text {
+				require.Len(t, parts, 2)
+				require.Equal(t, "answer", parts[1-refusalIndex].OfOutputText.Text)
+			} else {
+				require.Len(t, parts, 1)
+			}
+		})
 	}
 }
 
@@ -524,6 +620,7 @@ func TestResponsesRequestToChatCompletionRequest_Controls(t *testing.T) {
 		{"no parallel calls", `{"parallel_tool_calls":false}`, `{"parallel_tool_calls":false}`},
 		{"parallel calls", `{"parallel_tool_calls":true}`, `{"parallel_tool_calls":true}`},
 		{"foreground", `{"background":false,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
+		{"stateless", `{"store":false,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
 		{"null conversation", `{"conversation":null,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
 		{"reasoning effort", `{"reasoning":{"effort":"high"}}`, `{"reasoning_effort":"high"}`},
 		{"strict true", `{"tools":[{"type":"function","name":"weather","strict":true}]}`, `{"tools":[{"type":"function","function":{"name":"weather","strict":true,"parameters":null}}]}`},
