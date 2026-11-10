@@ -50,6 +50,7 @@ func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
 		{"conversation ID", `{"conversation":"conv_1","input":"Continue"}`},
 		{"conversation object", `{"conversation":{"id":"conv_1"},"input":"Continue"}`},
 		{"background", `{"background":true}`},
+		{"stream obfuscation", `{"stream":true,"stream_options":{"include_obfuscation":true}}`},
 		{"stored prompt", `{"prompt":{"id":"pmpt_1","variables":{"name":"Sam"}},"input":"Hello"}`},
 		{"response storage", `{"store":true,"input":"Hello"}`},
 		{"automatic truncation", `{"truncation":"auto"}`},
@@ -320,13 +321,15 @@ func TestResponsesViaChatCompletion_AnthropicSettings(t *testing.T) {
 func TestResponsesViaChatCompletion_GeminiSettings(t *testing.T) {
 	translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPVertexAITranslator(""))
 	var req openai.ResponseRequest
-	require.NoError(t, json.Unmarshal([]byte(`{"model":"gemini-3-flash","input":"Hello","reasoning":{"effort":"high"}}`), &req))
+	require.NoError(t, json.Unmarshal([]byte(`{"model":"gemini-3-flash","input":"Hello","reasoning":{"effort":"high"},"presence_penalty":0.5,"frequency_penalty":-0.25}`), &req))
 	_, body, err := translator.RequestBody(nil, &req, false)
 	require.NoError(t, err)
 	var params struct {
 		GenerationConfig struct {
-			MaxOutputTokens *int64 `json:"maxOutputTokens"`
-			ThinkingConfig  struct {
+			PresencePenalty  *float32 `json:"presencePenalty"`
+			FrequencyPenalty *float32 `json:"frequencyPenalty"`
+			MaxOutputTokens  *int64   `json:"maxOutputTokens"`
+			ThinkingConfig   struct {
 				ThinkingLevel string `json:"thinkingLevel"`
 			} `json:"thinkingConfig"`
 		} `json:"generationConfig"`
@@ -334,6 +337,8 @@ func TestResponsesViaChatCompletion_GeminiSettings(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &params))
 	require.Equal(t, "HIGH", params.GenerationConfig.ThinkingConfig.ThinkingLevel)
 	require.Nil(t, params.GenerationConfig.MaxOutputTokens)
+	require.Equal(t, ptr.To(float32(0.5)), params.GenerationConfig.PresencePenalty)
+	require.Equal(t, ptr.To(float32(-0.25)), params.GenerationConfig.FrequencyPenalty)
 }
 
 func TestResponsesViaChatCompletion_GeminiModelError(t *testing.T) {
@@ -637,6 +642,9 @@ func TestResponsesRequestToChatCompletionRequest_Controls(t *testing.T) {
 		{"no context changes", `{"truncation":"disabled","context_management":[],"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
 		{"null conversation", `{"conversation":null,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
 		{"reasoning effort", `{"reasoning":{"effort":"high"}}`, `{"reasoning_effort":"high"}`},
+		{"generation controls", `{"presence_penalty":0.5,"frequency_penalty":-0.25,"text":{"verbosity":"low"}}`, `{"presence_penalty":0.5,"frequency_penalty":-0.25,"verbosity":"low"}`},
+		{"zero penalties", `{"presence_penalty":0,"frequency_penalty":0}`, `{"presence_penalty":0,"frequency_penalty":0}`},
+		{"no obfuscation", `{"stream":true,"stream_options":{"include_obfuscation":false}}`, `{"stream":true,"stream_options":{"include_usage":true}}`},
 		{"strict true", `{"tools":[{"type":"function","name":"weather","strict":true}]}`, `{"tools":[{"type":"function","function":{"name":"weather","strict":true,"parameters":null}}]}`},
 		{"strict false", `{"tools":[{"type":"function","name":"weather","strict":false}]}`, `{"tools":[{"type":"function","function":{"name":"weather","parameters":null}}]}`},
 		{"default no parameters", `{"tools":[{"type":"function","name":"weather"}]}`, `{"tools":[{"type":"function","function":{"name":"weather","strict":true,"parameters":{"type":"object","required":[],"additionalProperties":false}}}]}`},

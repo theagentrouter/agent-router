@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	openaisdk "github.com/openai/openai-go/v3"
 	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -572,6 +573,9 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 		Model:               model,
 		Temperature:         req.Temperature,
 		TopP:                req.TopP,
+		PresencePenalty:     req.PresencePenalty,
+		FrequencyPenalty:    req.FrequencyPenalty,
+		Verbosity:           openaisdk.ChatCompletionNewParamsVerbosity(req.Text.Verbosity),
 		MaxCompletionTokens: req.MaxOutputTokens,
 		Stream:              req.Stream,
 		ParallelToolCalls:   req.ParallelToolCalls,
@@ -585,6 +589,9 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 	}
 	if ptr.Deref(req.Background, false) {
 		return chatReq, fmt.Errorf("%w: background mode is not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
+	}
+	if req.StreamOptions.IncludeObfuscation {
+		return chatReq, fmt.Errorf("%w: stream obfuscation is not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
 	}
 	if ptr.Deref(req.Store, false) {
 		return chatReq, fmt.Errorf("%w: response storage is not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
