@@ -144,6 +144,28 @@ func TestBodyMutator_Mutate_NoMutations(t *testing.T) {
 	require.Equal(t, requestBody, mutatedBody)
 }
 
+func TestBodyMutator_Mutate_PlainStringThatLooksLikeJSONValue(t *testing.T) {
+	bodyMutations := &filterapi.HTTPBodyMutation{
+		Set: []filterapi.HTTPBodyField{
+			{Path: "phone", Value: "+8613800138000"},
+			{Path: "date", Value: "2026-11-10"},
+		},
+	}
+
+	mutator := NewBodyMutator(bodyMutations, nil)
+
+	mutatedBody, err := mutator.Mutate([]byte(`{"phone": "", "date": ""}`))
+	require.NoError(t, err)
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal(mutatedBody, &result))
+
+	// Values that are not valid JSON must stay strings even when they only
+	// contain characters that look like a number.
+	require.Equal(t, "+8613800138000", result["phone"])
+	require.Equal(t, "2026-11-10", result["date"])
+}
+
 func TestBodyMutator_Mutate_InvalidJSON(t *testing.T) {
 	bodyMutations := &filterapi.HTTPBodyMutation{
 		Set: []filterapi.HTTPBodyField{
