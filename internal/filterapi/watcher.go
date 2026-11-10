@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/envoyproxy/ai-gateway/internal/version"
 )
 
@@ -26,7 +28,26 @@ type ConfigReceiver interface {
 	LoadConfig(ctx context.Context, config *Config) error
 }
 
+// ReloadableConfigReceiver is a [ConfigReceiver] that can ask for the configuration to be read again before the
+// next periodic load, for example when a request names a backend that the loaded configuration does not have yet.
+// [StartConfigBundleWatcher] gives it the reload function before it starts watching.
+type ReloadableConfigReceiver interface {
+	ConfigReceiver
+	// SetConfigReloader receives the function that reads the configuration again. The function returns when that
+	// read is done, or with the context's error if the context ends first. The read does not run under that context.
+	SetConfigReloader(reload func(context.Context) error)
+}
+
+// bundleLoadKey is the only key of bundleConfigWatcher.loads.
+const bundleLoadKey = "bundle"
+
 type bundleConfigWatcher struct {
+	// ctx is the context the watcher was started with. Loads after the first run under it, including the ones a
+	// receiver asks for, so a request's context never becomes the context of a load.
+	ctx  context.Context
+	tick time.Duration
+	// loads runs one load at a time: a tick or a reload that comes while a load is running waits for that load.
+	loads      singleflight.Group
 	lastMod    time.Time
 	path       string
 	rcv        ConfigReceiver
@@ -36,7 +57,7 @@ type bundleConfigWatcher struct {
 
 // StartConfigBundleWatcher starts a watcher for the sharded bundle directory.
 func StartConfigBundleWatcher(ctx context.Context, bundlePath string, rcv ConfigReceiver, l *slog.Logger, tick time.Duration) error {
-	cw := &bundleConfigWatcher{rcv: rcv, l: l, path: bundlePath, versionStr: version.Parse()}
+	cw := &bundleConfigWatcher{ctx: ctx, tick: tick, rcv: rcv, l: l, path: bundlePath, versionStr: version.Parse()}
 
 	if err := cw.loadConfig(ctx); err != nil {
 		// The initial load of the bundle may fail because of race condition
@@ -45,6 +66,9 @@ func StartConfigBundleWatcher(ctx context.Context, bundlePath string, rcv Config
 			return fmt.Errorf("failed to load initial bundled config: %w", err)
 		}
 		l.Warn("failed to load initial bundled config; will retry on next watch tick", slog.String("error", err.Error()))
+	}
+	if r, ok := rcv.(ReloadableConfigReceiver); ok {
+		r.SetConfigReloader(cw.reload)
 	}
 
 	l.Info("start watching the config bundle", slog.String("path", bundlePath), slog.String("interval", tick.String()))
@@ -61,12 +85,29 @@ func (cw *bundleConfigWatcher) watch(ctx context.Context, tick time.Duration) {
 			cw.l.Info("stop watching the config bundle", slog.String("path", cw.path))
 			return
 		case <-ticker.C:
-			perTickCtx, cancel := context.WithTimeout(ctx, tick)
-			if err := cw.loadConfig(perTickCtx); err != nil {
+			if _, err, _ := cw.loads.Do(bundleLoadKey, cw.load); err != nil {
 				cw.l.Error("failed to update bundled config", slog.String("error", err.Error()))
 			}
-			cancel()
 		}
+	}
+}
+
+// load reads the bundle as a tick does: under the watcher's context, for at most one tick.
+func (cw *bundleConfigWatcher) load() (any, error) {
+	ctx, cancel := context.WithTimeout(cw.ctx, cw.tick)
+	defer cancel()
+	return nil, cw.loadConfig(ctx)
+}
+
+// reload reads the bundle now instead of at the next tick. If a load is already running, it waits for that one.
+// ctx bounds only the wait: if it ends first, reload returns its error and the load still runs to the end.
+func (cw *bundleConfigWatcher) reload(ctx context.Context) error {
+	ch := cw.loads.DoChan(bundleLoadKey, cw.load)
+	select {
+	case res := <-ch:
+		return res.Err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

@@ -583,3 +583,11 @@ func (w *insecureSeedWarner) LoadConfig(ctx context.Context, config *filterapi.C
 	}
 	return w.ConfigReceiver.LoadConfig(ctx, config)
 }
+
+// SetConfigReloader implements [filterapi.ReloadableConfigReceiver.SetConfigReloader] by passing the reloader on to
+// the wrapped receiver, if it takes one.
+func (w *insecureSeedWarner) SetConfigReloader(reload func(context.Context) error) {
+	if r, ok := w.ConfigReceiver.(filterapi.ReloadableConfigReceiver); ok {
+		r.SetConfigReloader(reload)
+	}
+}

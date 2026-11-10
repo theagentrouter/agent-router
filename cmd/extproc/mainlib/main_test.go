@@ -486,3 +486,25 @@ func TestInsecureSeedWarner_FileID(t *testing.T) {
 		})
 	}
 }
+
+type reloadableConfigReceiver struct {
+	recordingConfigReceiver
+	reload func(context.Context) error
+}
+
+func (r *reloadableConfigReceiver) SetConfigReloader(reload func(context.Context) error) {
+	r.reload = reload
+}
+
+func TestInsecureSeedWarner_SetConfigReloader(t *testing.T) {
+	rcv := &reloadableConfigReceiver{}
+	var w filterapi.ConfigReceiver = newFileIDSeedWarner(rcv, slog.New(slog.DiscardHandler), "secure")
+	r, ok := w.(filterapi.ReloadableConfigReceiver)
+	require.True(t, ok, "the warner must pass the reloader on to the extproc server")
+	r.SetConfigReloader(func(context.Context) error { return nil })
+	require.NotNil(t, rcv.reload)
+
+	// A receiver without reloads is left as it is.
+	w = newMCPSeedWarner(&recordingConfigReceiver{}, slog.New(slog.DiscardHandler), "secure")
+	w.(filterapi.ReloadableConfigReceiver).SetConfigReloader(func(context.Context) error { return nil })
+}
