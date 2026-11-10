@@ -412,6 +412,13 @@ helm-test: helm-package  ## Test the helm chart with a dummy version.
 	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed --set controller.podAnnotations.foo=bar | grep -q -- "foo: bar"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.fullnameOverride=a-very-long-controller-fullname-override-value --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "name: a-very-long-controller-fullname-mcp-session-encryption-fallback"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -A3 -- "name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED" | grep -q -- "name: my-fallback-secret"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "--mcpFallbackSessionEncryptionIterations="
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "mcp-session-encryption-fallback"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "mcp-session-encryption-fallback"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "bXktb2xkLXNlZWQ="
 
 # This pushes the helm chart to the OCI registry, requiring the access to the registry endpoint.
 .PHONY: helm-push
