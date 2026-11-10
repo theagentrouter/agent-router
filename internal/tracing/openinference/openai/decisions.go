@@ -16,6 +16,13 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
+// decisionsImagePartArrays lists every place a Decisions request can carry images: messages, tool outputs, and question instructions.
+var decisionsImagePartArrays = []imagePartArrays{
+	{itemsPath: "input", partsKey: "content"},
+	{itemsPath: "input", partsKey: "output"},
+	{itemsPath: "questions", partsKey: "instructions"},
+}
+
 // DecisionsRecorder records OpenInference attributes for Decisions requests.
 type DecisionsRecorder struct {
 	tracingapi.NoopChunkRecorder[struct{}]
@@ -45,7 +52,7 @@ func (r *DecisionsRecorder) RecordRequest(span trace.Span, req *openaischema.Dec
 		attrs = append(attrs, attribute.String(openinference.InputValue, openinference.RedactedValue))
 	} else {
 		modifiedBody, err := redactImageFromResponseRequestParameters(
-			body, r.traceConfig.HideInputImages, r.traceConfig.Base64ImageMaxLength,
+			body, r.traceConfig.HideInputImages, r.traceConfig.Base64ImageMaxLength, decisionsImagePartArrays,
 		)
 		if err == nil {
 			attrs = append(attrs, attribute.String(openinference.InputValue, string(modifiedBody)))
