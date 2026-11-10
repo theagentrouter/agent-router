@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,16 +33,9 @@ import (
 	testsinternal "github.com/envoyproxy/ai-gateway/tests/internal"
 )
 
-// extprocBin holds the path to the compiled extproc binary.
-var extprocBin string
-
-func init() {
-	var err error
-	extprocBin, err = internaltesting.BuildGoBinaryOnDemand("EXTPROC_BIN", "extproc", "./cmd/extproc")
-	if err != nil {
-		panic(fmt.Sprintf("failed to build extproc binary: %v", err))
-	}
-}
+var extprocBin = sync.OnceValues(func() (string, error) {
+	return internaltesting.BuildGoBinaryOnDemand("EXTPROC_BIN", "extproc", "./cmd/extproc")
+})
 
 // TestEnvironment holds all the services needed for tests.
 type TestEnvironment struct {
@@ -318,7 +312,9 @@ func requireExtProc(t testing.TB, out io.Writer, config string, env []string, ex
 			}
 		}()
 	} else {
-		cmd := exec.CommandContext(t.Context(), extprocBin)
+		binary, err := extprocBin()
+		require.NoError(t, err)
+		cmd := exec.CommandContext(t.Context(), binary)
 		cmd.Args = append(cmd.Args, args...)
 		cmd.Env = append(os.Environ(), env...)
 		cmd.Stdout = out
