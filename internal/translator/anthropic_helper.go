@@ -912,11 +912,14 @@ func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error
 	chunk, err := p.parseAndHandleEvent(eventBlock)
 	if err != nil {
 		var streamErr *anthropicStreamError
-		if errors.As(err, &streamErr) && streamErr.Type == overloadedErrorType {
-			if serializeErr := serializeOpenAIOverloadedStreamError(streamErr.Message, buf); serializeErr != nil {
+		if errors.As(err, &streamErr) {
+			if serializeErr := serializeOpenAIStreamError(streamErr, buf); serializeErr != nil {
 				return serializeErr
 			}
-			return &StreamOverloadedError{Err: streamErr}
+			if streamErr.Type == overloadedErrorType {
+				return &StreamOverloadedError{Err: streamErr}
+			}
+			return &StreamResponseError{Err: streamErr}
 		}
 		return err
 	}
@@ -929,15 +932,14 @@ func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error
 	return nil
 }
 
-// serializeOpenAIOverloadedStreamError writes an OpenAI-style SSE error event for a mid-stream overload.
-func serializeOpenAIOverloadedStreamError(message string, buf *[]byte) error {
+func serializeOpenAIStreamError(streamErr *anthropicStreamError, buf *[]byte) error {
 	errorBytes, err := json.Marshal(struct {
 		Error openai.ErrorType `json:"error"`
 	}{
-		Error: openai.ErrorType{Type: overloadedErrorType, Message: message},
+		Error: openai.ErrorType{Type: streamErr.Type, Message: streamErr.Message},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to marshal overloaded stream error: %w", err)
+		return fmt.Errorf("failed to marshal stream error: %w", err)
 	}
 
 	*buf = append(*buf, sseDataPrefixSpace...)

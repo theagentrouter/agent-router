@@ -94,6 +94,8 @@ The bridge supports only the features available through the selected Chat Comple
 
 Reasoning text is returned separately from the visible answer, as reasoning output items and streaming events. Model refusals are preserved as refusal content parts. `include` and `top_logprobs` requests are not supported by the bridge and are rejected.
 
+Automatic truncation, `context_management`, and reasoning-summary controls (`reasoning.summary` and `reasoning.generate_summary`) are also rejected. Provider in-stream errors are translated before the response stream is closed.
+
 `AWSAnthropic`, `GCPAnthropic`, and `GCPVertexAI` already use the bridge for Responses requests and do not need this setting.
 
 ### BackendSecurityPolicy

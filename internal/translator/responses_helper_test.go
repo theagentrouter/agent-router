@@ -52,6 +52,10 @@ func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
 		{"background", `{"background":true}`},
 		{"stored prompt", `{"prompt":{"id":"pmpt_1","variables":{"name":"Sam"}},"input":"Hello"}`},
 		{"response storage", `{"store":true,"input":"Hello"}`},
+		{"automatic truncation", `{"truncation":"auto"}`},
+		{"context management", `{"context_management":[{"type":"compaction","compact_threshold":1000}]}`},
+		{"reasoning summary", `{"reasoning":{"summary":"auto"}}`},
+		{"legacy reasoning summary", `{"reasoning":{"generate_summary":"detailed"}}`},
 		{"assistant image", `{"input":[{"role":"assistant","content":[{"type":"input_image","image_url":"https://example.com/image.png"}]}]}`},
 		{"system image", `{"input":[{"role":"system","content":[{"type":"input_image","image_url":"https://example.com/image.png"}]}]}`},
 		{"developer image", `{"input":[{"role":"developer","content":[{"type":"input_text","text":"Look"},{"type":"input_image","image_url":"https://example.com/image.png"}]}]}`},
@@ -557,49 +561,58 @@ func TestResponsesViaChatCompletion_ResponseDetails(t *testing.T) {
 	}
 }
 
-func TestResponsesViaChatCompletion_Overloaded(t *testing.T) {
-	for _, beforeContent := range []bool{false, true} {
-		for _, split := range []bool{false, true} {
-			t.Run(fmt.Sprintf("beforeContent=%t/split=%t", beforeContent, split), func(t *testing.T) {
-				translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPAnthropicTranslator("v1", ""))
-				_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "claude", Stream: true}, false)
-				require.NoError(t, err)
-				stream := "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n"
-				if !beforeContent {
-					stream = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude\",\"content\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n" +
-						"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n" + stream
-				}
-				step := len(stream)
-				if split {
-					step = 1
-				}
-				span := &responsesRecordingSpan{}
-				var output []byte
-				for offset := 0; offset < len(stream); offset += step {
-					end := min(offset+step, len(stream))
-					_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader(stream[offset:end]), false, span)
-					output = append(output, body...)
-					if end == len(stream) {
-						var overloaded *StreamOverloadedError
-						require.ErrorAs(t, err, &overloaded)
-					} else {
+func TestResponsesViaChatCompletion_StreamErrors(t *testing.T) {
+	for _, errorType := range []string{"overloaded_error", "api_error", "rate_limit_error", "authentication_error"} {
+		t.Run(errorType, func(t *testing.T) {
+			for _, beforeContent := range []bool{false, true} {
+				for _, split := range []bool{false, true} {
+					t.Run(fmt.Sprintf("beforeContent=%t/split=%t", beforeContent, split), func(t *testing.T) {
+						translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPAnthropicTranslator("v1", ""))
+						_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "claude", Stream: true}, false)
 						require.NoError(t, err)
-					}
+						stream := fmt.Sprintf("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":%q,\"message\":\"busy\"}}\n\n", errorType)
+						if !beforeContent {
+							stream = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude\",\"content\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n" +
+								"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\n" + stream
+						}
+						step := len(stream)
+						if split {
+							step = 1
+						}
+						span := &responsesRecordingSpan{}
+						var output []byte
+						for offset := 0; offset < len(stream); offset += step {
+							end := min(offset+step, len(stream))
+							_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader(stream[offset:end]), false, span)
+							output = append(output, body...)
+							if end == len(stream) {
+								if errorType == "overloaded_error" {
+									var overloaded *StreamOverloadedError
+									require.ErrorAs(t, err, &overloaded)
+								} else {
+									var streamErr *StreamResponseError
+									require.ErrorAs(t, err, &streamErr)
+								}
+							} else {
+								require.NoError(t, err)
+							}
+						}
+						events := parseSSEEventsFromBytes(output)
+						require.NotEmpty(t, events)
+						require.Equal(t, "error", events[len(events)-1].eventType)
+						requireJSONFields(t, fmt.Sprintf(`{"type":"error","code":%q,"message":"busy"}`, errorType), []byte(events[len(events)-1].data))
+						require.NotContains(t, string(output), `"choices"`)
+						require.NotContains(t, string(output), `"error":{`)
+						require.NotContains(t, string(output), "event: response.completed")
+						require.Len(t, span.events, len(events))
+						require.NotNil(t, span.events[len(events)-1].OfError)
+						if !beforeContent {
+							require.Contains(t, string(output), "event: response.output_text.delta")
+						}
+					})
 				}
-				events := parseSSEEventsFromBytes(output)
-				require.NotEmpty(t, events)
-				require.Equal(t, "error", events[len(events)-1].eventType)
-				requireJSONFields(t, `{"type":"error","code":"overloaded_error","message":"busy"}`, []byte(events[len(events)-1].data))
-				require.NotContains(t, string(output), `"choices"`)
-				require.NotContains(t, string(output), `"error":{`)
-				require.NotContains(t, string(output), "event: response.completed")
-				require.Len(t, span.events, len(events))
-				require.NotNil(t, span.events[len(events)-1].OfError)
-				if !beforeContent {
-					require.Contains(t, string(output), "event: response.output_text.delta")
-				}
-			})
-		}
+			}
+		})
 	}
 }
 
@@ -621,6 +634,7 @@ func TestResponsesRequestToChatCompletionRequest_Controls(t *testing.T) {
 		{"parallel calls", `{"parallel_tool_calls":true}`, `{"parallel_tool_calls":true}`},
 		{"foreground", `{"background":false,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
 		{"stateless", `{"store":false,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
+		{"no context changes", `{"truncation":"disabled","context_management":[],"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
 		{"null conversation", `{"conversation":null,"input":"Hello"}`, `{"messages":[{"role":"user","content":"Hello"}]}`},
 		{"reasoning effort", `{"reasoning":{"effort":"high"}}`, `{"reasoning_effort":"high"}`},
 		{"strict true", `{"tools":[{"type":"function","name":"weather","strict":true}]}`, `{"tools":[{"type":"function","function":{"name":"weather","strict":true,"parameters":null}}]}`},

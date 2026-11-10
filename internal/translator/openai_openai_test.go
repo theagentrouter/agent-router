@@ -20,8 +20,28 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/redaction"
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 )
+
+func TestRedactResponseRefusal(t *testing.T) {
+	for _, redact := range []func(*openai.ChatCompletionResponseChoiceMessage) openai.ChatCompletionResponseChoiceMessage{
+		redactResponseMessage, redactGCPResponseMessage, redactGCPAnthropicResponseMessage, redactAWSBedrockResponseMessage,
+	} {
+		for _, refusal := range []*string{nil, ptr.To(""), ptr.To("sensitive refusal text")} {
+			original := openai.ChatCompletionResponseChoiceMessage{Refusal: refusal}
+			result := redact(&original)
+			if refusal == nil {
+				require.Nil(t, result.Refusal)
+			} else {
+				expected := *refusal
+				require.Equal(t, redaction.RedactString(expected), *result.Refusal)
+				require.Equal(t, expected, *original.Refusal)
+				require.NotSame(t, original.Refusal, result.Refusal)
+			}
+		}
+	}
+}
 
 // TestResponseModel_OpenAIStreaming tests that OpenAI streaming returns the actual model version
 // OpenAI supports automatic routing where generic models may resolve to specific versions

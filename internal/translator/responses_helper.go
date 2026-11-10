@@ -589,6 +589,12 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 	if ptr.Deref(req.Store, false) {
 		return chatReq, fmt.Errorf("%w: response storage is not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
 	}
+	if (req.Truncation != "" && req.Truncation != "disabled") || len(req.ContextManagement) > 0 {
+		return chatReq, fmt.Errorf("%w: automatic truncation and context management are not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
+	}
+	if req.Reasoning.Summary != "" || req.Reasoning.GenerateSummary != "" {
+		return chatReq, fmt.Errorf("%w: reasoning summaries are not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
+	}
 	if req.Prompt.ID != "" || req.Prompt.Version != "" || len(req.Prompt.Variables) > 0 {
 		return chatReq, fmt.Errorf("%w: reusable prompts are not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
 	}
@@ -1015,7 +1021,8 @@ func (t *responsesViaChatCompletionTranslator) ResponseBody(respHeaders map[stri
 		respHeaders, bytes.NewReader(rawBody), endOfStream, nil,
 	)
 	var overloaded *StreamOverloadedError
-	if innerErr != nil && (!t.stream || !errors.As(innerErr, &overloaded)) {
+	var streamErr *StreamResponseError
+	if innerErr != nil && (!t.stream || (!errors.As(innerErr, &overloaded) && !errors.As(innerErr, &streamErr))) {
 		return innerHeaders, innerBody, tokenUsage, cmp.Or(innerModel, t.requestModel), innerErr
 	}
 

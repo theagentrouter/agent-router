@@ -705,6 +705,10 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) RedactBody(resp *openai.
 // that has been converted to OpenAI format.
 func redactGCPResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) openai.ChatCompletionResponseChoiceMessage {
 	redactedMsg := *msg
+	if msg.Refusal != nil {
+		refusal := redaction.RedactString(*msg.Refusal)
+		redactedMsg.Refusal = &refusal
+	}
 
 	// Redact message content (AI-generated text)
 	if msg.Content != nil {

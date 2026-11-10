@@ -2243,7 +2243,7 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}
 		require.NotContains(t, string(body), "[DONE]")
 	})
 
-	t.Run("non-overload error is not serialized", func(t *testing.T) {
+	t.Run("non-overload error is serialized", func(t *testing.T) {
 		p := newAnthropicStreamParser("claude-sonnet-4-5")
 		const stream = `event: error
 data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
@@ -2252,9 +2252,11 @@ data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
 		_, body, _, _, err := p.Process(strings.NewReader(stream), false, nil)
 		var streamErr *StreamOverloadedError
 		require.NotErrorAs(t, err, &streamErr)
+		var responseErr *StreamResponseError
+		require.ErrorAs(t, err, &responseErr)
 		var anthropicErr *anthropicStreamError
 		require.ErrorAs(t, err, &anthropicErr)
 		require.Equal(t, "api_error", anthropicErr.Type)
-		require.Empty(t, body)
+		require.Equal(t, "data: {\"error\":{\"type\":\"api_error\",\"message\":\"Upstream error\"}}\n\n", string(body))
 	})
 }
