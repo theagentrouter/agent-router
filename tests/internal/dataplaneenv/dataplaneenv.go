@@ -23,6 +23,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/envoyproxy/ai-gateway/cmd/extproc/mainlib"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/pprof"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 	testsinternal "github.com/envoyproxy/ai-gateway/tests/internal"
@@ -289,11 +290,21 @@ func requireEnvoy(t testing.TB,
 
 // requireExtProc starts the external processor with the given configuration.
 func requireExtProc(t testing.TB, out io.Writer, config string, env []string, extraArgs []string, port, adminPort, mcpPort int, mcpWriteTimeout time.Duration, inProcess bool) {
-	configPath := t.TempDir() + "/extproc-config.yaml"
-	require.NoError(t, os.WriteFile(configPath, []byte(config), 0o600))
+	configRaw := []byte(config)
+	configBundlePath := filepath.Join(t.TempDir(), "extproc-config-bundle")
+	part := filterapi.ConfigBundlePart{Name: "config", Path: filterapi.ConfigBundlePartPath(0), SizeBytes: len(configRaw)}
+	partPath := filepath.Join(configBundlePath, filepath.FromSlash(part.Path))
+	require.NoError(t, os.MkdirAll(filepath.Dir(partPath), 0o700))
+	require.NoError(t, os.WriteFile(partPath, configRaw, 0o600))
+	indexRaw, err := filterapi.MarshalConfigBundleIndex(&filterapi.ConfigBundleIndex{
+		Checksum: filterapi.ConfigBundleChecksum(configRaw),
+		Parts:    []filterapi.ConfigBundlePart{part},
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(configBundlePath, filterapi.ConfigBundleIndexFileName), indexRaw, 0o600))
 
 	args := []string{
-		"-configPath", configPath,
+		"-configBundlePath", configBundlePath,
 		"-extProcAddr", fmt.Sprintf(":%d", port),
 		"-adminPort", strconv.Itoa(adminPort),
 		"-mcpAddr", ":" + strconv.Itoa(mcpPort),

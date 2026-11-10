@@ -316,6 +316,13 @@ func TestThinkingUnion_UnmarshalJSON(t *testing.T) {
 			},
 		},
 		{
+			name: "between_tools",
+			data: `{"type":"between_tools"}`,
+			expect: ThinkingUnion{
+				OfBetweenTools: &ThinkingBetweenTools{Type: "between_tools"},
+			},
+		},
+		{
 			name: "enabled with display",
 			data: `{"type":"enabled","budget_tokens":1024,"display":"omitted"}`,
 			expect: ThinkingUnion{
@@ -590,11 +597,32 @@ func TestResponseToolUnion_ToolSearch_MarshalJSON(t *testing.T) {
 	}
 }
 
+func TestResponseRequest_UnmarshalJSON_UnknownToolType(t *testing.T) {
+	const body = `{"model":"gpt-5","input":"hi","tools":[` +
+		`{"type":"function","name":"get_weather","parameters":{},"strict":true},` +
+		`{"type":"some_future_tool","execution":"client"}` +
+		`]}`
+
+	var req ResponseRequest
+	require.NoError(t, json.Unmarshal([]byte(body), &req))
+	require.Len(t, req.Tools, 2)
+
+	require.NotNil(t, req.Tools[0].OfFunction)
+	require.Equal(t, "get_weather", req.Tools[0].OfFunction.Name)
+
+	require.Nil(t, req.Tools[1].OfFunction)
+	require.JSONEq(t, `{"type":"some_future_tool","execution":"client"}`, string(req.Tools[1].OfUnknown))
+}
+
 func TestResponseToolUnion_UnmarshalJSON_UnknownType(t *testing.T) {
+	const raw = `{"type":"unknown_tool","execution":"client"}`
 	var got ResponseToolUnion
-	err := json.Unmarshal([]byte(`{"type":"unknown_tool"}`), &got)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unknown_tool")
+	require.NoError(t, json.Unmarshal([]byte(raw), &got))
+	require.Equal(t, json.RawMessage(raw), got.OfUnknown)
+
+	out, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.JSONEq(t, raw, string(out))
 }
 
 func TestThinkingUnion_MarshalJSON(t *testing.T) {
@@ -625,6 +653,13 @@ func TestThinkingUnion_MarshalJSON(t *testing.T) {
 			expect: `{"type":"adaptive"}`,
 		},
 		{
+			name: "between_tools",
+			input: ThinkingUnion{
+				OfBetweenTools: &ThinkingBetweenTools{Type: "between_tools"},
+			},
+			expect: `{"type":"between_tools"}`,
+		},
+		{
 			name: "enabled with display",
 			input: ThinkingUnion{
 				OfEnabled: &ThinkingEnabled{Type: "enabled", BudgetTokens: 1024, Display: "omitted"},
@@ -649,6 +684,42 @@ func TestThinkingUnion_MarshalJSON(t *testing.T) {
 			got, err := json.Marshal(&tc.input)
 			require.NoError(t, err)
 			require.JSONEq(t, tc.expect, string(got))
+		})
+	}
+}
+
+func TestStreamReasoningContent_MarshalJSON(t *testing.T) {
+	// reasoning_content on streaming chunks must serialize as a plain string;
+	// Signature and RedactedContent are carried via delta.thinking_blocks instead.
+	got, err := json.Marshal(&StreamReasoningContent{
+		Text: "thinking...", Signature: "c2ln", RedactedContent: []byte("x"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, `"thinking..."`, string(got))
+}
+
+func TestStreamReasoningContent_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name   string
+		data   string
+		expect StreamReasoningContent
+	}{
+		{
+			name:   "plain string (OpenAI-compatible backends)",
+			data:   `"thinking..."`,
+			expect: StreamReasoningContent{Text: "thinking..."},
+		},
+		{
+			name:   "legacy object form",
+			data:   `{"text":"thinking...","signature":"c2ln"}`,
+			expect: StreamReasoningContent{Text: "thinking...", Signature: "c2ln"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var got StreamReasoningContent
+			require.NoError(t, json.Unmarshal([]byte(tc.data), &got))
+			require.Equal(t, tc.expect, got)
 		})
 	}
 }

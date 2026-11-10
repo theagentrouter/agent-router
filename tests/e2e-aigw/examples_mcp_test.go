@@ -27,18 +27,11 @@ var (
 	// Adjust these as services update, as they can be added, removed or renamed
 
 	allNonGithubTools = []string{
-		// TODO(nacx): Context7 started giving errors due to its certificate:
-		// time=2026-02-20T12:14:12.555+01:00 level=ERROR msg="failed to create MCP session" component=mcp-proxy backend=context7
-		// error="MCP initialize request failed with status code 503 and body=upstream connect error or disconnect/reset before headers.
-		// reset reason: remote connection failure, transport failure reason: TLS_error:|268435563:SSL routines:OPENSSL_internal:BAD_ECC_CERT:TLS_error_end"
-		//
-		// Until those are resolved or figure out, we're just adding kiwi to verify that we can connect to a public MCP server and call a tool.
-		// context7 can be enabled back when the certificate issue is sorted out.
-		//
-		// "context7__query-docs",
-		// "context7__resolve-library-id",
-		"kiwi__feedback-to-devs",
-		"kiwi__search-flight",
+		"context7__query-docs",
+		"context7__resolve-library-id",
+		// Kiwi has been quite flaky recently, so we disable it
+		// "kiwi__feedback-to-devs",
+		// "kiwi__search-flight",
 	}
 )
 
@@ -82,47 +75,47 @@ func TestMCP_standalone(t *testing.T) {
 			params   map[string]any
 		}
 		tests := []callToolTest{
-			// {
-			// 	toolName: "context7__resolve-library-id",
-			// 	params: map[string]any{
-			// 		"libraryName": "envoyproxy/ai-gateway",
-			// 		"query":       "how can I route to an LLM bakend",
-			// 	},
-			// },
-			// {
-			// 	toolName: "context7__query-docs",
-			// 	params: map[string]any{
-			// 		"libraryId": "/envoyproxy/ai-gateway",
-			// 		"query":     "how can I route to an LLM bakend",
-			// 	},
-			// },
 			{
-				toolName: "kiwi__search-flight",
+				toolName: "context7__resolve-library-id",
 				params: map[string]any{
-					"flyFrom":                "LAX",
-					"flyTo":                  "HND",
-					"departureDate":          "01/12/2026",
-					"departureDateFlexRange": 1,
-					"returnDate":             "02/12/2026",
-					"returnDateFlexRange":    1,
-					"passengers": map[string]any{
-						"adults":   1,
-						"children": 0,
-						"infants":  0,
-					},
-					"cabinClass": "M",
-					"sort":       "date",
-					"curr":       "USD",
-					"locale":     "en",
+					"libraryName": "theagentrouter/agent-router",
+					"query":       "how can I route to an LLM bakend",
 				},
 			},
+			{
+				toolName: "context7__query-docs",
+				params: map[string]any{
+					"libraryId": "/theagentrouter/agent-router",
+					"query":     "how can I route to an LLM bakend",
+				},
+			},
+			// {
+			// 	toolName: "kiwi__search-flight",
+			// 	params: map[string]any{
+			// 		"flyFrom":                "LAX",
+			// 		"flyTo":                  "HND",
+			// 		"departureDate":          "01/12/2026",
+			// 		"departureDateFlexRange": 1,
+			// 		"returnDate":             "02/12/2026",
+			// 		"returnDateFlexRange":    1,
+			// 		"passengers": map[string]any{
+			// 			"adults":   1,
+			// 			"children": 0,
+			// 			"infants":  0,
+			// 		},
+			// 		"cabinClass": "M",
+			// 		"sort":       "date",
+			// 		"curr":       "USD",
+			// 		"locale":     "en",
+			// 	},
+			// },
 		}
 		if githubConfigured {
 			tests = append(tests, callToolTest{
 				toolName: "github__pull_request_read",
 				params: map[string]any{
-					"owner":      "envoyproxy",
-					"repo":       "ai-gateway",
+					"owner":      "theagentrouter",
+					"repo":       "agent-router",
 					"method":     "get",
 					"pullNumber": 1,
 				},
@@ -174,8 +167,7 @@ func TestMCP_standalone_oauth(t *testing.T) {
 	})
 
 	t.Run("connect to MCP server with token", func(t *testing.T) {
-		// https://raw.githubusercontent.com/envoyproxy/gateway/main/examples/kubernetes/jwt/test.jwt
-		validToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMn0.NHVaYe26MbtOYhSKkoKYdFVomg4i8ZJd8_-RU8VNbftc4TSMb4bXP3l3YlNWACwyXPGffz5aXHc6lty1Y2t4SWRqGteragsVdZufDn5BlnJl9pdR_kdVFUsra2rWKEofkZeIC4yWytE58sMIihvo9H1ScmmVwBcQP6XETqYd0aSHp1gOa9RdUPDvoXQ5oqygTqVtxaDr6wUFKrKItgBMzWIdNZ6y7O9E0DhEPTbE9rfBo6KTFsHAZnMg4k68CDp2woYIaXbmYTWcvbzIuHO7_37GT79XdIwkm95QJ7hYC9RiwrV7mesbY4PAahERJawntho0my942XheVLmGwLMBkQ" //nolint:gosec // Test JWT token
+		validToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImI1MjBiM2MyYzRiZDc1YTEwZTljZWJjOTU3NjkzM2RjIn0.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMiwiaXNzIjoiaHR0cHM6Ly9hdXRoLXNlcnZlci5leGFtcGxlLmNvbSJ9.Ri7Dglgpp_BJV-T6pCwvp6aj6JE-vd0sk_6teVp5SkayZalI1FwM3xNcCAhuKd5AswynXC0tTvqBHdo3G7l3P-__KSua0YcwzOe3VRh0cVKaV0NDC8hVivDOf9GET_YT5IyxT1HQDzc9M9s77nStTSva_u4QDHr_jjlulVVisy77aQIkbG4GP_K4OJYr3fnZVOOTOPgA55-xm-VPRn2MlkT1Y9z6pFvyeZTl-xj2OY4E-d5EMETRUWFQMUs5AQpzTZtqnzfrdmRZ2haSjkwLej7iZ2uirXMaFnc0qMCVYhROHRKMny6akP6u77cZ9QdFwatltL0sQceMCqAXZbFyLBlKXI3uEOLOFCnnUMWnVqsQjLO4vODnw2ih4TeTArEi2maLadGk5zZTCsw3wKEdLdO89dtfVXeWvyd3xYDgDoPNhyJDGl5gU5dU4hUg5_4uCb8Sg-pW4xYF64K_Oa0iNS3z1-zYtyZ1B4Ftu2pbxmsHLkxp3SxoOzueFft8m0q3" //nolint:gosec // Test JWT token
 
 		// Create HTTP client with Authorization header.
 		authHTTPClient := &http.Client{

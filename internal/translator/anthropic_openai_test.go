@@ -385,7 +385,7 @@ func TestAnthropicToOpenAITranslator_ResponseBody_Streaming(t *testing.T) {
 
 	// Spot-check specific event data.
 	require.JSONEq(t, `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}`, events[2].data)
-	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}`, events[4].data)
+	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":10,"output_tokens":5}}`, events[4].data)
 	require.JSONEq(t, `{"type":"message_stop"}`, events[5].data)
 }
 

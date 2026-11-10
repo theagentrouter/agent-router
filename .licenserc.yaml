@@ -43,3 +43,5 @@ header:
     - "**/.env*"
     - tests/internal/testopenai/cassettes
     - .github/codecov.yml
+    - hack/
+    - .idea/

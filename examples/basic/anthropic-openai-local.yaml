@@ -3,10 +3,11 @@
 # The full text of the Apache license is available in the LICENSE file at
 # the root of the repo.
 
-# This example routes /v1/messages (Anthropic Messages API) requests to a
-# local vLLM backend.
-# The AIServiceBackend schema is set to OpenAI so the gateway passes through
-# the Anthropic request format with translation.
+# This example routes Anthropic Messages API requests sent to the default
+# /anthropic/v1/messages endpoint to a local vLLM backend. The /anthropic
+# provider prefix is configurable through endpointConfig.anthropic.
+# The AIServiceBackend schema is set to OpenAI, so the gateway translates
+# Anthropic Messages API requests and responses to and from OpenAI Chat Completions.
 
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: AIGatewayRoute

@@ -6,7 +6,7 @@ sidebar_position: 7
 
 # Header and Body Mutations
 
-Envoy AI Gateway allows you to mutate HTTP headers and JSON request body fields before requests are sent to backends. This is useful for adding provider-specific headers, setting service tiers, or removing internal fields before forwarding to upstream providers.
+Agent Router allows you to mutate HTTP headers and JSON request body fields before requests are sent to backends. This is useful for adding provider-specific headers, setting service tiers, or removing internal fields before forwarding to upstream providers.
 
 ## Use Cases
 

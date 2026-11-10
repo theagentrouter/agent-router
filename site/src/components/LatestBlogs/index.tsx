@@ -1,6 +1,7 @@
 import React from 'react';
 import Heading from '@theme/Heading';
 import Link from '@docusaurus/Link';
+import SectionHeader from '@site/src/components/home/SectionHeader';
 import { useLatestBlogs } from '@site/src/hooks/useLatestBlogs';
 import styles from './styles.module.css';
 
@@ -18,39 +19,26 @@ function BlogCard({
   permalink: string;
 }) {
   return (
-    <div className={styles.blogCard}>
-      {image && (
-        <Link to={permalink} className={styles.imageLink}>
-          <div className={styles.imageContainer}>
-            <img
-              src={image}
-              alt={title}
-              className={styles.blogImage}
-              loading="lazy"
-            />
-          </div>
-        </Link>
+    <Link to={permalink} className={styles.card}>
+      {image ? (
+        <div className={styles.imageContainer}>
+          <img src={image} alt="" className={styles.image} loading="lazy" />
+        </div>
+      ) : (
+        <div className={styles.imagePlaceholder} aria-hidden="true">
+          <img src="/img/brand/ar-mark-marquee.svg" alt="" />
+        </div>
       )}
-      <div className={styles.cardContent}>
-        <Link to={permalink} className={styles.titleLink}>
-          <Heading as="h3" className={styles.blogTitle}>
-            {title}
-          </Heading>
-        </Link>
-        {description && (
-          <p className={styles.blogDescription}>{description}</p>
-        )}
+      <div className={styles.body}>
         {tags.length > 0 && (
-          <div className={styles.tagsContainer}>
-            {tags.map((tag, index) => (
-              <span key={`${tag}-${index}`} className={styles.tag}>
-                {tag}
-              </span>
-            ))}
-          </div>
+          <span className={styles.meta}>{tags.slice(0, 2).join(' · ').toUpperCase()}</span>
         )}
+        <Heading as="h3" className={styles.title}>
+          {title}
+        </Heading>
+        {description && <p className={styles.description}>{description}</p>}
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -62,26 +50,16 @@ export default function LatestBlogs(): React.ReactElement | null {
   }
 
   return (
-    <section className={styles.latestBlogsSection}>
+    <section className={styles.section}>
       <div className="container">
-        <div className={styles.sectionHeader}>
-          <Heading as="h2" className={styles.sectionTitle}>
-            Latest from the Blog
-          </Heading>
-          <div className={styles.titleUnderline}></div>
-          <p className={styles.sectionDescription}>
-            Stay up to date with the latest news, features, and insights from the Envoy AI Gateway team.
-          </p>
-        </div>
-        <div className={styles.blogsGrid}>
+        <SectionHeader label="Blog" accent="curtain" title="Latest from the project" />
+        <div className={styles.grid}>
           {latestPosts.map((post) => (
             <BlogCard key={post.slug} {...post} />
           ))}
         </div>
-        <div className={styles.ctaSection}>
-          <Link
-            className="button button--primary button--lg"
-            to="/blog">
+        <div className={styles.cta}>
+          <Link className="button button--secondary" to="/blog">
             View All Posts
           </Link>
         </div>

@@ -10,6 +10,7 @@
               gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
               gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
               gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
               session.id: "%DYNAMIC_METADATA(io.envoy.ai_gateway:session.id)%"
 {{- end }}
 
@@ -94,6 +95,11 @@ spec:
     level:
 {{- if .Debug }}
       default: debug
+      # Keep these two components out of the blanket debug level: at debug
+      # they each dump the full request headers (including the Authorization
+      # header the extproc injects with the backend API key) to the log.
+      http: info
+      ext_proc: info
 {{- else }}
       default: error
 {{- end }}
@@ -127,7 +133,7 @@ spec:
 {{- end }}
 {{- end }}
           format:
-            text: "[%START_TIME%] %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% model=%REQ(X-AI-EG-MODEL)% %RESPONSE_CODE% llm_input_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)% llm_output_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)% %DURATION%ms"
+            text: "[%START_TIME%] %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% model=%REQ(X-AI-EG-MODEL)% %RESPONSE_CODE% llm_input_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)% llm_output_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)% llm_reasoning_token=%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)% %DURATION%ms"
             json:
 {{ template "aigw.llmAccessLogFields" . }}
 {{ template "aigw.commonAccessLogFields" . }}
@@ -215,6 +221,8 @@ spec:
       type: InputToken
     - metadataKey: llm_output_token
       type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
 ---
 {{- end }}
 {{- if .Anthropic }}
@@ -246,6 +254,8 @@ spec:
       type: InputToken
     - metadataKey: llm_output_token
       type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
 ---
 {{- end }}
 {{- if .MCPBackendRefs }}
@@ -319,7 +329,11 @@ spec:
   schema:
     name: {{ .OpenAI.SchemaName }}
 {{- if .OpenAI.Version }}
+{{- if eq .OpenAI.SchemaName "AzureOpenAI" }}
     version: "{{ .OpenAI.Version }}"
+{{- else }}
+    prefix: "{{ .OpenAI.Version }}"
+{{- end }}
 {{- end }}
   backendRef:
     name: {{ .OpenAI.BackendName }}
@@ -352,7 +366,7 @@ spec:
   schema:
     name: {{ .Anthropic.SchemaName }}
 {{- if .Anthropic.Version }}
-    version: "{{ .Anthropic.Version }}"
+    prefix: "{{ .Anthropic.Version }}"
 {{- end }}
   backendRef:
     name: {{ .Anthropic.BackendName }}

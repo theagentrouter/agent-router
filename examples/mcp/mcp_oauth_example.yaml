@@ -17,10 +17,10 @@ spec:
       kind: Gateway
       group: gateway.networking.k8s.io
   backendRefs:
-    - name: kiwi
+    - name: context7
       kind: Backend
       group: gateway.envoyproxy.io
-      path: "/"
+      path: "/mcp"
   securityPolicy:
     oauth:
       issuer: "https://auth-server.example.com"
@@ -75,27 +75,30 @@ data:
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend
 metadata:
-  name: kiwi
+  name: context7
   namespace: default
 spec:
   endpoints:
     - fqdn:
-        hostname: mcp.kiwi.com
+        hostname: mcp.context7.com
         port: 443
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
-  name: kiwi-tls
+  name: context7-tls
   namespace: default
 spec:
   targetRefs:
     - group: "gateway.envoyproxy.io"
       kind: Backend
-      name: kiwi
+      name: context7
   validation:
     wellKnownCACertificates: "System"
-    hostname: mcp.kiwi.com
+    hostname: mcp.context7.com
+    subjectAltNames:
+      - type: Hostname
+        hostname: "*.context7.com"
 ---
 ###################################################################################
 ############################### Gateway Definitions ###############################

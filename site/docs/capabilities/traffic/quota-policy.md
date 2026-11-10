@@ -6,14 +6,16 @@ sidebar_position: 6
 
 # Quota Policy
 
-`QuotaPolicy` enables token-based quota management for AI inference services in Envoy AI Gateway.
+`QuotaPolicy` enables token-based quota management for AI inference services in Agent Router.
 When all related backend's quota are exceeded, requests are rejected with a `429 Too Many Requests` status code.
 
-:::note QuotaPolicy vs. Rate Limiting
-QuotaPolicy manages **total consumption budgets** (for example, 100,000 tokens per hour). This is
-distinct from [usage-based rate limiting](./usage-based-ratelimiting.md), which controls **request
-velocity** (for example, requests per second). Use QuotaPolicy when you need to cap cumulative token
-spend across a time window.
+:::note QuotaPolicy vs. usage-based rate limiting
+`QuotaPolicy` manages the platform's upstream consumption budget: how many tokens the gateway may
+spend against a provider backend and model across all routes and consumers. [Usage-based rate
+limiting](./usage-based-ratelimiting.md) manages consumer usage: how much a client may consume on a
+route. Both can count tokens and return `429 Too Many Requests`, but they answer different questions:
+whether the platform has exhausted its budget for a provider/model, or whether a client has exceeded
+its allowance. See [Choosing a policy](#choosing-a-policy) for details.
 :::
 
 ## Overview
@@ -26,6 +28,30 @@ Key features of QuotaPolicy:
 - **Client-selector bucket rules** — carve out per-tenant or per-header quotas using request attributes.
 - **Shadow mode** — evaluate quota rules without enforcing them, for safe rollout.
 
+## Choosing a Policy
+
+Both policies use Envoy's rate limit protocol and Redis-backed counters, but `QuotaPolicy` is enforced
+by a dedicated AI Gateway rate limit service. Usage-based rate limiting uses Envoy Gateway's global
+rate limit service. Choose between them based on the budget's intent and scope:
+
+|                  | `QuotaPolicy`                                                                                                                               | Usage-based rate limiting                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Configuration    | One AI Gateway policy containing the token cost and quota buckets                                                                           | `llmRequestCosts` on an `AIGatewayRoute`, plus an Envoy Gateway `BackendTrafficPolicy`                                |
+| Scope            | Backend- and model-scoped - the budget follows an `AIServiceBackend` across every route that sends traffic to it                            | Route/Gateway-scoped - budgets are keyed by client descriptors on a route                                             |
+| Token accounting | One default or custom CEL cost per model                                                                                                    | Multiple metadata keys can track and limit input, output, total, or custom token costs separately                     |
+| Client budgets   | Default and header-selected buckets, with optional shadow mode                                                                              | Envoy Gateway client selectors and rate limit rules                                                                   |
+| Enforcement      | In `Shared` mode, a request is denied only when all applicable quota buckets are exhausted; the quota is evaluated for the selected backend | A request is denied when any matched rate limit is exceeded; limits are evaluated from the route's client descriptors |
+| Time windows     | Exactly one second, minute, hour, or day                                                                                                    | One second, minute, hour, day, month, or year                                                                         |
+
+Use `QuotaPolicy` when the platform needs to protect its provider budget for a backend and model.
+For example, a platform team can give every tenant a separate daily budget for an expensive model,
+set a shared backend budget alongside those tenant budgets, and evaluate a new tenant rule in shadow
+mode. The policy stays with the `AIServiceBackend` even when multiple routes send traffic to it.
+
+Use usage-based rate limiting when you need to define each client's allowance on a route. It is also
+the natural choice when you need lower-level Envoy Gateway controls, route-specific token cost
+metadata, separate limits for input and output tokens, or a monthly or yearly window.
+
 ## How It Works
 
 1. A `QuotaPolicy` is attached to one or more `AIServiceBackend` resources via `targetRefs`.
@@ -35,13 +61,75 @@ Key features of QuotaPolicy:
    bucket rule).
 4. When all related quota buckets for that model are exceeded, subsequent matching requests receive `429 Too Many Requests`.
 
+### Cross-Namespace Backends
+
+`targetRefs[].namespace` is optional. If it is omitted, the backend is looked up in the
+`QuotaPolicy` namespace. Set it explicitly when the policy and backend are in different namespaces:
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: shared-provider-budget
+  namespace: platform
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: provider
+      namespace: providers
+```
+
+Same-namespace QuotaPolicy references do not require a `ReferenceGrant`. A cross-namespace
+QuotaPolicy reference must be authorized by a `ReferenceGrant` in the AIServiceBackend namespace.
+The grant must allow `QuotaPolicy` from the policy namespace to reference `AIServiceBackend`; a
+`to.name` restricts the grant to one backend, while an omitted `to.name` allows all AIServiceBackends
+in that namespace:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-platform-quota
+  namespace: providers
+spec:
+  from:
+    - group: aigateway.envoyproxy.io
+      kind: QuotaPolicy
+      namespace: platform
+  to:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: provider # omit name to allow every AIServiceBackend in providers
+```
+
+The QuotaPolicy and route relationships are independent. A route that references this backend from
+another namespace still requires its own route-to-backend `ReferenceGrant`. Grant only the
+controller service account the cross-namespace `get/list/watch` permissions it needs; a QuotaPolicy
+grant does not authorize routing traffic.
+
 :::tip Prerequisites
-Quota enforcement uses the same infrastructure as usage-based rate limiting:
+Quota enforcement requires two components that are not deployed by the AI Gateway Helm chart today:
 
-1. **Redis Deployment**: A Redis instance for storing quota counters. See the [redis.yaml example](https://github.com/envoyproxy/ai-gateway/blob/main/examples/token_ratelimit/redis.yaml) for a simple deployment.
-2. **Envoy Gateway Configuration**: Envoy Gateway must be configured at installation time to enable rate limiting and point to your Redis instance. See the [Envoy Gateway Installation Guide](../../getting-started/prerequisites.md#additional-features-rate-limiting-inferencepool-etc).
+1. **Redis** stores quota counters. See the
+   [redis.yaml example](https://github.com/theagentrouter/agent-router/blob/main/examples/token_ratelimit/redis.yaml)
+   for a simple deployment.
+2. **A dedicated rate limit service** evaluates the `ai-gateway-quota` domain. It must use the AI
+   Gateway controller's xDS server for configuration, with node ID `envoy-ai-gateway-ratelimit`, and
+   listen at the controller's `quotaRateLimitServiceAddr`. The
+   [quota E2E manifest](https://github.com/theagentrouter/agent-router/blob/main/tests/e2e/testdata/backend_quota_ratelimit.yaml)
+   provides a deployment example.
 
-See [Usage-based Rate Limiting](./usage-based-ratelimiting.md) for more detail on the rate limit infrastructure that QuotaPolicy builds on.
+Envoy Gateway's rate-limit addon is a separate service used by usage-based rate limiting. It is not
+required for a QuotaPolicy-only deployment, although both services can use the same Redis instance.
+
+By default, `controller.quotaRateLimitFailureModeDeny` is `false`. If the dedicated service is absent
+or unreachable, quota checks fail open and requests continue without enforcement. Set it to `true`
+if unavailable quota enforcement should reject requests instead.
+
+For a deployment example, including the rate-limit service, Redis, xDS, service discovery, and
+verification, see the
+[quota E2E manifest](https://github.com/theagentrouter/agent-router/blob/main/tests/e2e/testdata/backend_quota_ratelimit.yaml).
 :::
 
 ## Configuration
@@ -221,6 +309,67 @@ Supported header match types are `Exact`, `Distinct`, and `RegularExpression`.
 
 `clientSelectors` reuse the Envoy Gateway [`RateLimitSelectCondition`](https://gateway.envoyproxy.io/docs/api/extension_types/#ratelimitselectcondition) type, but QuotaPolicy currently applies only the `headers` matcher. The other fields on that type (`sourceCIDR`, `methods`, `path`, `queryParams`) are accepted by the schema but **not yet honored** for quota buckets.
 
+### Dynamic Bucket Limits with `fromMetadata`
+
+`QuotaPolicy` can resolve a bucket's limit for each request from Envoy dynamic
+metadata. This is useful when an authentication or entitlement filter already
+knows the tenant's budget and should serve many tenants with one policy.
+
+Both the metadata namespace and key are configurable. The producer must write
+`requests_per_unit` and `unit` at that configured path:
+
+```json
+{
+  "envoy.filters.http.ext_authz": {
+    "total_limit": {
+      "requests_per_unit": 50000,
+      "unit": "HOUR"
+    }
+  }
+}
+```
+
+The metadata namespace and key are configured on each `QuotaValue`:
+
+```yaml
+defaultBucket:
+  limit: 1000 # Required static RLS baseline and fallback.
+  duration: "1h"
+  fromMetadata:
+    namespace: envoy.filters.http.ext_authz
+    key: total_limit
+```
+
+`ext_authz` is the usual producer. Its dynamic metadata is stored under
+`envoy.filters.http.ext_authz`, but an `ext_proc`, Lua, or other HTTP filter can
+write the same contract. The producer must execute before the AI Gateway quota
+rate-limit filter, which is inserted immediately before the router.
+
+The static `limit` and `duration` remain required. They are emitted to the
+dedicated quota rate-limit service and are used when the metadata is missing or
+malformed. An override with `requests_per_unit: 0` is a real zero limit and
+suspends the matching tenant; it does not mean “use the fallback”. The metadata
+unit uses Envoy names such as `SECOND`, `MINUTE`, `HOUR`, and `DAY`, while the
+CRD duration uses values such as `1s`, `1m`, `1h`, and `1d`. The unit string is
+case-sensitive: lowercase values such as `hour` are ignored and the static
+baseline applies. Keep the static `limit` a conservative ceiling; missing or
+malformed metadata fails open to that baseline.
+
+When multiple quotas contribute to the same route-level descriptor, their
+dynamic metadata references must use the same namespace and key. Static quotas
+may share that descriptor with a dynamic quota; requests without the dynamic
+metadata use the static baseline. Different routes or descriptors may use
+different metadata references.
+
+With token charging, a suspended tenant (`requests_per_unit: 0`) can still
+complete one already-admitted request before subsequent matching requests are
+denied. Request-count charging (no response cost) denies immediately.
+
+Dynamic limits affect only the bucket size. Token cost is still computed from
+the response and charged through `quota_cost` after the response or stream
+ends. See the [dynamic metadata proposal](https://github.com/theagentrouter/agent-router/blob/main/docs/proposals/013-quota-policy-from-metadata/proposal.md)
+for the xDS flow and implementation details.
+
 ### Shadow Mode
 
 Shadow mode lets you test a bucket rule without rejecting traffic. When `shadowMode` is enabled on a
@@ -250,15 +399,23 @@ Shadow mode is configured per bucket rule. It cannot be set on the `defaultBucke
 
 The `duration` field selects the sliding-window size. It must be exactly one of the following values:
 
-| Value  | Window     |
-| ------ | ---------- |
-| `"1s"` | One second |
-| `"1m"` | One minute |
-| `"1h"` | One hour   |
-| `"1d"` | One day    |
+| Value   | Window     |
+| ------- | ---------- |
+| `"1s"`  | One second |
+| `"1m"`  | One minute |
+| `"1h"`  | One hour   |
+| `"1d"`  | One day    |
+| `"1w"`  | One week   |
+| `"1mo"` | One month  |
+| `"1y"`  | One year   |
 
 The window is fixed-size — arbitrary multiples such as `"30s"` or `"15m"` are **not** valid and will
 be rejected by the CRD schema. Choose the `limit` to express your budget within one of these windows.
+
+The one-day maximum is a current `QuotaPolicy` API restriction, not an inherent limitation of token
+accounting. Token-based rate limiting configured through an Envoy Gateway `BackendTrafficPolicy`
+also supports `Month` and `Year` units. Use [usage-based rate limiting](./usage-based-ratelimiting.md)
+when a token budget needs either of those longer windows.
 
 ## Service-Wide Quota
 

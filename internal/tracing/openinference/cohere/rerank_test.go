@@ -219,3 +219,20 @@ func fptr(v int) *float64 {
 	f := float64(v)
 	return &f
 }
+
+func TestRerankRecorder_RecordResponse_NullResult(t *testing.T) {
+	// A null element in the rerank results must be skipped, not dereferenced.
+	resp := &cohereschema.RerankV2Response{
+		Results: []*cohereschema.RerankV2Result{nil, {Index: 1, RelevanceScore: 0.9}},
+	}
+	recorder := NewRerankRecorder(&openinference.TraceConfig{})
+
+	var attrs []attribute.KeyValue
+	require.NotPanics(t, func() {
+		attrs = testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+			recorder.RecordResponse(span, resp)
+			return false
+		}).Attributes
+	})
+	require.Contains(t, attrs, attribute.Float64(openinference.RerankerOutputDocumentAttribute(1, openinference.DocumentScore), 0.9))
+}

@@ -22,7 +22,7 @@ spec:
       oidcExchangeToken:
         oidc:
           provider:
-            issuer: GCP_OIDC_PROVIDER_ISSUER
+            issuer: https://GCP_OIDC_PROVIDER_ISSUER
           clientID: GCP_OIDC_CLIENT_ID
           clientSecret:
             name: envoy-ai-gateway-basic-gcp-client-secret

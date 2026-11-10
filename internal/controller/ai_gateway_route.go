@@ -7,7 +7,12 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	stdjson "encoding/json" //nolint: depguard // byte-stable hashing; sonic does not guarantee stable field order.
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -23,7 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
@@ -41,8 +48,16 @@ const (
 	// @see https://gateway.envoyproxy.io/contributions/design/metadata/
 	httpRouteBackendRefPriorityAnnotationKey           = egAnnotationPrefix + "backend-ref-priority"
 	httpRouteAnnotationForAIGatewayGeneratedIndication = egAnnotationPrefix + internalapi.AIGatewayGeneratedHTTPRouteAnnotation
-	egOwningGatewayNameLabel                           = egAnnotationPrefix + "owning-gateway-name"
-	egOwningGatewayNamespaceLabel                      = egAnnotationPrefix + "owning-gateway-namespace"
+	// httpRouteQuotaPolicyHashAnnotationKey carries a hash of the QuotaPolicies attached to the
+	// AIServiceBackends referenced by this route. QuotaPolicy is an AI Gateway CRD that Envoy Gateway
+	// does not watch, so a QuotaPolicy change would otherwise regenerate a byte-identical HTTPRoute
+	// (a no-op update) and never force Envoy Gateway to re-translate. Stamping the hash makes the
+	// HTTPRoute genuinely change on a QuotaPolicy update, which triggers Envoy Gateway to re-translate
+	// and re-run the extension server's PostTranslateModify hook (which injects the quota rate limit
+	// filter, cluster, and per-route descriptors). Mirrors stampGatewayConfigHash in gateway.go.
+	httpRouteQuotaPolicyHashAnnotationKey = egAnnotationPrefix + "quota-policy-hash"
+	egOwningGatewayNameLabel              = egAnnotationPrefix + "owning-gateway-name"
+	egOwningGatewayNamespaceLabel         = egAnnotationPrefix + "owning-gateway-namespace"
 	// apiKeyInSecret is the key to store OpenAI API key.
 	apiKeyInSecret = "apiKey"
 	// GatewayConfigAnnotationKey is the annotation key used on Gateway objects to reference a GatewayConfig.
@@ -216,10 +231,12 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 		return fmt.Errorf("failed to get HTTPRoute: %w", err)
 	}
 
-	// Update the HTTPRoute with the new AIGatewayRoute.
-	if err = c.newHTTPRoute(ctx, &httpRoute, aiGatewayRoute); err != nil {
-		return fmt.Errorf("failed to construct a new HTTPRoute: %w", err)
-	}
+	// Update the HTTPRoute with the new AIGatewayRoute. A backendRef that fails validation (e.g. a
+	// missing or revoked ReferenceGrant) is dropped from the generated rule rather than aborting the
+	// whole sync, so the HTTPRoute and the Gateways below still get updated to reflect the now-reduced
+	// set of authorized backends instead of staying frozen at their last-good state. The error, if any,
+	// is still returned at the end so the caller marks the AIGatewayRoute NotAccepted as before.
+	newHTTPRouteErr := c.newHTTPRoute(ctx, &httpRoute, aiGatewayRoute)
 
 	if existingRoute {
 		c.logger.Info("updating HTTPRoute", "namespace", httpRoute.Namespace, "name", httpRoute.Name)
@@ -233,14 +250,22 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 		}
 	}
 
-	err = c.syncGateways(ctx, aiGatewayRoute)
-	if err != nil {
+	if err = c.syncGateways(ctx, aiGatewayRoute); err != nil {
 		return fmt.Errorf("failed to sync gw pods: %w", err)
+	}
+
+	if newHTTPRouteErr != nil {
+		return fmt.Errorf("failed to construct a new HTTPRoute: %w", newHTTPRouteErr)
 	}
 	return nil
 }
 
 // newHTTPRoute updates the HTTPRoute with the new AIGatewayRoute.
+//
+// A backendRef that fails validation (e.g. a missing or revoked ReferenceGrant for a cross-namespace
+// reference) is skipped rather than aborting the whole HTTPRoute construction: dst is still populated
+// with every other authorized backendRef, and the validation errors are joined and returned so the
+// caller can still surface them (e.g. to mark the AIGatewayRoute NotAccepted) without leaving dst stale.
 func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv1.HTTPRoute, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
 	rewriteFilters := []gwapiv1.HTTPRouteFilter{{
 		Type: gwapiv1.HTTPRouteFilterExtensionRef,
@@ -251,13 +276,14 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 		},
 	}}
 	rules := make([]gwapiv1.HTTPRouteRule, 0, len(aiGatewayRoute.Spec.Rules)+1) // +1 for the default rule.
+	var errs []error
 	for i := range aiGatewayRoute.Spec.Rules {
 		rule := &aiGatewayRoute.Spec.Rules[i]
 		var backendRefs []gwapiv1.HTTPBackendRef
 		for j := range rule.BackendRefs {
 			br := &rule.BackendRefs[j]
 			backendNamespace := br.GetNamespace(aiGatewayRoute.Namespace)
-			dstName := fmt.Sprintf("%s.%s", br.Name, backendNamespace)
+			dstName := namespacedNameIndexKey(br.Name, backendNamespace)
 
 			if br.IsInferencePool() {
 				// Handle InferencePool backend reference, honoring the (optionally cross-namespace)
@@ -269,7 +295,10 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 						backendNamespace,
 						br.Name,
 					); err != nil {
-						return err
+						c.logger.Error(err, "skipping InferencePool backendRef that failed ReferenceGrant validation",
+							"namespace", aiGatewayRoute.Namespace, "name", aiGatewayRoute.Name, "backend", dstName)
+						errs = append(errs, err)
+						continue
 					}
 				}
 				ns := gwapiv1.Namespace(backendNamespace)
@@ -288,7 +317,10 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 				// Handle AIServiceBackend reference with cross-namespace validation.
 				backend, err := c.validateAndGetBackend(ctx, aiGatewayRoute, br)
 				if err != nil {
-					return fmt.Errorf("failed to get AIServiceBackend %s: %w", dstName, err)
+					c.logger.Error(err, "skipping AIServiceBackend backendRef that failed validation",
+						"namespace", aiGatewayRoute.Namespace, "name", aiGatewayRoute.Name, "backend", dstName)
+					errs = append(errs, fmt.Errorf("failed to get AIServiceBackend %s: %w", dstName, err))
+					continue
 				}
 
 				// Copy the BackendObjectReference from the AIServiceBackend.
@@ -364,11 +396,23 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 	// HACK: We need to set an annotation so that Envoy Gateway reconciles the HTTPRoute when the backend refs change.
 	dst.Annotations[httpRouteBackendRefPriorityAnnotationKey] = buildPriorityAnnotation(aiGatewayRoute.Spec.Rules)
 	dst.Annotations[httpRouteAnnotationForAIGatewayGeneratedIndication] = "true"
+	// HACK: Stamp a hash of the QuotaPolicies affecting this route's backends so that a QuotaPolicy
+	// change (which Envoy Gateway does not watch) actually mutates the HTTPRoute, forcing Envoy Gateway
+	// to re-translate and re-run PostTranslateModify. See httpRouteQuotaPolicyHashAnnotationKey.
+	quotaHash, err := c.computeQuotaPolicyHash(ctx, aiGatewayRoute)
+	if err != nil {
+		return fmt.Errorf("failed to compute QuotaPolicy hash: %w", err)
+	}
+	if quotaHash == "" {
+		delete(dst.Annotations, httpRouteQuotaPolicyHashAnnotationKey)
+	} else {
+		dst.Annotations[httpRouteQuotaPolicyHashAnnotationKey] = quotaHash
+	}
 
 	dst.Spec.ParentRefs = aiGatewayRoute.Spec.ParentRefs
 
 	dst.Spec.Hostnames = aiGatewayRoute.Spec.Hostnames
-	return nil
+	return errors.Join(errs...)
 }
 
 // syncGateways synchronizes the gateways referenced by the AIGatewayRoute by sending events to the gateway controller.
@@ -458,6 +502,120 @@ func (c *AIGatewayRouteController) updateAIGatewayRouteStatus(ctx context.Contex
 	if err != nil {
 		c.logger.Error(err, "failed to update AIGatewayRoute status")
 	}
+}
+
+// computeQuotaPolicyHash returns a stable hash of the effective QuotaPolicies
+// that target AIServiceBackends referenced by this route. The hash is added to
+// the generated HTTPRoute so QuotaPolicy changes force Envoy Gateway to
+// reconcile the route.
+func (c *AIGatewayRouteController) computeQuotaPolicyHash(ctx context.Context, route *aigv1b1.AIGatewayRoute) (string, error) {
+	policies, err := c.fetchEffectiveQuotaPoliciesForRoute(ctx, route)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch effective QuotaPolicies for route %s/%s: %w", route.Namespace, route.Name, err)
+	}
+	hash, err := hashQuotaPolicies(policies)
+	if err != nil {
+		return "", fmt.Errorf("failed to compute QuotaPolicy hash for route %s/%s: %w", route.Namespace, route.Name, err)
+	}
+	return hash, nil
+}
+
+// fetchEffectiveQuotaPoliciesForRoute returns the non-deleting QuotaPolicies
+// targeting the AIServiceBackends referenced by route. Each policy contains
+// only the target references that are valid for the policy's namespace.
+func (c *AIGatewayRouteController) fetchEffectiveQuotaPoliciesForRoute(
+	ctx context.Context,
+	route *aigv1b1.AIGatewayRoute,
+) ([]*aigv1a1.QuotaPolicy, error) {
+	seenPolicies := make(map[string]*aigv1a1.QuotaPolicy)
+	processedPolicies := make(map[string]struct{})
+	seenBackendKeys := make(map[string]bool)
+	grantCache := make(map[string]bool)
+	for i := range route.Spec.Rules {
+		for j := range route.Spec.Rules[i].BackendRefs {
+			ref := &route.Spec.Rules[i].BackendRefs[j]
+			if ref.IsInferencePool() {
+				continue
+			}
+			backendNamespace := ref.GetNamespace(route.Namespace)
+			key := namespacedNameIndexKey(ref.Name, backendNamespace)
+			if seenBackendKeys[key] {
+				continue
+			}
+			seenBackendKeys[key] = true
+
+			var policies aigv1a1.QuotaPolicyList
+			if err := c.client.List(ctx, &policies,
+				client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: key}); err != nil {
+				return nil, fmt.Errorf("failed to list QuotaPolicies for backend %s: %w", key, err)
+			}
+			for k := range policies.Items {
+				policy := &policies.Items[k]
+				if !policy.DeletionTimestamp.IsZero() {
+					continue
+				}
+				policyKey := NamespacedNameKey(policy.Namespace, policy.Name)
+				if _, processed := processedPolicies[policyKey]; processed {
+					continue
+				}
+				processedPolicies[policyKey] = struct{}{}
+				effective := policy.DeepCopy()
+				effective.Spec.TargetRefs = make([]gwapiv1a2.NamespacedPolicyTargetReference, 0, len(policy.Spec.TargetRefs))
+				for _, target := range policy.Spec.TargetRefs {
+					targetNamespace := TargetNamespace(target, policy.Namespace)
+					grantKey := policy.Namespace + "\x00" + targetNamespace + "\x00" + string(target.Name)
+					allowed, ok := grantCache[grantKey]
+					if !ok {
+						allowed = c.referenceGrantValidator.validateQuotaPolicyAIServiceBackendReference(
+							ctx, policy.Namespace, targetNamespace, string(target.Name)) == nil
+						grantCache[grantKey] = allowed
+					}
+					if !allowed {
+						continue
+					}
+					effective.Spec.TargetRefs = append(effective.Spec.TargetRefs, target)
+				}
+				if len(effective.Spec.TargetRefs) > 0 {
+					seenPolicies[policyKey] = effective
+				}
+			}
+		}
+	}
+	policies := make([]*aigv1a1.QuotaPolicy, 0, len(seenPolicies))
+	for _, policy := range seenPolicies {
+		policies = append(policies, policy)
+	}
+	return policies, nil
+}
+
+// hashQuotaPolicies returns a stable 16-character SHA-256 hash of policies.
+// The input policies are not modified.
+func hashQuotaPolicies(policies []*aigv1a1.QuotaPolicy) (string, error) {
+	if len(policies) == 0 {
+		return "", nil
+	}
+	ordered := append([]*aigv1a1.QuotaPolicy(nil), policies...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Namespace != ordered[j].Namespace {
+			return ordered[i].Namespace < ordered[j].Namespace
+		}
+		return ordered[i].Name < ordered[j].Name
+	})
+	type hashedPolicy struct {
+		Namespace string                  `json:"namespace"`
+		Name      string                  `json:"name"`
+		Spec      aigv1a1.QuotaPolicySpec `json:"spec"`
+	}
+	hashed := make([]hashedPolicy, 0, len(ordered))
+	for _, policy := range ordered {
+		hashed = append(hashed, hashedPolicy{Namespace: policy.Namespace, Name: policy.Name, Spec: policy.Spec})
+	}
+	data, err := stdjson.Marshal(hashed)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal QuotaPolicies for hashing: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8]), nil
 }
 
 // Build an annotation that contains the priority of each backend ref. This is used to ensure Envoy Gateway reconciles the
