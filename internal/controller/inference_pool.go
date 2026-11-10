@@ -80,11 +80,9 @@ func (c *InferencePoolController) Reconcile(ctx context.Context, req reconcile.R
 		if errors.Is(err, errEndpointPickerRefMissing) {
 			reason = string(gwaiev1.InferencePoolReasonEndpointPickerRefMissing)
 		}
-		c.updateInferencePoolStatus(ctx, &inferencePool, reason, err.Error())
-		return ctrl.Result{}, err
+		return ctrl.Result{}, errors.Join(err, c.updateInferencePoolStatus(ctx, &inferencePool, reason, err.Error()))
 	}
-	c.updateInferencePoolStatus(ctx, &inferencePool, "Accepted", "InferencePool reconciled successfully")
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, c.updateInferencePoolStatus(ctx, &inferencePool, "Accepted", "InferencePool reconciled successfully")
 }
 
 // syncInferencePool is the main logic for reconciling the InferencePool resource.
@@ -253,15 +251,16 @@ func (c *InferencePoolController) httpRouteReferencesInferencePool(route *gwapiv
 }
 
 // updateInferencePoolStatus updates the status of the InferencePool.
-func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context, inferencePool *gwaiev1.InferencePool, conditionType string, message string) {
+// A returned error, such as a conflict with a concurrent status write, makes controller-runtime
+// requeue the pool, because no other event triggers a reconcile.
+func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context, inferencePool *gwaiev1.InferencePool, conditionType string, message string) error {
 	// Check if this is an ExtensionReference validation error.
 	isExtensionRefError := conditionType == "NotAccepted" &&
 		(strings.Contains(message, "ExtensionReference service") && strings.Contains(message, "not found"))
 	// Get the referenced Gateways from syncInferencePool logic.
 	referencedGateways, err := c.getReferencedGateways(ctx, inferencePool)
 	if err != nil {
-		c.logger.Error(err, "failed to get referenced Gateways for status update")
-		return
+		return fmt.Errorf("failed to get referenced Gateways for status update: %w", err)
 	}
 
 	// Build Parents status.
@@ -305,8 +304,9 @@ func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context,
 
 	inferencePool.Status.Parents = parents
 	if err := c.client.Status().Update(ctx, inferencePool); err != nil {
-		c.logger.Error(err, "failed to update InferencePool status")
+		return fmt.Errorf("failed to update InferencePool status: %w", err)
 	}
+	return nil
 }
 
 // buildAcceptedCondition builds a condition for the InferencePool status.
