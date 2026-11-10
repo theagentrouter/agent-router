@@ -12,6 +12,7 @@ package v1alpha1
 //
 // Note that this is vendor specific, and the stability of the API schema is not guaranteed by
 // the ai-gateway, but by the vendor via proper versioning.
+// +kubebuilder:validation:XValidation:rule="!has(self.responsesTranslation) || self.name in ['OpenAI', 'AWSOpenAI', 'AzureOpenAI']",message="responsesTranslation is only supported for OpenAI, AWSOpenAI, and AzureOpenAI"
 type VersionedAPISchema struct {
 	// Name is the name of the API schema of the AIGatewayRoute or AIServiceBackend.
 	//
@@ -45,6 +46,12 @@ type VersionedAPISchema struct {
 	// See https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/supported-providers for details.
 	// +optional
 	Prefix *string `json:"prefix,omitempty"`
+
+	// ResponsesTranslation selects the backend API for incoming Responses requests on AIServiceBackend.
+	// Defaults to Responses. Set ChatCompletions for backends that only support Chat Completions.
+	// +kubebuilder:validation:Enum=Responses;ChatCompletions
+	// +optional
+	ResponsesTranslation string `json:"responsesTranslation,omitempty"`
 }
 
 // APISchema defines the API schema.

@@ -329,6 +329,10 @@ curl -F "model=whisper-1" \
 - Azure OpenAI with an API version that supports Responses, such as `2025-04-01-preview`
 - Any OpenAI-compatible provider (Groq, Together AI, Mistral, Tetrate Agent Router Service, etc.)
 
+Responses requests can also use AWS-hosted Claude (`AWSAnthropic`), Vertex AI Gemini (`GCPVertexAI`), and Vertex AI Claude (`GCPAnthropic`) through their Chat Completions translators.
+
+For `OpenAI`, `AWSOpenAI`, and `AzureOpenAI` backends without a native Responses API, opt in with `schema.responsesTranslation: ChatCompletions`. See [Responses Through Chat Completions](./connect-providers.md#responses-through-chat-completions) for configuration and limitations. Bridged backends do not support all native Responses features listed above.
+
 **Example:**
 
 ```bash

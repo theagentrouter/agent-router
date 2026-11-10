@@ -66,6 +66,34 @@ Different providers require different schema configurations:
 Many providers offer OpenAI-compatible APIs, which allows them to use the OpenAI schema configuration with provider-specific version paths.
 :::
 
+#### Responses Through Chat Completions
+
+For `OpenAI`, `AWSOpenAI`, or `AzureOpenAI` backends that only support Chat Completions, set `schema.responsesTranslation` to `ChatCompletions`:
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: chat-only-backend
+spec:
+  schema:
+    name: OpenAI
+    prefix: v1
+    responsesTranslation: ChatCompletions
+  backendRef:
+    name: chat-only-backend
+    kind: Backend
+    group: gateway.envoyproxy.io
+```
+
+Clients continue calling `POST /v1/responses`. Agent Router converts requests to the backend's Chat Completions API and converts responses back, including streaming events and function calls. Model overrides, custom OpenAI prefixes, and Azure API versions still use their existing configuration.
+
+Leaving this field unset, or setting it to `Responses`, keeps the native Responses API for these schemas. There is no automatic detection or retry to another API. This setting does not change other incoming endpoints, such as `/v1/chat/completions`.
+
+The bridge supports only the features available through the selected Chat Completions backend. Hosted tools, `previous_response_id`, `conversation`, background execution, file inputs, file-ID images, and reasoning-item replay are rejected. Send prior messages and tool results explicitly in `input` for multi-turn conversations.
+
+`AWSAnthropic`, `GCPAnthropic`, and `GCPVertexAI` already use the bridge for Responses requests and do not need this setting.
+
 ### BackendSecurityPolicy
 
 The `BackendSecurityPolicy` resource configures authentication credentials needed to access upstream AI services securely.

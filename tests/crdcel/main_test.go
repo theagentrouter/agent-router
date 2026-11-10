@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
@@ -125,6 +127,44 @@ func TestAIServiceBackends(t *testing.T) {
 				require.NoError(t, c.Delete(ctx, aiBackend))
 			}
 		})
+	}
+}
+
+func TestAIServiceBackendResponsesTranslation(t *testing.T) {
+	c, _, _ := testsinternal.NewEnvTest(t)
+	data, err := testdata.ReadFile("testdata/aiservicebackends/basic.yaml")
+	require.NoError(t, err)
+	for _, version := range []string{"v1alpha1", "v1beta1"} {
+		for _, tc := range []struct{ schema, mode, errorText string }{
+			{"OpenAI", "ChatCompletions", ""},
+			{"AWSOpenAI", "ChatCompletions", ""},
+			{"AzureOpenAI", "ChatCompletions", ""},
+			{"OpenAI", "Responses", ""},
+			{"OpenAI", "", ""},
+			{"OpenAI", "invalid", "Unsupported value"},
+			{"Anthropic", "ChatCompletions", "responsesTranslation is only supported"},
+		} {
+			t.Run(version+"/"+tc.schema+"/"+tc.mode, func(t *testing.T) {
+				var backend aigv1b1.AIServiceBackend
+				require.NoError(t, yaml.UnmarshalStrict(data, &backend))
+				backend.Spec.APISchema.Name = aigv1b1.APISchema(tc.schema)
+				backend.Spec.APISchema.ResponsesTranslation = tc.mode
+				object, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&backend)
+				require.NoError(t, err)
+				resource := &unstructured.Unstructured{Object: object}
+				resource.SetAPIVersion("aigateway.envoyproxy.io/" + version)
+				err = c.Create(t.Context(), resource)
+				if tc.errorText != "" {
+					require.ErrorContains(t, err, tc.errorText)
+					return
+				}
+				require.NoError(t, err)
+				mode, _, err := unstructured.NestedString(resource.Object, "spec", "schema", "responsesTranslation")
+				require.NoError(t, err)
+				require.Equal(t, tc.mode, mode)
+				require.NoError(t, c.Delete(t.Context(), resource))
+			})
+		}
 	}
 }
 

@@ -40,6 +40,8 @@ Below is a table of currently supported providers and their respective configura
 | Self-hosted-models                                                                                        |                                   `{"name":"OpenAI","prefix":"/v1"}`                                   |                            N/A                            |   ⚠️   | Depending on the API schema spoken by self-hosted servers. For example, [vLLM] speaks the OpenAI format. Also, API Key auth can be configured as well. |
 | [Anthropic](https://docs.claude.com/en/home)                                                              |                                         `{"name":"Anthropic"}`                                         |                    [Anthropic API Key]                    |   ✅   | Support only Native Anthropic messages endpoint                                                                                                        |
 
+For OpenAI-compatible backends that only offer Chat Completions, see [Responses Through Chat Completions](./connect-providers.md#responses-through-chat-completions) to expose `/v1/responses` with `schema.responsesTranslation: ChatCompletions`.
+
 [AIServiceBackend]: api/api.mdx#aiservicebackendspec
 [BackendSecurityPolicy]: api/api.mdx#backendsecuritypolicyspec
 [API Key]: api/api.mdx#backendsecuritypolicyapikey

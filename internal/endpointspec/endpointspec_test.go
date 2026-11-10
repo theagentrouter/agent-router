@@ -513,6 +513,55 @@ func TestResponsesEndpointSpec_GetTranslator(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported API schema")
 }
 
+func TestResponsesEndpointSpec_ResponsesTranslation(t *testing.T) {
+	for _, tc := range []struct {
+		schema               filterapi.VersionedAPISchema
+		nativePath, chatPath string
+	}{
+		{filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "custom/v1"}, "/custom/v1/responses", "/custom/v1/chat/completions"},
+		{filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI}, "/openai/v1/responses", "/openai/v1/chat/completions"},
+		{filterapi.VersionedAPISchema{Name: filterapi.APISchemaAzureOpenAI, Version: "2025-03-01-preview"}, "/openai/responses?api-version=2025-03-01-preview", "/openai/deployments/backend/chat/completions?api-version=2025-03-01-preview"},
+	} {
+		for _, mode := range []string{"", "Responses", "ChatCompletions"} {
+			t.Run(string(tc.schema.Name)+"/"+mode, func(t *testing.T) {
+				schema := tc.schema
+				schema.ResponsesTranslation = mode
+				translator, err := (ResponsesEndpointSpec{}).GetTranslator(schema, "backend")
+				require.NoError(t, err)
+				original := []byte(`{"model":"client","input":"Hello"}`)
+				headers, body, err := translator.RequestBody(original, &openai.ResponseRequest{Model: "client", Input: openai.ResponseNewParamsInputUnion{OfString: ptr.To("Hello")}}, false)
+				require.NoError(t, err)
+				path := tc.nativePath
+				if mode == "ChatCompletions" {
+					path = tc.chatPath
+					var chat openai.ChatCompletionRequest
+					require.NoError(t, json.Unmarshal(body, &chat))
+					require.Len(t, chat.Messages, 1)
+					require.Equal(t, "Hello", chat.Messages[0].OfUser.Content.Value)
+					_, responseBody, _, _, err := translator.ResponseBody(nil, strings.NewReader(`{"id":"chat_1","model":"backend","choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}]}`), true, nil)
+					require.NoError(t, err)
+					var response openai.Response
+					require.NoError(t, json.Unmarshal(responseBody, &response))
+					require.Equal(t, "response", response.Object)
+					require.Equal(t, "Hi", response.Output[0].OfOutputMessage.Content.OfContentArray[0].OfOutputText.Text)
+				} else {
+					var request openai.ResponseRequest
+					require.NoError(t, json.Unmarshal(body, &request))
+					require.Equal(t, "Hello", *request.Input.OfString)
+				}
+				require.Contains(t, headers, internalapi.Header{":path", path})
+			})
+		}
+	}
+	for _, schema := range []filterapi.VersionedAPISchema{
+		{Name: filterapi.APISchemaOpenAI, ResponsesTranslation: "invalid"},
+		{Name: filterapi.APISchemaGCPVertexAI, ResponsesTranslation: "ChatCompletions"},
+	} {
+		_, err := (ResponsesEndpointSpec{}).GetTranslator(schema, "")
+		require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+	}
+}
+
 func TestDecisionsEndpointSpec(t *testing.T) {
 	spec := DecisionsEndpointSpec{}
 

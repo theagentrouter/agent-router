@@ -351,6 +351,14 @@ spec:
 
                       See https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/supported-providers for details.
                     type: string
+                  responsesTranslation:
+                    description: |-
+                      ResponsesTranslation selects the backend API for incoming Responses requests on AIServiceBackend.
+                      Defaults to Responses. Set ChatCompletions for backends that only support Chat Completions.
+                    enum:
+                    - Responses
+                    - ChatCompletions
+                    type: string
                   version:
                     description: |-
                       Version is the version of the API schema.
@@ -365,6 +373,11 @@ spec:
                 required:
                 - name
                 type: object
+                x-kubernetes-validations:
+                - message: responsesTranslation is only supported for OpenAI, AWSOpenAI,
+                    and AzureOpenAI
+                  rule: '!has(self.responsesTranslation) || self.name in [''OpenAI'',
+                    ''AWSOpenAI'', ''AzureOpenAI'']'
             required:
             - backendRef
             - schema
@@ -821,6 +834,14 @@ spec:
 
                       See https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/supported-providers for details.
                     type: string
+                  responsesTranslation:
+                    description: |-
+                      ResponsesTranslation selects the backend API for incoming Responses requests on AIServiceBackend.
+                      Defaults to Responses. Set ChatCompletions for backends that only support Chat Completions.
+                    enum:
+                    - Responses
+                    - ChatCompletions
+                    type: string
                   version:
                     description: |-
                       Version is the version of the API schema.
@@ -835,6 +856,11 @@ spec:
                 required:
                 - name
                 type: object
+                x-kubernetes-validations:
+                - message: responsesTranslation is only supported for OpenAI, AWSOpenAI,
+                    and AzureOpenAI
+                  rule: '!has(self.responsesTranslation) || self.name in [''OpenAI'',
+                    ''AWSOpenAI'', ''AzureOpenAI'']'
             required:
             - backendRef
             - schema

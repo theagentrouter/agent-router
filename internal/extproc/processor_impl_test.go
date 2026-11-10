@@ -721,7 +721,7 @@ func Test_chatCompletionProcessorUpstreamFilter_SetBackend(t *testing.T) {
 	immediateResp, ok := resp.Response.(*extprocv3.ProcessingResponse_ImmediateResponse)
 	require.True(t, ok)
 	require.Equal(t, typev3.StatusCode(422), immediateResp.ImmediateResponse.Status.Code)
-	require.JSONEq(t, `{"type":"error","error":{"type":"UnprocessableEntity","code":"422","message":"invalid request body: unsupported API schema: backend={some-schema v10.0 }"}}`,
+	require.JSONEq(t, `{"type":"error","error":{"type":"UnprocessableEntity","code":"422","message":"invalid request body: unsupported API schema: backend={some-schema v10.0  }"}}`,
 		string(immediateResp.ImmediateResponse.Body))
 	require.True(t, r.localReplyEmitted, "the gateway answered the request itself")
 	mm.RequireRequestFailure(t)

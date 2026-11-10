@@ -3411,6 +3411,10 @@ func Test_schemaToFilterAPI(t *testing.T) {
 		expected filterapi.VersionedAPISchema
 	}{
 		{
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaOpenAI, ResponsesTranslation: "ChatCompletions"},
+			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "v1", ResponsesTranslation: "ChatCompletions"},
+		},
+		{
 			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaOpenAI},
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "v1"},
 		},
