@@ -314,7 +314,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) parseGCPStreamingChunks(
 
 	// Process all complete chunks (all but the last part).
 	for _, part := range parts {
-		part = bytes.TrimSpace(part)
+		part = bytes.TrimLeft(part, " \t\r\n")
 		if len(part) == 0 {
 			continue
 		}

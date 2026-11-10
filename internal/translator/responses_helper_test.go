@@ -50,6 +50,10 @@ func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
 		{"conversation ID", `{"conversation":"conv_1","input":"Continue"}`},
 		{"conversation object", `{"conversation":{"id":"conv_1"},"input":"Continue"}`},
 		{"background", `{"background":true}`},
+		{"top logprobs", `{"top_logprobs":5}`},
+		{"zero top logprobs", `{"top_logprobs":0}`},
+		{"included logprobs", `{"include":["message.output_text.logprobs"]}`},
+		{"encrypted reasoning include", `{"include":["reasoning.encrypted_content"]}`},
 		{"reasoning item", `{"input":[{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"encrypted"}]}`},
 		{"item reference", `{"input":[{"type":"item_reference","id":"msg_1"}]}`},
 		{"hosted tool call", `{"input":[{"type":"file_search_call","id":"fs_1","queries":["test"],"status":"completed"}]}`},
@@ -72,6 +76,106 @@ func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
 			require.Nil(t, headers)
 			require.Nil(t, body)
 		})
+	}
+}
+
+func TestResponsesViaChatCompletion_SchemaLimits(t *testing.T) {
+	cycle := map[string]any{"type": "object"}
+	cycle["properties"] = map[string]any{"child": cycle}
+	properties := make(map[string]any, 50001)
+	for i := range 50001 {
+		properties[fmt.Sprintf("field%d", i)] = map[string]any{"type": "object"}
+	}
+	for _, tc := range []struct {
+		name       string
+		parameters map[string]any
+	}{
+		{"cyclic", cycle},
+		{"node limit", map[string]any{"type": "object", "properties": properties}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := newResponsesChatCompletionTestTranslator().RequestBody(nil, &openai.ResponseRequest{
+				Tools: []openai.ResponseToolUnion{{OfFunction: &openai.FunctionToolParam{Name: "test", Parameters: tc.parameters}}},
+			}, false)
+			require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+		})
+	}
+}
+
+func TestResponsesViaChatCompletion_Reasoning(t *testing.T) {
+	for _, provider := range []string{"anthropic", "gemini", "openai"} {
+		for _, mode := range []string{"non-stream", "stream", "split-stream"} {
+			t.Run(provider+"/"+mode, func(t *testing.T) {
+				streaming := mode != "non-stream"
+				inner := NewChatCompletionOpenAIToOpenAITranslator("v1", "")
+				body := `{"id":"chat_1","model":"backend","choices":[{"index":0,"message":{"role":"assistant","reasoning_content":"private plan","content":"answer"},"finish_reason":"stop"}]}`
+				if streaming {
+					body = "data: {\"id\":\"chat_1\",\"model\":\"backend\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"private plan\"}}]}\n\n" +
+						"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\n"
+				}
+				switch provider {
+				case "anthropic":
+					inner = NewChatCompletionOpenAIToGCPAnthropicTranslator("v1", "")
+					body = `{"id":"msg_1","type":"message","model":"claude","role":"assistant","content":[{"type":"thinking","thinking":"private plan","signature":"sig"},{"type":"text","text":"answer"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`
+					if streaming {
+						body = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude\",\"content\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n" +
+							"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"private plan\"}}\n\n" +
+							"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\n" +
+							"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n" +
+							"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+					}
+				case "gemini":
+					inner = NewChatCompletionOpenAIToGCPVertexAITranslator("")
+					body = `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"private plan","thought":true},{"text":"answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}` + "\n"
+				}
+				translator := NewResponsesViaChatCompletionTranslator(inner)
+				_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "model", Stream: streaming, Input: openai.ResponseNewParamsInputUnion{OfString: ptr.To("Hello")}}, false)
+				require.NoError(t, err)
+				span := &responsesRecordingSpan{}
+				step := len(body)
+				if mode == "split-stream" {
+					step = 1
+				}
+				var output []byte
+				for offset := 0; offset < len(body); offset += step {
+					end := min(offset+step, len(body))
+					_, converted, _, _, err := translator.ResponseBody(nil, strings.NewReader(body[offset:end]), end == len(body), span)
+					require.NoError(t, err)
+					output = append(output, converted...)
+				}
+				var response openai.Response
+				if streaming {
+					events := parseSSEEventsFromBytes(output)
+					var reasoning, answer string
+					for i, event := range span.events {
+						if added := event.OfResponseOutputItemAdded; added != nil && added.Item.OfReasoning != nil {
+							require.Len(t, added.Item.OfReasoning.Content, 1)
+							require.Empty(t, added.Item.OfReasoning.Content[0].Text)
+						}
+						if delta := event.OfResponseReasoningTextDelta; delta != nil {
+							reasoning += delta.Delta
+							require.Equal(t, int64(0), delta.OutputIndex)
+						}
+						if delta := event.OfResponseTextDelta; delta != nil {
+							answer += delta.Delta
+							require.Equal(t, int64(1), delta.OutputIndex)
+						}
+						requireJSONFields(t, fmt.Sprintf(`{"sequence_number":%d}`, i), []byte(events[i].data))
+					}
+					require.Equal(t, "private plan", reasoning)
+					require.Equal(t, "answer", answer)
+					require.Contains(t, string(output), "event: response.reasoning_text.done")
+					response = span.events[len(span.events)-1].OfResponseCompleted.Response
+				} else {
+					require.NoError(t, json.Unmarshal(output, &response))
+				}
+				require.Len(t, response.Output, 2)
+				require.NotNil(t, response.Output[0].OfReasoning)
+				require.NotNil(t, response.Output[0].OfReasoning.Summary)
+				require.Equal(t, "private plan", response.Output[0].OfReasoning.Content[0].Text)
+				require.Equal(t, "answer", response.Output[1].OfOutputMessage.Content.OfContentArray[0].OfOutputText.Text)
+			})
+		}
 	}
 }
 

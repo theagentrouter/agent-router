@@ -1268,16 +1268,14 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 			return nil, fmt.Errorf("unmarshal content_block_delta: %w", err)
 		}
 		switch event.Delta.Type {
-		case string(constant.ValueOf[constant.TextDelta]()), string(constant.ValueOf[constant.ThinkingDelta]()):
-			// Treat thinking_delta just like a text_delta, but read the field
-			// that belongs to the variant: RawContentBlockDeltaUnion.Text is
-			// only populated for text_delta, and .Thinking only for
-			// thinking_delta.
+		case string(constant.ValueOf[constant.TextDelta]()):
 			text := event.Delta.Text
-			if event.Delta.Type == string(constant.ValueOf[constant.ThinkingDelta]()) {
-				text = event.Delta.Thinking
-			}
 			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &text}
+			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
+		case string(constant.ValueOf[constant.ThinkingDelta]()):
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{
+				ReasoningContent: &openai.StreamReasoningContent{Text: event.Delta.Thinking},
+			}
 			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
 		case string(constant.ValueOf[constant.InputJSONDelta]()):
 			tool, ok := p.activeToolCalls[p.toolIndex]

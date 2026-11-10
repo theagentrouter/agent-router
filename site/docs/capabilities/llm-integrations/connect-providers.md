@@ -92,6 +92,8 @@ Leaving this field unset, or setting it to `Responses`, keeps the native Respons
 
 The bridge supports only the features available through the selected Chat Completions backend. Hosted tools, `previous_response_id`, `conversation`, background execution, file inputs, file-ID images, and reasoning-item replay are rejected. Send prior messages and tool results explicitly in `input` for multi-turn conversations.
 
+Reasoning text is returned separately from the visible answer, as reasoning output items and streaming events. `include` and `top_logprobs` requests are not supported by the bridge and are rejected.
+
 `AWSAnthropic`, `GCPAnthropic`, and `GCPVertexAI` already use the bridge for Responses requests and do not need this setting.
 
 ### BackendSecurityPolicy

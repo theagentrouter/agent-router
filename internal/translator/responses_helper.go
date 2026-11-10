@@ -54,6 +54,9 @@ func chatCompletionToResponse(chatResp *openai.ChatCompletionResponse, requestMo
 	for i := range chatResp.Choices {
 		choice := &chatResp.Choices[i]
 		status := applyResponsesFinishReason(resp, choice.FinishReason)
+		if text := responsesReasoningText(choice.Message.ReasoningContent); text != "" {
+			resp.Output = append(resp.Output, responsesReasoningItem("rs_"+chatResp.ID, text, status))
+		}
 		if choice.Message.Content != nil && *choice.Message.Content != "" {
 			resp.Output = append(resp.Output, responsesMessageItem("msg_"+chatResp.ID, *choice.Message.Content, status))
 		}
@@ -119,6 +122,28 @@ func responsesMessageItem(id, text, status string) openai.ResponseOutputItemUnio
 	}}
 }
 
+func responsesReasoningText(content *openai.ReasoningContentUnion) string {
+	if content != nil {
+		switch value := content.Value.(type) {
+		case string:
+			return value
+		case *openai.ReasoningContent:
+			if value != nil && value.ReasoningContent != nil && value.ReasoningContent.ReasoningText != nil {
+				return value.ReasoningContent.ReasoningText.Text
+			}
+		}
+	}
+	return ""
+}
+
+func responsesReasoningItem(id, text, status string) openai.ResponseOutputItemUnion {
+	return openai.ResponseOutputItemUnion{OfReasoning: &openai.ResponseReasoningItem{
+		ID: id, Type: "reasoning", Status: status,
+		Summary: []openai.ResponseReasoningItemSummaryParam{},
+		Content: []openai.ResponseReasoningItemContentParam{{Type: "reasoning_text", Text: text}},
+	}}
+}
+
 func responsesIncompleteReason(reason openai.ChatCompletionChoicesFinishReason) string {
 	switch reason {
 	case openai.ChatCompletionChoicesFinishReasonLength:
@@ -154,6 +179,11 @@ type streamingToolCallState struct {
 	outputIndex int64
 }
 
+type streamingReasoningState struct {
+	text        strings.Builder
+	outputIndex int64
+}
+
 type chatCompletionStreamToResponsesConverter struct {
 	started        bool
 	responseID     string
@@ -166,6 +196,7 @@ type chatCompletionStreamToResponsesConverter struct {
 	messageIndex   int64
 	itemCount      int64
 	toolCalls      map[int64]*streamingToolCallState
+	reasoning      *streamingReasoningState
 	finished       bool
 	pendingStatus  string
 	stopReason     openai.ChatCompletionChoicesFinishReason
@@ -273,6 +304,23 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 	choice := chunk.Choices[0]
 	delta := choice.Delta
 
+	if delta != nil && delta.ReasoningContent != nil && delta.ReasoningContent.Text != "" {
+		id := "rs_" + c.responseID
+		if c.reasoning == nil {
+			c.reasoning = &streamingReasoningState{outputIndex: c.itemCount}
+			c.itemCount++
+			output = append(output, marshalSSEEvent("response.output_item.added", openai.ResponseOutputItemAddedEvent{
+				Type: "response.output_item.added", SequenceNumber: c.nextSeq(), OutputIndex: c.reasoning.outputIndex,
+				Item: responsesReasoningItem(id, "", "in_progress"),
+			})...)
+		}
+		c.reasoning.text.WriteString(delta.ReasoningContent.Text)
+		output = append(output, marshalSSEEvent("response.reasoning_text.delta", openai.ResponseReasoningTextDeltaEvent{
+			Type: "response.reasoning_text.delta", SequenceNumber: c.nextSeq(),
+			ItemID: id, OutputIndex: c.reasoning.outputIndex, ContentIndex: 0, Delta: delta.ReasoningContent.Text,
+		})...)
+	}
+
 	if delta != nil && delta.Content != nil && *delta.Content != "" {
 		if !c.messageStarted {
 			c.messageStarted = true
@@ -358,6 +406,12 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 	if choice.FinishReason != "" {
 		c.stopReason = choice.FinishReason
 		response := c.buildFinalResponse("completed", nil)
+		if c.reasoning != nil {
+			output = append(output, marshalSSEEvent("response.reasoning_text.done", openai.ResponseReasoningTextDoneEvent{
+				Type: "response.reasoning_text.done", SequenceNumber: c.nextSeq(),
+				ItemID: "rs_" + c.responseID, OutputIndex: c.reasoning.outputIndex, ContentIndex: 0, Text: c.reasoning.text.String(),
+			})...)
+		}
 		if c.messageStarted {
 			output = append(output, marshalSSEEvent("response.output_text.done", openai.ResponseTextDoneEvent{
 				ContentIndex:   0,
@@ -429,6 +483,9 @@ func (c *chatCompletionStreamToResponsesConverter) buildFinalResponse(status str
 	applyResponsesRequestSettings(&resp, c.requestConfig)
 
 	outputItems := make([]openai.ResponseOutputItemUnion, c.itemCount)
+	if c.reasoning != nil {
+		outputItems[c.reasoning.outputIndex] = responsesReasoningItem("rs_"+c.responseID, c.reasoning.text.String(), itemStatus)
+	}
 	if c.messageStarted {
 		outputItems[c.messageIndex] = responsesMessageItem(c.messageID, c.accText.String(), itemStatus)
 	}
@@ -467,6 +524,9 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 	}
 	if ptr.Deref(req.Background, false) {
 		return chatReq, fmt.Errorf("%w: background mode is not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
+	}
+	if req.TopLogprobs != nil || len(req.Include) > 0 {
+		return chatReq, fmt.Errorf("%w: include and top_logprobs are not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
 	}
 
 	format := req.Text.Format
@@ -555,14 +615,48 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 	return chatReq, nil
 }
 
+func copyResponsesSchema(value any, depth int) (any, error) {
+	if depth >= 100 {
+		return nil, fmt.Errorf("maximum function schema depth exceeded")
+	}
+	switch source := value.(type) {
+	case map[string]any:
+		if source == nil {
+			return source, nil
+		}
+		result := make(map[string]any, len(source))
+		for key, value := range source {
+			var err error
+			result[key], err = copyResponsesSchema(value, depth+1)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return result, nil
+	case []any:
+		result := make([]any, len(source))
+		for i, value := range source {
+			var err error
+			result[i], err = copyResponsesSchema(value, depth+1)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return result, nil
+	default:
+		return value, nil
+	}
+}
+
 func responsesFunctionParameters(tool *openai.FunctionToolParam) (map[string]any, bool, error) {
 	if tool.Strict != nil {
 		return tool.Parameters, *tool.Strict, nil
 	}
-	schema, err := jsonSchemaDeepCopyMapStringAny(tool.Parameters)
+	copied, err := copyResponsesSchema(tool.Parameters, 0)
 	if err != nil {
 		return nil, false, err
 	}
+	schema := copied.(map[string]any)
 	if schema == nil {
 		schema = map[string]any{"type": "object"}
 	}
@@ -571,8 +665,8 @@ func responsesFunctionParameters(tool *openai.FunctionToolParam) (map[string]any
 	}
 	pending := []map[string]any{schema}
 	for visited := 0; len(pending) > 0; visited++ {
-		if visited >= jsonSchemaMaxNodes {
-			return nil, false, errJSONSchemaMaxNodesExceeded
+		if visited >= 50000 {
+			return nil, false, fmt.Errorf("maximum number of function schema nodes exceeded")
 		}
 		current := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
