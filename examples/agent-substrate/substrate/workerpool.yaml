@@ -1,0 +1,24 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# Modeled on Substrate's demos/egress. setup.sh resolves the ko:// worker image
+# from the Substrate checkout (ko builds it and pins it by digest).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agents
+---
+apiVersion: ate.dev/v1
+kind: WorkerPool
+metadata:
+  name: llm-agents
+  namespace: agents
+  labels:
+    workload: llm-agents
+spec:
+  replicas: 2
+  workerImage: ko://go.ate.dev/substrate/cmd/ateworker-gvisor
+  sandboxClasses:
+    - name: gvisor

@@ -1,0 +1,62 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-llm
+  namespace: agent-router-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-llm
+  template:
+    metadata:
+      labels:
+        app: mock-llm
+    spec:
+      containers:
+        - name: mock-llm
+          image: localhost:5001/agent-substrate-demo/mock-llm:dev
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Every response reports 50 + 150 = 200 total tokens.
+            - name: PROMPT_TOKENS
+              value: "50"
+            - name: COMPLETION_TOKENS
+              value: "150"
+            # Refuse requests that don't carry the key Agent Router injects.
+            - name: EXPECTED_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mock-llm-apikey
+                  key: apiKey
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-llm
+  namespace: agent-router-demo
+spec:
+  selector:
+    app: mock-llm
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

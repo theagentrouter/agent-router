@@ -1,0 +1,46 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# One rule serves every actor: a separate daily token budget per x-actor-id
+# value. To give specific actors different budgets, see "Different budgets per
+# actor" in the README.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: actor-token-budget
+  namespace: agent-router-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agent-router
+  rateLimit:
+    type: Global
+    global:
+      rules:
+        - clientSelectors:
+            - headers:
+                # A bucket per actor ID (the verified JWT subject).
+                - name: x-actor-id
+                  type: Distinct
+          # One bucket per actor across every route on the Gateway. Without this,
+          # each AIGatewayRoute rule (for example, one per model) gets its own
+          # bucket, and an actor's budget is per model instead of per actor.
+          shared: true
+          limit:
+            # Tokens per actor per UTC day.
+            requests: 500
+            unit: Day
+          cost:
+            # Check the budget on the way in without spending it...
+            request:
+              from: Number
+              number: 0
+            # ...and charge the tokens the model reported once the response ends.
+            response:
+              from: Metadata
+              metadata:
+                namespace: io.envoy.ai_gateway
+                key: llm_total_token
