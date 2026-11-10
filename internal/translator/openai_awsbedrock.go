@@ -313,7 +313,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) bedrockStopReasonToOpenAI
 		return openai.ChatCompletionChoicesFinishReasonStop
 	case awsbedrock.StopReasonMaxTokens:
 		return openai.ChatCompletionChoicesFinishReasonLength
-	case awsbedrock.StopReasonContentFiltered:
+	case awsbedrock.StopReasonContentFiltered, awsbedrock.StopReasonGuardrailIntervened:
 		return openai.ChatCompletionChoicesFinishReasonContentFilter
 	case awsbedrock.StopReasonToolUse:
 		return openai.ChatCompletionChoicesFinishReasonToolCalls
