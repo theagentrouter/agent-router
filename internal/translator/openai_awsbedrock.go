@@ -773,6 +773,7 @@ func redactAWSBedrockResponseMessage(msg *openai.ChatCompletionResponseChoiceMes
 	if msg.ReasoningContent != nil {
 		redactedMsg.ReasoningContent = redactReasoningContent(msg.ReasoningContent)
 	}
+	redactedMsg.ThinkingBlocks = redactThinkingBlocks(msg.ThinkingBlocks)
 
 	return redactedMsg
 }

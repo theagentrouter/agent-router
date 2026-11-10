@@ -298,8 +298,26 @@ func redactResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) open
 	if msg.ReasoningContent != nil {
 		redactedMsg.ReasoningContent = redactReasoningContent(msg.ReasoningContent)
 	}
+	redactedMsg.ThinkingBlocks = redactThinkingBlocks(msg.ThinkingBlocks)
 
 	return redactedMsg
+}
+
+// redactThinkingBlocks redacts the text, signature and encrypted data of each thinking block. Translators copy the model's reasoning into ThinkingBlocks as well as ReasoningContent, so redacting only ReasoningContent would still log the reasoning. Only the block type is kept.
+func redactThinkingBlocks(blocks []openai.ThinkingBlock) []openai.ThinkingBlock {
+	if len(blocks) == 0 {
+		return blocks
+	}
+	redacted := make([]openai.ThinkingBlock, len(blocks))
+	for i, tb := range blocks {
+		redacted[i] = openai.ThinkingBlock{
+			Type:      tb.Type,
+			Thinking:  redaction.RedactString(tb.Thinking),
+			Signature: redaction.RedactString(tb.Signature),
+			Data:      redaction.RedactString(tb.Data),
+		}
+	}
+	return redacted
 }
 
 // redactReasoningContent redacts sensitive content from reasoning content union.
@@ -316,20 +334,22 @@ func redactReasoningContent(rc *openai.ReasoningContentUnion) *openai.ReasoningC
 		}
 	// Handle ReasoningContent type (e.g., from AWS Bedrock)
 	case *openai.ReasoningContent:
-		if reasoningContent.ReasoningContent != nil {
-			if reasoningText := reasoningContent.ReasoningContent.ReasoningText; reasoningText != nil {
-				return &openai.ReasoningContentUnion{
-					Value: &openai.ReasoningContent{
-						ReasoningContent: &awsbedrock.ReasoningContentBlock{
-							ReasoningText: &awsbedrock.ReasoningTextBlock{
-								Text:      redaction.RedactString(reasoningText.Text),
-								Signature: reasoningText.Signature,
-							},
-						},
-					},
-				}
+		block := reasoningContent.ReasoningContent
+		if block == nil {
+			return rc
+		}
+		// The signature and the redacted content both carry the full reasoning in encrypted form, so they are redacted along with the text, matching redactThinkingBlocks.
+		redactedBlock := &awsbedrock.ReasoningContentBlock{}
+		if block.ReasoningText != nil {
+			redactedBlock.ReasoningText = &awsbedrock.ReasoningTextBlock{
+				Text:      redaction.RedactString(block.ReasoningText.Text),
+				Signature: redaction.RedactString(block.ReasoningText.Signature),
 			}
 		}
+		if len(block.RedactedContent) > 0 {
+			redactedBlock.RedactedContent = []byte(redaction.RedactString(string(block.RedactedContent)))
+		}
+		return &openai.ReasoningContentUnion{Value: &openai.ReasoningContent{ReasoningContent: redactedBlock}}
 	}
 
 	return rc
