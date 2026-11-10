@@ -389,6 +389,42 @@ func Test_parseAndValidateFlags_mcpSessionEncryptionSeedEnvVars(t *testing.T) {
 	})
 }
 
+func Test_parseAndValidateFlags_fileIDEncryptionSeedEnvVars(t *testing.T) {
+	t.Run("from env vars", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "env-seed")
+		t.Setenv(fileIDFallbackEncryptionSeedEnvVar, "env-fallback-seed")
+		f, err := parseAndValidateFlags([]string{"--fileIDFallbackEncryptionIterations=200"})
+		require.NoError(t, err)
+		require.Equal(t, "env-seed", f.fileIDEncryptionSeed)
+		require.Equal(t, "env-fallback-seed", f.fileIDFallbackEncryptionSeed)
+		require.Equal(t, 200, f.fileIDFallbackEncryptionIterations)
+	})
+	t.Run("flags take precedence", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "env-seed")
+		t.Setenv(fileIDFallbackEncryptionSeedEnvVar, "env-fallback-seed")
+		f, err := parseAndValidateFlags([]string{
+			"--fileIDEncryptionSeed=flag-seed",
+			"--fileIDFallbackEncryptionSeed=flag-fallback-seed",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "flag-seed", f.fileIDEncryptionSeed)
+		require.Equal(t, "flag-fallback-seed", f.fileIDFallbackEncryptionSeed)
+	})
+	t.Run("empty env vars are ignored", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "")
+		t.Setenv(fileIDFallbackEncryptionSeedEnvVar, "")
+		f, err := parseAndValidateFlags(nil)
+		require.NoError(t, err)
+		require.Equal(t, "default-insecure-seed", f.fileIDEncryptionSeed)
+		require.Empty(t, f.fileIDFallbackEncryptionSeed)
+	})
+	t.Run("fallback iterations are validated for the env var seed", func(t *testing.T) {
+		t.Setenv(fileIDFallbackEncryptionSeedEnvVar, "env-fallback-seed")
+		_, err := parseAndValidateFlags([]string{"--fileIDFallbackEncryptionIterations=0"})
+		require.ErrorContains(t, err, "file id fallback encryption iterations must be positive")
+	})
+}
+
 // Test_maybePatchAdmissionWebhook_conflict reproduces two controller replicas racing to set the CA bundle:
 // the other replica writes the bundle between our Get and Update, so our Update gets a Conflict.
 func Test_maybePatchAdmissionWebhook_conflict(t *testing.T) {
