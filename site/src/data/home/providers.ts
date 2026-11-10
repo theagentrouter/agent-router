@@ -36,6 +36,7 @@ export const providers: Provider[] = [
   { name: 'Together AI', logoUrl: '/img/providers/together-ai.svg', status: 'supported' },
   { name: 'TypeSafe AI', logoUrl: '/img/providers/typesafe-ai.svg', status: 'supported' },
   { name: 'Vertex AI', logoUrl: '/img/providers/vertex-ai.svg', status: 'supported' },
+  { name: 'Wiro AI', logoUrl: '/img/providers/wiro-ai.svg', status: 'supported' },
 ];
 
 /** Shown under the strip; the docs table has schema + auth config per provider. */
