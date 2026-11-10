@@ -112,6 +112,10 @@ func applyResponsesRequestSettings(resp *openai.Response, req *openai.ResponseRe
 	resp.TopP = ptr.Deref(req.TopP, 1)
 	resp.PresencePenalty = req.PresencePenalty
 	resp.FrequencyPenalty = req.FrequencyPenalty
+	resp.Tools = req.Tools
+	resp.ToolChoice = req.ToolChoice
+	resp.ParallelToolCalls = req.ParallelToolCalls
+	resp.User = req.User
 	resp.Store = ptr.To(false)
 	resp.MaxOutputTokens = req.MaxOutputTokens
 	resp.Reasoning = req.Reasoning
@@ -154,7 +158,7 @@ func responsesIncompleteReason(reason openai.ChatCompletionChoicesFinishReason) 
 	switch reason {
 	case openai.ChatCompletionChoicesFinishReasonLength:
 		return "max_output_tokens"
-	case openai.ChatCompletionChoicesFinishReasonContentFilter:
+	case openai.ChatCompletionChoicesFinishReasonContentFilter, openai.ChatCompletionChoicesFinishReasonRecitation:
 		return "content_filter"
 	default:
 		return ""
@@ -162,7 +166,10 @@ func responsesIncompleteReason(reason openai.ChatCompletionChoicesFinishReason) 
 }
 
 func applyResponsesFinishReason(resp *openai.Response, reason openai.ChatCompletionChoicesFinishReason) string {
-	if reason == openai.ChatCompletionChoicesFinishReasonError {
+	switch reason {
+	case openai.ChatCompletionChoicesFinishReasonError, openai.ChatCompletionChoicesFinishReasonMalformedFunctionCall,
+		openai.ChatCompletionChoicesFinishReasonUnexpectedToolCall, openai.ChatCompletionChoicesFinishReasonLanguage,
+		openai.ChatCompletionChoicesFinishReasonNoImage:
 		resp.Status = "failed"
 		resp.Error = openai.ResponseError{Code: "server_error", Message: "upstream model terminated with an error"}
 		resp.IncompleteDetails = openai.ResponseIncompleteDetails{}
@@ -593,6 +600,10 @@ func responsesRequestToChatCompletionRequest(req *openai.ResponseRequest, model 
 		ParallelToolCalls:   req.ParallelToolCalls,
 		ReasoningEffort:     openai.ReasoningEffort(req.Reasoning.Effort),
 		ServiceTier:         req.ServiceTier,
+		User:                req.User,
+	}
+	if req.SafetyIdentifier != "" || req.PromptCacheKey != "" || req.PromptCacheRetention != "" {
+		return chatReq, fmt.Errorf("%w: safety_identifier, prompt_cache_key, and prompt_cache_retention are not supported by Chat Completion backends", internalapi.ErrInvalidRequestBody)
 	}
 	if req.PreviousResponseID != "" {
 		return chatReq, fmt.Errorf("%w: previous_response_id is not supported by Chat Completion backends; provide the conversation in input", internalapi.ErrInvalidRequestBody)
@@ -990,6 +1001,7 @@ func (t *responsesViaChatCompletionTranslator) RequestBody(_ []byte, req *openai
 	t.streamConverter.requestConfig = &openai.ResponseRequest{
 		Temperature: req.Temperature, TopP: req.TopP, Text: req.Text, Reasoning: req.Reasoning,
 		PresencePenalty: req.PresencePenalty, FrequencyPenalty: req.FrequencyPenalty,
+		Tools: req.Tools, ToolChoice: req.ToolChoice, ParallelToolCalls: req.ParallelToolCalls, User: req.User,
 	}
 
 	chatReq, err := responsesRequestToChatCompletionRequest(req, req.Model)
@@ -1074,6 +1086,7 @@ func (t *responsesViaChatCompletionTranslator) ResponseBody(respHeaders map[stri
 		return withContentLengthHeader(innerHeaders, len(newBody)), newBody, tokenUsage, fallbackModel, nil
 	}
 
+	t.streamConverter.requestModel = cmp.Or(innerModel, t.requestModel)
 	newBody = []byte{}
 	t.buffered = append(t.buffered, chatData...)
 	for {

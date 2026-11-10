@@ -50,6 +50,9 @@ func TestResponsesViaChatCompletion_UnsupportedRequests(t *testing.T) {
 		{"conversation ID", `{"conversation":"conv_1","input":"Continue"}`},
 		{"conversation object", `{"conversation":{"id":"conv_1"},"input":"Continue"}`},
 		{"background", `{"background":true}`},
+		{"safety identifier", `{"safety_identifier":"user-hash"}`},
+		{"prompt cache key", `{"prompt_cache_key":"cache-bucket"}`},
+		{"prompt cache retention", `{"prompt_cache_retention":"24h"}`},
 		{"stream obfuscation", `{"stream":true,"stream_options":{"include_obfuscation":true}}`},
 		{"stored prompt", `{"prompt":{"id":"pmpt_1","variables":{"name":"Sam"}},"input":"Hello"}`},
 		{"response storage", `{"store":true,"input":"Hello"}`},
@@ -318,6 +321,86 @@ func TestResponsesViaChatCompletion_AnthropicSettings(t *testing.T) {
 	}
 }
 
+func TestResponsesViaChatCompletion_AnthropicContextLimit(t *testing.T) {
+	for _, provider := range []string{"aws", "gcp"} {
+		for _, mode := range []string{"non-stream", "stream", "split-stream"} {
+			t.Run(provider+"/"+mode, func(t *testing.T) {
+				inner := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+				if provider == "gcp" {
+					inner = NewChatCompletionOpenAIToGCPAnthropicTranslator("v1", "")
+				}
+				translator := NewResponsesViaChatCompletionTranslator(inner)
+				_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "claude", Stream: mode != "non-stream"}, false)
+				require.NoError(t, err)
+				body := `{"id":"msg_1","type":"message","model":"claude","role":"assistant","content":[{"type":"text","text":"partial"}],"stop_reason":"model_context_window_exceeded","usage":{"input_tokens":10,"output_tokens":5}}`
+				if mode != "non-stream" {
+					body = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude\",\"content\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n" +
+						"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n" +
+						"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"model_context_window_exceeded\"},\"usage\":{\"output_tokens\":5}}\n\n" +
+						"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+					if provider == "aws" {
+						wrapped, err := wrapAnthropicSSEInEventStream(body)
+						require.NoError(t, err)
+						body = string(wrapped)
+					}
+				}
+				span := &responsesRecordingSpan{}
+				step := len(body)
+				if mode == "split-stream" {
+					step = 1
+				}
+				var output []byte
+				for offset := 0; offset < len(body); offset += step {
+					end := min(offset+step, len(body))
+					_, converted, _, _, err := translator.ResponseBody(nil, strings.NewReader(body[offset:end]), end == len(body), span)
+					require.NoError(t, err)
+					output = append(output, converted...)
+				}
+				var response openai.Response
+				if mode == "non-stream" {
+					require.NoError(t, json.Unmarshal(output, &response))
+				} else {
+					require.NotEmpty(t, span.events)
+					require.NotNil(t, span.events[len(span.events)-1].OfResponseIncomplete)
+					response = span.events[len(span.events)-1].OfResponseIncomplete.Response
+				}
+				require.Equal(t, "incomplete", response.Status)
+				require.Equal(t, "max_output_tokens", response.IncompleteDetails.Reason)
+				require.Equal(t, "partial", response.Output[0].OfOutputMessage.Content.OfContentArray[0].OfOutputText.Text)
+			})
+		}
+	}
+}
+
+func TestResponsesViaChatCompletion_StreamModelOverride(t *testing.T) {
+	for _, backendModel := range []string{"", "actual-model"} {
+		for _, step := range []int{1, 10000} {
+			t.Run(fmt.Sprintf("model=%s/step=%d", backendModel, step), func(t *testing.T) {
+				translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToOpenAITranslator("v1", "override-model"))
+				_, request, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "client-model", Stream: true}, false)
+				require.NoError(t, err)
+				requireJSONFields(t, `{"model":"override-model"}`, request)
+				body := fmt.Sprintf("data: {\"id\":\"chat_1\",\"model\":%q,\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n", backendModel)
+				span := &responsesRecordingSpan{}
+				expected := "override-model"
+				if backendModel != "" {
+					expected = backendModel
+				}
+				var responseModel string
+				for offset := 0; offset < len(body); offset += step {
+					end := min(offset+step, len(body))
+					_, _, _, responseModel, err = translator.ResponseBody(nil, strings.NewReader(body[offset:end]), end == len(body), span)
+					require.NoError(t, err)
+				}
+				require.Equal(t, expected, responseModel)
+				require.Equal(t, expected, span.events[0].OfResponseCreated.Response.Model)
+				require.Equal(t, expected, span.events[1].OfResponseInProgress.Response.Model)
+				require.Equal(t, expected, span.events[len(span.events)-1].OfResponseCompleted.Response.Model)
+			})
+		}
+	}
+}
+
 func TestResponsesViaChatCompletion_GeminiSettings(t *testing.T) {
 	for _, tc := range []struct{ model, effort, level string }{
 		{"gemini-3-flash", "high", "HIGH"},
@@ -350,28 +433,48 @@ func TestResponsesViaChatCompletion_GeminiSettings(t *testing.T) {
 }
 
 func TestResponsesViaChatCompletion_GeminiModelError(t *testing.T) {
-	for _, stream := range []bool{false, true} {
-		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
-			translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPVertexAITranslator(""))
-			_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "gemini-3-flash", Stream: stream, Input: openai.ResponseNewParamsInputUnion{OfString: ptr.To("Hello")}}, false)
-			require.NoError(t, err)
-			body := `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"partial"}]},"finishReason":"OTHER"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}` + "\n"
-			span := &responsesRecordingSpan{}
-			_, translated, _, _, err := translator.ResponseBody(nil, strings.NewReader(body), true, span)
-			require.NoError(t, err)
-			var response openai.Response
-			if stream {
-				events := parseSSEEventsFromBytes(translated)
-				require.Equal(t, "response.failed", events[len(events)-1].eventType)
-				require.NotNil(t, span.events[len(span.events)-1].OfResponseFailed)
-				response = span.events[len(span.events)-1].OfResponseFailed.Response
-			} else {
-				require.NoError(t, json.Unmarshal(translated, &response))
+	for _, reason := range []string{"OTHER", "MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL", "LANGUAGE", "NO_IMAGE", "RECITATION", "IMAGE_RECITATION"} {
+		for _, parts := range []string{`[{"text":"partial"}]`, `[]`} {
+			for _, stream := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/parts=%s/stream=%t", reason, parts, stream), func(t *testing.T) {
+					translator := NewResponsesViaChatCompletionTranslator(NewChatCompletionOpenAIToGCPVertexAITranslator(""))
+					_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "gemini-3-flash", Stream: stream, Input: openai.ResponseNewParamsInputUnion{OfString: ptr.To("Hello")}}, false)
+					require.NoError(t, err)
+					body := fmt.Sprintf(`{"candidates":[{"index":0,"content":{"role":"model","parts":%s},"finishReason":%q}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}`, parts, reason) + "\n"
+					status := "failed"
+					if reason == "RECITATION" || reason == "IMAGE_RECITATION" {
+						status = "incomplete"
+					}
+					span := &responsesRecordingSpan{}
+					_, translated, _, _, err := translator.ResponseBody(nil, strings.NewReader(body), true, span)
+					require.NoError(t, err)
+					var response openai.Response
+					if stream {
+						events := parseSSEEventsFromBytes(translated)
+						require.Equal(t, "response."+status, events[len(events)-1].eventType)
+						var terminal struct {
+							Response openai.Response `json:"response"`
+						}
+						require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].data), &terminal))
+						response = terminal.Response
+					} else {
+						require.NoError(t, json.Unmarshal(translated, &response))
+					}
+					require.Equal(t, status, response.Status)
+					if status == "failed" {
+						require.Equal(t, "server_error", response.Error.Code)
+					} else {
+						require.Equal(t, "content_filter", response.IncompleteDetails.Reason)
+						require.Empty(t, response.Error.Code)
+					}
+					if parts == `[]` {
+						require.Empty(t, response.Output)
+					} else {
+						require.Equal(t, "incomplete", response.Output[0].OfOutputMessage.Status)
+					}
+				})
 			}
-			require.Equal(t, "failed", response.Status)
-			require.Equal(t, "server_error", response.Error.Code)
-			require.Equal(t, "incomplete", response.Output[0].OfOutputMessage.Status)
-		})
+		}
 	}
 }
 
@@ -606,8 +709,9 @@ func TestResponsesViaChatCompletion_ResponseDetails(t *testing.T) {
 		for _, cacheField := range []string{"cache_write_tokens", "cache_creation_input_tokens"} {
 			t.Run(fmt.Sprintf("stream=%t/%s", stream, cacheField), func(t *testing.T) {
 				var req openai.ResponseRequest
-				require.NoError(t, json.Unmarshal([]byte(`{"model":"model","temperature":0.4,"top_p":0.8,"presence_penalty":0.5,"frequency_penalty":0,"text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"}}}}`), &req))
+				require.NoError(t, json.Unmarshal([]byte(`{"model":"model","user":"user-123","temperature":0.4,"top_p":0.8,"presence_penalty":0.5,"frequency_penalty":0,"tools":[{"type":"function","name":"weather","strict":false,"parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"weather"},"text":{"format":{"type":"json_schema","name":"answer","schema":{"type":"object"}}}}`), &req))
 				req.Stream = stream
+				req.ParallelToolCalls = ptr.To(cacheField == "cache_write_tokens")
 				translator := newResponsesChatCompletionTestTranslator()
 				_, _, err := translator.RequestBody(nil, &req, false)
 				require.NoError(t, err)
@@ -658,6 +762,16 @@ func TestResponsesViaChatCompletion_ResponseDetails(t *testing.T) {
 				require.Equal(t, req.PresencePenalty, response.PresencePenalty)
 				require.Equal(t, req.FrequencyPenalty, response.FrequencyPenalty)
 				require.Equal(t, req.Text.Format, response.Text.Format)
+				settings := []openai.Response{response}
+				if stream {
+					settings = append(settings, span.events[0].OfResponseCreated.Response, span.events[1].OfResponseInProgress.Response)
+				}
+				for _, actual := range settings {
+					require.Equal(t, req.Tools, actual.Tools)
+					require.Equal(t, req.ToolChoice, actual.ToolChoice)
+					require.Equal(t, req.ParallelToolCalls, actual.ParallelToolCalls)
+					require.Equal(t, req.User, actual.User)
+				}
 				require.Equal(t, int64(12), response.Usage.InputTokens)
 				require.Equal(t, int64(6), response.Usage.OutputTokens)
 				require.Equal(t, int64(18), response.Usage.TotalTokens)
@@ -748,6 +862,7 @@ func TestResponsesRequestToChatCompletionRequest_Controls(t *testing.T) {
 		{"flex service tier", `{"service_tier":"flex"}`, `{"service_tier":"flex"}`},
 		{"priority service tier", `{"service_tier":"priority"}`, `{"service_tier":"priority"}`},
 		{"auto service tier", `{"service_tier":"auto"}`, `{"service_tier":"auto"}`},
+		{"user identity", `{"user":"user-123"}`, `{"user":"user-123"}`},
 		{"generation controls", `{"presence_penalty":0.5,"frequency_penalty":-0.25,"text":{"verbosity":"low"}}`, `{"presence_penalty":0.5,"frequency_penalty":-0.25,"verbosity":"low"}`},
 		{"zero penalties", `{"presence_penalty":0,"frequency_penalty":0}`, `{"presence_penalty":0,"frequency_penalty":0}`},
 		{"no obfuscation", `{"stream":true,"stream_options":{"include_obfuscation":false}}`, `{"stream":true,"stream_options":{"include_usage":true}}`},

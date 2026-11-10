@@ -98,6 +98,8 @@ Automatic truncation, `context_management`, reasoning-summary controls (`reasoni
 
 Presence and frequency penalties, `text.verbosity`, and `service_tier` are forwarded to the Chat Completions backend. Support for these controls depends on the selected provider and model. Returned Responses objects include the requested penalties and the service tier reported by the backend, which can differ from the requested tier.
 
+The bridge forwards `user` and includes it with the requested tool configuration in returned Responses objects. `safety_identifier`, `prompt_cache_key`, and `prompt_cache_retention` are not supported and are rejected.
+
 For Gemini Flash models that support thinking levels, `reasoning.effort: minimal` selects minimal thinking.
 
 `AWSAnthropic`, `GCPAnthropic`, and `GCPVertexAI` already use the bridge for Responses requests and do not need this setting.
