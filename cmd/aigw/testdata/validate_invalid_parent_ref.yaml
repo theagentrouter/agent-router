@@ -1,0 +1,24 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# Invalid: parentRef uses kind: HTTPRoute instead of kind: Gateway.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: invalid-parent-ref
+  namespace: default
+spec:
+  parentRefs:
+    - name: some-gateway
+      kind: HTTPRoute
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: gpt-4o-mini
+      backendRefs:
+        - name: some-backend
