@@ -82,12 +82,15 @@ type openAIToGCPVertexAITranslatorV1ChatCompletion struct {
 	bufferedBody      []byte // Buffer for incomplete JSON chunks.
 	requestModel      internalapi.RequestModel
 	toolCallIndex     int64
-	// streamedToolCall records whether any tool call has been emitted so far in
-	// the streaming response. Newer Gemini models (e.g. gemini-3.5-flash,
-	// gemini-3.1-flash-lite) stream the terminal STOP on a separate chunk that no
-	// longer carries the functionCall part, so the finish_reason must be derived
-	// from the whole stream, not just the current chunk.
-	streamedToolCall bool
+	// streamedToolCallByCandidate records, per candidate index, whether a tool call
+	// has been emitted so far in the streaming response. Newer Gemini models (e.g.
+	// gemini-3.5-flash, gemini-3.1-flash-lite) stream the terminal STOP on a
+	// separate chunk that no longer carries the functionCall part, so the
+	// finish_reason must be derived from the whole stream, not just the current
+	// chunk. It is tracked per candidate because with n > 1 each candidate is an
+	// independent completion: a tool call in candidate 0 says nothing about how
+	// candidate 1 finished.
+	streamedToolCallByCandidate map[int]bool
 	// Redaction configuration for debug logging
 	debugLogEnabled bool
 	enableRedaction bool
@@ -452,9 +455,13 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 			choice.Delta = &openai.ChatCompletionResponseChunkChoiceDelta{}
 		}
 
-		// Track whether a tool call has been streamed at any point in the response.
+		// Track whether a tool call has been streamed at any point in the response
+		// for this candidate.
 		if len(toolCalls) > 0 {
-			o.streamedToolCall = true
+			if o.streamedToolCallByCandidate == nil {
+				o.streamedToolCallByCandidate = make(map[int]bool)
+			}
+			o.streamedToolCallByCandidate[i] = true
 		}
 
 		choice.FinishReason = geminiFinishReasonToOpenAI(candidate.FinishReason, toolCalls)
@@ -462,11 +469,11 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 		// the terminal STOP on a separate chunk whose parts no longer contain the
 		// functionCall (e.g. an empty text part), so the per-chunk toolCalls slice
 		// is empty and geminiFinishReasonToOpenAI maps it to "stop". If a tool call
-		// was streamed in an earlier chunk, the correct OpenAI finish_reason for the
-		// completion is still "tool_calls". Older Gemini models carried the
-		// functionCall and STOP in the same chunk, so this only affects the newer
-		// split-chunk shape.
-		if choice.FinishReason == openai.ChatCompletionChoicesFinishReasonStop && o.streamedToolCall {
+		// was streamed in an earlier chunk of this same candidate, the correct
+		// OpenAI finish_reason for the completion is still "tool_calls". Older
+		// Gemini models carried the functionCall and STOP in the same chunk, so
+		// this only affects the newer split-chunk shape.
+		if choice.FinishReason == openai.ChatCompletionChoicesFinishReasonStop && o.streamedToolCallByCandidate[i] {
 			choice.FinishReason = openai.ChatCompletionChoicesFinishReasonToolCalls
 		}
 
