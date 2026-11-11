@@ -173,7 +173,8 @@ func TestServePOST_NotificationHasNoResponseBody(t *testing.T) {
 
 	require.Equal(t, http.StatusAccepted, rr.Code)
 	require.Empty(t, rr.Body.String())
-	require.Equal(t, 0, backendHits)
+	// The call still runs. Only the response body is suppressed.
+	require.Equal(t, 1, backendHits)
 }
 
 func TestServeModernPOST_StartsSpanOnlyForSupportedMethods(t *testing.T) {
@@ -863,6 +864,116 @@ func TestSendModernRequestAndProxy_ProxiesSSEEvents(t *testing.T) {
 	require.NotContains(t, body, `"uri":"file:///data"`)
 }
 
+func TestSendModernRequestAndProxy_ProgressBeforeBackendCloses(t *testing.T) {
+	const progress = `{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"tok","progress":0.5}}`
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", progress)
+		flusher.Flush()
+		<-release
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{\"ok\":true}}\n\n"))
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+	proxy.requestHeaders = http.Header{}
+	req := modernReq(t, "tools/list", nil)
+
+	pr, pw := io.Pipe()
+	sw := &streamResponseWriter{header: make(http.Header), w: pw}
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := proxy.sendModernRequestAndProxy(context.Background(), sw, req, "test-route", proxy.routes["test-route"].backends["backend1"], handlerResult{}, nil, nil)
+		_ = pw.Close()
+		errCh <- err
+	}()
+
+	seen := make(chan struct{})
+	bodyCh := make(chan string, 1)
+	go func() {
+		var got bytes.Buffer
+		buf := make([]byte, 512)
+		signaled := false
+		for {
+			n, err := pr.Read(buf)
+			if n > 0 {
+				got.Write(buf[:n])
+				if !signaled && bytes.Contains(got.Bytes(), []byte("notifications/progress")) {
+					signaled = true
+					close(seen)
+				}
+			}
+			if err != nil {
+				bodyCh <- got.String()
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-seen:
+	case <-time.After(2 * time.Second):
+		t.Fatal("progress was not forwarded before the backend sent its result")
+	}
+	close(release)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy did not finish after the backend completed")
+	}
+	body := <-bodyCh
+	require.Contains(t, body, `"ok":true`)
+	require.Less(t, strings.Index(body, "notifications/progress"), strings.Index(body, `"ok":true`))
+}
+
+func TestSendModernRequestAndProxy_TerminalDoesNotWaitForEOF(t *testing.T) {
+	hold := make(chan struct{})
+	entered := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{\"ok\":true}}\n\n"))
+		flusher.Flush()
+		close(entered)
+		<-hold
+	}))
+	defer server.Close()
+	defer close(hold)
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+	proxy.requestHeaders = http.Header{}
+	req := modernReq(t, "tools/list", nil)
+	rr := httptest.NewRecorder()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := proxy.sendModernRequestAndProxy(context.Background(), rr, req, "test-route", proxy.routes["test-route"].backends["backend1"], handlerResult{}, nil, nil)
+		done <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("backend did not send the terminal event")
+	}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("gateway waited for the backend to close the stream")
+	}
+	require.Equal(t, "application/json", rr.Header().Get("Content-Type"))
+	require.Contains(t, rr.Body.String(), `"ok":true`)
+	require.NotContains(t, rr.Body.String(), "data:")
+}
+
 func TestSendModernRequestAndProxy_SSETerminalOnlyStaysJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -1021,6 +1132,29 @@ func TestHandleServerDiscover_LegacyBackendSkipped(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.JSONEq(t, `["2026-07-28"]`, string(decodeResult(t, rr)["supportedVersions"]))
+}
+
+func TestHandleServerDiscover_MixedLegacyAndFailureIsServerError(t *testing.T) {
+	// One legacy rejection must not turn a route into -32022 when another
+	// backend failed for a reason that does not prove it is pre-2026-07-28.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(internalapi.MCPBackendHeader) == "backend1" {
+			http.Error(w, "Bad Request: missing session ID", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+	rr := httptest.NewRecorder()
+
+	_, err := proxy.handleServerDiscover(context.Background(), rr, modernReq(t, "server/discover", nil), "test-route", nil)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errBackendNotModern)
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	require.NotContains(t, rr.Body.String(), "-32022")
 }
 
 func TestHandleServerDiscover_AllLegacyRejectedWithUnsupportedVersion(t *testing.T) {
@@ -1716,6 +1850,19 @@ func (r *concurrentRecorder) bodyString() string {
 	return r.Body.String()
 }
 
+// streamResponseWriter is an http.ResponseWriter backed by an io.Writer so a
+// test can observe bytes before the handler returns.
+type streamResponseWriter struct {
+	header http.Header
+	code   int
+	w      io.Writer
+}
+
+func (s *streamResponseWriter) Header() http.Header { return s.header }
+func (s *streamResponseWriter) WriteHeader(code int) { s.code = code }
+func (s *streamResponseWriter) Write(b []byte) (int, error) { return s.w.Write(b) }
+func (s *streamResponseWriter) Flush()                     {}
+
 func TestHandleSubscriptionsListen_MergesAndRewritesEvents(t *testing.T) {
 	// Each backend emits one resources/updated notification with an upstream URI;
 	// the gateway must re-prefix each URI into the downstream namespace and forward
@@ -1868,6 +2015,72 @@ func TestHandleSubscriptionsListen_RejectsBareResourceURI(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	require.Contains(t, rr.Body.String(), "invalid resource subscription URI")
+}
+
+func TestHandleSubscriptionsListen_ForwardsStructuredHTTPRejection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"bad subscription"}}`))
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+
+	params, err := json.Marshal(map[string]any{
+		"notifications": map[string]any{
+			"resourceSubscriptions": []string{downstreamResourceURI("file:///watched-backend1", "backend1")},
+		},
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := modernReq(t, "subscriptions/listen", params)
+	_, err = proxy.handleSubscriptionsListen(context.Background(), rr, newModernRequest("subscriptions/listen"), req, "test-route", nil)
+
+	require.Error(t, err)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), `"code":-32602`)
+	require.Contains(t, rr.Body.String(), "bad subscription")
+	require.NotContains(t, rr.Body.String(), `"code":-32603`)
+	require.NotContains(t, rr.Body.String(), "complete")
+}
+
+func TestHandleSubscriptionsListen_TerminalErrorOverridesAcceptance(t *testing.T) {
+	// A notification proves the stream opened, but a later JSON-RPC error is
+	// the terminal result. The gateway must surface that error rather than
+	// synthesize resultType:"complete".
+	sub := downstreamResourceURI("file:///watched-backend1", "backend1")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		notif := `{"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":"file:///watched-backend1"}}`
+		_, _ = w.Write([]byte("event: message\ndata: " + notif + "\n\n"))
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"error\":{\"code\":-32602,\"message\":\"subscription failed\"}}\n\n"))
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+
+	params, err := json.Marshal(map[string]any{
+		"notifications": map[string]any{
+			"resourceSubscriptions": []string{sub},
+		},
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := modernReq(t, "subscriptions/listen", params)
+	_, err = proxy.handleSubscriptionsListen(context.Background(), rr, newModernRequest("subscriptions/listen"), req, "test-route", nil)
+
+	require.Error(t, err)
+	body := rr.Body.String()
+	require.Contains(t, body, sub)
+	require.Contains(t, body, `"code":-32602`)
+	require.Contains(t, body, "subscription failed")
+	require.NotContains(t, body, `"resultType":"complete"`)
 }
 
 func TestHandleSubscriptionsListen_AllBackendsFail(t *testing.T) {
@@ -2855,6 +3068,25 @@ func TestRewriteToolsCallResult(t *testing.T) {
 		require.NoError(t, json.Unmarshal(m["content"], &contents))
 		require.Len(t, contents, 1)
 		require.Equal(t, downstreamResourceURI("file:///data", "backend1"), contents[0]["uri"])
+	})
+
+	t.Run("rewrites _meta inside a content block", func(t *testing.T) {
+		in := json.RawMessage(`{"content":[{"type":"resource_link","uri":"file:///data","name":"d","_meta":{"ui":{"resourceUri":"ui://app/link"},"keep":"yes"}}]}`)
+		out, ok := rewriteToolsCallResult(in, "backend1")
+		require.True(t, ok)
+
+		var m map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(out, &m))
+		var contents []map[string]any
+		require.NoError(t, json.Unmarshal(m["content"], &contents))
+		require.Len(t, contents, 1)
+		require.Equal(t, downstreamResourceURI("file:///data", "backend1"), contents[0]["uri"])
+		meta, ok := contents[0]["_meta"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "yes", meta["keep"])
+		ui, ok := meta["ui"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, downstreamResourceURI("ui://app/link", "backend1"), ui["resourceUri"])
 	})
 
 	t.Run("embedded resource uri is re-prefixed", func(t *testing.T) {

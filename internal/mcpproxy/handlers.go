@@ -433,7 +433,7 @@ func rewriteToolsCallResult(resp json.RawMessage, backendName filterapi.MCPBacke
 		if json.Unmarshal(raw, &contents) == nil {
 			contentChanged := false
 			for _, c := range contents {
-				if rewriteContentResourceURI(c, backendName) {
+				if rewriteContentBlock(c, backendName) {
 					contentChanged = true
 				}
 			}
@@ -464,6 +464,28 @@ func rewriteToolsCallResult(resp json.RawMessage, backendName filterapi.MCPBacke
 		return nil, false
 	}
 	return out, true
+}
+
+// rewriteContentBlock re-prefixes the resource URI and any _meta resource URIs
+// on one content object. A resource link's own _meta.ui.resourceUri has to be
+// namespaced the same way as the result-level _meta, or a later resources/read
+// cannot route the UI resource on a multi-backend route.
+func rewriteContentBlock(c map[string]json.RawMessage, backendName filterapi.MCPBackendName) bool {
+	changed := rewriteContentResourceURI(c, backendName)
+	metaRaw, ok := c["_meta"]
+	if !ok {
+		return changed
+	}
+	var meta map[string]any
+	if json.Unmarshal(metaRaw, &meta) != nil || !rewriteMetaResourceURIs(mcp.Meta(meta), backendName) {
+		return changed
+	}
+	out, err := json.Marshal(meta)
+	if err != nil {
+		return changed
+	}
+	c["_meta"] = out
+	return true
 }
 
 // rewriteContentResourceURI re-prefixes the resource URI carried by one content
@@ -545,17 +567,7 @@ func rewritePromptsGetResult(resp json.RawMessage, backendName filterapi.MCPBack
 				if json.Unmarshal(contentRaw, &content) != nil {
 					continue
 				}
-				contentChanged := rewriteContentResourceURI(content, backendName)
-				if metaRaw, ok := content["_meta"]; ok {
-					var meta map[string]any
-					if json.Unmarshal(metaRaw, &meta) == nil && rewriteMetaResourceURIs(mcp.Meta(meta), backendName) {
-						if out, err := json.Marshal(meta); err == nil {
-							content["_meta"] = out
-							contentChanged = true
-						}
-					}
-				}
-				if !contentChanged {
+				if !rewriteContentBlock(content, backendName) {
 					continue
 				}
 				out, err := json.Marshal(content)

@@ -6,6 +6,7 @@
 package mcpproxy
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -77,6 +78,16 @@ func (e *backendStatusError) Error() string {
 	return fmt.Sprintf("backend returned status %d: %s", e.status, e.body)
 }
 
+// discardResponseWriter drops a handler's writes. Id-less JSON-RPC requests
+// are notifications: the call still runs, and the client gets an empty 202.
+type discardResponseWriter struct {
+	header http.Header
+}
+
+func (d *discardResponseWriter) Header() http.Header { return d.header }
+func (d *discardResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (d *discardResponseWriter) WriteHeader(int) {}
+
 // serveModernPOST handles modern (2026-07-28) stateless POST requests.
 // This is the Phase 1 entry point for modern clients talking to modern backends.
 // The JSON-RPC request has already been parsed by servePOST.
@@ -128,11 +139,16 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 
 	// A JSON-RPC notification is defined by the absent id, not by a
 	// notifications/* method name. validateModernRequest lets these through
-	// (they need no clientCapabilities). Dispatching would run the call and
-	// the handler would write a response with id:null. Accept with an empty body.
+	// (they need no clientCapabilities). The method still has to run — an
+	// id-less tools/call is fire-and-forget and its side effects must happen —
+	// but the handler must not write a response body. Handlers below write to
+	// w, so swap in a sink and acknowledge with 202 once dispatch returns.
 	if !req.ID.IsValid() {
-		w.WriteHeader(http.StatusAccepted)
-		return
+		clientW := w
+		w = &discardResponseWriter{header: make(http.Header)}
+		defer func() {
+			clientW.WriteHeader(http.StatusAccepted)
+		}()
 	}
 
 	// Dispatch based on method. Tracing spans are started only for supported
@@ -241,8 +257,11 @@ func (m *mcpRequestContext) serveModernPOST(w http.ResponseWriter, r *http.Reque
 		params = p
 		result, err = m.handleModernComplete(ctx, w, r, req, route, span)
 	default:
-		// Requests that reach this branch have an id. Notifications were
-		// accepted above, before dispatch.
+		// An id-less unknown method (notifications/progress and the like) is
+		// still a notification: accept it and do not invent an error response.
+		if !req.ID.IsValid() {
+			return
+		}
 		errType = metrics.MCPErrorUnsupportedMethod
 		err = fmt.Errorf("unknown method: %s", req.Method)
 		onRequestError(w, http.StatusNotFound, errCodeMethodNotFound, fmt.Sprintf("unknown method: %s", req.Method), req.ID)
@@ -312,8 +331,9 @@ func (m *mcpRequestContext) handleServerDiscover(ctx context.Context, w http.Res
 	}
 
 	var results []*mcp.DiscoverResult
-	notModern := false
+	attempted, legacy := 0, 0
 	for _, backend := range selectedBackends {
+		attempted++
 		backendStartAt := time.Now()
 		result, err := m.discoverBackend(ctx, route, backend)
 		backendMetrics := m.metrics.WithBackend(backend.Name)
@@ -323,7 +343,12 @@ func (m *mcpRequestContext) handleServerDiscover(ctx context.Context, w http.Res
 				slog.String("error", err.Error()))
 			backendMetrics.RecordMethodErrorCount(ctx, req.Method, nil, metrics.MCPStatusError)
 			backendMetrics.RecordRequestErrorDuration(ctx, backendStartAt, errorType(err), nil)
-			notModern = notModern || errors.Is(err, errBackendNotModern)
+			// Only a legacy-shaped rejection counts. A transport error, 5xx,
+			// or modern-only protocol error has not shown that this backend
+			// is pre-2026-07-28, and must not flip the whole route to -32022.
+			if errors.Is(err, errBackendNotModern) {
+				legacy++
+			}
 			continue
 		}
 		if span != nil {
@@ -333,8 +358,11 @@ func (m *mcpRequestContext) handleServerDiscover(ctx context.Context, w http.Res
 		backendMetrics.RecordRequestDuration(ctx, backendStartAt, nil)
 		results = append(results, result)
 	}
-	// Client error only if every backend failed
-	if len(results) == 0 && notModern {
+	// -32022 tells the client to fall back to legacy initialize. That claim is
+	// only true when every backend we contacted answered as a legacy server.
+	// One legacy rejection plus a crash, a 5xx, or a modern-only error leaves
+	// the route unclassified, so the client gets a server error instead.
+	if len(results) == 0 && attempted > 0 && legacy == attempted {
 		writeBackendNotModernError(w, req.ID)
 		return handlerResult{}, fmt.Errorf("%w: route %s", errBackendNotModern, route)
 	}
@@ -953,6 +981,9 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 	events := make(chan *sseEvent)
 	var wg sync.WaitGroup
 	var attempted, established int
+	// First structured non-200 rejection. Forwarded when no stream opens, so a
+	// 400/-32602 from the backend is not replaced by a generic 502/-32603.
+	var rejection *backendJSONRPCError
 	for _, backend := range selected {
 		uris := perBackendURIs[backend.Name]
 		if len(uris) == 0 && !wantListChanged {
@@ -994,8 +1025,16 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
-			m.l.Warn("subscriptions/listen rejected by backend", slog.String("backend", backend.Name), slog.Int("status", resp.StatusCode))
+			statusErr := backendHTTPStatusError(resp)
 			_ = resp.Body.Close()
+			m.l.Warn("subscriptions/listen rejected by backend",
+				slog.String("backend", backend.Name),
+				slog.Int("status", resp.StatusCode),
+				slog.String("error", statusErr.Error()))
+			var structured *backendJSONRPCError
+			if errors.As(statusErr, &structured) && rejection == nil {
+				rejection = structured
+			}
 			continue
 		}
 		established++
@@ -1032,6 +1071,14 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 	}()
 
 	if attempted > 0 && established == 0 {
+		if rejection != nil {
+			status := rejection.status
+			if status == 0 {
+				status = http.StatusBadGateway
+			}
+			writeBackendJSONRPCErrorWithStatus(w, req.ID, rejection.raw, status)
+			return handlerResult{}, rejection
+		}
 		err := fmt.Errorf("subscriptions/listen: all %d backend(s) failed", attempted)
 		onRequestError(w, http.StatusBadGateway, int(jsonrpc.CodeInternalError), err.Error(), req.ID)
 		return handlerResult{}, err
@@ -1235,8 +1282,8 @@ func (m *mcpRequestContext) forwardSubscriptionEvent(event *sseEvent, intent sub
 
 // subscriptionFanout records which established subscriptions/listen streams
 // accepted the subscription and which rejected it with a JSON-RPC error.
-// Acceptance wins: a backend that sends a notification or a successful
-// completion is not failed by a later error on the same stream.
+// The latest signal from a backend wins: a terminal JSON-RPC error overrides
+// an earlier notification, and a later notification overrides an earlier error.
 type subscriptionFanout struct {
 	accepted map[filterapi.MCPBackendName]struct{}
 	rejected map[filterapi.MCPBackendName]struct{}
@@ -1255,10 +1302,11 @@ func (f *subscriptionFanout) accept(backend filterapi.MCPBackendName) {
 	delete(f.rejected, backend)
 }
 
+// reject records a terminal JSON-RPC error. It overrides an earlier
+// notification or acknowledgement from the same backend, so a stream that
+// delivered an event and then failed is not reported as a clean close.
 func (f *subscriptionFanout) reject(backend filterapi.MCPBackendName, raw json.RawMessage) {
-	if _, ok := f.accepted[backend]; ok {
-		return
-	}
+	delete(f.accepted, backend)
 	f.rejected[backend] = struct{}{}
 	if f.firstErr == nil && len(raw) > 0 {
 		f.firstErr = raw
@@ -1484,9 +1532,12 @@ type modernResultRewriter func(result json.RawMessage) (json.RawMessage, bool)
 // result through unchanged.
 //
 // An SSE body that carries progress notifications or other JSON-RPC messages
-// before the terminal response is proxied as text/event-stream. The rewrite
-// applies only to that terminal result. A single JSON body, or an SSE body
-// whose only message is the terminal response, is still one application/json result.
+// around the terminal response is proxied as text/event-stream as each event
+// arrives. The client sees progress before the backend closes, and a terminal
+// message is written even when the backend keeps the stream open afterwards.
+// The rewrite applies only to that terminal result. A single JSON body, or an
+// SSE body whose only message is the terminal response, is still one
+// application/json result.
 func (m *mcpRequestContext) sendModernRequestAndProxy(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -1501,22 +1552,40 @@ func (m *mcpRequestContext) sendModernRequestAndProxy(
 		span.RecordRouteToBackend(backend.Name, "", false)
 	}
 
-	reply, err := m.exchangeModernRequest(ctx, req, route, backend)
-	if len(reply.before) > 0 || len(reply.after) > 0 {
-		return m.proxyModernSSECall(w, req, backend, result, reply, err, rewrite)
-	}
+	resp, err := m.doModernBackendRequest(ctx, req, route, backend)
 	if err != nil {
 		return m.writeModernCallError(w, req, backend, result, err)
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return m.writeModernCallError(w, req, backend, result, backendHTTPStatusError(resp))
+	}
 
-	resp := reply.result
+	body := bufio.NewReader(resp.Body)
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "text/event-stream") || bodyLooksLikeSSE(body) {
+		return m.streamModernSSE(w, req, backend, result, body, rewrite)
+	}
+
+	respBody, err := io.ReadAll(body)
+	if err != nil {
+		return m.writeModernCallError(w, req, backend, result, fmt.Errorf("read response: %w", err))
+	}
+	var rpcResp map[string]json.RawMessage
+	if err := json.Unmarshal(respBody, &rpcResp); err != nil {
+		return m.writeModernCallError(w, req, backend, result, fmt.Errorf("parse response: %w (body: %.200s)", err, string(respBody)))
+	}
+	if err := validateModernJSONRPCResponse(req, rpcResp); err != nil {
+		return m.writeModernCallError(w, req, backend, result, err)
+	}
+	respResult := rpcResp["result"]
 	if rewrite != nil {
-		if rewritten, ok := rewrite(resp); ok {
-			resp = rewritten
+		if rewritten, ok := rewrite(respResult); ok {
+			respResult = rewritten
 		}
 	}
-	writeRawJSONRPCResult(w, req.ID, resp)
-	return m.finishModernCallResult(req, backend, result, resp)
+	writeRawJSONRPCResult(w, req.ID, respResult)
+	return m.finishModernCallResult(req, backend, result, respResult)
 }
 
 // writeModernCallError forwards a structured backend JSON-RPC error, or writes
@@ -1541,43 +1610,158 @@ func (m *mcpRequestContext) writeModernCallError(w http.ResponseWriter, req *jso
 	return result, err
 }
 
-// proxyModernSSECall writes prelude JSON-RPC messages, then the terminal
-// response (rewritten when rewrite is set), then any messages that followed it.
-// Headers are committed as text/event-stream before the first event.
-func (m *mcpRequestContext) proxyModernSSECall(
+// streamModernSSE parses the backend SSE body incrementally and writes each
+// event to the client as soon as it is complete. Progress is not held until
+// EOF. Once the terminal JSON-RPC response is in hand and nothing further is
+// already buffered, a lone terminal message is written as application/json
+// without waiting for the backend to close the stream.
+func (m *mcpRequestContext) streamModernSSE(
 	w http.ResponseWriter,
 	req *jsonrpc.Request,
 	backend filterapi.MCPBackend,
 	result handlerResult,
-	reply modernBackendReply,
-	callErr error,
+	body io.Reader,
 	rewrite modernResultRewriter,
 ) (handlerResult, error) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	for _, ev := range reply.before {
-		ev.writeAndMaybeFlush(w)
-	}
-	if callErr != nil {
-		writeModernSSEError(w, req.ID, callErr)
-		for _, ev := range reply.after {
-			ev.writeAndMaybeFlush(w)
+	parser := newSSEEventParser(body, backend.Name)
+	sseStarted := false
+	sawTerminal := false
+	var terminalResult json.RawMessage
+	var terminalErr error
+
+	startSSE := func() {
+		if sseStarted {
+			return
 		}
-		return result, callErr
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+		sseStarted = true
 	}
-	resp := reply.result
-	if rewrite != nil {
-		if rewritten, ok := rewrite(resp); ok {
-			resp = rewritten
+	writeMessages := func(eventName, id string, msgs []jsonrpc.Message) {
+		if len(msgs) == 0 {
+			return
+		}
+		startSSE()
+		(&sseEvent{event: eventName, id: id, messages: msgs}).writeAndMaybeFlush(w)
+	}
+	writeTerminal := func() {
+		if terminalErr != nil {
+			startSSE()
+			writeModernSSEError(w, req.ID, terminalErr)
+			return
+		}
+		resp := terminalResult
+		if rewrite != nil {
+			if rewritten, ok := rewrite(resp); ok {
+				resp = rewritten
+			}
+		}
+		terminalResult = resp
+		startSSE()
+		writeModernTerminalEvent(w, req.ID, resp)
+	}
+
+	for {
+		ev, err := parser.next()
+		if ev != nil && len(ev.messages) > 0 {
+			before, terminal, after := splitSSEMessages(ev.messages)
+			if !sawTerminal {
+				writeMessages(ev.event, ev.id, before)
+				if terminal != nil {
+					terminalResult, terminalErr = modernResultFromResponse(req, terminal)
+					sawTerminal = true
+					// More messages are already buffered, or this event itself
+					// continues past the response: commit to SSE and write the
+					// terminal now. A lone response with an idle stream falls
+					// through and is emitted as JSON without another read.
+					if sseStarted || len(after) > 0 || parser.hasPendingMessage() {
+						writeTerminal()
+						writeMessages(ev.event, ev.id, after)
+					}
+				}
+			} else {
+				if !sseStarted {
+					writeTerminal()
+				}
+				writeMessages(ev.event, ev.id, ev.messages)
+			}
+		}
+		if err != nil {
+			if readErr := sseReadErr(err); readErr != nil && !sawTerminal {
+				if sseStarted {
+					writeModernSSEError(w, req.ID, readErr)
+					return result, readErr
+				}
+				return m.writeModernCallError(w, req, backend, result, readErr)
+			}
+			break
+		}
+		if sawTerminal && !sseStarted && !parser.hasPendingMessage() {
+			break
 		}
 	}
-	writeModernTerminalEvent(w, req.ID, resp)
-	for _, ev := range reply.after {
-		ev.writeAndMaybeFlush(w)
+
+	if !sawTerminal {
+		err := fmt.Errorf("no JSON-RPC response found in SSE stream")
+		if sseStarted {
+			writeModernSSEError(w, req.ID, err)
+			return result, err
+		}
+		return m.writeModernCallError(w, req, backend, result, err)
 	}
-	return m.finishModernCallResult(req, backend, result, resp)
+	if !sseStarted {
+		if terminalErr != nil {
+			return m.writeModernCallError(w, req, backend, result, terminalErr)
+		}
+		resp := terminalResult
+		if rewrite != nil {
+			if rewritten, ok := rewrite(resp); ok {
+				resp = rewritten
+			}
+		}
+		writeRawJSONRPCResult(w, req.ID, resp)
+		return m.finishModernCallResult(req, backend, result, resp)
+	}
+	if terminalErr != nil {
+		return result, terminalErr
+	}
+	return m.finishModernCallResult(req, backend, result, terminalResult)
+}
+
+// splitSSEMessages divides one SSE event's JSON-RPC messages around the last
+// response. Messages before that response are prelude; messages after it are
+// the suffix. An event with no response is entirely prelude.
+func splitSSEMessages(messages []jsonrpc.Message) (before []jsonrpc.Message, terminal *jsonrpc.Response, after []jsonrpc.Message) {
+	term := -1
+	for i, msg := range messages {
+		if _, ok := msg.(*jsonrpc.Response); ok {
+			term = i
+		}
+	}
+	if term < 0 {
+		return messages, nil, nil
+	}
+	if term > 0 {
+		before = messages[:term]
+	}
+	terminal = messages[term].(*jsonrpc.Response)
+	if term+1 < len(messages) {
+		after = messages[term+1:]
+	}
+	return before, terminal, after
+}
+
+// bodyLooksLikeSSE reports whether the next buffered bytes of r are an SSE
+// frame. It is used when the backend omits a text/event-stream content type.
+// Peek does not consume bytes, so a JSON body is still intact for ReadAll.
+func bodyLooksLikeSSE(r *bufio.Reader) bool {
+	peek, err := r.Peek(len("event:"))
+	if err != nil && len(peek) == 0 {
+		return false
+	}
+	return bytes.HasPrefix(peek, []byte("event:")) || bytes.HasPrefix(peek, []byte("data:"))
 }
 
 // finishModernCallResult classifies a tools/call result that completed at the
@@ -1645,24 +1829,23 @@ type modernBackendReply struct {
 
 // sendModernRequest sends a JSON-RPC request to a modern backend with proper headers (P1.6).
 // Returns the raw result JSON. SSE progress and other non-terminal messages are
-// discarded here; single-target callers use exchangeModernRequest so they can
-// proxy those events.
+// discarded here; single-target callers stream those events as they arrive.
 func (m *mcpRequestContext) sendModernRequest(ctx context.Context, req *jsonrpc.Request, route filterapi.MCPRouteName, backend filterapi.MCPBackend) (json.RawMessage, error) {
 	reply, err := m.exchangeModernRequest(ctx, req, route, backend)
 	return reply.result, err
 }
 
-// exchangeModernRequest performs one modern backend call and separates any SSE
-// messages that surround the terminal JSON-RPC response from that response's result.
-func (m *mcpRequestContext) exchangeModernRequest(ctx context.Context, req *jsonrpc.Request, route filterapi.MCPRouteName, backend filterapi.MCPBackend) (modernBackendReply, error) {
+// doModernBackendRequest posts one JSON-RPC call to a modern backend and
+// returns the HTTP response. The caller closes the body.
+func (m *mcpRequestContext) doModernBackendRequest(ctx context.Context, req *jsonrpc.Request, route filterapi.MCPRouteName, backend filterapi.MCPBackend) (*http.Response, error) {
 	body, err := jsonrpc.EncodeMessage(req)
 	if err != nil {
-		return modernBackendReply{}, fmt.Errorf("encode request: %w", err)
+		return nil, fmt.Errorf("encode request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, m.backendListenerAddr, bytes.NewReader(body))
 	if err != nil {
-		return modernBackendReply{}, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	// Keep modern forwarding behavior aligned with the legacy proxy path:
@@ -1685,7 +1868,7 @@ func (m *mcpRequestContext) exchangeModernRequest(ctx context.Context, req *json
 	if name := extractNameForMethod(req.Method, json.RawMessage(req.Params)); name != "" {
 		httpReq.Header.Set(mcpNameHeader, name)
 	} else if req.Method == "tools/call" {
-		return modernBackendReply{}, fmt.Errorf("invalid tools/call params: missing required name")
+		return nil, fmt.Errorf("invalid tools/call params: missing required name")
 	}
 	// Backends validate Mcp-Param-* against x-mcp-header tool arguments
 	// (SEP-2243). The gateway rewrites only the tool name, never arguments, so
@@ -1700,20 +1883,39 @@ func (m *mcpRequestContext) exchangeModernRequest(ctx context.Context, req *json
 
 	resp, err := m.client.Do(httpReq)
 	if err != nil {
-		return modernBackendReply{}, fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	return resp, nil
+}
+
+// backendHTTPStatusError classifies a non-200 backend response. A 4xx body
+// that carries a JSON-RPC error object keeps that object and the HTTP status;
+// anything else is a plain status error.
+func backendHTTPStatusError(resp *http.Response) error {
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		var errBody struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(respBody, &errBody) == nil && jsonRPCErrorCode(errBody.Error) != 0 {
+			return &backendJSONRPCError{raw: errBody.Error, status: resp.StatusCode}
+		}
+	}
+	return &backendStatusError{status: resp.StatusCode, body: respBody}
+}
+
+// exchangeModernRequest performs one modern backend call and separates any SSE
+// messages that surround the terminal JSON-RPC response from that response's result.
+// The body is buffered: list and discover callers only need the terminal result.
+// Single-target calls use streamModernSSE so progress is not held until EOF.
+func (m *mcpRequestContext) exchangeModernRequest(ctx context.Context, req *jsonrpc.Request, route filterapi.MCPRouteName, backend filterapi.MCPBackend) (modernBackendReply, error) {
+	resp, err := m.doModernBackendRequest(ctx, req, route, backend)
+	if err != nil {
+		return modernBackendReply{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			var errBody struct {
-				Error json.RawMessage `json:"error"`
-			}
-			if json.Unmarshal(respBody, &errBody) == nil && jsonRPCErrorCode(errBody.Error) != 0 {
-				return modernBackendReply{}, &backendJSONRPCError{raw: errBody.Error, status: resp.StatusCode}
-			}
-		}
-		return modernBackendReply{}, &backendStatusError{status: resp.StatusCode, body: respBody}
+		return modernBackendReply{}, backendHTTPStatusError(resp)
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
