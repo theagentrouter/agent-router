@@ -546,6 +546,11 @@ func TestFinishReasonTranslation(t *testing.T) {
 			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonLength,
 		},
 		{
+			name:                 "context window stop reason",
+			input:                anthropic.StopReasonModelContextWindowExceeded,
+			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonLength,
+		},
+		{
 			name:                 "refusal stop reason",
 			input:                anthropic.StopReasonRefusal,
 			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonContentFilter,
@@ -1381,7 +1386,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			},
 		},
 		{
-			name:      "structured output skipped on unsupported model",
+			name:      "structured output rejected on unsupported model",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-3-sonnet",
@@ -1402,7 +1407,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 					},
 				},
 			},
-			expectSchema: false,
+			expectErr: true,
 		},
 		{
 			name:      "no response format",
@@ -1507,7 +1512,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 		{
 			// Mirror of the case above: the same GCP-only model must NOT enable
 			// structured output on the AWS Bedrock (InvokeModel) path.
-			name:      "structured output skipped on AWS for GCP-only model",
+			name:      "structured output rejected on AWS for GCP-only model",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-8",
@@ -1528,7 +1533,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 					},
 				},
 			},
-			expectSchema: false,
+			expectErr: true,
 		},
 	}
 
@@ -2079,11 +2084,7 @@ data:{"type":"message_stop"}
 	require.Equal(t, uint32(16), output)
 }
 
-// TestAnthropicStreamParser_ThinkingDelta asserts that extended thinking
-// content reaches the OpenAI stream. text_delta and thinking_delta are
-// separate variants of RawContentBlockDeltaUnion and carry their payload
-// in different fields, so reading .Text for both streams every thinking
-// token as an empty string.
+// Thinking must stay in reasoning_content, separate from the visible answer.
 func TestAnthropicStreamParser_ThinkingDelta(t *testing.T) {
 	p := newAnthropicStreamParser("claude-sonnet-4-5")
 
@@ -2125,12 +2126,22 @@ data: {"type":"message_stop"}
 	_, body, _, _, err := p.Process(strings.NewReader(stream), true, nil)
 	require.NoError(t, err)
 
-	contents := streamedContent(t, body)
-	require.Equal(t, []string{
-		"Let me work through it. ",
-		"Two plus two is four.",
-		"4",
-	}, contents, "thinking content is dropped: every thinking_delta arrives as an empty string")
+	require.Equal(t, []string{"4"}, streamedContent(t, body))
+	var reasoning []string
+	for line := range strings.SplitSeq(string(body), "\n") {
+		payload, ok := strings.CutPrefix(line, "data: ")
+		if !ok || payload == "[DONE]" {
+			continue
+		}
+		var chunk openai.ChatCompletionResponseChunk
+		require.NoError(t, json.Unmarshal([]byte(payload), &chunk))
+		for _, choice := range chunk.Choices {
+			if choice.Delta != nil && choice.Delta.ReasoningContent != nil {
+				reasoning = append(reasoning, choice.Delta.ReasoningContent.Text)
+			}
+		}
+	}
+	require.Equal(t, []string{"Let me work through it. ", "Two plus two is four."}, reasoning)
 }
 
 // streamedContent collects the non-empty delta.content values from an
@@ -2237,7 +2248,7 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}
 		require.NotContains(t, string(body), "[DONE]")
 	})
 
-	t.Run("non-overload error is not serialized", func(t *testing.T) {
+	t.Run("non-overload error is serialized", func(t *testing.T) {
 		p := newAnthropicStreamParser("claude-sonnet-4-5")
 		const stream = `event: error
 data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
@@ -2246,9 +2257,11 @@ data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
 		_, body, _, _, err := p.Process(strings.NewReader(stream), false, nil)
 		var streamErr *StreamOverloadedError
 		require.NotErrorAs(t, err, &streamErr)
+		var responseErr *StreamResponseError
+		require.ErrorAs(t, err, &responseErr)
 		var anthropicErr *anthropicStreamError
 		require.ErrorAs(t, err, &anthropicErr)
 		require.Equal(t, "api_error", anthropicErr.Type)
-		require.Empty(t, body)
+		require.Equal(t, "data: {\"error\":{\"type\":\"api_error\",\"message\":\"Upstream error\"}}\n\n", string(body))
 	})
 }

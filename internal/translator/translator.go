@@ -82,6 +82,22 @@ type Translator[ReqT any, SpanT any] interface {
 	)
 }
 
+// StreamResponseError carries a translated upstream error event that must be sent before ending the stream.
+type StreamResponseError struct {
+	Err error
+}
+
+func (e *StreamResponseError) Error() string {
+	if e.Err == nil {
+		return "upstream failed mid-stream"
+	}
+	return "upstream failed mid-stream: " + e.Err.Error()
+}
+
+func (e *StreamResponseError) Unwrap() error {
+	return e.Err
+}
+
 // StreamOverloadedError signals that the upstream reported an overload in the
 // middle of a streaming response. When returning it, ResponseBody must also
 // return a non-empty body containing the translated error event. The response

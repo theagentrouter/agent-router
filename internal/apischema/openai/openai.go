@@ -1038,12 +1038,13 @@ type ReasoningEffort = openai.ReasoningEffort
 
 // ReasoningEffort constants for the reasoning_effort field.
 const (
-	ReasoningEffortNone   ReasoningEffort = "none"
-	ReasoningEffortLow    ReasoningEffort = "low"
-	ReasoningEffortMedium ReasoningEffort = "medium"
-	ReasoningEffortHigh   ReasoningEffort = "high"
-	ReasoningEffortXhigh  ReasoningEffort = "xhigh"
-	ReasoningEffortMax    ReasoningEffort = "max"
+	ReasoningEffortNone    ReasoningEffort = "none"
+	ReasoningEffortMinimal ReasoningEffort = "minimal"
+	ReasoningEffortLow     ReasoningEffort = "low"
+	ReasoningEffortMedium  ReasoningEffort = "medium"
+	ReasoningEffortHigh    ReasoningEffort = "high"
+	ReasoningEffortXhigh   ReasoningEffort = "xhigh"
+	ReasoningEffortMax     ReasoningEffort = "max"
 )
 
 type ChatCompletionRequest struct {
@@ -1520,6 +1521,8 @@ type ChatCompletionResponseChoice struct {
 type ChatCompletionResponseChoiceMessage struct {
 	// The contents of the message.
 	Content *string `json:"content,omitempty"`
+	// Refusal is the explanation returned when the model refuses the request.
+	Refusal *string `json:"refusal,omitempty"`
 
 	// The role of the author of this message.
 	Role string `json:"role,omitempty"`
@@ -1710,6 +1713,7 @@ type ChatCompletionChunkChoiceDeltaToolCall struct {
 // https://platform.openai.com/docs/api-reference/chat/streaming#chat/streaming-choices
 type ChatCompletionResponseChunkChoiceDelta struct {
 	Content     *string                                  `json:"content,omitempty"`
+	Refusal     *string                                  `json:"refusal,omitempty"`
 	Role        string                                   `json:"role,omitempty"`
 	ToolCalls   []ChatCompletionChunkChoiceDeltaToolCall `json:"tool_calls,omitempty"`
 	Annotations *[]Annotation                            `json:"annotations,omitempty"`

@@ -66,3 +66,24 @@ func portValues(t *testing.T, config string) []int {
 	}
 	return ports
 }
+
+func TestReplaceTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, expected string
+		replacements          map[string]string
+	}{
+		{"unchanged", "port_value: 1061", "port_value: 1061", nil},
+		{"ports replaced once", "port_value: 1061\nport_value: 1063", "port_value: 10631\nport_value: 10619", map[string]string{
+			"port_value: 1061": "port_value: 10631",
+			"port_value: 1063": "port_value: 10619",
+		}},
+		{"longest token first", "port_value: 10619", "port_value: 12000", map[string]string{
+			"port_value: 1061":  "port_value: 13000",
+			"port_value: 10619": "port_value: 12000",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, replaceTokens(tc.input, tc.replacements))
+		})
+	}
+}
