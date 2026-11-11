@@ -262,6 +262,11 @@ type MCPBackendSecurityPolicy struct {
 type MCPBackendAPIKey struct {
 	// secretRef is the Kubernetes secret which contains the API keys.
 	// The key of the secret should be "apiKey".
+	//
+	// When namespace is set to a namespace other than the MCPRoute's, a ReferenceGrant in the
+	// Secret's namespace must allow MCPRoute from the route's namespace to reference Secrets.
+	// Without it the MCPRoute is marked NotAccepted.
+	//
 	// +optional
 	SecretRef *gwapiv1.SecretObjectReference `json:"secretRef,omitempty"`
 

@@ -1863,7 +1863,7 @@ When both `header` and `queryParam` are unspecified, the API key will be injecte
   name="secretRef"
   type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
   required="false"
-  description="secretRef is the Kubernetes secret which contains the API keys.<br />The key of the secret should be `apiKey`."
+  description="secretRef is the Kubernetes secret which contains the API keys.<br />The key of the secret should be `apiKey`.<br />When namespace is set to a namespace other than the MCPRoute's, a ReferenceGrant in the<br />Secret's namespace must allow MCPRoute from the route's namespace to reference Secrets.<br />Without it the MCPRoute is marked NotAccepted."
 /><ApiField
   name="inline"
   type="string"
@@ -4715,7 +4715,7 @@ When both `header` and `queryParam` are unspecified, the API key will be injecte
   name="secretRef"
   type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
   required="false"
-  description="secretRef is the Kubernetes secret which contains the API keys.<br />The key of the secret should be `apiKey`."
+  description="secretRef is the Kubernetes secret which contains the API keys.<br />The key of the secret should be `apiKey`.<br />When namespace is set to a namespace other than the MCPRoute's, a ReferenceGrant in the<br />Secret's namespace must allow MCPRoute from the route's namespace to reference Secrets.<br />Without it the MCPRoute is marked NotAccepted."
 /><ApiField
   name="inline"
   type="string"

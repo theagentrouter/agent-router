@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -85,7 +87,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -112,7 +114,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKey{
@@ -180,7 +182,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -245,7 +247,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -329,7 +331,7 @@ func TestReferenceGrantController_Reconcile(t *testing.T) {
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -366,9 +368,10 @@ func TestNewReferenceGrantController(t *testing.T) {
 	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
 	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	quotaPolicyChan := make(chan event.GenericEvent, 10)
+	mcpRouteChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
 
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, quotaPolicyChan)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, quotaPolicyChan, mcpRouteChan)
 
 	require.NotNil(t, controller)
 	require.Equal(t, fakeClient, controller.client)
@@ -376,6 +379,7 @@ func TestNewReferenceGrantController(t *testing.T) {
 	require.Equal(t, aiGatewayRouteChan, controller.aiGatewayRouteChan)
 	require.Equal(t, backendSecurityPolicyChan, controller.backendSecurityPolicyChan)
 	require.Equal(t, quotaPolicyChan, controller.quotaPolicyChan)
+	require.Equal(t, mcpRouteChan, controller.mcpRouteChan)
 }
 
 // TestReferenceGrantController_Reconcile_GetError tests reconcile when Get returns error
@@ -393,7 +397,7 @@ func TestReferenceGrantController_Reconcile_GetError(t *testing.T) {
 	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
 
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 	// Try to reconcile a non-existent ReferenceGrant - this should be handled gracefully
 	req := reconcile.Request{
@@ -445,7 +449,7 @@ func TestReferenceGrantController_Reconcile_GetAffectedRoutesError(t *testing.T)
 	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
 
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 	req := reconcile.Request{
 		NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -638,7 +642,7 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 			aiGatewayRouteChan := make(chan event.GenericEvent, 10)
 			backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 			logger := logr.Discard()
-			controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+			controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 			affectedRoutes, err := controller.getAffectedAIGatewayRoutes(
 				context.Background(),
@@ -667,7 +671,7 @@ func TestReferenceGrantController_GetAffectedAIGatewayRoutes(t *testing.T) {
 		aiGatewayRouteChan := make(chan event.GenericEvent, 10)
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 		routes, err := controller.getAffectedAIGatewayRoutes(context.Background(), "backend-ns")
 		require.Error(t, err)
@@ -729,7 +733,7 @@ func TestReferenceGrantController_Reconcile_BackendSecurityPolicy(t *testing.T) 
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -795,7 +799,7 @@ func TestReferenceGrantController_Reconcile_BackendSecurityPolicy(t *testing.T) 
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -856,7 +860,7 @@ func TestReferenceGrantController_Reconcile_BackendSecurityPolicy(t *testing.T) 
 		backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 		logger := logr.Discard()
 
-		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+		controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 		req := reconcile.Request{
 			NamespacedName: client.ObjectKeyFromObject(referenceGrant),
@@ -960,7 +964,7 @@ func TestReferenceGrantController_GetAffectedBackendSecurityPolicies(t *testing.
 	aiGatewayRouteChan := make(chan event.GenericEvent, 10)
 	backendSecurityPolicyChan := make(chan event.GenericEvent, 10)
 	logger := logr.Discard()
-	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil)
+	controller := NewReferenceGrantController(fakeClient, logger, aiGatewayRouteChan, backendSecurityPolicyChan, nil, nil)
 
 	affected, err := controller.getAffectedBackendSecurityPolicies(context.Background(), grant.Namespace)
 	require.NoError(t, err)
@@ -1018,7 +1022,7 @@ func TestReferenceGrantController_RevokedAccessIsReconciled(t *testing.T) {
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, bsp, narrowedGrant).Build()
 		routeChan := make(chan event.GenericEvent, 10)
 		bspChan := make(chan event.GenericEvent, 10)
-		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan, nil)
+		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan, nil, nil)
 
 		_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(narrowedGrant)})
 		require.NoError(t, err)
@@ -1032,7 +1036,7 @@ func TestReferenceGrantController_RevokedAccessIsReconciled(t *testing.T) {
 		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, bsp).Build()
 		routeChan := make(chan event.GenericEvent, 10)
 		bspChan := make(chan event.GenericEvent, 10)
-		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan, nil)
+		c := NewReferenceGrantController(fakeClient, logr.Discard(), routeChan, bspChan, nil, nil)
 
 		_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: client.ObjectKey{Namespace: "shared", Name: "grant"}})
 		require.NoError(t, err)
@@ -1088,7 +1092,7 @@ func TestReferenceGrantController_AffectedQuotaPolicies(t *testing.T) {
 		WithObjects(remotePolicy, localPolicy).
 		WithIndex(&aigv1a1.QuotaPolicy{}, k8sClientIndexQuotaPolicyTargetNamespace, quotaPolicyTargetNamespaceIndexFunc)
 	c := NewReferenceGrantController(builder.Build(), logr.Discard(),
-		make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10))
+		make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10), nil)
 
 	affected, err := c.getAffectedQuotaPolicies(t.Context(), "providers")
 	require.NoError(t, err)
@@ -1147,6 +1151,7 @@ func TestReferenceGrantController_Reconcile_QuotaPolicyReferenceGrantChanges(t *
 		make(chan event.GenericEvent, 10),
 		make(chan event.GenericEvent, 10),
 		quotaPolicyChan,
+		nil,
 	)
 	request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(referenceGrant)}
 
@@ -1168,4 +1173,130 @@ func TestReferenceGrantController_Reconcile_QuotaPolicyReferenceGrantChanges(t *
 	require.Len(t, quotaPolicyChan, 1)
 	eventObject = (<-quotaPolicyChan).Object.(*aigv1a1.QuotaPolicy)
 	require.Equal(t, "platform/remote", eventObject.Namespace+"/"+eventObject.Name)
+}
+
+func TestReferenceGrantController_Reconcile_MCPRouteReferenceGrantChanges(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, gwapiv1b1.Install(scheme))
+	require.NoError(t, aigv1a1.AddToScheme(scheme))
+	require.NoError(t, aigv1b1.AddToScheme(scheme))
+
+	secretRefRoute := func(name, namespace string, secretNamespace *string) *aigv1b1.MCPRoute {
+		ref := &gwapiv1.SecretObjectReference{Name: "token"}
+		if secretNamespace != nil {
+			ref.Namespace = ptr.To(gwapiv1.Namespace(*secretNamespace))
+		}
+		return &aigv1b1.MCPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Spec: aigv1b1.MCPRouteSpec{BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+				BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc"},
+				SecurityPolicy:         &aigv1b1.MCPBackendSecurityPolicy{APIKey: &aigv1b1.MCPBackendAPIKey{SecretRef: ref}},
+			}}},
+		}
+	}
+	remoteRoute := secretRefRoute("remote", "apps", ptr.To("credentials"))
+	localRoute := secretRefRoute("local", "credentials", nil)
+	otherRoute := secretRefRoute("other", "apps", ptr.To("elsewhere"))
+	inlineRoute := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "inline", Namespace: "apps"},
+		Spec: aigv1b1.MCPRouteSpec{BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+			BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc"},
+			SecurityPolicy:         &aigv1b1.MCPBackendSecurityPolicy{APIKey: &aigv1b1.MCPBackendAPIKey{Inline: ptr.To("key")}},
+		}}},
+	}
+	referenceGrant := &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "token-grant", Namespace: "credentials"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{Group: aiServiceBackendGroup, Kind: mcpRouteKind, Namespace: "apps"}},
+			To:   []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(remoteRoute, localRoute, otherRoute, inlineRoute, referenceGrant).
+		Build()
+	mcpRouteChan := make(chan event.GenericEvent, 10)
+	controller := NewReferenceGrantController(
+		fakeClient,
+		logr.Discard(),
+		make(chan event.GenericEvent, 10),
+		make(chan event.GenericEvent, 10),
+		nil,
+		mcpRouteChan,
+	)
+	request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(referenceGrant)}
+
+	// A grant creation must enqueue only the MCPRoute that references a Secret in the grant's
+	// namespace from another namespace.
+	_, err := controller.Reconcile(t.Context(), request)
+	require.NoError(t, err)
+	require.Len(t, mcpRouteChan, 1)
+	eventObject := (<-mcpRouteChan).Object.(*aigv1b1.MCPRoute)
+	require.Equal(t, "apps/remote", eventObject.Namespace+"/"+eventObject.Name)
+
+	// A grant deletion must enqueue the previously authorized route again so it is marked
+	// NotAccepted and stops using the Secret.
+	var currentGrant gwapiv1b1.ReferenceGrant
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(referenceGrant), &currentGrant))
+	require.NoError(t, fakeClient.Delete(t.Context(), &currentGrant))
+	_, err = controller.Reconcile(t.Context(), request)
+	require.NoError(t, err)
+	require.Len(t, mcpRouteChan, 1)
+	eventObject = (<-mcpRouteChan).Object.(*aigv1b1.MCPRoute)
+	require.Equal(t, "apps/remote", eventObject.Namespace+"/"+eventObject.Name)
+}
+
+// TestReferenceGrantController_Reconcile_MCPRouteErrors verifies that a failure to list or enqueue
+// the MCPRoutes affected by a grant is returned, so the grant is reconciled again instead of a route
+// missing the change.
+func TestReferenceGrantController_Reconcile_MCPRouteErrors(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, gwapiv1b1.Install(scheme))
+	require.NoError(t, aigv1a1.AddToScheme(scheme))
+	require.NoError(t, aigv1b1.AddToScheme(scheme))
+
+	route := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "remote", Namespace: "apps"},
+		Spec: aigv1b1.MCPRouteSpec{BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+			BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc"},
+			SecurityPolicy: &aigv1b1.MCPBackendSecurityPolicy{APIKey: &aigv1b1.MCPBackendAPIKey{
+				SecretRef: &gwapiv1.SecretObjectReference{Name: "token", Namespace: ptr.To(gwapiv1.Namespace("credentials"))},
+			}},
+		}}},
+	}
+	referenceGrant := &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "token-grant", Namespace: "credentials"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{Group: aiServiceBackendGroup, Kind: mcpRouteKind, Namespace: "apps"}},
+			To:   []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+		},
+	}
+	request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(referenceGrant)}
+
+	t.Run("listing MCPRoutes fails", func(t *testing.T) {
+		errInjected := errors.New("injected")
+		fakeClient := interceptor.NewClient(
+			fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, referenceGrant).Build(),
+			interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*aigv1b1.MCPRouteList); ok {
+					return errInjected
+				}
+				return c.List(ctx, list, opts...)
+			}},
+		)
+		controller := NewReferenceGrantController(fakeClient, logr.Discard(),
+			make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10), nil, make(chan event.GenericEvent, 10))
+		_, err := controller.Reconcile(t.Context(), request)
+		require.ErrorIs(t, err, errInjected)
+		require.ErrorContains(t, err, "failed to list MCPRoutes")
+	})
+
+	t.Run("MCPRoute channel full", func(t *testing.T) {
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route, referenceGrant).Build()
+		controller := NewReferenceGrantController(fakeClient, logr.Discard(),
+			make(chan event.GenericEvent, 10), make(chan event.GenericEvent, 10), nil, make(chan event.GenericEvent))
+		_, err := controller.Reconcile(t.Context(), request)
+		require.ErrorContains(t, err, "MCPRoute event channel buffer full while enqueueing apps/remote")
+	})
 }
