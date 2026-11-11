@@ -1858,10 +1858,10 @@ type streamResponseWriter struct {
 	w      io.Writer
 }
 
-func (s *streamResponseWriter) Header() http.Header { return s.header }
-func (s *streamResponseWriter) WriteHeader(code int) { s.code = code }
+func (s *streamResponseWriter) Header() http.Header         { return s.header }
+func (s *streamResponseWriter) WriteHeader(code int)        { s.code = code }
 func (s *streamResponseWriter) Write(b []byte) (int, error) { return s.w.Write(b) }
-func (s *streamResponseWriter) Flush()                     {}
+func (s *streamResponseWriter) Flush()                      {}
 
 func TestHandleSubscriptionsListen_MergesAndRewritesEvents(t *testing.T) {
 	// Each backend emits one resources/updated notification with an upstream URI;

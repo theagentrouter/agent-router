@@ -84,9 +84,9 @@ type discardResponseWriter struct {
 	header http.Header
 }
 
-func (d *discardResponseWriter) Header() http.Header { return d.header }
+func (d *discardResponseWriter) Header() http.Header         { return d.header }
 func (d *discardResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
-func (d *discardResponseWriter) WriteHeader(int) {}
+func (d *discardResponseWriter) WriteHeader(int)             {}
 
 // serveModernPOST handles modern (2026-07-28) stateless POST requests.
 // This is the Phase 1 entry point for modern clients talking to modern backends.
