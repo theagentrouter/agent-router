@@ -124,36 +124,35 @@ func anthropicMessagesToOpenAI(body *anthropic.MessagesRequest) []openai.ChatCom
 // It extracts tool_use blocks as OpenAI tool_calls on the assistant message, and preserves
 // text, thinking, and redacted_thinking content blocks.
 //
-// When thinking or redacted_thinking blocks are present, the content is encoded as a
-// structured []ChatCompletionAssistantMessageParamContent array to preserve full fidelity.
-// Otherwise, plain string content is used for backward compatibility.
+// Thinking blocks are placed at the message level following the de-facto convention used by
+// OpenAI-compatible reasoning backends (DeepSeek, vLLM, LiteLLM): the thinking text goes into
+// the plain-string `reasoning_content`, and the structured blocks (including signatures and
+// redacted_thinking data) go into `thinking_blocks`. vLLM only renders assistant reasoning into
+// the chat template (e.g. <think>...</think>) when it is passed via `reasoning_content`; it
+// ignores thinking content parts. Text blocks are joined into plain string content.
 func appendAnthropicAssistantMessage(messages []openai.ChatCompletionMessageParamUnion, msg anthropic.MessageParam) []openai.ChatCompletionMessageParamUnion {
 	var toolCalls []openai.ChatCompletionMessageToolCallParam
-	var contentParts []openai.ChatCompletionAssistantMessageParamContent
-	hasThinking := false
+	var thinkingBlocks []openai.ThinkingBlock
+	var reasoningTexts []string
 
 	for _, block := range msg.Content.Array {
 		switch {
 		case block.Thinking != nil:
-			hasThinking = true
-			thinking := block.Thinking.Thinking
-			signature := block.Thinking.Signature
-			contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{
-				Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-				Text:      &thinking,
-				Signature: &signature,
+			if block.Thinking.Thinking == "" && block.Thinking.Signature == "" {
+				continue
+			}
+			if block.Thinking.Thinking != "" {
+				reasoningTexts = append(reasoningTexts, block.Thinking.Thinking)
+			}
+			thinkingBlocks = append(thinkingBlocks, openai.ThinkingBlock{
+				Type:      "thinking",
+				Thinking:  block.Thinking.Thinking,
+				Signature: block.Thinking.Signature,
 			})
 		case block.RedactedThinking != nil:
-			hasThinking = true
-			contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{
-				Type:            openai.ChatCompletionAssistantMessageParamContentTypeRedactedThinking,
-				RedactedContent: &openai.RedactedContentUnion{Value: block.RedactedThinking.Data},
-			})
-		case block.Text != nil:
-			text := block.Text.Text
-			contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{
-				Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
-				Text: &text,
+			thinkingBlocks = append(thinkingBlocks, openai.ThinkingBlock{
+				Type: "redacted_thinking",
+				Data: block.RedactedThinking.Data,
 			})
 		case block.ToolUse != nil:
 			args, _ := json.Marshal(block.ToolUse.Input)
@@ -173,18 +172,16 @@ func appendAnthropicAssistantMessage(messages []openai.ChatCompletionMessagePara
 	}
 
 	assistantMsg := &openai.ChatCompletionAssistantMessageParam{
-		Role: openai.ChatMessageRoleAssistant,
+		Role:           openai.ChatMessageRoleAssistant,
+		ThinkingBlocks: thinkingBlocks,
+	}
+	if len(reasoningTexts) > 0 {
+		assistantMsg.ReasoningContent = strings.Join(reasoningTexts, "")
 	}
 
-	if hasThinking {
-		// Use structured content array to preserve thinking blocks.
-		assistantMsg.Content = openai.StringOrAssistantRoleContentUnion{Value: contentParts}
-	} else {
-		// No thinking blocks — use plain string for backward compatibility.
-		text := anthropicContentToText(msg.Content)
-		if text != "" {
-			assistantMsg.Content = openai.StringOrAssistantRoleContentUnion{Value: text}
-		}
+	text := anthropicContentToText(msg.Content)
+	if text != "" {
+		assistantMsg.Content = openai.StringOrAssistantRoleContentUnion{Value: text}
 	}
 
 	if len(toolCalls) > 0 {
@@ -440,8 +437,8 @@ func openAIResponseToAnthropic(resp *openai.ChatCompletionResponse, model string
 	}
 }
 
-// appendThinkingBlocks converts OpenAI ThinkingBlocks and ReasoningContent to Anthropic
-// thinking/redacted_thinking content blocks. ThinkingBlocks take priority over ReasoningContent.
+// appendThinkingBlocks converts OpenAI ThinkingBlocks, ReasoningContent, and Reasoning to Anthropic
+// thinking/redacted_thinking content blocks. Precedence: ThinkingBlocks > ReasoningContent > Reasoning.
 func appendThinkingBlocks(content []anthropic.MessagesContentBlock, msg *openai.ChatCompletionResponseChoiceMessage) []anthropic.MessagesContentBlock {
 	// Prefer ThinkingBlocks (structured, preserves signatures).
 	if len(msg.ThinkingBlocks) > 0 {
@@ -461,35 +458,42 @@ func appendThinkingBlocks(content []anthropic.MessagesContentBlock, msg *openai.
 	}
 
 	// Fall back to ReasoningContent (used by AWS Bedrock, Gemini, Qwen, DeepSeek).
-	if msg.ReasoningContent == nil {
-		return content
+	if msg.ReasoningContent != nil {
+		// Some models (Qwen, DeepSeek) return reasoning content as a plain string.
+		if str, ok := msg.ReasoningContent.Value.(string); ok && str != "" {
+			return append(content, anthropic.MessagesContentBlock{
+				Thinking: &anthropic.ThinkingBlock{Type: "thinking", Thinking: str},
+			})
+		}
+		if rc, ok := msg.ReasoningContent.Value.(*openai.ReasoningContent); ok && rc != nil && rc.ReasoningContent != nil {
+			start := len(content)
+			if rt := rc.ReasoningContent.ReasoningText; rt != nil && (rt.Text != "" || rt.Signature != "") {
+				content = append(content, anthropic.MessagesContentBlock{
+					Thinking: &anthropic.ThinkingBlock{
+						Type:      "thinking",
+						Thinking:  rt.Text,
+						Signature: rt.Signature,
+					},
+				})
+			}
+			if len(rc.ReasoningContent.RedactedContent) > 0 {
+				content = append(content, anthropic.MessagesContentBlock{
+					RedactedThinking: &anthropic.RedactedThinkingBlock{
+						Type: "redacted_thinking",
+						Data: string(rc.ReasoningContent.RedactedContent),
+					},
+				})
+			}
+			if len(content) > start {
+				return content
+			}
+		}
 	}
-	// Some models (Qwen, DeepSeek) return reasoning content as a plain string.
-	if str, ok := msg.ReasoningContent.Value.(string); ok && str != "" {
+
+	// Fall back to Reasoning (used by vLLM >= v0.30.0, which renamed reasoning_content to reasoning).
+	if msg.Reasoning != nil && *msg.Reasoning != "" {
 		content = append(content, anthropic.MessagesContentBlock{
-			Thinking: &anthropic.ThinkingBlock{Type: "thinking", Thinking: str},
-		})
-		return content
-	}
-	rc, ok := msg.ReasoningContent.Value.(*openai.ReasoningContent)
-	if !ok || rc == nil || rc.ReasoningContent == nil {
-		return content
-	}
-	if rc.ReasoningContent.ReasoningText != nil {
-		content = append(content, anthropic.MessagesContentBlock{
-			Thinking: &anthropic.ThinkingBlock{
-				Type:      "thinking",
-				Thinking:  rc.ReasoningContent.ReasoningText.Text,
-				Signature: rc.ReasoningContent.ReasoningText.Signature,
-			},
-		})
-	}
-	if len(rc.ReasoningContent.RedactedContent) > 0 {
-		content = append(content, anthropic.MessagesContentBlock{
-			RedactedThinking: &anthropic.RedactedThinkingBlock{
-				Type: "redacted_thinking",
-				Data: string(rc.ReasoningContent.RedactedContent),
-			},
+			Thinking: &anthropic.ThinkingBlock{Type: "thinking", Thinking: *msg.Reasoning},
 		})
 	}
 	return content
@@ -772,8 +776,13 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 
 	if delta != nil {
 		// Handle reasoning/thinking content (must come before text).
-		if delta.ReasoningContent != nil {
-			if err := s.handleReasoningDelta(delta.ReasoningContent, out); err != nil {
+		// reasoning_content takes precedence; vLLM (>= v0.30.0) emits the same data as `reasoning`.
+		rc := delta.ReasoningContent
+		if (rc == nil || (rc.Text == "" && rc.Signature == "")) && delta.Reasoning != nil && *delta.Reasoning != "" {
+			rc = &openai.StreamReasoningContent{Text: *delta.Reasoning}
+		}
+		if rc != nil {
+			if err := s.handleReasoningDelta(rc, out); err != nil {
 				return err
 			}
 		}

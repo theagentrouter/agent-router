@@ -2202,6 +2202,32 @@ func TestChatCompletionResponseChunkChoiceDelta_annotations_round_trip(t *testin
 	require.JSONEq(t, `{}`, string(marshaled))
 }
 
+func TestChatCompletionResponseChoiceMessage_reasoning_round_trip(t *testing.T) {
+	orig := []byte(`{"role":"assistant","content":"323","reasoning":"17*19 = 340-17"}`)
+	var msg ChatCompletionResponseChoiceMessage
+	err := json.Unmarshal(orig, &msg)
+	require.NoError(t, err)
+	require.NotNil(t, msg.Reasoning)
+	require.Equal(t, "17*19 = 340-17", *msg.Reasoning)
+	require.Nil(t, msg.ReasoningContent)
+	marshaled, err := json.Marshal(msg)
+	require.NoError(t, err)
+	require.JSONEq(t, string(orig), string(marshaled))
+}
+
+func TestChatCompletionResponseChunkChoiceDelta_reasoning_round_trip(t *testing.T) {
+	orig := []byte(`{"reasoning":"17*19"}`)
+	var delta ChatCompletionResponseChunkChoiceDelta
+	err := json.Unmarshal(orig, &delta)
+	require.NoError(t, err)
+	require.NotNil(t, delta.Reasoning)
+	require.Equal(t, "17*19", *delta.Reasoning)
+	require.Nil(t, delta.ReasoningContent)
+	marshaled, err := json.Marshal(delta)
+	require.NoError(t, err)
+	require.JSONEq(t, string(orig), string(marshaled))
+}
+
 func TestStringOrAssistantRoleContentUnionUnmarshal(t *testing.T) {
 	testCases := []struct {
 		name     string
