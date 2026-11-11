@@ -923,6 +923,46 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_ResponseBody(t *testing.T
 			wantTokenUsage: tokenUsageFrom(10, 10, -1, 25, 35, 10),
 		},
 		{
+			name: "blocked prompt",
+			respHeaders: map[string]string{
+				"content-type": "application/json",
+			},
+			body: `{
+				"promptFeedback": {
+					"blockReason": "BLOCKLIST",
+					"blockReasonMessage": "The prompt could not be submitted."
+				},
+				"usageMetadata": {
+					"promptTokenCount": 7771,
+					"totalTokenCount": 7771
+				},
+				"modelVersion": "gemini-2.5-flash"
+			}`,
+			endOfStream:   true,
+			wantError:     false,
+			wantHeaderMut: []internalapi.Header{{contentLengthHeaderName, "252"}},
+			wantBodyMut: []byte(`{
+    "choices": [
+        {
+            "finish_reason": "content_filter",
+            "index": 0,
+            "message": {
+                "role": "assistant"
+            }
+        }
+    ],
+    "model": "gemini-2.5-flash",
+    "object": "chat.completion",
+    "usage": {
+        "prompt_tokens": 7771,
+        "total_tokens": 7771,
+        "completion_tokens_details": {},
+        "prompt_tokens_details": {}
+    }
+}`),
+			wantTokenUsage: tokenUsageFrom(7771, 0, -1, 0, 7771, 0),
+		},
+		{
 			name: "response with safety ratings",
 			respHeaders: map[string]string{
 				"content-type": "application/json",
@@ -1379,6 +1419,14 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingResponseBody(t *
 				require.Contains(t, bodyStr, `"finish_reason":"length"`)
 				// The usage chunk must have empty choices.
 				require.Contains(t, bodyStr, `"choices":[]`)
+			},
+		},
+		{
+			name:          "blocked prompt",
+			gcpChunk:      `{"promptFeedback":{"blockReason":"PROHIBITED_CONTENT"},"usageMetadata":{"promptTokenCount":21,"totalTokenCount":21}}`,
+			expectedUsage: tokenUsageFrom(21, 0, -1, 0, 21, 0),
+			assertBody: func(t *testing.T, bodyStr string) {
+				require.Contains(t, bodyStr, `"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":"content_filter"}]`)
 			},
 		},
 	}
