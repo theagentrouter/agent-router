@@ -1336,6 +1336,10 @@ func TestPatchListenerWithInferencePoolFilters(t *testing.T) {
 		require.Len(t, hcm.HttpFilters, 2) // Should have inference pool filter + router.
 		require.Equal(t, httpFilterNameForInferencePool(pools[0]), hcm.HttpFilters[0].Name)
 		require.Equal(t, "envoy.filters.http.router", hcm.HttpFilters[1].Name)
+		// The filter must be disabled by default and only enabled on the routes that use the pool.
+		// Otherwise, when the pool is removed, connections still draining on the old listener keep
+		// running the filter for every route while the shared route configuration no longer disables it.
+		require.True(t, hcm.HttpFilters[0].Disabled)
 	})
 
 	t.Run("listener with multiple inference pools", func(t *testing.T) {
@@ -1523,6 +1527,11 @@ func TestPatchVirtualHostWithInferencePool(t *testing.T) {
 		require.NotNil(t, normalRoute.TypedPerFilterConfig)
 		filterName := httpFilterNameForInferencePool(pools[0])
 		require.Contains(t, normalRoute.TypedPerFilterConfig, filterName)
+		// The filter must be disabled with ExtProcPerRoute, not with FilterConfig.disabled, so that it stays
+		// in the filter chain for requests that are re-routed from this route to a pool route.
+		perRoute := &extprocv3.ExtProcPerRoute{}
+		require.NoError(t, normalRoute.TypedPerFilterConfig[filterName].UnmarshalTo(perRoute))
+		require.True(t, perRoute.GetDisabled())
 	})
 
 	t.Run("route with matching InferencePool metadata", func(t *testing.T) {
@@ -1538,12 +1547,13 @@ func TestPatchVirtualHostWithInferencePool(t *testing.T) {
 		err := s.patchVirtualHostWithInferencePool(vh, pools)
 		require.NoError(t, err)
 
-		// Verify the route was not configured to disable its own filter.
-		// It should not have any TypedPerFilterConfig for its own filter.
-		if inferenceRoute.TypedPerFilterConfig != nil {
-			filterName := httpFilterNameForInferencePool(pool)
-			require.NotContains(t, inferenceRoute.TypedPerFilterConfig, filterName)
-		}
+		// Verify the route explicitly enables its own filter, which is disabled by default on the listener.
+		filterName := httpFilterNameForInferencePool(pool)
+		require.Contains(t, inferenceRoute.TypedPerFilterConfig, filterName)
+		fc := &routev3.FilterConfig{}
+		require.NoError(t, inferenceRoute.TypedPerFilterConfig[filterName].UnmarshalTo(fc))
+		require.False(t, fc.Disabled)
+		require.NotNil(t, fc.Config)
 	})
 
 	t.Run("route with different InferencePool metadata", func(t *testing.T) {
@@ -1562,13 +1572,16 @@ func TestPatchVirtualHostWithInferencePool(t *testing.T) {
 		err := s.patchVirtualHostWithInferencePool(vh, pools)
 		require.NoError(t, err)
 
-		// Verify the route disables pool2's filter but not pool1's filter.
+		// Verify the route enables pool1's filter and disables pool2's filter.
 		require.NotNil(t, inferenceRoute.TypedPerFilterConfig)
 
 		pool1FilterName := httpFilterNameForInferencePool(pool1)
 		pool2FilterName := httpFilterNameForInferencePool(pool2)
 
-		require.NotContains(t, inferenceRoute.TypedPerFilterConfig, pool1FilterName)
+		require.Contains(t, inferenceRoute.TypedPerFilterConfig, pool1FilterName)
+		fc := &routev3.FilterConfig{}
+		require.NoError(t, inferenceRoute.TypedPerFilterConfig[pool1FilterName].UnmarshalTo(fc))
+		require.False(t, fc.Disabled)
 		require.Contains(t, inferenceRoute.TypedPerFilterConfig, pool2FilterName)
 	})
 
@@ -1649,15 +1662,17 @@ func TestPatchVirtualHostWithInferencePool(t *testing.T) {
 		require.NotNil(t, normalRoute.TypedPerFilterConfig)
 		require.Len(t, normalRoute.TypedPerFilterConfig, 2)
 
-		// Verify inference route 1 disables only pool2's filter.
+		// Verify inference route 1 enables pool1's filter and disables pool2's filter.
 		require.NotNil(t, inferenceRoute1.TypedPerFilterConfig)
-		require.Len(t, inferenceRoute1.TypedPerFilterConfig, 1)
+		require.Len(t, inferenceRoute1.TypedPerFilterConfig, 2)
+		require.Contains(t, inferenceRoute1.TypedPerFilterConfig, httpFilterNameForInferencePool(pool1))
 		require.Contains(t, inferenceRoute1.TypedPerFilterConfig, httpFilterNameForInferencePool(pool2))
 
-		// Verify inference route 2 disables only pool1's filter.
+		// Verify inference route 2 enables pool2's filter and disables pool1's filter.
 		require.NotNil(t, inferenceRoute2.TypedPerFilterConfig)
-		require.Len(t, inferenceRoute2.TypedPerFilterConfig, 1)
+		require.Len(t, inferenceRoute2.TypedPerFilterConfig, 2)
 		require.Contains(t, inferenceRoute2.TypedPerFilterConfig, httpFilterNameForInferencePool(pool1))
+		require.Contains(t, inferenceRoute2.TypedPerFilterConfig, httpFilterNameForInferencePool(pool2))
 	})
 }
 
