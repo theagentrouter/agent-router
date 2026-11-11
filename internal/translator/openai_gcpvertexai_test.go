@@ -1425,6 +1425,63 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingResponseBody(t *
 	}
 }
 
+// TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingFinishReasonAfterToolCall covers the
+// split-chunk shape of newer Gemini models, where the functionCall and the terminal finish reason
+// arrive in different chunks. Only a raw STOP may be promoted to tool_calls; a failure reason that
+// is approximated to "stop" must stay "stop", otherwise the client would try to run a call that
+// does not exist.
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingFinishReasonAfterToolCall(t *testing.T) {
+	const toolCallChunk = `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"NYC"}}}],"role":"model"}}]}`
+
+	tests := []struct {
+		name               string
+		terminalChunk      string
+		wantFinishReason   string
+		wantNativeFinish   string
+		wantNoNativeFinish bool
+	}{
+		{
+			name:               "terminal STOP after a streamed tool call is promoted to tool_calls",
+			terminalChunk:      `{"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"STOP"}]}`,
+			wantFinishReason:   `"finish_reason":"tool_calls"`,
+			wantNoNativeFinish: true,
+		},
+		{
+			name:             "terminal MALFORMED_FUNCTION_CALL after a streamed tool call stays stop",
+			terminalChunk:    `{"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"MALFORMED_FUNCTION_CALL"}]}`,
+			wantFinishReason: `"finish_reason":"stop"`,
+			wantNativeFinish: `"native_finish_reason":"MALFORMED_FUNCTION_CALL"`,
+		},
+		{
+			name:             "terminal OTHER after a streamed tool call stays stop",
+			terminalChunk:    `{"candidates":[{"finishReason":"OTHER"}]}`,
+			wantFinishReason: `"finish_reason":"stop"`,
+			wantNativeFinish: `"native_finish_reason":"OTHER"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+
+			_, firstBody, _, _, err := translator.handleStreamingResponse(bytes.NewReader([]byte(toolCallChunk)), false, nil)
+			require.NoError(t, err)
+			require.Contains(t, string(firstBody), `"tool_calls"`)
+			require.NotContains(t, string(firstBody), `"finish_reason"`)
+
+			_, secondBody, _, _, err := translator.handleStreamingResponse(bytes.NewReader([]byte(tt.terminalChunk)), false, nil)
+			require.NoError(t, err)
+			bodyStr := string(secondBody)
+			require.Contains(t, bodyStr, tt.wantFinishReason)
+			if tt.wantNoNativeFinish {
+				require.NotContains(t, bodyStr, `native_finish_reason`)
+			} else {
+				require.Contains(t, bodyStr, tt.wantNativeFinish)
+			}
+		})
+	}
+}
+
 func TestExtractToolCallsFromGeminiPartsStream(t *testing.T) {
 	toolCalls := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
 	tests := []struct {
