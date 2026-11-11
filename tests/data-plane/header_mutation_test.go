@@ -32,8 +32,8 @@ func TestExtProcHeaderMutationsNotRejected(t *testing.T) {
 		Version:  version.Parse(),
 		Backends: []filterapi.Backend{testUpstreamOpenAIBackend},
 	}
-	configBytes, err := yaml.Marshal(config)
-	require.NoError(t, err)
+	configBytes, marshalErr := yaml.Marshal(config)
+	require.NoError(t, marshalErr)
 	env := startTestEnvironment(t, string(configBytes), true, false)
 
 	listenerAddr := fmt.Sprintf("http://127.0.0.1:%d", env.EnvoyListenerPort())
@@ -75,8 +75,8 @@ func TestExtProcHeaderMutationsNotRejected(t *testing.T) {
 		}
 		name, value, ok := strings.Cut(line, ":")
 		require.True(t, ok, "unexpected stats line: %q", line)
-		count, err := strconv.Atoi(strings.TrimSpace(value))
-		require.NoError(t, err, "unexpected stats line: %q", line)
+		count, convErr := strconv.Atoi(strings.TrimSpace(value))
+		require.NoError(t, convErr, "unexpected stats line: %q", line)
 		require.Zero(t, count, "ext_proc rejected a header mutation: %s", strings.TrimSpace(name))
 	}
 }
