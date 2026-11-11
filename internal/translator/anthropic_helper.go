@@ -1021,7 +1021,7 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 	}
 
 	for {
-		eventBlock, remaining, found := bytes.Cut(p.buffer.Bytes(), []byte("\n\n"))
+		eventBlock, remaining, found := nextSSEEvent(p.buffer.Bytes())
 		if !found {
 			break
 		}
