@@ -215,9 +215,20 @@ func (s *session) streamNotifications(ctx context.Context, w http.ResponseWriter
 		heartbeats = make(chan time.Time) // never ticks
 	}
 
+	// The server's WriteTimeout is a fixed deadline for the whole response, which would cut off
+	// this long-lived stream, so it is extended before every write instead.
+	writeTimeout := serverWriteTimeout(ctx)
+	rc := http.NewResponseController(w)
+	writeEvent := func(e *sseEvent) {
+		if writeTimeout > 0 {
+			_ = rc.SetWriteDeadline(time.Now().Add(writeTimeout))
+		}
+		e.writeAndMaybeFlush(w)
+	}
+
 	// Eagerly send an initial heartbeat event to unblock Goose
 	heartBeatEvent := &sseEvent{event: "message", messages: []jsonrpc.Message{newHeartBeatPingMessage()}}
-	heartBeatEvent.writeAndMaybeFlush(w)
+	writeEvent(heartBeatEvent)
 
 	for {
 		select {
@@ -250,7 +261,7 @@ func (s *session) streamNotifications(ctx context.Context, w http.ResponseWriter
 				}
 				s.reqCtx.recordResponse(ctx, _msg)
 			}
-			event.writeAndMaybeFlush(w)
+			writeEvent(event.sseEvent)
 			// Reset the heartbeat ticker so that the next heartbeat will be sent after the full interval.
 			// This avoids sending heartbeats too frequently when there are events.
 			if heartbeatTicker != nil {
@@ -260,7 +271,7 @@ func (s *session) streamNotifications(ctx context.Context, w http.ResponseWriter
 		// This is not related to upstream MCP server changes, but to the tools configured in the gateway.
 		case <-toolChangeSignaler.Watch():
 			toolChangeEvent := &sseEvent{event: "message", messages: []jsonrpc.Message{newToolListChangedMessage()}}
-			toolChangeEvent.writeAndMaybeFlush(w)
+			writeEvent(toolChangeEvent)
 			// Reset the heartbeat ticker so that the next heartbeat will be sent after the full interval.
 			// This avoids sending heartbeats too frequently when there are events.
 			if heartbeatTicker != nil {
@@ -268,12 +279,22 @@ func (s *session) streamNotifications(ctx context.Context, w http.ResponseWriter
 			}
 		case <-heartbeats:
 			heartBeatEvent := &sseEvent{event: "message", messages: []jsonrpc.Message{newHeartBeatPingMessage()}}
-			heartBeatEvent.writeAndMaybeFlush(w)
+			writeEvent(heartBeatEvent)
 		case <-ctx.Done():
 			// Context cancelled, stop streaming.
 			return ctx.Err()
 		}
 	}
+}
+
+// serverWriteTimeout returns the WriteTimeout of the http.Server handling the request, or zero
+// when there is none (e.g. when the handler is invoked directly in tests).
+func serverWriteTimeout(ctx context.Context) time.Duration {
+	srv, ok := ctx.Value(http.ServerContextKey).(*http.Server)
+	if !ok {
+		return 0
+	}
+	return srv.WriteTimeout
 }
 
 // heartbeatInterval is computed at startup to avoid the locks in os.Getenv() to be called on the request path.
