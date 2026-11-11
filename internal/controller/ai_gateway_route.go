@@ -174,7 +174,12 @@ func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.
 // syncAIGatewayRoute is the main logic for reconciling the AIGatewayRoute resource.
 // This is decoupled from the Reconcile method to centralize the error handling and status updates.
 func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
-	if handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.syncGateways) { // Propagate the AIGatewayRoute deletion all the way up to relevant Gateways.
+	// Propagate the AIGatewayRoute deletion all the way up to relevant Gateways.
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.syncGateways)
+	if err != nil {
+		return err
+	}
+	if onDelete {
 		return nil
 	}
 
@@ -182,7 +187,7 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 	filters := generateHTTPRouteFilters(aiGatewayRoute)
 	for _, base := range filters {
 		var f egv1a1.HTTPRouteFilter
-		if err := c.client.Get(ctx, client.ObjectKey{Name: base.Name, Namespace: base.Namespace}, &f); err != nil {
+		if err = c.client.Get(ctx, client.ObjectKey{Name: base.Name, Namespace: base.Namespace}, &f); err != nil {
 			if apierrors.IsNotFound(err) {
 				if err = ctrlutil.SetControllerReference(aiGatewayRoute, base, c.client.Scheme()); err != nil {
 					panic(fmt.Errorf("BUG: failed to set controller reference for HTTPRouteFilter: %w", err))
@@ -201,7 +206,7 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 	// Check if the HTTPRoute exists.
 	c.logger.Info("syncing AIGatewayRoute", "namespace", aiGatewayRoute.Namespace, "name", aiGatewayRoute.Name)
 	var httpRoute gwapiv1.HTTPRoute
-	err := c.client.Get(ctx, client.ObjectKey{Name: aiGatewayRoute.Name, Namespace: aiGatewayRoute.Namespace}, &httpRoute)
+	err = c.client.Get(ctx, client.ObjectKey{Name: aiGatewayRoute.Name, Namespace: aiGatewayRoute.Namespace}, &httpRoute)
 	existingRoute := err == nil
 	if apierrors.IsNotFound(err) {
 		// This means that this AIGatewayRoute is a new one.
