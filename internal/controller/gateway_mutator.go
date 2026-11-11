@@ -149,7 +149,7 @@ func (g *gatewayMutator) listMCPRoutesForGateway(ctx context.Context, gatewayNam
 
 func listAIGatewayRoutesForGateway(ctx context.Context, cacheReader client.Reader, noCacheReader client.Reader, gatewayName, gatewayNamespace string) (aigv1b1.AIGatewayRouteList, error) {
 	var routes aigv1b1.AIGatewayRouteList
-	key := fmt.Sprintf("%s.%s", gatewayName, gatewayNamespace)
+	key := namespacedNameIndexKey(gatewayName, gatewayNamespace)
 	cacheErr := cacheReader.List(ctx, &routes, client.MatchingFields{
 		k8sClientIndexAIGatewayRouteToAttachedGateway: key,
 	})
@@ -170,7 +170,7 @@ func listAIGatewayRoutesForGateway(ctx context.Context, cacheReader client.Reade
 
 func listMCPRoutesForGateway(ctx context.Context, cacheReader client.Reader, noCacheReader client.Reader, gatewayName, gatewayNamespace string) (aigv1b1.MCPRouteList, error) {
 	var routes aigv1b1.MCPRouteList
-	key := fmt.Sprintf("%s.%s", gatewayName, gatewayNamespace)
+	key := namespacedNameIndexKey(gatewayName, gatewayNamespace)
 	cacheErr := cacheReader.List(ctx, &routes, client.MatchingFields{
 		k8sClientIndexMCPRouteToAttachedGateway: key,
 	})

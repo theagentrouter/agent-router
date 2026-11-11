@@ -17,6 +17,7 @@ Support for various Large Language Model providers:
 - **[Supported Endpoints](./llm-integrations/supported-endpoints.md)**: Available API endpoints and operations
 - **[Vendor-Specific Fields](./llm-integrations/vendor-specific-fields.md)**: Use backend-specific parameters and access provider-unique capabilities in your OpenAI-compatible requests
 - **[Prompt Caching](./llm-integrations/prompt-caching.md)**: Provider-agnostic prompt caching using unified cache_control API
+- **[Files API](./llm-integrations/files-api.md)**: Upload, list, retrieve, download, and delete files with backend-sticky routing
 
 ## Inference Optimization
 
@@ -52,6 +53,12 @@ Robust security features for AI gateway deployments:
 Connect AI agents to external tools and data sources:
 
 - **[MCP Gateway](./mcp/)**: Server multiplexing, tool routing, OAuth authentication, and observability for MCP workloads
+
+## Agent2Agent (A2A)
+
+Route traffic between agents:
+
+- **[A2A Traffic (preview)](./a2a/)**: Route A2A agents through the gateway today using Envoy's native A2A filter, ahead of a first-class A2A route type
 
 ## Observability
 

@@ -36,7 +36,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/controller/rotators"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -59,6 +61,63 @@ func requireLLMRequestCostsEqual(t *testing.T, want, got []filterapi.LLMRequestC
 	}
 }
 
+func TestInjectQuotaPolicyCostExpressions(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	controller := &GatewayController{
+		client:                  fakeClient,
+		logger:                  ctrl.Log,
+		referenceGrantValidator: newReferenceGrantValidator(fakeClient),
+	}
+	model := "model-a"
+	expression := "input_tokens + output_tokens"
+	policy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "route-ns"},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+				Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "backend",
+			}},
+			PerModelQuotas: []aigv1a1.PerModelQuota{{
+				ModelName: &model,
+				Quota:     aigv1a1.QuotaDefinition{CostExpression: &expression},
+			}},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), policy))
+	unrelatedModel := "unrelated-model"
+	unrelatedPolicy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "unrelated-policy", Namespace: "other-ns"},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+				Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "other-backend",
+			}},
+			PerModelQuotas: []aigv1a1.PerModelQuota{{
+				ModelName: &unrelatedModel,
+				Quota:     aigv1a1.QuotaDefinition{CostExpression: &expression},
+			}},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), unrelatedPolicy))
+	var policies aigv1a1.QuotaPolicyList
+	require.NoError(t, fakeClient.List(t.Context(), &policies))
+	require.Len(t, policies.Items, 2)
+	require.Equal(t, string(aiServiceBackendGroup), string(policies.Items[0].Spec.TargetRefs[0].Group))
+	require.Equal(t, string(aiServiceBackendKind), string(policies.Items[0].Spec.TargetRefs[0].Kind))
+	require.Len(t, policies.Items[0].Spec.PerModelQuotas, 1)
+
+	config := &filterapi.Config{
+		Backends: []filterapi.Backend{{AIServiceBackendName: "route-ns/backend"}},
+	}
+	injected := make(map[string]struct{})
+	controller.injectQuotaPolicyCostExpressions(t.Context(), config, injected, "route")
+	require.Len(t, config.LLMRequestCosts, 1)
+	require.Equal(t, expression, config.LLMRequestCosts[0].CEL)
+	require.Equal(t, "route-ns/backend", config.LLMRequestCosts[0].Backend)
+	require.Equal(t, model, config.LLMRequestCosts[0].Model)
+
+	controller.injectQuotaPolicyCostExpressions(t.Context(), config, injected, "route")
+	require.Len(t, config.LLMRequestCosts, 1)
+}
+
 // newTestGatewayController builds a GatewayController for tests, deriving the
 // extproc builder from the given image/logLevel/sidecar via the same
 // newExtProcBuilder NewGatewayController uses. It mirrors the pre-refactor
@@ -74,6 +133,8 @@ func newTestGatewayController(c client.Client, kube kubernetes.Interface, logger
 		MCPSessionEncryptionIterations:         100,
 		MCPFallbackSessionEncryptionSeed:       "fallback",
 		MCPFallbackSessionEncryptionIterations: 200,
+		FileIDEncryptionSeed:                   "file-seed",
+		FileIDEncryptionIterations:             100,
 	}
 	return NewGatewayController(c, kube, logger, ns, standAlone, uuidFn, opts, extProcAsSideCar)
 }
@@ -500,6 +561,175 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 	}
 }
 
+// GatewayController must not include a cross-namespace AIServiceBackend/InferencePool
+// (and its BackendSecurityPolicy credentials) in the extproc filter config unless a ReferenceGrant permits it.
+func TestGatewayController_reconcileFilterConfigSecret_CrossNamespaceReferenceGrant(t *testing.T) {
+	const (
+		routeNamespace   = "tenant-a"
+		backendNamespace = "tenant-b"
+	)
+
+	newRoute := func(kind, name string) []aigv1b1.AIGatewayRoute {
+		group := aiServiceBackendGroup
+		if kind == "InferencePool" {
+			group = inferencePoolGroup
+		}
+		return []aigv1b1.AIGatewayRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: routeNamespace},
+				Spec: aigv1b1.AIGatewayRouteSpec{
+					Rules: []aigv1b1.AIGatewayRouteRule{
+						{
+							BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+								{
+									Name:      name,
+									Namespace: ptr.To(gwapiv1.Namespace(backendNamespace)),
+									Group:     ptr.To(group),
+									Kind:      ptr.To(kind),
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	referenceGrant := func(fromGroup, fromKind, toGroup, toKind string) *gwapiv1b1.ReferenceGrant {
+		return &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow", Namespace: backendNamespace},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{Group: gwapiv1b1.Group(fromGroup), Kind: gwapiv1b1.Kind(fromKind), Namespace: routeNamespace}},
+				To:   []gwapiv1b1.ReferenceGrantTo{{Group: gwapiv1b1.Group(toGroup), Kind: gwapiv1b1.Kind(toKind)}},
+			},
+		}
+	}
+
+	setup := func(t *testing.T, grant *gwapiv1b1.ReferenceGrant) (*GatewayController, kubernetes.Interface) {
+		t.Helper()
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		kube := fake2.NewClientset()
+		c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+			"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIServiceBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: "backend1", Namespace: backendNamespace},
+			Spec: aigv1b1.AIServiceBackendSpec{
+				BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend", Namespace: ptr.To[gwapiv1.Namespace](backendNamespace)},
+			},
+		}))
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: backendNamespace},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+				APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+					SecretRef: &gwapiv1.SecretObjectReference{Name: "api-key-secret"},
+				},
+				TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
+					{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: "backend1"},
+				},
+			},
+		}))
+		_, err := kube.CoreV1().Secrets(backendNamespace).Create(t.Context(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "api-key-secret", Namespace: backendNamespace},
+			Data:       map[string][]byte{apiKeyInSecret: []byte("supersecret")},
+		}, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		if grant != nil {
+			require.NoError(t, fakeClient.Create(t.Context(), grant))
+		}
+		return c, kube
+	}
+
+	t.Run("AIServiceBackend cross-namespace without ReferenceGrant is rejected", func(t *testing.T) {
+		c, kube := setup(t, nil)
+		const someNamespace = "some-namespace"
+		_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("AIServiceBackend", "backend1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Empty(t, fc.Backends, "cross-namespace backend without a ReferenceGrant must not be wired into the filter config")
+	})
+
+	t.Run("AIServiceBackend cross-namespace with ReferenceGrant is allowed", func(t *testing.T) {
+		grant := referenceGrant(aiServiceBackendGroup, aiGatewayRouteKind, aiServiceBackendGroup, aiServiceBackendKind)
+		c, kube := setup(t, grant)
+		const someNamespace = "some-namespace"
+		_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("AIServiceBackend", "backend1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Len(t, fc.Backends, 1)
+		require.NotNil(t, fc.Backends[0].Auth)
+		require.NotNil(t, fc.Backends[0].Auth.APIKey)
+		require.Equal(t, "supersecret", fc.Backends[0].Auth.APIKey.Key)
+	})
+
+	t.Run("BackendSecurityPolicy Secret in another namespace without ReferenceGrant is left out", func(t *testing.T) {
+		grant := referenceGrant(aiServiceBackendGroup, aiGatewayRouteKind, aiServiceBackendGroup, aiServiceBackendKind)
+		c, kube := setup(t, grant)
+
+		// Point the BSP at a Secret in a third namespace that no ReferenceGrant allows. The same-named
+		// Secret in the BSP's own namespace must not be used instead.
+		const secretNamespace = "secret-ns"
+		var bsp aigv1b1.BackendSecurityPolicy
+		require.NoError(t, c.client.Get(t.Context(), client.ObjectKey{Namespace: backendNamespace, Name: "bsp"}, &bsp))
+		bsp.Spec.APIKey.SecretRef.Namespace = ptr.To[gwapiv1.Namespace](secretNamespace)
+		require.NoError(t, c.client.Update(t.Context(), &bsp))
+		_, err := kube.CoreV1().Secrets(secretNamespace).Create(t.Context(), &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "api-key-secret", Namespace: secretNamespace},
+			Data:       map[string][]byte{apiKeyInSecret: []byte("othersecret")},
+		}, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		const someNamespace = "some-namespace"
+		_, err = c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("AIServiceBackend", "backend1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Empty(t, fc.Backends, "a backend whose credential Secret is not permitted must be left out, not published without auth")
+	})
+
+	t.Run("InferencePool cross-namespace without ReferenceGrant is rejected", func(t *testing.T) {
+		c, kube := setup(t, nil)
+		const someNamespace = "some-namespace"
+		_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("InferencePool", "pool1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Empty(t, fc.Backends, "cross-namespace inference pool without a ReferenceGrant must not be wired into the filter config")
+	})
+
+	t.Run("InferencePool cross-namespace with ReferenceGrant is allowed", func(t *testing.T) {
+		grant := referenceGrant(aiServiceBackendGroup, aiGatewayRouteKind, inferencePoolGroup, inferencePoolKind)
+		c, kube := setup(t, grant)
+
+		// Re-target the existing BSP at the InferencePool instead of the AIServiceBackend.
+		var bsp aigv1b1.BackendSecurityPolicy
+		require.NoError(t, c.client.Get(t.Context(), client.ObjectKey{Namespace: backendNamespace, Name: "bsp"}, &bsp))
+		bsp.Spec.TargetRefs = []gwapiv1a2.LocalPolicyTargetReference{
+			{Kind: "InferencePool", Group: "inference.networking.k8s.io", Name: "pool1"},
+		}
+		require.NoError(t, c.client.Update(t.Context(), &bsp))
+
+		const someNamespace = "some-namespace"
+		_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", routeNamespace, someNamespace,
+			newRoute("InferencePool", "pool1"), nil, "uuid", nil, nil)
+		require.NoError(t, err)
+
+		fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", routeNamespace)
+		require.Len(t, fc.Backends, 1)
+		require.NotNil(t, fc.Backends[0].Auth)
+		require.NotNil(t, fc.Backends[0].Auth.APIKey)
+		require.Equal(t, "supersecret", fc.Backends[0].Auth.APIKey.Key)
+	})
+}
+
 // TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels verifies that mixing routes
 // with and without Spec.Hostnames produces a filter config where:
 //   - each per-host list contains the host's own models AND every unscoped model (so the unscoped
@@ -541,6 +771,23 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 						Matches: []aigv1b1.AIGatewayRouteRuleMatch{
 							{Headers: []gwapiv1.HTTPHeaderMatch{
 								{Name: internalapi.ModelNameHeaderKeyDefault, Value: "unscoped-model"},
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "hidden-alias-route", Namespace: gwNamespace},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Hostnames: []gwapiv1.Hostname{"api.example.com"},
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{
+						BackendRefs:               []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}},
+						ExcludeFromModelsEndpoint: true,
+						Matches: []aigv1b1.AIGatewayRouteRuleMatch{
+							{Headers: []gwapiv1.HTTPHeaderMatch{
+								{Name: internalapi.ModelNameHeaderKeyDefault, Value: "hidden-alias"},
 							}},
 						},
 					},
@@ -590,6 +837,14 @@ func TestGatewayController_reconcileFilterConfigSecret_HostnameScopedModels(t *t
 		gotHostModels = append(gotHostModels, m.Name)
 	}
 	require.ElementsMatch(t, []string{"scoped-model", "unscoped-model"}, gotHostModels)
+
+	// The hidden alias must keep its backend config so requests can still be routed.
+	hiddenAliasBackendName := internalapi.PerRouteRuleRefBackendName(gwNamespace, "apple", "hidden-alias-route", 0, 0)
+	backendNames := make([]string, 0, len(fc.Backends))
+	for _, backend := range fc.Backends {
+		backendNames = append(backendNames, backend.Name)
+	}
+	require.Contains(t, backendNames, hiddenAliasBackendName)
 }
 
 // TestGatewayController_reconcileFilterConfigSecret_AllUnscopedRoutesLeaveUnscopedModelsEmpty
@@ -1058,6 +1313,16 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 				},
 			},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "openai-credentials", Namespace: namespace},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+				OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{
+					Organization: "org-123",
+					Project:      "proj_456",
+				},
+			},
+		},
 	} {
 		require.NoError(t, fakeClient.Create(t.Context(), bsp))
 	}
@@ -1085,6 +1350,10 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: rotators.GetBSPSecretName("gcp-wif"), Namespace: namespace},
 			StringData: map[string]string{rotators.GCPAccessTokenKey: "thisisgcpcredentials"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: rotators.GetBSPSecretName("openai-credentials"), Namespace: namespace},
+			StringData: map[string]string{rotators.OpenAIAccessTokenKey: "thisisopenaicredentials"},
 		},
 	} {
 		_, err := kube.CoreV1().Secrets(namespace).Create(t.Context(), s, metav1.CreateOptions{})
@@ -1149,6 +1418,16 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 				AnthropicAPIKey: &filterapi.AnthropicAPIKeyAuth{Key: "thisisapikey"},
 			},
 		},
+		{
+			bspName: "openai-credentials",
+			exp: &filterapi.BackendAuth{
+				OpenAIAuth: &filterapi.OpenAIAuth{
+					AccessToken:  "thisisopenaicredentials",
+					Organization: "org-123",
+					Project:      "proj_456",
+				},
+			},
+		},
 	} {
 		t.Run(tc.bspName, func(t *testing.T) {
 			bsp := &aigv1b1.BackendSecurityPolicy{}
@@ -1166,11 +1445,17 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 
 func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexes(t)
-	c := newTestGatewayController(fakeClient, fake2.NewClientset(), ctrl.Log, "envoy-gateway-system",
+	kube := fake2.NewClientset()
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
 		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
 
 	ctx := context.Background()
 	namespace := "test-namespace"
+	_, err := kube.CoreV1().Secrets(namespace).Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "wrong-key-secret", Namespace: namespace},
+		Data:       map[string][]byte{"not-" + apiKeyInSecret: []byte("value")},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
 
 	tests := []struct {
 		name          string
@@ -1192,7 +1477,35 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "failed to get secret missing-secret",
+			expectedError: "failed to get secret test-namespace/missing-secret",
+		},
+		{
+			name:    "api key type with secret missing the key",
+			bspName: "api-key-wrong-key-bsp",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "api-key-wrong-key-bsp", Namespace: namespace},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+					APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{
+						SecretRef: &gwapiv1.SecretObjectReference{
+							Name: "wrong-key-secret",
+						},
+					},
+				},
+			},
+			expectedError: "secret test-namespace/wrong-key-secret does not contain key apiKey",
+		},
+		{
+			name:    "api key type with nil secretRef",
+			bspName: "api-key-nil-ref-bsp",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "api-key-nil-ref-bsp", Namespace: namespace},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type:   aigv1b1.BackendSecurityPolicyTypeAPIKey,
+					APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{},
+				},
+			},
+			expectedError: "secretRef is not set for policy test-namespace/api-key-nil-ref-bsp",
 		},
 		{
 			name:    "aws credentials with credentials file missing secret",
@@ -1211,7 +1524,19 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 					},
 				},
 			},
-			expectedError: "failed to get secret missing-aws-secret",
+			expectedError: "failed to get secret test-namespace/missing-aws-secret",
+		},
+		{
+			name:    "openai credentials with missing generated secret",
+			bspName: "openai-bsp",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "openai-bsp", Namespace: namespace},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type:              aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+					OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{},
+				},
+			},
+			expectedError: "failed to get secret test-namespace/ai-eg-bsp-openai-bsp",
 		},
 	}
 
@@ -1221,6 +1546,136 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.expectedError)
 			require.Nil(t, result)
+		})
+	}
+}
+
+// TestGatewayController_bspToFilterAPIBackendAuth_CrossNamespaceSecret verifies that the static
+// credential types read the Secret from secretRef.namespace, and only when a ReferenceGrant allows a
+// cross-namespace reference. A same-named Secret with a different value always exists in the
+// policy's namespace, so falling back to it would show up as the wrong credential.
+func TestGatewayController_bspToFilterAPIBackendAuth_CrossNamespaceSecret(t *testing.T) {
+	const (
+		bspNamespace    = "app"
+		secretNamespace = "shared-secrets"
+		secretName      = "creds"
+	)
+
+	staticTypes := []struct {
+		name    string
+		dataKey string
+		spec    func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec
+		cred    func(auth *filterapi.BackendAuth) string
+	}{
+		{
+			name:    "APIKey",
+			dataKey: apiKeyInSecret,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type:   aigv1b1.BackendSecurityPolicyTypeAPIKey,
+					APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{SecretRef: ref},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.APIKey.Key },
+		},
+		{
+			name:    "AzureAPIKey",
+			dataKey: apiKeyInSecret,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type:        aigv1b1.BackendSecurityPolicyTypeAzureAPIKey,
+					AzureAPIKey: &aigv1b1.BackendSecurityPolicyAzureAPIKey{SecretRef: ref},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.AzureAPIKey.Key },
+		},
+		{
+			name:    "AnthropicAPIKey",
+			dataKey: apiKeyInSecret,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type:            aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey,
+					AnthropicAPIKey: &aigv1b1.BackendSecurityPolicyAnthropicAPIKey{SecretRef: ref},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.AnthropicAPIKey.Key },
+		},
+		{
+			name:    "AWSCredentialsFile",
+			dataKey: rotators.AwsCredentialsKey,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type: aigv1b1.BackendSecurityPolicyTypeAWSCredentials,
+					AWSCredentials: &aigv1b1.BackendSecurityPolicyAWSCredentials{
+						Region:          "us-east-1",
+						CredentialsFile: &aigv1b1.AWSCredentialsFile{SecretRef: ref},
+					},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.AWSAuth.CredentialFileLiteral },
+		},
+	}
+
+	grant := func(fromKind, fromNamespace string) *gwapiv1b1.ReferenceGrant {
+		return &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow", Namespace: secretNamespace},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{Group: aiServiceBackendGroup, Kind: gwapiv1b1.Kind(fromKind), Namespace: gwapiv1b1.Namespace(fromNamespace)}},
+				To:   []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+			},
+		}
+	}
+
+	cases := []struct {
+		name      string
+		namespace *gwapiv1.Namespace
+		grant     *gwapiv1b1.ReferenceGrant
+		expCred   string // Empty means the reference must be rejected.
+	}{
+		{name: "namespace unset", expCred: "from-app"},
+		{name: "same namespace set explicitly", namespace: ptr.To[gwapiv1.Namespace](bspNamespace), expCred: "from-app"},
+		{name: "cross-namespace without ReferenceGrant", namespace: ptr.To[gwapiv1.Namespace](secretNamespace)},
+		{name: "cross-namespace with ReferenceGrant", namespace: ptr.To[gwapiv1.Namespace](secretNamespace), grant: grant(backendSecurityPolicyKind, bspNamespace), expCred: "from-shared"},
+		{name: "ReferenceGrant for another kind", namespace: ptr.To[gwapiv1.Namespace](secretNamespace), grant: grant(aiGatewayRouteKind, bspNamespace)},
+		{name: "ReferenceGrant from another namespace", namespace: ptr.To[gwapiv1.Namespace](secretNamespace), grant: grant(backendSecurityPolicyKind, "other")},
+	}
+
+	for _, st := range staticTypes {
+		t.Run(st.name, func(t *testing.T) {
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					fakeClient := requireNewFakeClientWithIndexes(t)
+					kube := fake2.NewClientset()
+					c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+						"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+					for ns, value := range map[string]string{bspNamespace: "from-app", secretNamespace: "from-shared"} {
+						_, err := kube.CoreV1().Secrets(ns).Create(t.Context(), &corev1.Secret{
+							ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns},
+							StringData: map[string]string{st.dataKey: value},
+						}, metav1.CreateOptions{})
+						require.NoError(t, err)
+					}
+					if tc.grant != nil {
+						require.NoError(t, fakeClient.Create(t.Context(), tc.grant.DeepCopy()))
+					}
+					kube.ClearActions()
+
+					bsp := &aigv1b1.BackendSecurityPolicy{
+						ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: bspNamespace},
+						Spec:       st.spec(&gwapiv1.SecretObjectReference{Name: secretName, Namespace: tc.namespace}),
+					}
+					auth, err := c.bspToFilterAPIBackendAuth(t.Context(), bsp)
+					if tc.expCred == "" {
+						require.ErrorContains(t, err, "is not permitted")
+						require.Nil(t, auth)
+						require.Empty(t, kube.Actions(), "no Secret may be read before the ReferenceGrant check passes")
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, tc.expCred, st.cred(auth))
+				})
+			}
 		})
 	}
 }
@@ -1308,6 +1763,19 @@ func TestResolveCredentialOverride(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, "x-aigw-gcp-access-token", result.DynamicMetadataKey)
+	})
+
+	t.Run("fromRequestHeaders default header for OpenAICredentials", func(t *testing.T) {
+		result, err := resolveCredentialOverride(
+			aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+			&aigv1b1.BackendSecurityPolicyCredentialOverride{
+				FromRequestHeaders: &aigv1b1.CredentialOverrideFromRequestHeaders{},
+			},
+			true,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "x-aigw-openai-access-token", result.HeaderName)
+		require.Equal(t, []string{"x-aigw-openai-access-token"}, result.InputHeadersToRemove)
 	})
 
 	t.Run("fromRequestHeaders for AWSCredentials derives three headers from a prefix", func(t *testing.T) {
@@ -1652,6 +2120,58 @@ func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextDeadlineRea
 	require.Error(t, getErr, "no filter config may be published when the backend could not be read")
 }
 
+// TestGatewayController_reconcileFilterConfigSecret_BailsOnContextCanceledListingReferenceGrants is
+// the same invariant for the ReferenceGrant lookup that guards a cross-namespace credential Secret.
+func TestGatewayController_reconcileFilterConfigSecret_BailsOnContextCanceledListingReferenceGrants(t *testing.T) {
+	const gwNamespace, configNamespace = "ns", "some-namespace"
+	inner, ok := requireNewFakeClientWithIndexes(t).(client.WithWatch)
+	require.True(t, ok)
+	fakeClient := interceptor.NewClient(inner, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, isGrantList := list.(*gwapiv1b1.ReferenceGrantList); isGrantList {
+				return context.Canceled
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+	kube := fake2.NewClientset()
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	require.NoError(t, inner.Create(t.Context(), &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "apple", Namespace: gwNamespace},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			BackendRef: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: ptr.To[gwapiv1.Namespace](gwNamespace)},
+		},
+	}))
+	require.NoError(t, inner.Create(t.Context(), &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "bsp", Namespace: gwNamespace},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAPIKey,
+			APIKey: &aigv1b1.BackendSecurityPolicyAPIKey{SecretRef: &gwapiv1.SecretObjectReference{
+				Name: "api-key", Namespace: ptr.To[gwapiv1.Namespace]("secret-ns"),
+			}},
+			TargetRefs: []gwapiv1a2.LocalPolicyTargetReference{
+				{Kind: "AIServiceBackend", Group: "aigateway.envoyproxy.io", Name: "apple"},
+			},
+		},
+	}))
+
+	routes := []aigv1b1.AIGatewayRoute{{
+		ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: gwNamespace},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{
+			{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "apple"}}},
+		}},
+	}}
+
+	_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", gwNamespace, configNamespace, routes, nil, "uuid", nil, nil)
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, getErr := kube.CoreV1().Secrets(configNamespace).Get(t.Context(),
+		FilterConfigBundleIndexSecretName("gw", gwNamespace), metav1.GetOptions{})
+	require.Error(t, getErr, "no filter config may be published when the ReferenceGrant check was interrupted")
+}
+
 func TestGatewayController_annotateGatewayPods(t *testing.T) {
 	egNamespace := "envoy-gateway-system"
 	gwName, gwNamepsace := "gw", "ns"
@@ -1935,7 +2455,7 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 		require.Equal(t, "some-uuid", deployment.Spec.Template.Annotations[aigatewayUUIDAnnotationKey])
 
 		// Simulate new pod created after rollout with -mcpAddr present
-		pod.Spec.InitContainers[0].Args = []string{"-logLevel", logLevel, "-mcpAddr", ":9856", "-adminPort", "1064"}
+		pod.Spec.InitContainers[0].Args = []string{"-logLevel", logLevel, "-mcpAddr", internalapi.MCPProxyAddr, "-adminPort", "1064"}
 		pod, err = kube.CoreV1().Pods(egNamespace).Update(t.Context(), pod, metav1.UpdateOptions{})
 		require.NoError(t, err)
 
@@ -2281,10 +2801,34 @@ func TestGatewayController_checkPodHasSideCar(t *testing.T) {
 	t.Run("container mode: needMCP with -mcpAddr keeps sidecar", func(t *testing.T) {
 		c := newTestGatewayController(fakeClient, kube, ctrl.Log, egNamespace, image, logLevel, false, nil, false)
 		pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{
-			extProcContainer("-logLevel", logLevel, "-mcpAddr", ":808"),
+			extProcContainer("-logLevel", logLevel, "-mcpAddr", internalapi.MCPProxyAddr),
 		}}}
 		hasSideCar := c.checkPodHasSideCar(pod, true, c.image)
-		require.True(t, hasSideCar, "with -mcpAddr present the sidecar is up to date")
+		require.True(t, hasSideCar, "with the desired -mcpAddr the sidecar is up to date")
+	})
+
+	// Pods created before the MCP proxy was bound to loopback listen on every interface. They must
+	// be rolled, otherwise the proxy stays reachable from other pods until something else restarts them.
+	t.Run("container mode: needMCP with all-interfaces -mcpAddr triggers rollout", func(t *testing.T) {
+		c := newTestGatewayController(fakeClient, kube, ctrl.Log, egNamespace, image, logLevel, false, nil, false)
+		pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{
+			extProcContainer("-logLevel", logLevel, "-mcpAddr", ":9856"),
+		}}}
+		hasSideCar := c.checkPodHasSideCar(pod, true, c.image)
+		require.False(t, hasSideCar, "a non-loopback -mcpAddr must trigger rollout")
+	})
+
+	t.Run("sidecar mode: needMCP with all-interfaces -mcpAddr triggers rollout", func(t *testing.T) {
+		c := newTestGatewayController(fakeClient, kube, ctrl.Log, egNamespace, image, logLevel, false, nil, true)
+		pod := &corev1.Pod{Spec: corev1.PodSpec{InitContainers: []corev1.Container{
+			extProcContainer("-logLevel", logLevel, "-mcpAddr", ":9856"),
+		}}}
+		hasSideCar := c.checkPodHasSideCar(pod, true, c.image)
+		require.False(t, hasSideCar, "a non-loopback -mcpAddr must trigger rollout")
+
+		pod.Spec.InitContainers[0].Args = []string{"-logLevel", logLevel, "-mcpAddr", internalapi.MCPProxyAddr}
+		hasSideCar = c.checkPodHasSideCar(pod, true, c.image)
+		require.True(t, hasSideCar, "with the desired -mcpAddr the sidecar is up to date")
 	})
 
 	t.Run("container mode: logLevel mismatch triggers rollout", func(t *testing.T) {
@@ -2883,6 +3427,14 @@ func Test_schemaToFilterAPI(t *testing.T) {
 			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaAWSOpenAI, Prefix: "openai/v1"},
 		},
 		{
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaTypeSafe},
+			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe, Version: "v1"},
+		},
+		{
+			in:       aigv1b1.VersionedAPISchema{Name: aigv1b1.APISchemaTypeSafe, Version: ptr.To("v2")},
+			expected: filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe, Version: "v2"},
+		},
+		{
 			in: aigv1b1.VersionedAPISchema{
 				Name:   aigv1b1.APISchemaAWSOpenAI,
 				Prefix: ptr.To("custom/v1"),
@@ -3135,6 +3687,15 @@ func TestGatewayController_reconcileFilterMCPConfigSecret(t *testing.T) {
 	require.Equal(t, "mcp-uuid", cfg.UUID)
 	require.NotNil(t, cfg.MCPConfig)
 	require.Equal(t, "http://127.0.0.1:"+strconv.Itoa(internalapi.MCPBackendListenerPort), cfg.MCPConfig.BackendListenerAddr)
+	// The MCP session encryption config is delivered through the filter config Secrets.
+	require.Equal(t, &filterapi.MCPSessionEncryption{
+		Seed:               "seed",
+		Iterations:         100,
+		FallbackSeed:       "fallback",
+		FallbackIterations: 200,
+	}, cfg.MCPConfig.SessionEncryption)
+	// The file id encryption config is delivered through the filter config Secrets as well.
+	require.Equal(t, &filterapi.FileIDEncryption{Seed: "file-seed", Iterations: 100}, cfg.FileIDEncryption)
 }
 
 func TestGatewayController_writeFilterConfigBundleShards(t *testing.T) {
@@ -3299,6 +3860,55 @@ func Test_mcpConfig_ForwardHeaders(t *testing.T) {
 	require.Empty(t, backendB.ForwardHeaders)
 }
 
+// The CRD's XValidation rule only requires oauth when a rule's source.jwt is set; a CEL expression
+// referencing request.auth.jwt.claims/scopes is accepted without oauth configured. mcpConfig must still
+// mark the resulting filterapi.MCPRouteAuthorization as VerifiedJWT: false in that case, so
+// the mcpproxy never trusts an attacker-forged bearer JWT for such a rule.
+func Test_mcpConfig_Authorization_VerifiedJWT(t *testing.T) {
+	newRoutes := func(oauth *aigv1b1.MCPRouteOAuth) []aigv1b1.MCPRoute {
+		return []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+					}},
+					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+						OAuth: oauth,
+						Authorization: &aigv1b1.MCPRouteAuthorization{
+							DefaultAction: ptr.To(egv1a1.AuthorizationActionDeny),
+							Rules: []aigv1b1.MCPRouteAuthorizationRule{
+								{CEL: ptr.To(`request.auth.jwt.claims["role"] == "admin"`)},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("VerifiedJWT is false when oauth is not configured (the vulnerable configuration)", func(t *testing.T) {
+		mc, effective := mcpConfig(newRoutes(nil))
+		require.True(t, effective)
+		auth := mc.Routes[0].Authorization
+		require.NotNil(t, auth)
+		require.False(t, auth.VerifiedJWT, "VerifiedJWT must be false when securityPolicy.oauth is not configured")
+	})
+
+	t.Run("VerifiedJWT is true when oauth is configured", func(t *testing.T) {
+		mc, effective := mcpConfig(newRoutes(&aigv1b1.MCPRouteOAuth{
+			Issuer: "https://issuer.example.com",
+			ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+				Resource: "https://api.example.com/mcp",
+			},
+		}))
+		require.True(t, effective)
+		auth := mc.Routes[0].Authorization
+		require.NotNil(t, auth)
+		require.True(t, auth.VerifiedJWT, "VerifiedJWT must be true when securityPolicy.oauth is configured")
+	})
+}
+
 func Test_mcpConfig_BackendSelector(t *testing.T) {
 	t.Run("unset means no selector", func(t *testing.T) {
 		mcpRoutes := []aigv1b1.MCPRoute{
@@ -3343,6 +3953,42 @@ func Test_mcpConfig_BackendSelector(t *testing.T) {
 		require.Len(t, sel.Rules, 1)
 		require.Equal(t, filterapi.AuthorizationActionAllow, sel.Rules[0].Action) // Action defaults to Allow.
 		require.Equal(t, `request.mcp.backend in request.auth.jwt.claims.mcp_backends`, *sel.Rules[0].CEL)
+		// A CEL rule referencing request.auth.jwt.claims must never be treated as verified when
+		// securityPolicy.oauth is absent, even though the CRD accepts this configuration without error.
+		require.False(t, sel.VerifiedJWT, "VerifiedJWT must be false when securityPolicy.oauth is not configured")
+	})
+
+	t.Run("VerifiedJWT is true when oauth is configured", func(t *testing.T) {
+		mcpRoutes := []aigv1b1.MCPRoute{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "ns"},
+				Spec: aigv1b1.MCPRouteSpec{
+					BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+						BackendObjectReference: gwapiv1.BackendObjectReference{Name: gwapiv1.ObjectName("backend")},
+					}},
+					SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+						OAuth: &aigv1b1.MCPRouteOAuth{
+							Issuer: "https://issuer.example.com",
+							ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+								Resource: "https://api.example.com/mcp",
+							},
+						},
+					},
+					BackendSelector: &aigv1b1.MCPBackendSelector{
+						DefaultAction: ptr.To(egv1a1.AuthorizationActionDeny),
+						Rules: []aigv1b1.MCPBackendSelectorRule{
+							{CEL: ptr.To(`request.mcp.backend in request.auth.jwt.claims.mcp_backends`)},
+						},
+					},
+				},
+			},
+		}
+
+		mc, effective := mcpConfig(mcpRoutes)
+		require.True(t, effective)
+		sel := mc.Routes[0].BackendSelector
+		require.NotNil(t, sel)
+		require.True(t, sel.VerifiedJWT, "VerifiedJWT must be true when securityPolicy.oauth is configured")
 	})
 
 	t.Run("defaultAction defaults to deny when unset", func(t *testing.T) {
@@ -3427,6 +4073,72 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 		require.True(t, effective)
 		require.Len(t, mc.Routes, 1)
 		require.Equal(t, []string{"x-mcp-client-id"}, mc.Routes[0].ForwardHeaders)
+	})
+}
+
+func Test_mcpConfig_OAuth(t *testing.T) {
+	newRoute := func(sp *aigv1b1.MCPRouteSecurityPolicy) []aigv1b1.MCPRoute {
+		return []aigv1b1.MCPRoute{{
+			ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns"},
+			Spec: aigv1b1.MCPRouteSpec{
+				BackendRefs:    []aigv1b1.MCPRouteBackendRef{{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "b"}}},
+				SecurityPolicy: sp,
+			},
+		}}
+	}
+
+	t.Run("full metadata is propagated to the proxy", func(t *testing.T) {
+		mc, effective := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+			OAuth: &aigv1b1.MCPRouteOAuth{
+				Issuer: "https://auth.example.com",
+				ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+					ResourceName:                      ptr.To("My MCP Tools"),
+					ScopesSupported:                   []string{"read", "write"},
+					ResourceSigningAlgValuesSupported: []string{"RS256"},
+					ResourceDocumentation:             ptr.To("https://docs.example.com"),
+					ResourcePolicyURI:                 ptr.To("https://policy.example.com"),
+				},
+			},
+		}))
+		require.True(t, effective)
+		require.Equal(t, &filterapi.MCPRouteOAuthProtectedResourceMetadata{
+			Issuer:                            "https://auth.example.com",
+			ResourceName:                      "My MCP Tools",
+			ScopesSupported:                   []string{"read", "write"},
+			ResourceSigningAlgValuesSupported: []string{"RS256"},
+			ResourceDocumentation:             "https://docs.example.com",
+			ResourcePolicyURI:                 "https://policy.example.com",
+		}, mc.Routes[0].ProtectedResourceMetadata)
+		// Resource is left empty so the proxy derives it per request.
+		require.Empty(t, mc.Routes[0].ProtectedResourceMetadata.Resource)
+	})
+
+	t.Run("an explicitly configured resource is carried through as an override", func(t *testing.T) {
+		mc, _ := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+			OAuth: &aigv1b1.MCPRouteOAuth{
+				Issuer: "https://auth.example.com",
+				ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+					Resource: "https://api.example.com/mcp",
+				},
+			},
+		}))
+		require.Equal(t, "https://api.example.com/mcp", mc.Routes[0].ProtectedResourceMetadata.Resource)
+	})
+
+	t.Run("OAuth without authorization rules still serves metadata", func(t *testing.T) {
+		// The metadata document must be served whenever OAuth is configured, independently of
+		// whether the route also defines authorization rules.
+		mc, _ := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+			OAuth: &aigv1b1.MCPRouteOAuth{Issuer: "https://auth.example.com"},
+		}))
+		require.Nil(t, mc.Routes[0].Authorization)
+		require.NotNil(t, mc.Routes[0].ProtectedResourceMetadata)
+		require.Equal(t, "https://auth.example.com", mc.Routes[0].ProtectedResourceMetadata.Issuer)
+	})
+
+	t.Run("no OAuth configured", func(t *testing.T) {
+		mc, _ := mcpConfig(newRoute(nil))
+		require.Nil(t, mc.Routes[0].ProtectedResourceMetadata)
 	})
 }
 

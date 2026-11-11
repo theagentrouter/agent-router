@@ -16,12 +16,14 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
@@ -195,7 +197,7 @@ func TestServePOST_InitializeRequest(t *testing.T) {
 
 	decrypted, err := proxy.sessionCrypto.Decrypt(rr.Header().Get(sessionIDHeader))
 	require.NoError(t, err)
-	perBackendSessions, _, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
+	perBackendSessions, _, _, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
 	require.NoError(t, err)
 	require.ElementsMatch(t, []filterapi.MCPBackendName{"backend1"}, slices.Collect(maps.Keys(perBackendSessions)))
 
@@ -336,6 +338,9 @@ func TestServePOST_JSONRPCRequest(t *testing.T) {
 		expBodyOnNonOKStatus string
 		params               any
 		validate             func(*testing.T, []byte)
+		// noRouteHeader omits both the route header and the session ID, modelling a request that
+		// did not go through the Gateway's frontend HTTPRoute.
+		noRouteHeader bool
 	}{
 		{
 			method:               "unknown-method",
@@ -359,6 +364,7 @@ func TestServePOST_JSONRPCRequest(t *testing.T) {
 			method:        "initialize",
 			params:        &mcp.InitializeParams{},
 			expStatusCode: 500,
+			noRouteHeader: true,
 		},
 		{
 			method:           "tools/list",
@@ -564,7 +570,10 @@ func TestServePOST_JSONRPCRequest(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set(sessionIDHeader, sessionID)
+			if !tt.noRouteHeader {
+				req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+				req.Header.Set(sessionIDHeader, sessionID)
+			}
 			rr := httptest.NewRecorder()
 
 			proxy.servePOST(rr, req)
@@ -601,6 +610,93 @@ func TestServePOST_JSONRPCRequest(t *testing.T) {
 	}
 }
 
+// TestServePOST_ToolsCallRequest_CrossRouteSessionReuse verifies that a session created on an
+// OAuth-protected route cannot be resumed through another route on the same Gateway. Otherwise the
+// protected route's per-tool JWT rules would be evaluated against a bearer token that was never
+// verified by Envoy (the other route has no securityPolicy.oauth), so a caller could forge claims.
+func TestServePOST_ToolsCallRequest_CrossRouteSessionReuse(t *testing.T) {
+	// Unsigned (alg=none) token carrying the elevated scope. Only Envoy's JWT filter on the
+	// protected route would reject it; the proxy itself never verifies signatures.
+	forged := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"sub": "alice", "scope": "admin"})
+	forgedToken, err := forged.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	require.NoError(t, err)
+
+	compiledAuth, err := compileAuthorization(&filterapi.MCPRouteAuthorization{
+		DefaultAction: filterapi.AuthorizationActionDeny,
+		// The protected route has securityPolicy.oauth configured.
+		VerifiedJWT: true,
+		Rules: []filterapi.MCPRouteAuthorizationRule{{
+			Action: filterapi.AuthorizationActionAllow,
+			Source: &filterapi.MCPAuthorizationSource{JWT: filterapi.JWTSource{Scopes: []string{"admin"}}},
+			Target: &filterapi.MCPAuthorizationTarget{Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "admin-tool"}}},
+		}},
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		route      string
+		wantStatus int
+	}{
+		// The advisory's PoC: resume the protected session through the unprotected route.
+		{name: "through other route", route: "open-route", wantStatus: http.StatusBadRequest},
+		// Control: the same request through the protected route reaches the backend. In a real
+		// deployment Envoy would have rejected the forged token before reaching the proxy.
+		{name: "through original route", route: "protected-route", wantStatus: http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var backendCalled bool
+			backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				backendCalled = true
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"1","result":"success"}`))
+			}))
+			t.Cleanup(backendServer.Close)
+
+			proxy := newTestMCPProxy()
+			proxy.backendListenerAddr = backendServer.URL
+			proxy.routes = map[filterapi.MCPRouteName]*mcpProxyConfigRoute{
+				"protected-route": {
+					backends:      map[filterapi.MCPBackendName]filterapi.MCPBackend{"backend1": {Name: "backend1"}},
+					authorization: compiledAuth,
+				},
+				"open-route": {
+					backends: map[filterapi.MCPBackendName]filterapi.MCPBackend{"backend1": {Name: "backend1"}},
+				},
+			}
+
+			// Session legitimately created by "alice" on the protected route.
+			sessionID := secureID(t, proxy, "protected-route@alice@backend1:dGVzdC1zZXNzaW9u") // "test-session" base64 encoded.
+
+			id, err := jsonrpc.MakeID("1")
+			require.NoError(t, err)
+			paramsData, err := json.Marshal(&mcp.CallToolParams{Name: "backend1__admin-tool"})
+			require.NoError(t, err)
+			body, err := jsonrpc.EncodeMessage(&jsonrpc.Request{Method: "tools/call", ID: id, Params: paramsData})
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(internalapi.MCPRouteHeader, tt.route)
+			req.Header.Set(internalapi.MCPSubjectHeader, "alice")
+			req.Header.Set("Authorization", "Bearer "+forgedToken)
+			req.Header.Set(sessionIDHeader, sessionID)
+			rr := httptest.NewRecorder()
+
+			proxy.servePOST(rr, req)
+
+			require.Equal(t, tt.wantStatus, rr.Code, rr.Body.String())
+			require.Equal(t, tt.wantStatus == http.StatusOK, backendCalled)
+			if tt.wantStatus != http.StatusOK {
+				require.Contains(t, rr.Body.String(), errSessionRouteMismatch.Error())
+			}
+		})
+	}
+}
+
 func TestServePOST_ToolsCallRequest(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -612,7 +708,7 @@ func TestServePOST_ToolsCallRequest(t *testing.T) {
 		{name: "backend1", route: "test-route", tool: "backend1__test-tool", wantBackend: "backend1", wantStatus: http.StatusOK},
 		{name: "backend2", route: "test-route", tool: "backend2__test-tool", wantBackend: "backend2", wantStatus: http.StatusOK},
 		{name: "backend3", route: "test-route-another", tool: "backend3__test-tool", wantBackend: "backend3", wantStatus: http.StatusOK},
-		{name: "test-route-another", tool: "unknown__test-tool", wantBackend: "unknown", wantStatus: http.StatusNotFound},
+		{name: "test-route-another", route: "test-route-another", tool: "unknown__test-tool", wantBackend: "unknown", wantStatus: http.StatusNotFound},
 		{name: "backend1-not-whitelisted", route: "test-route", tool: "backend1__custom-tool", wantBackend: "backend1", wantStatus: http.StatusBadRequest},
 	}
 
@@ -668,7 +764,7 @@ func TestServePOST_ToolsCallRequest(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			// This header is used to establish MCP session with the backends associated with the route.
 			// It is set by the frontend listeners based on the selected route.
-			req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+			req.Header.Set(internalapi.MCPRouteHeader, tt.route)
 			req.Header.Set(sessionIDHeader, sessionID)
 			rr := httptest.NewRecorder()
 
@@ -728,6 +824,7 @@ func TestServePOST_UnsupportedMethod(t *testing.T) {
 	require.NoError(t, err)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	httpReq.Header.Set(internalapi.MCPRouteHeader, "test-route")
 	httpReq.Header.Set(sessionIDHeader, secureID(t, proxy, "test-route@@backend1:dGVzdC1zZXNzaW9u")) // "test-session" base64 encoded.
 	rr := httptest.NewRecorder()
 
@@ -786,6 +883,71 @@ func TestHandleToolCallRequest_NoSession(t *testing.T) {
 
 	require.Equal(t, http.StatusForbidden, rr.Code)
 	require.Contains(t, rr.Body.String(), "no MCP session found for backend backend2")
+}
+
+func TestHandleToolCallRequest_InsufficientScope(t *testing.T) {
+	makeToken := func(scopes ...string) string {
+		token := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"scope": scopes})
+		signed, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+		return signed
+	}
+
+	auth, err := compileAuthorization(&filterapi.MCPRouteAuthorization{
+		DefaultAction: "Deny",
+		Rules: []filterapi.MCPRouteAuthorizationRule{{
+			Action: "Allow",
+			Source: &filterapi.MCPAuthorizationSource{
+				JWT: filterapi.JWTSource{Scopes: []string{"read", "write"}},
+			},
+			Target: &filterapi.MCPAuthorizationTarget{
+				Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "test-tool"}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	newDeniedCall := func(prm *filterapi.MCPRouteOAuthProtectedResourceMetadata) (*httptest.ResponseRecorder, error) {
+		proxy := newTestMCPProxy()
+		route := proxy.routes["test-route"]
+		route.authorization = auth
+		route.prm = prm
+		s := &session{
+			reqCtx: proxy,
+			perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+				"backend1": {sessionID: "test-session"},
+			},
+			route: "test-route",
+		}
+		httpReq := httptest.NewRequest(http.MethodPost, "http://api.example.com:8443/mcp", nil)
+		httpReq.Host = "api.example.com:8443"
+		httpReq.Header.Set("x-forwarded-proto", "https")
+		httpReq.Header.Set("Authorization", "Bearer "+makeToken("read"))
+		rr := httptest.NewRecorder()
+		_, callErr := proxy.handleToolCallRequest(t.Context(), s, rr, &jsonrpc.Request{Method: "tools/call"},
+			&mcp.CallToolParams{Name: "backend1__test-tool"}, nil, httpReq)
+		return rr, callErr
+	}
+
+	t.Run("derived resource metadata is included when OAuth is configured", func(t *testing.T) {
+		rr, err := newDeniedCall(&filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
+		require.ErrorContains(t, err, "authorization failed")
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		require.Equal(t,
+			`Bearer error="insufficient_scope", scope="read write", resource_metadata="https://api.example.com:8443/.well-known/oauth-protected-resource/mcp", error_description="The token is missing required scopes"`,
+			rr.Header().Get("WWW-Authenticate"),
+		)
+	})
+
+	t.Run("resource metadata is omitted when OAuth is not configured", func(t *testing.T) {
+		rr, err := newDeniedCall(nil)
+		require.ErrorContains(t, err, "authorization failed")
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		require.Equal(t,
+			`Bearer error="insufficient_scope", scope="read write", error_description="The token is missing required scopes"`,
+			rr.Header().Get("WWW-Authenticate"),
+		)
+	})
 }
 
 func TestHandleToolCallRequest_BackendError(t *testing.T) {
@@ -1031,7 +1193,7 @@ data: %s
 	rr := httptest.NewRecorder()
 	sessionID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("test-session")))
 	eventID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("_1")))
-	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID))
+	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID), "", "")
 	require.NoError(t, err)
 
 	proxy.proxyResponseBody(t.Context(), s, rr, httpResp, &jsonrpc.Request{Method: "test", ID: id}, filterapi.MCPBackend{Name: "mybackend"}, nil) //nolint:errcheck
@@ -1095,6 +1257,7 @@ func TestServePOST_NotificationsInitialized(t *testing.T) {
 	require.NoError(t, err)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	httpReq.Header.Set(internalapi.MCPRouteHeader, "test-route")
 	httpReq.Header.Set(sessionIDHeader, secureID(t, proxy, "test-route@@backend1:dGVzdC1zZXNzaW9u")) // "test-session" base64 encoded.
 	rr := httptest.NewRecorder()
 
@@ -1221,6 +1384,7 @@ func TestServePOST_InvalidPromptsGetParams(t *testing.T) {
 	require.NoError(t, err)
 
 	httpReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	httpReq.Header.Set(internalapi.MCPRouteHeader, "test-route")
 	httpReq.Header.Set(sessionIDHeader, secureID(t, proxy, "test-route@@backend1:dGVzdC1zZXNzaW9u")) // "test-session" base64 encoded.
 	rr := httptest.NewRecorder()
 
@@ -1276,15 +1440,33 @@ func Test_maybeResponseModify(t *testing.T) {
 	})
 
 	t.Run("resources/read rewrites ui Contents URIs keeping the scheme", func(t *testing.T) {
-		raw, err := json.Marshal(&mcp.ReadResourceResult{
-			Contents: []*mcp.ResourceContents{{URI: "ui://prefab/renderer.html"}},
-		})
-		require.NoError(t, err)
-		msg := &jsonrpc.Response{Result: raw}
+		msg := &jsonrpc.Response{Result: []byte(`{"contents":[{"uri":"ui://prefab/renderer.html"}]}`)}
 		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
 		var got mcp.ReadResourceResult
 		require.NoError(t, json.Unmarshal(msg.Result, &got))
 		require.Equal(t, "ui://backend1/prefab/renderer.html", got.Contents[0].URI)
+	})
+
+	t.Run("resources/read defaults caching hints omitted by the backend", func(t *testing.T) {
+		msg := &jsonrpc.Response{Result: []byte(`{"contents":[{"uri":"file:///notes.txt","mimeType":"text/plain","text":"hello"}]}`)}
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
+		require.NotContains(t, string(msg.Result), `"cacheScope":""`)
+		require.Contains(t, string(msg.Result), `"ttlMs":0`)
+		require.Contains(t, string(msg.Result), `"cacheScope":"private"`)
+		require.Contains(t, string(msg.Result), `"uri":"backend1+file:///notes.txt"`)
+	})
+
+	t.Run("resources/read replaces an empty cacheScope sent by the backend", func(t *testing.T) {
+		msg := &jsonrpc.Response{Result: []byte(`{"ttlMs":0,"cacheScope":"","contents":[{"uri":"file:///notes.txt","text":"hello"}]}`)}
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
+		require.Contains(t, string(msg.Result), `"cacheScope":"private"`)
+	})
+
+	t.Run("resources/read preserves backend caching hints", func(t *testing.T) {
+		msg := &jsonrpc.Response{Result: []byte(`{"ttlMs":5000,"cacheScope":"public","contents":[{"uri":"file:///notes.txt","text":"hello"}]}`)}
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
+		require.Contains(t, string(msg.Result), `"ttlMs":5000`)
+		require.Contains(t, string(msg.Result), `"cacheScope":"public"`)
 	})
 }
 
@@ -2226,6 +2408,11 @@ func Test_errorType(t *testing.T) {
 			expected: metrics.MCPErrorInvalidParam,
 		},
 		{
+			name:     "invalid prompt name error",
+			err:      errInvalidPromptName,
+			expected: metrics.MCPErrorInvalidParam,
+		},
+		{
 			name:     "wrapped backend not found error",
 			err:      fmt.Errorf("failed to call backend: %w", errBackendNotFound),
 			expected: metrics.MCPErrorInvalidParam,
@@ -2579,4 +2766,95 @@ func TestMCPProxy_handleCompletionComplete_NeverModeBareName(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+// TestHandlePromptGetRequest_PromptSelector verifies that prompts filtered out by the backend's
+// promptSelector cannot be fetched directly via prompts/get, even though the client knows the
+// name. Allowed prompts on the same backend must still be routed.
+func TestHandlePromptGetRequest_PromptSelector(t *testing.T) {
+	var hits atomic.Int32
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"messages":[]}}`))
+	}))
+	t.Cleanup(backendServer.Close)
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = backendServer.URL
+	proxy.routes["test-route"].promptSelectors = map[filterapi.MCPBackendName]*toolSelector{
+		"backend1": {
+			exclude:        map[string]struct{}{"private_prompt": {}},
+			excludeRegexps: []*regexp.Regexp{regexp.MustCompile("^secret_.*")},
+		},
+	}
+	s := &session{
+		route:  "test-route",
+		reqCtx: proxy,
+		perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+			"backend1": {backendName: "backend1"},
+		},
+	}
+
+	for _, name := range []string{"backend1__private_prompt", "backend1__secret_stuff"} {
+		t.Run(name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			_, err := proxy.handlePromptGetRequest(t.Context(), s, rr, &jsonrpc.Request{}, &mcp.GetPromptParams{Name: name})
+			require.ErrorIs(t, err, errInvalidPromptName)
+			require.Equal(t, http.StatusBadRequest, rr.Code)
+			require.Contains(t, rr.Body.String(), "invalid prompt name")
+		})
+	}
+	require.Zero(t, hits.Load(), "excluded prompts must not be forwarded to the backend")
+
+	rr := httptest.NewRecorder()
+	_, err := proxy.handlePromptGetRequest(t.Context(), s, rr, &jsonrpc.Request{}, &mcp.GetPromptParams{Name: "backend1__public_prompt"})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, int32(1), hits.Load())
+}
+
+// TestMCPProxy_handleCompletionComplete_PromptSelector verifies that "ref/prompt" completion
+// requests honor the backend's promptSelector the same way prompts/get does.
+func TestMCPProxy_handleCompletionComplete_PromptSelector(t *testing.T) {
+	reqID, _ := jsonrpc.MakeID("id")
+	var hits atomic.Int32
+	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		resp := &jsonrpc.Response{ID: reqID}
+		resp.Result, _ = json.Marshal(&mcp.CompleteResult{})
+		respBody, _ := jsonrpc.EncodeMessage(resp)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(respBody)
+	}))
+	t.Cleanup(backendServer.Close)
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = backendServer.URL
+	proxy.routes["test-route"].promptSelectors = map[filterapi.MCPBackendName]*toolSelector{
+		"backend1": {include: map[string]struct{}{"public_prompt": {}}},
+	}
+	s := &session{
+		reqCtx: proxy,
+		perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+			"backend1": {sessionID: "test-session"},
+		},
+		route: "test-route",
+	}
+
+	rr := httptest.NewRecorder()
+	_, err := proxy.handleCompletionComplete(t.Context(), s, rr, &jsonrpc.Request{ID: reqID, Method: "completion/complete"}, &mcp.CompleteParams{
+		Ref: &mcp.CompleteReference{Type: "ref/prompt", Name: "backend1__private_prompt"},
+	}, nil)
+	require.ErrorIs(t, err, errInvalidPromptName)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Zero(t, hits.Load(), "excluded prompts must not be forwarded to the backend")
+
+	rr = httptest.NewRecorder()
+	_, err = proxy.handleCompletionComplete(t.Context(), s, rr, &jsonrpc.Request{ID: reqID, Method: "completion/complete"}, &mcp.CompleteParams{
+		Ref: &mcp.CompleteReference{Type: "ref/prompt", Name: "backend1__public_prompt"},
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, int32(1), hits.Load())
 }

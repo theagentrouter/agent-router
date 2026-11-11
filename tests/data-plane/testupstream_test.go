@@ -419,42 +419,42 @@ func TestWithTestUpstream(t *testing.T) {
 			backend:           "gcp-vertexai",
 			path:              "/v1/chat/completions",
 			method:            http.MethodPost,
-			requestBody:       `{"model":"gemini-1.5-pro","messages":[{"role":"system","content":"You are a helpful assistant."}]}`,
+			requestBody:       `{"model":"gemini-3.5-flash","messages":[{"role":"system","content":"You are a helpful assistant."}]}`,
 			expRequestBody:    `{"contents":null,"tools":null,"generationConfig":{},"systemInstruction":{"parts":[{"text":"You are a helpful assistant."}]}}`,
-			expPath:           "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-1.5-pro:generateContent",
+			expPath:           "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-3.5-flash:generateContent",
 			expRequestHeaders: map[string]string{"Authorization": "Bearer " + fakeGCPAuthToken},
 			responseStatus:    strconv.Itoa(http.StatusOK),
 			responseBody:      `{"candidates":[{"content":{"parts":[{"text":"This is a test response from Gemini."}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":10,"totalTokenCount":35,"cachedContentTokenCount":10,"thoughtsTokenCount":10}}`,
 			expStatus:         http.StatusOK,
-			expResponseBody:   `{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"This is a test response from Gemini.","role":"assistant"}}],"model":"gemini-1.5-pro","object":"chat.completion","usage":{"completion_tokens":20,"completion_tokens_details":{"reasoning_tokens":10},"prompt_tokens":15,"prompt_tokens_details":{"cached_tokens":10},"total_tokens":35}}`,
+			expResponseBody:   `{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"This is a test response from Gemini.","role":"assistant"}}],"model":"gemini-3.5-flash","object":"chat.completion","usage":{"completion_tokens":20,"completion_tokens_details":{"reasoning_tokens":10},"prompt_tokens":15,"prompt_tokens_details":{"cached_tokens":10},"total_tokens":35}}`,
 		},
 		{
 			name:              "gcp-vertexai - /v1/chat/completions",
 			backend:           "gcp-vertexai",
 			path:              "/v1/chat/completions",
 			method:            http.MethodPost,
-			requestBody:       `{"model":"gemini-1.5-pro","messages":[{"role":"system","content":"You are a helpful assistant."}]}`,
+			requestBody:       `{"model":"gemini-3.5-flash","messages":[{"role":"system","content":"You are a helpful assistant."}]}`,
 			expRequestBody:    `{"contents":null,"tools":null,"generationConfig":{},"systemInstruction":{"parts":[{"text":"You are a helpful assistant."}]}}`,
-			expPath:           "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-1.5-pro:generateContent",
+			expPath:           "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-3.5-flash:generateContent",
 			expRequestHeaders: map[string]string{"Authorization": "Bearer " + fakeGCPAuthToken},
 			responseStatus:    strconv.Itoa(http.StatusOK),
 			responseBody:      `{"candidates":[{"content":{"parts":[{"text":"This is a test response from Gemini."}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":10,"totalTokenCount":25}}`,
 			expStatus:         http.StatusOK,
-			expResponseBody:   `{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"This is a test response from Gemini.","role":"assistant"}}],"model":"gemini-1.5-pro","object":"chat.completion","usage":{"completion_tokens":10,"completion_tokens_details":{},"prompt_tokens":15,"total_tokens":25,"prompt_tokens_details":{}}}`,
+			expResponseBody:   `{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"This is a test response from Gemini.","role":"assistant"}}],"model":"gemini-3.5-flash","object":"chat.completion","usage":{"completion_tokens":10,"completion_tokens_details":{},"prompt_tokens":15,"total_tokens":25,"prompt_tokens_details":{}}}`,
 		},
 		{
 			name:              "gcp-vertexai - /v1/chat/completions - tool use",
 			backend:           "gcp-vertexai",
 			path:              "/v1/chat/completions",
 			method:            http.MethodPost,
-			requestBody:       `{"model":"gemini-1.5-pro","messages":[{"role":"user","content":"tell me the delivery date for order 123"}],"tools":[{"type":"function","function":{"name":"get_delivery_date","description":"Get the delivery date for a customer's order. Call this whenever you need to know the delivery date, for example when a customer asks 'Where is my package'","parameters":{"type":"object","properties":{"order_id":{"type":"string","description":"The customer's order ID."}},"required":["order_id"]}}}]}`,
-			expRequestBody:    `{"contents":[{"parts":[{"text":"tell me the delivery date for order 123"}],"role":"user"}],"tools":[{"functionDeclarations":[{"description":"Get the delivery date for a customer's order. Call this whenever you need to know the delivery date, for example when a customer asks 'Where is my package'","name":"get_delivery_date","parameters":{"properties":{"order_id":{"description":"The customer's order ID.","type":"string"}},"required":["order_id"],"type":"object"}}]}],"generationConfig":{}}`,
-			expPath:           "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-1.5-pro:generateContent",
+			requestBody:       `{"model":"gemini-3.5-flash","messages":[{"role":"user","content":"tell me the delivery date for order 123"}],"tools":[{"type":"function","function":{"name":"get_delivery_date","description":"Get the delivery date for a customer's order. Call this whenever you need to know the delivery date, for example when a customer asks 'Where is my package'","parameters":{"type":"object","properties":{"order_id":{"type":"string","description":"The customer's order ID."}},"required":["order_id"]}}}]}`,
+			expRequestBody:    `{"contents":[{"parts":[{"text":"tell me the delivery date for order 123"}],"role":"user"}],"tools":[{"functionDeclarations":[{"description":"Get the delivery date for a customer's order. Call this whenever you need to know the delivery date, for example when a customer asks 'Where is my package'","name":"get_delivery_date","parametersJsonSchema":{"type":"object","properties":{"order_id":{"description":"The customer's order ID.","type":"string"}},"required":["order_id"]}}]}],"generationConfig":{}}`,
+			expPath:           "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-3.5-flash:generateContent",
 			expRequestHeaders: map[string]string{"Authorization": "Bearer " + fakeGCPAuthToken},
 			responseStatus:    strconv.Itoa(http.StatusOK),
-			responseBody:      `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_delivery_date","args":{"order_id":"123"}}}]},"finishReason":"STOP","avgLogprobs":0.000001220789272338152}],"usageMetadata":{"promptTokenCount":50,"candidatesTokenCount":11,"totalTokenCount":61,"trafficType":"ON_DEMAND","promptTokensDetails":[{"modality":"TEXT","tokenCount":50}],"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":11}]},"modelVersion":"gemini-2.0-flash-001","createTime":"2025-07-11T22:15:44.956335Z","responseId":"EI5xaK-vOtqJm22IPmuCR14AI"}`,
+			responseBody:      `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"get_delivery_date","args":{"order_id":"123"}}}]},"finishReason":"STOP","avgLogprobs":0.000001220789272338152}],"usageMetadata":{"promptTokenCount":50,"candidatesTokenCount":11,"totalTokenCount":61,"trafficType":"ON_DEMAND","promptTokensDetails":[{"modality":"TEXT","tokenCount":50}],"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":11}]},"modelVersion":"gemini-3.5-flash-001","createTime":"2025-07-11T22:15:44.956335Z","responseId":"EI5xaK-vOtqJm22IPmuCR14AI"}`,
 			expStatus:         http.StatusOK,
-			expResponseBody:   `{"choices":[{"finish_reason":"tool_calls","index":0,"message":{"role":"assistant","tool_calls":[{"id":"703482f8-2e5b-4dcc-a872-d74bd66c3866","function":{"arguments":"{\"order_id\":\"123\"}","name":"get_delivery_date"},"type":"function"}]}}],"created":123, "id":"EI5xaK-vOtqJm22IPmuCR14AI","model":"gemini-2.0-flash-001","object":"chat.completion","usage":{"completion_tokens":11,"completion_tokens_details":{},"prompt_tokens":50,"total_tokens":61,"prompt_tokens_details":{}}}`,
+			expResponseBody:   `{"choices":[{"finish_reason":"tool_calls","index":0,"message":{"role":"assistant","tool_calls":[{"id":"703482f8-2e5b-4dcc-a872-d74bd66c3866","function":{"arguments":"{\"order_id\":\"123\"}","name":"get_delivery_date"},"type":"function"}]}}],"created":123, "id":"EI5xaK-vOtqJm22IPmuCR14AI","model":"gemini-3.5-flash-001","object":"chat.completion","usage":{"completion_tokens":11,"completion_tokens_details":{},"prompt_tokens":50,"total_tokens":61,"prompt_tokens_details":{}}}`,
 		},
 		{
 			name:              "gcp-anthropicai - /v1/chat/completions",
@@ -616,9 +616,9 @@ data: [DONE]
 			path:              "/v1/chat/completions",
 			responseType:      "sse",
 			method:            http.MethodPost,
-			requestBody:       `{"model":"gemini-1.5-pro","messages":[{"role":"system","content":"You are a helpful assistant."}], "stream": true}`,
+			requestBody:       `{"model":"gemini-3.5-flash","messages":[{"role":"system","content":"You are a helpful assistant."}], "stream": true}`,
 			expRequestBody:    `{"contents":null,"tools":null,"generationConfig":{},"systemInstruction":{"parts":[{"text":"You are a helpful assistant."}]}}`,
-			expPath:           "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-1.5-pro:streamGenerateContent",
+			expPath:           "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-3.5-flash:streamGenerateContent",
 			expRawQuery:       "alt=sse",
 			expRequestHeaders: map[string]string{"Authorization": "Bearer " + fakeGCPAuthToken},
 			responseStatus:    strconv.Itoa(http.StatusOK),
@@ -630,21 +630,21 @@ data: [DONE]
 {"responseId":"msg_123","createTime":"2024-11-15T09:00:00Z","candidates":[{"content":{"parts":[{"text":" today"}],"role":"model"}}]}
 {"responseId":"msg_123","createTime":"2024-11-15T09:00:00Z","candidates":[{"content":{"parts":[{"text":"?"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":7,"totalTokenCount":17}}`,
 			expStatus: http.StatusOK,
-			expResponseBody: `data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"Hello","role":"assistant"}}],"created":123,"model":"gemini-1.5-pro","object":"chat.completion.chunk"}
+			expResponseBody: `data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"Hello","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"! How","role":"assistant"}}],"created":123,"model":"gemini-1.5-pro","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"! How","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" can I","role":"assistant"}}],"created":123,"model":"gemini-1.5-pro","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" can I","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" help","role":"assistant"}}],"created":123,"model":"gemini-1.5-pro","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" help","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" you","role":"assistant"}}],"created":123,"model":"gemini-1.5-pro","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" you","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" today","role":"assistant"}}],"created":123,"model":"gemini-1.5-pro","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" today","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"?","role":"assistant"},"finish_reason":"stop"}],"created":123,"model":"gemini-1.5-pro","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"?","role":"assistant"},"finish_reason":"stop"}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[],"created":123,"model":"gemini-1.5-pro","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17,"completion_tokens_details":{},"prompt_tokens_details":{}}}
+data: {"id":"msg_123","choices":[],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17,"completion_tokens_details":{},"prompt_tokens_details":{}}}
 
 data: [DONE]
 `,
@@ -791,8 +791,8 @@ data: [DONE]
 			path:            "/v1/chat/completions",
 			responseType:    "",
 			method:          http.MethodPost,
-			requestBody:     `{"model":"gemini-1.5-pro","messages":[{"role":"system","content":"You are a helpful assistant."}]}`,
-			expPath:         "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-1.5-pro:generateContent",
+			requestBody:     `{"model":"gemini-3.5-flash","messages":[{"role":"system","content":"You are a helpful assistant."}]}`,
+			expPath:         "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-3.5-flash:generateContent",
 			responseStatus:  "400",
 			expStatus:       http.StatusBadRequest,
 			responseBody:    `{"error":{"code":400,"message":"Invalid request: missing required field","status":"INVALID_ARGUMENT"}}`,
@@ -1298,6 +1298,41 @@ data: {"type":"message_stop","amazon-bedrock-invocationMetrics":{"inputTokenCoun
 			expResponseBody: `{"id":"resp_67cc","object":"response","created_at":1741476542,"status":"completed","model":"something","output":[{"type":"message","id":"msg_67c","status":"completed","role":"assistant","content":[{"type":"output_text","text":"This is a test."}]}],"parallel_tool_calls":true,"store":true,"temperature":1,"text":{"format":{"type":"text"}},"tool_choice":"auto","top_p":1,"truncation":"disabled","usage":{"input_tokens":16,"input_tokens_details":{"cached_tokens":5},"output_tokens":6,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":22}}`,
 		},
 		{
+			name:            "openai - /v1/decisions",
+			backend:         "openai",
+			path:            "/v1/decisions",
+			method:          http.MethodPost,
+			requestBody:     `{"model":"gpt-6-luna","input":"I was charged twice.","questions":[{"type":"choice","name":"department","instructions":"Route this request.","choices":[{"value":"billing","description":"Billing requests."},{"value":"other","description":"Other requests."}]}]}`,
+			expPath:         "/v1/decisions",
+			responseBody:    `{"answers":[{"type":"choice","name":"department","choice":"billing","probabilities":[{"value":"billing","probability":0.95},{"value":"other","probability":0.05}],"confidence":0.95}],"model":"gpt-6-luna","usage":{"input_tokens":24,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":24}}`,
+			expStatus:       http.StatusOK,
+			expResponseBody: `{"answers":[{"type":"choice","name":"department","choice":"billing","probabilities":[{"value":"billing","probability":0.95},{"value":"other","probability":0.05}],"confidence":0.95}],"model":"gpt-6-luna","usage":{"input_tokens":24,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":24}}`,
+		},
+		{
+			name:            "openai - /v1/decisions - instructions with images",
+			backend:         "openai",
+			path:            "/v1/decisions",
+			method:          http.MethodPost,
+			requestBody:     `{"model":"gpt-6-luna","input":"Candidate photo.","questions":[{"type":"predicate","name":"match","instructions":[{"type":"input_text","text":"Is this the same item as the reference?"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]}]}`,
+			expPath:         "/v1/decisions",
+			expRequestBody:  `{"model":"gpt-6-luna","input":"Candidate photo.","questions":[{"type":"predicate","name":"match","instructions":[{"type":"input_text","text":"Is this the same item as the reference?"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]}]}`,
+			responseBody:    `{"answers":[{"type":"predicate","name":"match","probability":0.9}],"model":"gpt-6-luna","usage":{"input_tokens":30,"output_tokens":0,"total_tokens":30}}`,
+			expStatus:       http.StatusOK,
+			expResponseBody: `{"answers":[{"type":"predicate","name":"match","probability":0.9}],"model":"gpt-6-luna","usage":{"input_tokens":30,"output_tokens":0,"total_tokens":30}}`,
+		},
+		{
+			name:            "azure-openai - /v1/decisions",
+			backend:         "azure-openai",
+			path:            "/v1/decisions",
+			method:          http.MethodPost,
+			requestBody:     `{"model":"gpt-6-luna","input":"I was charged twice.","questions":[{"type":"choice","name":"department","instructions":"Route this request.","choices":[{"value":"billing","description":"Billing requests."},{"value":"other","description":"Other requests."}]}]}`,
+			expPath:         "/openai/v1/decisions",
+			expRequestBody:  `{"model":"gpt-6-luna","input":"I was charged twice.","questions":[{"type":"choice","name":"department","instructions":"Route this request.","choices":[{"value":"billing","description":"Billing requests."},{"value":"other","description":"Other requests."}]}]}`,
+			responseBody:    `{"answers":[{"type":"choice","name":"department","choice":"billing","probabilities":[{"value":"billing","probability":0.95},{"value":"other","probability":0.05}],"confidence":0.95}],"model":"gpt-6-luna","usage":{"input_tokens":24,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":24}}`,
+			expStatus:       http.StatusOK,
+			expResponseBody: `{"answers":[{"type":"choice","name":"department","choice":"billing","probabilities":[{"value":"billing","probability":0.95},{"value":"other","probability":0.05}],"confidence":0.95}],"model":"gpt-6-luna","usage":{"input_tokens":24,"input_tokens_details":{"cache_write_tokens":0,"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":24}}`,
+		},
+		{
 			name:            "azure-openai - /v1/responses",
 			backend:         "azure-openai",
 			path:            "/v1/responses",
@@ -1744,7 +1779,7 @@ func TestStreamingUsageInclusionWithCosts(t *testing.T) {
 			name:           "streaming - forced to include usage",
 			backend:        "openai",
 			requestBody:    `{"model":"something","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true, "stream_options": {"include_usage": false}}`,
-			expRequestBody: `{"model":"something","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true, "stream_options": {"include_usage": true}}`,
+			expRequestBody: `{"model":"something","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true,"stream_options":{"include_usage": true}}`,
 			responseBody: `
 {"id":"chatcmpl-foo","object":"chat.completion.chunk","created":1731618222,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0ba0d124f1","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
 {"id":"chatcmpl-foo","object":"chat.completion.chunk","created":1731618222,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0ba0d124f1","choices":[],"usage":{"prompt_tokens":13,"completion_tokens":12,"total_tokens":25,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}}
@@ -1780,7 +1815,7 @@ data: [DONE]
 			name:           "streaming - model override forced to include usage",
 			backend:        "modelname-override",
 			requestBody:    `{"model":"requested-model","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true, "stream_options": {"include_usage": false}}`,
-			expRequestBody: `{"model":"override-model","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true, "stream_options": {"include_usage": true}}`,
+			expRequestBody: `{"model":"override-model","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true,"stream_options":{"include_usage": true}}`,
 			responseBody: `
 {"id":"chatcmpl-foo","object":"chat.completion.chunk","created":1731618222,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0ba0d124f1","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
 {"id":"chatcmpl-foo","object":"chat.completion.chunk","created":1731618222,"model":"gpt-4o-mini-2024-07-18","system_fingerprint":"fp_0ba0d124f1","choices":[],"usage":{"prompt_tokens":13,"completion_tokens":12,"total_tokens":25,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}}}
@@ -1974,4 +2009,123 @@ func requestCompletionCount(t *testing.T, adminPort int, backend string) int {
 		total += count
 	}
 	return total
+}
+
+// TestMalformedUpstreamResponseDoesNotTerminateExtProc sends 2xx upstream responses that are missing fields
+// or contain null values through Envoy and an out-of-process external processor. After each one, a well-formed
+// request through the same Envoy must still succeed, which fails if the response terminated the external processor.
+func TestMalformedUpstreamResponseDoesNotTerminateExtProc(t *testing.T) {
+	config := &filterapi.Config{
+		Version: version.Parse(),
+		GlobalLLMRequestCosts: []filterapi.GlobalLLMRequestCost{
+			{MetadataKey: "used_token", Type: filterapi.LLMRequestCostTypeInputToken},
+		},
+		Backends: []filterapi.Backend{
+			testUpstreamOpenAIBackend,
+			testUpstreamAAWSBackend,
+			testUpstreamGCPVertexAIBackend,
+			testUpstreamGCPAnthropicAIBackend,
+			testUpstreamAWSAnthropicBackend,
+			{
+				Name:   "testupstream-anthropic",
+				Schema: anthropicSchema,
+				Auth:   &filterapi.BackendAuth{AnthropicAPIKey: &filterapi.AnthropicAPIKeyAuth{Key: "anthropic-api-key"}},
+			},
+		},
+	}
+	configBytes, err := yaml.Marshal(config)
+	require.NoError(t, err)
+
+	const messagesRequest = `{"model":"claude-x","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
+	for _, tc := range []struct {
+		name, backend, path, requestBody, responseBody, expPath string
+	}{
+		{
+			name:         "anthropic - /anthropic/v1/messages - no usage",
+			backend:      "anthropic",
+			path:         "/anthropic/v1/messages",
+			requestBody:  messagesRequest,
+			responseBody: `{}`,
+			expPath:      "/v1/messages",
+		},
+		{
+			name:         "aws-anthropic - /anthropic/v1/messages - null body",
+			backend:      "aws-anthropic",
+			path:         "/anthropic/v1/messages",
+			requestBody:  messagesRequest,
+			responseBody: `null`,
+			expPath:      "/model/claude-x/invoke",
+		},
+		{
+			name:         "gcp-anthropicai - /anthropic/v1/messages - no usage",
+			backend:      "gcp-anthropicai",
+			path:         "/anthropic/v1/messages",
+			requestBody:  messagesRequest,
+			responseBody: `{"model":"claude-x","type":"message","role":"assistant","content":[]}`,
+			expPath:      "/v1/projects/gcp-project-name/locations/gcp-region/publishers/anthropic/models/claude-x:rawPredict",
+		},
+		{
+			name:         "aws-bedrock - /anthropic/v1/messages - null content block",
+			backend:      "aws-bedrock",
+			path:         "/anthropic/v1/messages",
+			requestBody:  messagesRequest,
+			responseBody: `{"output":{"message":{"role":"assistant","content":[null]}},"stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}`,
+			expPath:      "/model/claude-x/converse",
+		},
+		{
+			name:         "aws-bedrock - /v1/chat/completions - null content block",
+			backend:      "aws-bedrock",
+			path:         "/v1/chat/completions",
+			requestBody:  `{"model":"bedrock-x","messages":[{"role":"user","content":"hi"}]}`,
+			responseBody: `{"output":{"message":{"role":"assistant","content":[null]}},"stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}`,
+			expPath:      "/model/bedrock-x/converse",
+		},
+		{
+			name:         "gcp-vertexai - /v1/chat/completions - null body",
+			backend:      "gcp-vertexai",
+			path:         "/v1/chat/completions",
+			requestBody:  `{"model":"gemini-x","messages":[{"role":"user","content":"hi"}]}`,
+			responseBody: `null`,
+			expPath:      "/v1/projects/gcp-project-name/locations/gcp-region/publishers/google/models/gemini-x:generateContent",
+		},
+		{
+			name:         "openai - /v1/images/generations - null body",
+			backend:      "openai",
+			path:         "/v1/images/generations",
+			requestBody:  `{"model":"gpt-image-1-mini","prompt":"a cat"}`,
+			responseBody: `null`,
+			expPath:      "/v1/images/generations",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := startTestEnvironment(t, string(configBytes), true, false)
+			listenerAddress := fmt.Sprintf("http://localhost:%d", env.EnvoyListenerPort())
+
+			status, body := postToTestUpstream(t, listenerAddress, tc.backend, tc.path, tc.requestBody, tc.responseBody, tc.expPath)
+			require.Equal(t, http.StatusOK, status, "malformed response: %s", body)
+
+			status, body = postToTestUpstream(t, listenerAddress, "openai", "/v1/chat/completions",
+				`{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`,
+				`{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`,
+				"/v1/chat/completions")
+			require.Equal(t, http.StatusOK, status, "well-formed request after the malformed one: %s", body)
+		})
+	}
+}
+
+// postToTestUpstream sends a request through Envoy to the test upstream, telling it which response body to
+// return and which path to expect, and returns the status code and body the client received.
+func postToTestUpstream(t *testing.T, listenerAddress, backend, path, requestBody, responseBody, expPath string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, listenerAddress+path, strings.NewReader(requestBody))
+	require.NoError(t, err)
+	req.Header.Set("x-test-backend", backend)
+	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(responseBody)))
+	req.Header.Set(testupstreamlib.ExpectedPathHeaderKey, base64.StdEncoding.EncodeToString([]byte(expPath)))
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, string(body)
 }

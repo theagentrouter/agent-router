@@ -51,7 +51,6 @@ spec:
   apiKey:
     secretRef:
       name: envoy-ai-gateway-basic-tars-apikey
-      namespace: default
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend

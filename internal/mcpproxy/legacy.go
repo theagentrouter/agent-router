@@ -38,6 +38,7 @@ var (
 	errSessionNotFound      = errors.New("session not found")
 	errBackendNotFound      = errors.New("backend not found")
 	errInvalidToolName      = errors.New("invalid tool name")
+	errInvalidPromptName    = errors.New("invalid prompt name")
 	errBackendResponseError = errors.New("one or more backends returned an error response")
 )
 
@@ -130,10 +131,10 @@ func (m *mcpRequestContext) serveGET(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing session ID", http.StatusBadRequest)
 		return
 	}
-	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(lastEventID))
+	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(lastEventID), extractRoute(r), extractSubject(r))
 	if err != nil {
 		m.l.Error("invalid session ID in GET request", slog.String("session_id", sessionID), slog.String("error", err.Error()))
-		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), sessionErrorStatus(err))
 		return
 	}
 	if m.l.Enabled(r.Context(), slog.LevelDebug) {
@@ -164,10 +165,10 @@ func (m *mcpRequestContext) serverDELETE(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// we didn't care about last event id in DELETE.
-	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), "")
+	s, err := m.sessionFromID(secureClientToGatewaySessionID(sessionID), "", extractRoute(r), extractSubject(r))
 	if err != nil {
 		m.l.Error("invalid session ID in DELETE request", slog.String("session_id", sessionID), slog.String("error", err.Error()))
-		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("invalid session ID: %v", err), sessionErrorStatus(err))
 		return
 	}
 	_ = s.Close() // Ignore error as it's not recoverable here. Errors per backend are logged in Close().
@@ -213,11 +214,11 @@ func (m *mcpRequestContext) serveLegacyPOST(w http.ResponseWriter, r *http.Reque
 		})
 	}()
 	if sessionID := r.Header.Get(sessionIDHeader); sessionID != "" {
-		s, err = m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(r.Header.Get(lastEventIDHeader)))
+		s, err = m.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(r.Header.Get(lastEventIDHeader)), extractRoute(r), extractSubject(r))
 		if err != nil {
 			errType = metrics.MCPErrorInvalidSessionID
 			m.l.Error("invalid session ID in POST request", slog.String("session_id", sessionID), slog.String("error", err.Error()))
-			http.Error(w, fmt.Sprintf("invalid session ID: %v", err), http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("invalid session ID: %v", err), sessionErrorStatus(err))
 			return
 		}
 	}
@@ -457,7 +458,7 @@ func errorType(err error) metrics.MCPErrorType {
 	}
 
 	// Check for specific error types
-	if errors.Is(err, errBackendNotFound) || errors.Is(err, errSessionNotFound) || errors.Is(err, errInvalidToolName) {
+	if errors.Is(err, errBackendNotFound) || errors.Is(err, errSessionNotFound) || errors.Is(err, errInvalidToolName) || errors.Is(err, errInvalidPromptName) {
 		return metrics.MCPErrorInvalidParam
 	}
 	var toolCallValidaitonError *errToolCall
@@ -703,7 +704,13 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 			// Specify the minimum required scopes in the WWW-Authenticate header.
 			// Reference: https://mcp.mintlify.app/specification/2025-11-25/basic/authorization#runtime-insufficient-scope-errors
 			if len(requiredScopes) > 0 {
-				if challenge := buildInsufficientScopeHeader(requiredScopes, route.authorization.ResourceMetadataURL); challenge != "" {
+				// The resource_metadata URL is derived from this request so that it points at
+				// the host the client actually reached, whatever hostname or port that is.
+				var metadataURL string
+				if route.prm != nil {
+					metadataURL = resourceMetadataURL(r, route.prm, externalPath(r))
+				}
+				if challenge := buildInsufficientScopeHeader(requiredScopes, metadataURL); challenge != "" {
 					w.Header().Set("WWW-Authenticate", challenge)
 				}
 			}
@@ -912,6 +919,11 @@ func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.
 		}
 		for _, res := range result.Contents {
 			res.URI = downstreamResourceURI(res.URI, backend)
+		}
+		// Older backends omit caching hints, which would otherwise be re-encoded as an invalid empty
+		// cacheScope. Read results can be user-specific, so a missing scope defaults to private.
+		if result.CacheScope == "" {
+			result.CacheScope = "private"
 		}
 		msg.Result, _ = json.Marshal(result) // Already decoded result, so ignore error.
 	case "tools/call":
@@ -1188,6 +1200,18 @@ func (m *mcpRequestContext) resolvePromptBackend(routeName filterapi.MCPRouteNam
 	return upstreamResourceName(name)
 }
 
+// promptAllowed reports whether the backend's promptSelector on the given route allows the
+// upstream prompt name. Prompts filtered out of prompts/list must not be reachable by name
+// either, mirroring the toolSelector check in handleToolCallRequest.
+func (m *mcpRequestContext) promptAllowed(routeName filterapi.MCPRouteName, backendName, promptName string) bool {
+	route := m.routes[routeName]
+	if route == nil {
+		return false
+	}
+	selector := route.promptSelectors[backendName]
+	return selector == nil || selector.allows(promptName)
+}
+
 // handlePromptGetRequest handles the "prompts/get" JSON-RPC method.
 func (m *mcpRequestContext) handlePromptGetRequest(ctx context.Context, s *session, w http.ResponseWriter, req *jsonrpc.Request, p *mcp.GetPromptParams) (handlerResult, error) {
 	backendName, promptName, err := m.resolvePromptBackend(s.route, p.Name)
@@ -1200,6 +1224,10 @@ func (m *mcpRequestContext) handlePromptGetRequest(ctx context.Context, s *sessi
 	if err != nil {
 		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in prompt name %s", errBackendNotFound, backendName, p.Name)
+	}
+	if !m.promptAllowed(s.route, backendName, promptName) {
+		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", p.Name))
+		return result, fmt.Errorf("%w: %s", errInvalidPromptName, p.Name)
 	}
 	cse := s.getCompositeSessionEntry(backendName)
 	if cse == nil {
@@ -1226,9 +1254,12 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 	var (
 		err         error
 		backendName string
+		// promptName is the client-facing prompt name, kept for error messages.
+		promptName string
 	)
 	switch param.Ref.Type {
 	case "ref/prompt":
+		promptName = param.Ref.Name
 		backendName, param.Ref.Name, err = m.resolvePromptBackend(s.route, param.Ref.Name)
 	case "ref/resource":
 		backendName, param.Ref.URI, err = upstreamResourceURI(param.Ref.URI)
@@ -1246,6 +1277,10 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 	if err != nil {
 		onErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in resource name %s", errBackendNotFound, backendName, cmp.Or(param.Ref.Name, param.Ref.URI))
+	}
+	if param.Ref.Type == "ref/prompt" && !m.promptAllowed(s.route, backendName, param.Ref.Name) {
+		onErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", promptName))
+		return result, fmt.Errorf("%w: %s", errInvalidPromptName, promptName)
 	}
 
 	cse := s.getCompositeSessionEntry(backend.Name)
@@ -1546,6 +1581,15 @@ func (m *mcpRequestContext) handleSetLoggingLevel(ctx context.Context, s *sessio
 	})
 }
 
+// extractRoute returns the MCPRoute the request was routed through.
+//
+// The route is read from internalapi.MCPRouteHeader, which the Gateway's frontend HTTPRoute
+// unconditionally sets (overwriting any client-supplied value) for every MCPRoute, so it reliably
+// identifies the route, and therefore the Envoy-side security policy, the request went through.
+func extractRoute(r *http.Request) filterapi.MCPRouteName {
+	return r.Header.Get(internalapi.MCPRouteHeader)
+}
+
 // extractSubject returns the authenticated subject (the JWT "sub" claim).
 //
 // The subject is read from the trusted internalapi.MCPSubjectHeader, which Envoy's JWT filter
@@ -1559,6 +1603,17 @@ func (m *mcpRequestContext) handleSetLoggingLevel(ctx context.Context, s *sessio
 // the subject is only used as an anti-hijacking discriminator in the session ID, not for authorization.
 func extractSubject(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get(internalapi.MCPSubjectHeader))
+}
+
+// sessionErrorStatus maps an error from sessionFromID to the HTTP status code that should be
+// returned to the client. A subject mismatch is an authorization failure (the caller is
+// authenticated but is not the subject the session was created for), so it is reported as 401
+// rather than the generic 400 used for malformed/undecryptable session IDs.
+func sessionErrorStatus(err error) int {
+	if errors.Is(err, errSessionSubjectMismatch) {
+		return http.StatusUnauthorized
+	}
+	return http.StatusBadRequest
 }
 
 // parseParamsAndMaybeStartSpan parses the params from the JSON-RPC request and starts a tracing span if params is non-nil.

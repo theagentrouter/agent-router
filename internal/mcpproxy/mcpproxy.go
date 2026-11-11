@@ -90,6 +90,13 @@ func NewMCPProxy(l *slog.Logger, mcpMetrics metrics.MCPMetrics, tracer tracingap
 				requestHeaders: r.Header,
 				originalPath:   originalPathForRequest(r),
 			}
+			// The OAuth Protected Resource Metadata document is served from here rather than
+			// as a static direct response so that the resource identifier it advertises can be
+			// derived from the scheme, authority and path the client actually used.
+			if isProtectedResourceMetadataRequest(externalPath(r)) {
+				proxy.serveOAuthProtectedResourceMetadata(w, r)
+				return
+			}
 			switch r.Method {
 			case http.MethodGet:
 				proxy.serveGET(w, r)
@@ -172,7 +179,7 @@ func (m *mcpRequestContext) selectAuthorizedBackends(routeName filterapi.MCPRout
 		headers = http.Header{}
 	}
 	filtered := make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(route.backends))
-	authzCtx := m.newAuthzContext(&authorizationRequest{Headers: headers})
+	authzCtx := m.newAuthzContext(&authorizationRequest{Headers: headers}, route.backendSelector.VerifiedJWT)
 	for name, backend := range route.backends {
 		allowed, _ := m.authorizeRequestWith(route.backendSelector, &authorizationRequest{
 			Headers: headers,
@@ -272,7 +279,7 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 		return nil, errors.New("failed to create MCP session to any backend")
 	}
 
-	encrypted, err := m.sessionCrypto.Encrypt(string(clientToGatewaySessionIDFromEntries(subject, finalEntries, routeName)))
+	encrypted, err := m.currentSessionCrypto().Encrypt(string(clientToGatewaySessionIDFromEntries(subject, finalEntries, routeName)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt session ID: %w", err)
 	}
@@ -294,19 +301,52 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 	}, nil
 }
 
+// errSessionSubjectMismatch is returned by sessionFromID when the subject embedded in the
+// decrypted session ID (set at session creation from the authenticated caller's JWT "sub" claim)
+// does not match the current request's authenticated subject. This is the anti-hijacking check
+// documented at https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices#session-hijacking:
+// without it, any client in possession of a Mcp-Session-Id value (its own or another user's) could
+// resume another user's session and act with its already-initialized backend session(s).
+var errSessionSubjectMismatch = errors.New("session ID was issued for a different authenticated subject")
+
+// errSessionRouteMismatch is returned by sessionFromID when the route embedded in the decrypted
+// session ID does not match the MCPRoute the current request was routed through. Sessions are
+// bound to the route they were created on: the resumed session carries that route's backends,
+// tool selectors and authorization config, and those must only be applied to requests that went
+// through that route's Envoy-side security (e.g. JWT verification). Otherwise a session created
+// on an OAuth-protected route could be resumed through a route without OAuth, where the bearer
+// token and the subject header are not verified, and the protected route's authorization rules
+// would be evaluated against unverified, caller-supplied claims.
+var errSessionRouteMismatch = errors.New("session ID was issued for a different route")
+
 // sessionFromID returns the session with the given ID, or error if not found or invalid.
-func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, lastEvent secureClientToGatewayEventID) (*session, error) {
-	decrypted, err := m.sessionCrypto.Decrypt(string(id))
+//
+// currentRoute is the MCPRoute the current request was routed through (the
+// internalapi.MCPRouteHeader set by the Gateway) and MUST match the route embedded in the session
+// ID, so that a session can only be resumed through the route it was created on.
+//
+// currentSubject is the authenticated subject of the current request (see extractSubject) and
+// MUST be compared against the subject embedded in the session ID to prevent session hijacking:
+// resuming a session must only be allowed for the same authenticated caller that created it.
+func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, lastEvent secureClientToGatewayEventID, currentRoute filterapi.MCPRouteName, currentSubject string) (*session, error) {
+	sessionCrypto := m.currentSessionCrypto()
+	decrypted, err := sessionCrypto.Decrypt(string(id))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt session ID: %w", err)
 	}
 
-	perBackendSessionIDs, route, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
+	perBackendSessionIDs, route, subject, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
 	if err != nil {
 		return nil, err
 	}
+	if route != currentRoute {
+		return nil, errSessionRouteMismatch
+	}
+	if subject != currentSubject {
+		return nil, errSessionSubjectMismatch
+	}
 	if len(lastEvent) != 0 {
-		decryptedEventID, err := m.sessionCrypto.Decrypt(string(lastEvent))
+		decryptedEventID, err := sessionCrypto.Decrypt(string(lastEvent))
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt last event ID: %w", err)
 		}

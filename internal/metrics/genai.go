@@ -23,6 +23,7 @@ const (
 	genaiAttributeResponseModel = "gen_ai.response.model"
 	genaiAttributeTokenType     = "gen_ai.token.type" //nolint:gosec // metric name, not credential
 	genaiAttributeErrorType     = "error.type"
+	genaiAttributeBackend       = "gen_ai.backend"
 
 	GenAIOperationChat                 GenAIOperation = "chat"
 	GenAIOperationCompletion           GenAIOperation = "completion"
@@ -30,10 +31,12 @@ const (
 	GenAIOperationMessages             GenAIOperation = "messages"
 	GenAIOperationImageGeneration      GenAIOperation = "image_generation"
 	GenAIOperationResponses            GenAIOperation = "responses"
+	GenAIOperationDecisions            GenAIOperation = "decisions"
 	GenAIOperationSpeech               GenAIOperation = "speech"
 	GenAIOperationTranscription        GenAIOperation = "transcription"
 	GenAIOperationTranslation          GenAIOperation = "translation"
 	GenAIOperationRerank               GenAIOperation = "rerank"
+	GenAIOperationSystemOne            GenAIOperation = "systemone"
 	GenAIOperationTokenize             GenAIOperation = "tokenize"
 	GenAIOperationResponsesInputTokens GenAIOperation = "responses_input_tokens"
 	GenAIOperationCountTokens          GenAIOperation = "count_tokens"
@@ -48,6 +51,7 @@ const (
 	genaiProviderGCPAnthropic = "gcp.anthropic"
 	genaiProviderAnthropic    = "anthropic"
 	genaiProviderCohere       = "cohere"
+	genaiProviderTypeSafe     = "typesafe"
 
 	genaiTokenTypeInput  = "input"
 	genaiTokenTypeOutput = "output"

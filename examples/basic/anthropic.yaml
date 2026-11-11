@@ -49,7 +49,6 @@ spec:
   anthropicAPIKey:
     secretRef:
       name: envoy-ai-gateway-basic-anthropic-apikey
-      namespace: default
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend

@@ -55,7 +55,6 @@ spec:
     tenantID: AZURE_TENANT_ID # Replace with your Azure Tenant ID.
     clientSecretRef:
       name: envoy-ai-gateway-basic-azure-client-secret
-      namespace: default
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend

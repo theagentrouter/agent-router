@@ -343,6 +343,10 @@ func jwtBackendSelectorAllowing(t *testing.T) *compiledAuthorization {
 	t.Helper()
 	return mustCompileBackendSelector(t, &filterapi.MCPRouteAuthorization{
 		DefaultAction: filterapi.AuthorizationActionDeny,
+		// VerifiedJWT: true models a route with securityPolicy.oauth configured, so Envoy has
+		// already verified the bearer JWT's signature before this request reached the proxy.
+		// Without it, claims are never parsed/trusted (see newAuthzContext).
+		VerifiedJWT: true,
 		Rules: []filterapi.MCPRouteAuthorizationRule{
 			{
 				Action: filterapi.AuthorizationActionAllow,

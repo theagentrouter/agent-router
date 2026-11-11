@@ -18,9 +18,9 @@ metadata:
   namespace: default
 spec:
   endpoints:
-    - fqdn:
-        hostname: api.openai.com
-        port: 443
+  - fqdn:
+      hostname: api.openai.com
+      port: 443
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend
@@ -29,9 +29,9 @@ metadata:
   namespace: default
 spec:
   endpoints:
-    - fqdn:
-        hostname: bedrock-runtime.us-east-1.amazonaws.com
-        port: 443
+  - fqdn:
+      hostname: bedrock-runtime.us-east-1.amazonaws.com
+      port: 443
 ---
 apiVersion: gateway.networking.k8s.io/v1alpha3
 kind: BackendTLSPolicy
@@ -40,9 +40,9 @@ metadata:
   namespace: default
 spec:
   targetRefs:
-    - group: gateway.envoyproxy.io
-      kind: Backend
-      name: envoy-ai-gateway-basic-openai
+  - group: gateway.envoyproxy.io
+    kind: Backend
+    name: envoy-ai-gateway-basic-openai
   validation:
     hostname: api.openai.com
     wellKnownCACertificates: System
@@ -54,9 +54,9 @@ metadata:
   namespace: default
 spec:
   targetRefs:
-    - group: gateway.envoyproxy.io
-      kind: Backend
-      name: envoy-ai-gateway-basic-aws
+  - group: gateway.envoyproxy.io
+    kind: Backend
+    name: envoy-ai-gateway-basic-aws
   validation:
     hostname: bedrock-runtime.us-east-1.amazonaws.com
     wellKnownCACertificates: System
@@ -64,91 +64,93 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
+  annotations:
+    gateway.envoyproxy.io/ai-gateway-generated: "true"
+    gateway.envoyproxy.io/backend-ref-priority: 0:envoy-ai-gateway-basic-openai:0,1:envoy-ai-gateway-basic-aws:0,2:envoy-ai-gateway-basic-testupstream:0
   name: envoy-ai-gateway-basic
   namespace: default
-  annotations:
-    gateway.envoyproxy.io/backend-ref-priority: 0:envoy-ai-gateway-basic-openai:0,1:envoy-ai-gateway-basic-aws:0,2:envoy-ai-gateway-basic-testupstream:0
-    gateway.envoyproxy.io/ai-gateway-generated: "true"
   ownerReferences:
-    - apiVersion: aigateway.envoyproxy.io/v1beta1
-      blockOwnerDeletion: true
-      controller: true
-      kind: AIGatewayRoute
-      name: envoy-ai-gateway-basic
-      uid: ""
+  - apiVersion: aigateway.envoyproxy.io/v1beta1
+    blockOwnerDeletion: true
+    controller: true
+    kind: AIGatewayRoute
+    name: envoy-ai-gateway-basic
+    uid: ""
 spec:
   parentRefs:
-    - name: envoy-ai-gateway-basic
-      group: gateway.networking.k8s.io
-      kind: Gateway
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: envoy-ai-gateway-basic
   rules:
-    - backendRefs:
-        - group: gateway.envoyproxy.io
-          kind: Backend
-          name: envoy-ai-gateway-basic-openai
-      filters:
-        - extensionRef:
-            group: gateway.envoyproxy.io
-            kind: HTTPRouteFilter
-            name: ai-eg-host-rewrite-envoy-ai-gateway-basic
-          type: ExtensionRef
-      matches:
-        - headers:
-            - name: x-ai-eg-model
-              type: Exact
-              value: gpt-4o-mini
-          path:
-            value: "/"
-      timeouts:
-        request: 60s
-    - backendRefs:
-        - group: gateway.envoyproxy.io
-          kind: Backend
-          name: envoy-ai-gateway-basic-aws
-      filters:
-        - extensionRef:
-            group: gateway.envoyproxy.io
-            kind: HTTPRouteFilter
-            name: ai-eg-host-rewrite-envoy-ai-gateway-basic
-          type: ExtensionRef
-      matches:
-        - headers:
-            - name: x-ai-eg-model
-              type: Exact
-              value: llama3-2-1b-instruct-v1
-          path:
-            value: "/"
-      timeouts:
-        request: 60s
-    - backendRefs:
-        - kind: Service
-          name: envoy-ai-gateway-basic-testupstream
-          port: 80
-      filters:
-        - extensionRef:
-            group: gateway.envoyproxy.io
-            kind: HTTPRouteFilter
-            name: ai-eg-host-rewrite-envoy-ai-gateway-basic
-          type: ExtensionRef
-      matches:
-        - headers:
-            - name: x-ai-eg-model
-              type: Exact
-              value: some-cool-self-hosted-model
-          path:
-            value: "/"
-      timeouts:
-        request: 60s
-    - matches:
-        - path:
-            value: /
-      name: route-not-found
-      filters:
-        - extensionRef:
-            group: gateway.envoyproxy.io
-            kind: HTTPRouteFilter
-            name: ai-eg-route-not-found-response-envoy-ai-gateway-basic
-          type: ExtensionRef
+  - backendRefs:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: envoy-ai-gateway-basic-openai
+    filters:
+    - extensionRef:
+        group: gateway.envoyproxy.io
+        kind: HTTPRouteFilter
+        name: ai-eg-host-rewrite-envoy-ai-gateway-basic
+      type: ExtensionRef
+    matches:
+    - headers:
+      - name: x-ai-eg-model
+        type: Exact
+        value: gpt-4o-mini
+      path:
+        value: /
+    timeouts:
+      request: 60s
+  - backendRefs:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: envoy-ai-gateway-basic-aws
+    filters:
+    - extensionRef:
+        group: gateway.envoyproxy.io
+        kind: HTTPRouteFilter
+        name: ai-eg-host-rewrite-envoy-ai-gateway-basic
+      type: ExtensionRef
+    matches:
+    - headers:
+      - name: x-ai-eg-model
+        type: Exact
+        value: llama3-2-1b-instruct-v1
+      path:
+        value: /
+    timeouts:
+      request: 60s
+  - backendRefs:
+    - kind: Service
+      name: envoy-ai-gateway-basic-testupstream
+      port: 80
+    filters:
+    - extensionRef:
+        group: gateway.envoyproxy.io
+        kind: HTTPRouteFilter
+        name: ai-eg-host-rewrite-envoy-ai-gateway-basic
+      type: ExtensionRef
+    matches:
+    - headers:
+      - name: x-ai-eg-model
+        type: Exact
+        value: some-cool-self-hosted-model
+      path:
+        value: /
+    timeouts:
+      request: 60s
+  - filters:
+    - extensionRef:
+        group: gateway.envoyproxy.io
+        kind: HTTPRouteFilter
+        name: ai-eg-route-not-found-response-envoy-ai-gateway-basic
+      type: ExtensionRef
+    matches:
+    - path:
+        value: /
+    name: route-not-found
+status:
+  parents: null
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: HTTPRouteFilter
@@ -156,12 +158,12 @@ metadata:
   name: ai-eg-host-rewrite-envoy-ai-gateway-basic
   namespace: default
   ownerReferences:
-    - apiVersion: aigateway.envoyproxy.io/v1beta1
-      kind: AIGatewayRoute
-      name: envoy-ai-gateway-basic
-      uid: ""
-      controller: true
-      blockOwnerDeletion: true
+  - apiVersion: aigateway.envoyproxy.io/v1beta1
+    blockOwnerDeletion: true
+    controller: true
+    kind: AIGatewayRoute
+    name: envoy-ai-gateway-basic
+    uid: ""
 spec:
   urlRewrite:
     hostname:
@@ -173,16 +175,17 @@ metadata:
   name: ai-eg-route-not-found-response-envoy-ai-gateway-basic
   namespace: default
   ownerReferences:
-    - apiVersion: aigateway.envoyproxy.io/v1beta1
-      kind: AIGatewayRoute
-      name: envoy-ai-gateway-basic
-      uid: ""
-      controller: true
-      blockOwnerDeletion: true
+  - apiVersion: aigateway.envoyproxy.io/v1beta1
+    blockOwnerDeletion: true
+    controller: true
+    kind: AIGatewayRoute
+    name: envoy-ai-gateway-basic
+    uid: ""
 spec:
   directResponse:
     body:
-      inline: No matching route found. It is likely because the model specified in your request is not configured in the Gateway.
+      inline: No matching route found. It is likely because the model specified in
+        your request is not configured in the Gateway.
       type: null
     statusCode: 404
 ---
@@ -192,20 +195,20 @@ metadata:
   name: envoy-ai-gateway-basic-default-21a9f8f801bd
 stringData:
   index.yaml: |
-    checksum: 715d03a335eb2a5e469e0fd1a022b4bf0b064e2ee2bf5f5c431dbdc3f30498c5
+    checksum: da43a0302479226041b7921fe35fce12ffffe5436cc016c3090eb1b2fa0a26fd
     parts:
     - name: envoy-ai-gateway-basic-default-21a9f8f801bd-part-000
       path: parts/000
-      sizeBytes: 1022
+      sizeBytes: 1211
     uuid: aigw-translate
     version: dev
 ---
 apiVersion: v1
+data:
+  chunk: YmFja2VuZHM6Ci0gYWlTZXJ2aWNlQmFja2VuZE5hbWU6IGRlZmF1bHQvZW52b3ktYWktZ2F0ZXdheS1iYXNpYy1vcGVuYWkKICBhdXRoOgogICAgYXBpS2V5OgogICAgICBrZXk6IGFwaUtleQogIG1vZGVsTmFtZU92ZXJyaWRlOiAiIgogIG5hbWU6IGRlZmF1bHQvZW52b3ktYWktZ2F0ZXdheS1iYXNpYy1vcGVuYWkvcm91dGUvZW52b3ktYWktZ2F0ZXdheS1iYXNpYy9ydWxlLzAvcmVmLzAKICBzY2hlbWE6CiAgICBuYW1lOiBPcGVuQUkKICAgIHByZWZpeDogdjEKLSBhaVNlcnZpY2VCYWNrZW5kTmFtZTogZGVmYXVsdC9lbnZveS1haS1nYXRld2F5LWJhc2ljLWF3cwogIGF1dGg6CiAgICBhd3M6CiAgICAgIGNyZWRlbnRpYWxGaWxlTGl0ZXJhbDogfAogICAgICAgIFtkZWZhdWx0XQogICAgICAgIGF3c19hY2Nlc3Nfa2V5X2lkID0gQVdTX0FDQ0VTU19LRVlfSUQKICAgICAgICBhd3Nfc2VjcmV0X2FjY2Vzc19rZXkgPSBBV1NfU0VDUkVUX0FDQ0VTU19LRVkKICAgICAgcmVnaW9uOiB1cy1lYXN0LTEKICBtb2RlbE5hbWVPdmVycmlkZTogdXMubWV0YS5sbGFtYTMtMi0xYi1pbnN0cnVjdC12MTowCiAgbmFtZTogZGVmYXVsdC9lbnZveS1haS1nYXRld2F5LWJhc2ljLWF3cy9yb3V0ZS9lbnZveS1haS1nYXRld2F5LWJhc2ljL3J1bGUvMS9yZWYvMAogIHNjaGVtYToKICAgIG5hbWU6IEFXU0JlZHJvY2sKLSBhaVNlcnZpY2VCYWNrZW5kTmFtZTogZGVmYXVsdC9lbnZveS1haS1nYXRld2F5LWJhc2ljLXRlc3R1cHN0cmVhbQogIG1vZGVsTmFtZU92ZXJyaWRlOiAiIgogIG5hbWU6IGRlZmF1bHQvZW52b3ktYWktZ2F0ZXdheS1iYXNpYy10ZXN0dXBzdHJlYW0vcm91dGUvZW52b3ktYWktZ2F0ZXdheS1iYXNpYy9ydWxlLzIvcmVmLzAKICBzY2hlbWE6CiAgICBuYW1lOiBPcGVuQUkKICAgIHByZWZpeDogdjEKbW9kZWxzOgotIENyZWF0ZWRBdDogIjIwMjUtMDUtMjNUMDA6MDA6MDBaIgogIE5hbWU6IGdwdC00by1taW5pCiAgT3duZWRCeTogb3BlbmFpCi0gQ3JlYXRlZEF0OiAiMjAyNS0wNS0yM1QwMDowMDowMFoiCiAgTmFtZTogbGxhbWEzLTItMWItaW5zdHJ1Y3QtdjEKICBPd25lZEJ5OiBhd3MKLSBDcmVhdGVkQXQ6ICIyMDI1LTA1LTIzVDAwOjAwOjAwWiIKICBOYW1lOiBzb21lLWNvb2wtc2VsZi1ob3N0ZWQtbW9kZWwKICBPd25lZEJ5OiBFbnZveSBBSSBHYXRld2F5CnV1aWQ6IGFpZ3ctdHJhbnNsYXRlCnZlcnNpb246IGRldgo=
 kind: Secret
 metadata:
   name: envoy-ai-gateway-basic-default-21a9f8f801bd-part-000
-data:
-  chunk: YmFja2VuZHM6Ci0gYXV0aDoKICAgIGFwaUtleToKICAgICAga2V5OiBhcGlLZXkKICBtb2RlbE5hbWVPdmVycmlkZTogIiIKICBuYW1lOiBkZWZhdWx0L2Vudm95LWFpLWdhdGV3YXktYmFzaWMtb3BlbmFpL3JvdXRlL2Vudm95LWFpLWdhdGV3YXktYmFzaWMvcnVsZS8wL3JlZi8wCiAgc2NoZW1hOgogICAgbmFtZTogT3BlbkFJCiAgICBwcmVmaXg6IHYxCi0gYXV0aDoKICAgIGF3czoKICAgICAgY3JlZGVudGlhbEZpbGVMaXRlcmFsOiB8CiAgICAgICAgW2RlZmF1bHRdCiAgICAgICAgYXdzX2FjY2Vzc19rZXlfaWQgPSBBV1NfQUNDRVNTX0tFWV9JRAogICAgICAgIGF3c19zZWNyZXRfYWNjZXNzX2tleSA9IEFXU19TRUNSRVRfQUNDRVNTX0tFWQogICAgICByZWdpb246IHVzLWVhc3QtMQogIG1vZGVsTmFtZU92ZXJyaWRlOiB1cy5tZXRhLmxsYW1hMy0yLTFiLWluc3RydWN0LXYxOjAKICBuYW1lOiBkZWZhdWx0L2Vudm95LWFpLWdhdGV3YXktYmFzaWMtYXdzL3JvdXRlL2Vudm95LWFpLWdhdGV3YXktYmFzaWMvcnVsZS8xL3JlZi8wCiAgc2NoZW1hOgogICAgbmFtZTogQVdTQmVkcm9jawotIG1vZGVsTmFtZU92ZXJyaWRlOiAiIgogIG5hbWU6IGRlZmF1bHQvZW52b3ktYWktZ2F0ZXdheS1iYXNpYy10ZXN0dXBzdHJlYW0vcm91dGUvZW52b3ktYWktZ2F0ZXdheS1iYXNpYy9ydWxlLzIvcmVmLzAKICBzY2hlbWE6CiAgICBuYW1lOiBPcGVuQUkKICAgIHByZWZpeDogdjEKbW9kZWxzOgotIENyZWF0ZWRBdDogIjIwMjUtMDUtMjNUMDA6MDA6MDBaIgogIE5hbWU6IGdwdC00by1taW5pCiAgT3duZWRCeTogb3BlbmFpCi0gQ3JlYXRlZEF0OiAiMjAyNS0wNS0yM1QwMDowMDowMFoiCiAgTmFtZTogbGxhbWEzLTItMWItaW5zdHJ1Y3QtdjEKICBPd25lZEJ5OiBhd3MKLSBDcmVhdGVkQXQ6ICIyMDI1LTA1LTIzVDAwOjAwOjAwWiIKICBOYW1lOiBzb21lLWNvb2wtc2VsZi1ob3N0ZWQtbW9kZWwKICBPd25lZEJ5OiBFbnZveSBBSSBHYXRld2F5CnV1aWQ6IGFpZ3ctdHJhbnNsYXRlCnZlcnNpb246IGRldgo=
 ---
 apiVersion: v1
 kind: Secret
@@ -236,6 +239,6 @@ metadata:
 spec:
   gatewayClassName: envoy-ai-gateway-basic
   listeners:
-    - name: http
-      port: 8888
-      protocol: HTTP
+  - name: http
+    port: 8888
+    protocol: HTTP

@@ -59,6 +59,7 @@ var (
 	grokSchema           = filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "v1"}
 	sambaNovaSchema      = filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "v1"}
 	deepInfraSchema      = filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "v1/openai"}
+	openRouterSchema     = filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "api/v1"}
 	anthropicSchema      = filterapi.VersionedAPISchema{Name: filterapi.APISchemaAnthropic}
 
 	// awsCredentialOverrideHeaders are derived from the default prefix, as the controller does.

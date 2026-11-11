@@ -112,7 +112,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
                 {
                     "name": "get_weather",
                     "description": "Get the current weather in a given location",
-                    "parameters": {
+                    "parametersJsonSchema": {
                         "type": "object",
                         "properties": {
                             "location": {
@@ -158,7 +158,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
                 {
                     "name": "test_function",
                     "description": "A test function",
-                    "parameters": {
+                    "parametersJsonSchema": {
                         "type": "object",
                         "properties": {
                             "param1": {
@@ -198,7 +198,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
                 {
                     "name": "test_function",
                     "description": "A test function",
-                    "parameters": {
+                    "parametersJsonSchema": {
                         "type": "object",
                         "properties": {
                             "param1": {
@@ -270,7 +270,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
         {
           "name": "test_function",
           "description": "A test function",
-          "parameters": {
+          "parametersJsonSchema": {
             "type": "object",
             "properties": {
               "param1": {
@@ -313,7 +313,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
         {
           "name": "test_function",
           "description": "A test function",
-          "parameters": {
+          "parametersJsonSchema": {
             "type": "object",
             "properties": {
               "param1": {
@@ -2759,5 +2759,31 @@ func TestGCPVertexAIRedactBody(t *testing.T) {
 		// Verify original is completely unchanged
 		require.Equal(t, originalContentCopy, *resp.Choices[0].Message.Content)
 		require.NotContains(t, *resp.Choices[0].Message.Content, "[REDACTED")
+	})
+}
+
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_ResponseBody_NullBody(t *testing.T) {
+	// genai's GenerateContentResponse.UnmarshalJSON dereferences a nil pointer when it is given
+	// a JSON null, so a null body or stream event must be handled before decoding.
+	t.Run("non-streaming", func(t *testing.T) {
+		translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{requestModel: "gemini-2.5-flash"}
+		var err error
+		require.NotPanics(t, func() {
+			_, _, _, _, err = translator.ResponseBody(map[string]string{"content-type": "application/json"}, strings.NewReader("null"), true, nil)
+		})
+		require.NoError(t, err)
+	})
+	t.Run("streaming", func(t *testing.T) {
+		translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+		body := "data: null\n\n" +
+			`data: {"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4}}` + "\n\n"
+		var tokenUsage metrics.TokenUsage
+		var err error
+		require.NotPanics(t, func() {
+			_, _, tokenUsage, _, err = translator.ResponseBody(nil, strings.NewReader(body), true, nil)
+		})
+		require.NoError(t, err)
+		// The usage of the valid event that follows the null one is still counted.
+		require.Equal(t, tokenUsageFrom(3, 0, -1, 1, 4, 0), tokenUsage)
 	})
 }

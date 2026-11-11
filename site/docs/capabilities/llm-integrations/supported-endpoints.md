@@ -351,6 +351,52 @@ curl -H "Content-Type: application/json" \
   $GATEWAY_URL/v1/responses
 ```
 
+### Decisions
+
+**Endpoint:** `POST /v1/decisions`
+
+**Status:** ✅ Supported for OpenAI and Azure OpenAI backends
+
+**Description:** Evaluate shared text or image evidence against typed questions and return probabilities, fixed choices, or rubric scores. The request and response use the native OpenAI Decisions API format.
+
+**Features:**
+
+- ✅ `predicate`, `choice`, and `score` questions, including multiple independent questions in one request
+- ✅ `refusal` answers when the model declines an individual question
+- ✅ Question `instructions` as a string or as an array of `input_text` and `input_image` parts, to give each question its own images
+- ✅ Text input and user messages containing text, JSON, and images as inline base64 data URLs or public HTTP or HTTPS URLs
+- ✅ Model selection via request body or `x-ai-eg-model` header
+- ✅ Model name virtualization, provider fallback, and load balancing
+- ✅ Token usage and model metadata from the upstream response
+- ❌ Streaming (not documented by the OpenAI Decisions API)
+- ❌ `file_id` inputs (not supported by the OpenAI Decisions API)
+
+**Supported Providers:**
+
+- OpenAI
+- Azure OpenAI, through the v1 API at `/openai/v1/decisions` without an `api-version` query parameter. Set `model` (or `modelNameOverride`) to the name of your `gpt-6-luna` deployment. For region availability, see the [Azure OpenAI Decisions API guide](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/decisions).
+
+**Example:**
+
+```bash
+curl -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-6-luna",
+    "input": "I was charged twice for my order.",
+    "questions": [{
+      "type": "choice",
+      "name": "department",
+      "instructions": "Which department should handle this complaint?",
+      "choices": [
+        {"value": "billing", "description": "Payments, invoices, and refunds."},
+        {"value": "technical", "description": "Problems using the product."},
+        {"value": "other", "description": "Requests outside these categories."}
+      ]
+    }]
+  }' \
+  $GATEWAY_URL/v1/decisions
+```
+
 ### Responses Input Tokens
 
 **Endpoint:** `POST /v1/responses/input_tokens`
@@ -424,6 +470,45 @@ curl -H "Content-Type: application/json" \
     ]
   }' \
   $GATEWAY_URL/cohere/v2/rerank
+```
+
+### System One (TypeSafe Jev)
+
+**Endpoint:** `POST /typesafe/v1/systemone`
+
+**Status:** ✅ Fully Supported
+
+**Description:** Evaluate application state against typed questions and return structured decisions with probabilities and confidence. Native [TypeSafe AI](https://docs.typesafe.ai/api.md) API, passed through unchanged, so the official TypeSafe SDKs work by changing only the base URL.
+
+**Features:**
+
+- ✅ `noul` (yes/no probability), `choice` (single selection) and `score` (rubric) questions, batched in one call
+- ✅ Model selection via request body or `x-ai-eg-model` header, including the `jev-latest` and `jev-preview` aliases
+- ✅ Token usage tracking and cost calculation (TypeSafe bills input tokens only)
+- ✅ Provider fallback and load balancing
+- ❌ Streaming (not offered by the TypeSafe API)
+
+**Supported Providers:**
+
+- TypeSafe AI
+
+**Example:**
+
+```bash
+curl -H "Content-Type: application/json" \
+  -d '{
+    "model": "jev-latest",
+    "state": {"ticket": "I was charged twice for order #4471."},
+    "questions": {
+      "is_billing": {"type": "noul", "instructions": "Is this ticket about billing?"},
+      "team": {
+        "type": "choice",
+        "instructions": "Which team should handle this?",
+        "criteria": {"billing": null, "shipping": null, "other": null}
+      }
+    }
+  }' \
+  $GATEWAY_URL/typesafe/v1/systemone
 ```
 
 ### Tokenize
@@ -547,32 +632,90 @@ curl $GATEWAY_URL/v1/models
 }
 ```
 
+### Files
+
+**Endpoints:**
+
+- `POST /v1/files` (upload)
+- `GET /v1/files` (list)
+- `GET /v1/files/{file_id}` (retrieve)
+- `GET /v1/files/{file_id}/content` (download content)
+- `DELETE /v1/files/{file_id}` (delete)
+
+**Status:** ✅ Supported (OpenAI schema only)
+
+**Description:** Upload, list, retrieve, download, and delete files. Files are backend-scoped
+objects; the gateway routes every id-bearing request back to the backend that created the file.
+
+**Features:**
+
+- ✅ Multipart/form-data upload (OpenAI-compatible)
+- ✅ Backend-sticky routing via gateway-issued, encrypted file ids
+- ✅ List pagination (`after` cursors are gateway-issued ids)
+- ✅ Model selection via the `model` form field (upload) or `?model=` query parameter (list) — **required**
+- ⚠️ Exactly **one backend per route rule** — rules with multiple `backendRefs` are rejected, so
+  provider fallback and load balancing are not supported for Files
+
+**Supported Providers:**
+
+- OpenAI
+- Any OpenAI-compatible provider that supports the Files API
+
+Non-OpenAI backend schemas are not supported and the request fails with an error.
+
+:::danger Set a secret file id encryption seed
+
+If the file id encryption seed is left at the well-known default, anyone can decrypt and forge file
+and batch ids. Set `--fileIDEncryptionSeed` (or the Helm value `controller.fileIDEncryption.seed`) to
+a secret, randomly generated value. See
+[Encryption of file ids](./files-api.md#encryption-of-file-ids).
+
+:::
+
+**Example:**
+
+```bash
+# Upload (model selects the backend and is stripped before forwarding upstream)
+curl -F "purpose=batch" \
+  -F "model=gpt-4o-mini" \
+  -F "file=@batchinput.jsonl" \
+  $GATEWAY_URL/v1/files
+
+# List (model is required)
+curl "$GATEWAY_URL/v1/files?model=gpt-4o-mini&limit=20"
+```
+
+See the [Files API](./files-api.md) guide for full usage, configuration, and caveats.
+
 ## Provider-Endpoint Compatibility Table
 
 The following table summarizes which providers support which endpoints:
 
-| Provider                                                                                              | Chat Completions | Completions | Embeddings | Image Generation | Anthropic Messages | Count Tokens | Rerank | Tokenize | Notes                                                                                                                |
-| ----------------------------------------------------------------------------------------------------- | :--------------: | :---------: | :--------: | :--------------: | :----------------: | :----------: | :----: | :------: | -------------------------------------------------------------------------------------------------------------------- |
-| [OpenAI](https://platform.openai.com/docs/api-reference)                                              |        ✅        |     ✅      |     ✅     |        ❌        |         ✅         |      ❌      |   ❌   |    ❌    | OpenAI does not offer a tokenize REST API                                                                            |
-| [AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/APIReference/)                               |        ✅        |     🚧      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |    ❌    | Via API translation (embeddings: Titan models only)                                                                  |
-| [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/reference)                  |        ✅        |     🚧      |     ✅     |        ❌        |         ⚠️         |      ❌      |   ❌   |    ❌    | Via API translation or via [OpenAI-compatible API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/latest) |
-| [Google Gemini](https://ai.google.dev/gemini-api/docs/openai)                                         |        ✅        |     ⚠️      |     ✅     |        ⚠️        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [Groq](https://console.groq.com/docs/openai)                                                          |        ✅        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [Grok](https://docs.x.ai/docs/api-reference)                                                          |        ✅        |     ⚠️      |     ❌     |        ⚠️        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [Together AI](https://docs.together.ai/docs/openai-api-compatibility)                                 |        ⚠️        |     ⚠️      |     ⚠️     |        ⚠️        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [Cohere](https://docs.cohere.com/v2/docs/compatibility-api)                                           |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ✅   |    ❌    | Via OpenAI-compatible API and Cohere V2 API for rerank                                                               |
-| [Mistral](https://docs.mistral.ai/api/)                                                               |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [DeepInfra](https://deepinfra.com/docs/inference)                                                     |        ✅        |     ⚠️      |     ✅     |        ⚠️        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [DeepSeek](https://api-docs.deepseek.com/)                                                            |        ⚠️        |     ⚠️      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [Hunyuan](https://cloud.tencent.com/document/product/1729/111007)                                     |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [Tencent LLM Knowledge Engine](https://www.tencentcloud.com/document/product/1255/70381)              |        ⚠️        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [Tetrate Agent Router Service (TARS)](https://router.tetrate.ai/)                                     |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [Google Vertex AI](https://cloud.google.com/vertex-ai/docs/reference/rest)                            |        ✅        |     🚧      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |    ✅    | Via API translation                                                                                                  |
-| [Anthropic on Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude) |        ✅        |     ❌      |     🚧     |        ❌        |         ✅         |      ✅      |   ❌   |    ✅    | Via API translation                                                                                                  |
-| [Anthropic on AWS Bedrock](https://aws.amazon.com/bedrock/anthropic/)                                 |        🚧        |     ❌      |     ❌     |        ❌        |         ✅         |      ✅      |   ❌   |    ✅    | Native Anthropic API                                                                                                 |
-| [SambaNova](https://docs.sambanova.ai/sambastudio/latest/open-ai-api.html)                            |        ✅        |     ⚠️      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |    ❌    | Via OpenAI-compatible API                                                                                            |
-| [Anthropic](https://docs.claude.com/en/home)                                                          |        ✅        |     ❌      |     ❌     |        ❌        |         ✅         |      ✅      |   ❌   |    ❌    | Via OpenAI-compatible API and Native Anthropic API                                                                   |
-| [vLLM](https://docs.vllm.ai/en/latest/)                                                               |        ✅        |     ✅      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |    ✅    | Via OpenAI-compatible API; native `/tokenize` support                                                                |
+| Provider                                                                                              | Chat Completions | Completions | Embeddings | Image Generation | Anthropic Messages | Count Tokens | Rerank | System One | Tokenize | Files | Notes                                                                                                                |
+| ----------------------------------------------------------------------------------------------------- | :--------------: | :---------: | :--------: | :--------------: | :----------------: | :----------: | :----: | :--------: | :------: | :---: | -------------------------------------------------------------------------------------------------------------------- |
+| [OpenAI](https://platform.openai.com/docs/api-reference)                                              |        ✅        |     ✅      |     ✅     |        ❌        |         ✅         |      ❌      |   ❌   |     ❌     |    ❌    |  ✅   | OpenAI does not offer a tokenize REST API                                                                            |
+| [AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/APIReference/)                               |        ✅        |     🚧      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via API translation (embeddings: Titan models only)                                                                  |
+| [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/reference)                  |        ✅        |     🚧      |     ✅     |        ❌        |         ⚠️         |      ❌      |   ❌   |     ❌     |    ❌    |  ⚠️   | Via API translation or via [OpenAI-compatible API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/latest) |
+| [Google Gemini](https://ai.google.dev/gemini-api/docs/openai)                                         |        ✅        |     ⚠️      |     ✅     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Groq](https://console.groq.com/docs/openai)                                                          |        ✅        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Grok](https://docs.x.ai/docs/api-reference)                                                          |        ✅        |     ⚠️      |     ❌     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Together AI](https://docs.together.ai/docs/openai-api-compatibility)                                 |        ⚠️        |     ⚠️      |     ⚠️     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Cohere](https://docs.cohere.com/v2/docs/compatibility-api)                                           |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ✅   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API and Cohere V2 API for rerank                                                               |
+| [Mistral](https://docs.mistral.ai/api/)                                                               |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [DeepInfra](https://deepinfra.com/docs/inference)                                                     |        ✅        |     ⚠️      |     ✅     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [DeepSeek](https://api-docs.deepseek.com/)                                                            |        ⚠️        |     ⚠️      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [FlexAI](https://docs.flex.ai/inference-api/overview)                                                 |        ⚠️        |     ⚠️      |     ⚠️     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ⚠️   | Via OpenAI-compatible API; also serves `/v1/audio/transcriptions` and `/v1/audio/speech`                             |
+| [Heabsy](https://api.heabsy.com/docs)                                                                 |        ⚠️        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Hunyuan](https://cloud.tencent.com/document/product/1729/111007)                                     |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Tencent LLM Knowledge Engine](https://www.tencentcloud.com/document/product/1255/70381)              |        ⚠️        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Tetrate Agent Router Service (TARS)](https://router.tetrate.ai/)                                     |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Google Vertex AI](https://cloud.google.com/vertex-ai/docs/reference/rest)                            |        ✅        |     🚧      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ✅    |  ❌   | Via API translation                                                                                                  |
+| [Anthropic on Vertex AI](https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude) |        ✅        |     ❌      |     🚧     |        ❌        |         ✅         |      ✅      |   ❌   |     ❌     |    ✅    |  ❌   | Via API translation                                                                                                  |
+| [Anthropic on AWS Bedrock](https://aws.amazon.com/bedrock/anthropic/)                                 |        🚧        |     ❌      |     ❌     |        ❌        |         ✅         |      ✅      |   ❌   |     ❌     |    ✅    |  ❌   | Native Anthropic API                                                                                                 |
+| [SambaNova](https://docs.sambanova.ai/sambastudio/latest/open-ai-api.html)                            |        ✅        |     ⚠️      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Anthropic](https://docs.claude.com/en/home)                                                          |        ✅        |     ❌      |     ❌     |        ❌        |         ✅         |      ✅      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API and Native Anthropic API                                                                   |
+| [vLLM](https://docs.vllm.ai/en/latest/)                                                               |        ✅        |     ✅      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ✅    |  ⚠️   | Via OpenAI-compatible API; native `/tokenize` support                                                                |
+| [TypeSafe AI](https://docs.typesafe.ai/api.md)                                                        |        ❌        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ✅     |    ❌    |  ❌   | Native System One API for the Jev decision model                                                                     |
 
 - ✅ - Supported and Tested on Agent Router CI
 - ⚠️️ - Expected to work based on provider documentation, but not tested on the CI.
@@ -586,6 +729,7 @@ By default, the gateway registers provider endpoints under these prefixes:
 - OpenAI: `/`
 - Cohere: `/cohere`
 - Anthropic: `/anthropic`
+- TypeSafe: `/typesafe`
 
 You can override them via Helm using values under `endpointConfig`:
 
@@ -596,6 +740,7 @@ endpointConfig:
   openai: ""
   cohere: "/cohere"
   anthropic: "/anthropic"
+  typesafe: "/typesafe"
   # rootPrefix applies to all routes; final paths are <rootPrefix><providerPrefix>/...
   # endpointConfig:
   #   rootPrefix: "/"
@@ -608,13 +753,14 @@ helm upgrade --install ai-gateway envoyproxy/ai-gateway-helm \
   -n envoy-ai-gateway-system --create-namespace \
   --set 'endpointConfig.openai=/' \
   --set 'endpointConfig.cohere=/cohere' \
-  --set 'endpointConfig.anthropic=/anthropic'
+  --set 'endpointConfig.anthropic=/anthropic' \
+  --set 'endpointConfig.typesafe=/typesafe'
 ```
 
 Notes:
 
 - `endpointConfig.rootPrefix` (default `/`) is prepended to all provider prefixes.
-- Only these keys are accepted: `openaiPrefix`, `coherePrefix`, `anthropicPrefix`.
+- Only these keys are accepted: `openai`, `cohere`, `anthropic`, `typesafe`.
 - If any key is omitted or empty, defaults are applied as listed above.
 
 ## What's Next

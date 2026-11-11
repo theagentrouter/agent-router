@@ -33,7 +33,11 @@ import (
 
 var (
 	sensitiveHeaderRedactedValue = []byte("[REDACTED]")
-	sensitiveHeaderKeys          = []string{"authorization", "x-api-key"}
+	// sensitiveHeaderKeys are the (lowercased) header names whose values are redacted in debug logs.
+	// They cover every credential header set by the backendauth handlers: "authorization" (API key,
+	// Azure, GCP, AWS SigV4), "x-api-key" (Anthropic), "api-key" (Azure API key) and
+	// "x-amz-security-token" (AWS SigV4 session token).
+	sensitiveHeaderKeys = []string{"authorization", "x-api-key", "api-key", "x-amz-security-token"}
 )
 
 // contextKey is a type for context keys to avoid collisions.
@@ -58,9 +62,18 @@ type Server struct {
 	enableRedaction               bool
 	config                        *filterapi.RuntimeConfig
 	processorFactories            map[string]ProcessorFactory
+	prefixProcessorFactories      []prefixProcessorFactory
 	routerProcessorsPerReqID      map[string]Processor
 	routerProcessorsPerReqIDMutex sync.RWMutex
 	uuidFn                        func() string
+}
+
+// prefixProcessorFactory associates a path prefix with a processor factory. It is used for
+// endpoints whose paths contain variable segments (e.g. the Files API "/v1/files/{id}"),
+// which cannot be matched by the exact-path map.
+type prefixProcessorFactory struct {
+	prefix  string
+	factory ProcessorFactory
 }
 
 // NewServer creates a new external processor server.
@@ -93,10 +106,20 @@ func (s *Server) Register(path string, newProcessor ProcessorFactory) {
 	s.processorFactories[path] = newProcessor
 }
 
+// RegisterPrefix registers a processor for any request path equal to prefix or nested under
+// it (i.e. starting with prefix+"/"). Exact-path registrations take precedence, and the
+// longest matching prefix wins. This supports endpoints with variable path segments such as
+// the Files API ("/v1/files", "/v1/files/{id}", "/v1/files/{id}/content").
+func (s *Server) RegisterPrefix(prefix string, newProcessor ProcessorFactory) {
+	s.logger.Info("Registering prefix processor", slog.String("prefix", prefix))
+	s.prefixProcessorFactories = append(s.prefixProcessorFactories, prefixProcessorFactory{prefix: prefix, factory: newProcessor})
+}
+
 var errNoProcessor = errors.New("no processor registered for the given path")
 
 // processorForPath returns the processor for the given path.
-// Only exact path matching is supported currently.
+// Exact path matching is tried first; if no exact match exists, the longest registered
+// prefix (see RegisterPrefix) that matches the path on a segment boundary is used.
 func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFilter bool, logger *slog.Logger) (Processor, error) {
 	pathHeader := ":path"
 	if isUpstreamFilter {
@@ -109,11 +132,24 @@ func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFi
 		path = path[:queryIndex]
 	}
 
-	newProcessor, ok := s.processorFactories[path]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", errNoProcessor, path)
+	if newProcessor, ok := s.processorFactories[path]; ok {
+		return newProcessor(s.config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
 	}
-	return newProcessor(s.config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
+
+	// Fall back to the longest matching prefix registration.
+	var best ProcessorFactory
+	bestLen := -1
+	for i := range s.prefixProcessorFactories {
+		pf := &s.prefixProcessorFactories[i]
+		if (path == pf.prefix || strings.HasPrefix(path, pf.prefix+"/")) && len(pf.prefix) > bestLen {
+			best = pf.factory
+			bestLen = len(pf.prefix)
+		}
+	}
+	if best != nil {
+		return best(s.config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
+	}
+	return nil, fmt.Errorf("%w: %s", errNoProcessor, path)
 }
 
 // originalPathHeader is the header used to pass the original path to the processor.
@@ -300,7 +336,7 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 			case *extprocv3.ProcessingResponse_RequestHeaders:
 				logContent = redactProcessingResponseRequestHeaders(val, s.logger, sensitiveHeaderKeys, s.enableRedaction)
 			case *extprocv3.ProcessingResponse_ImmediateResponse:
-				logContent = val
+				logContent = redactImmediateResponse(val, l, sensitiveHeaderKeys)
 			}
 			l.Debug("request headers processed", slog.Any("response", logContent))
 		}
@@ -320,8 +356,9 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 				logContent := redactRequestBodyResponse(val, l, sensitiveHeaderKeys, s.enableRedaction)
 				l.Debug("request body processed", slog.Any("response", logContent))
 			case *extprocv3.ProcessingResponse_ImmediateResponse:
-				// ImmediateResponse (e.g., for malformed requests) doesn't need request body redaction
-				l.Debug("request body processed", slog.Any("response", val))
+				// ImmediateResponse (e.g., for malformed requests) doesn't need request body redaction,
+				// but its header mutation is still filtered.
+				l.Debug("request body processed", slog.Any("response", redactImmediateResponse(val, l, sensitiveHeaderKeys)))
 			}
 		}
 		return resp, nil
@@ -355,7 +392,7 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 				case *extprocv3.ProcessingResponse_ResponseBody:
 					logContent = redactResponseBodyResponseFull(val, l, sensitiveHeaderKeys)
 				case *extprocv3.ProcessingResponse_ImmediateResponse:
-					logContent = val
+					logContent = redactImmediateResponse(val, l, sensitiveHeaderKeys)
 				}
 			} else {
 				logContent = resp
@@ -650,6 +687,28 @@ func redactRequestBodyResponse(resp *extprocv3.ProcessingResponse_RequestBody, l
 				BodyMutation:    bodyMutation,
 				ClearRouteCache: resp.RequestBody.Response.GetClearRouteCache(),
 			},
+		},
+	}
+}
+
+// redactImmediateResponse creates a safe-to-log copy of an immediate response with sensitive
+// header values redacted. The status, body and details are local error information generated by
+// the filter and are logged as-is.
+func redactImmediateResponse(resp *extprocv3.ProcessingResponse_ImmediateResponse, logger *slog.Logger, sensitiveKeys []string) *extprocv3.ProcessingResponse_ImmediateResponse {
+	if resp == nil || resp.ImmediateResponse == nil {
+		return &extprocv3.ProcessingResponse_ImmediateResponse{}
+	}
+	var headers *extprocv3.HeaderMutation
+	if original := resp.ImmediateResponse.GetHeaders(); original != nil {
+		headers = redactHeaderMutation(original, logger, sensitiveKeys)
+	}
+	return &extprocv3.ProcessingResponse_ImmediateResponse{
+		ImmediateResponse: &extprocv3.ImmediateResponse{
+			Status:     resp.ImmediateResponse.GetStatus(),
+			Headers:    headers,
+			Body:       resp.ImmediateResponse.GetBody(),
+			GrpcStatus: resp.ImmediateResponse.GetGrpcStatus(),
+			Details:    resp.ImmediateResponse.GetDetails(),
 		},
 	}
 }

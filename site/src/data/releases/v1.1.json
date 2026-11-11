@@ -3,7 +3,7 @@
     "version": "v1.1",
     "title": "Envoy AI Gateway v1.1.x",
     "subtitle": "Token counting, per-request credentials, stream idle timeout, MCP hostname routing, OpenTelemetry GenAI tracing, and HTTP CONNECT egress.",
-    "badge": "Latest",
+    "badge": "Stable",
     "badgeType": "milestone"
   },
   "releases": [
@@ -203,6 +203,7 @@
     }
   ],
   "navigation": {
-    "previous": { "version": "v1.0.x Series", "path": "/release-notes/v1.0" }
+    "previous": { "version": "v1.0.x Series", "path": "/release-notes/v1.0" },
+    "next": { "version": "v1.2.x Series", "path": "/release-notes/v1.2" }
   }
 }

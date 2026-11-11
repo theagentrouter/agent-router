@@ -66,6 +66,8 @@ type MCPRouteList struct {
 }
 
 // MCPRouteSpec details the MCPRoute configuration.
+//
+// +kubebuilder:validation:XValidation:rule="!(has(self.backendSelector) && self.backendSelector.rules.exists(r, has(r.cel) && r.cel.contains('auth.jwt')) && !(has(self.securityPolicy) && has(self.securityPolicy.oauth)))",message="securityPolicy.oauth must be configured when a backendSelector rule's cel expression references request.auth.jwt"
 type MCPRouteSpec struct {
 	// ParentRefs are the names of the Gateway resources this MCPRoute is being attached to.
 	// Cross namespace references are not supported. In other words, the Gateway resources must be in the
@@ -138,6 +140,11 @@ type MCPRouteSpec struct {
 	// BackendSelector restricts which of this route's backends a given request may fan
 	// out to, evaluated once per candidate backend when a client session is initialized.
 	// If unspecified, all backends on the route are considered.
+	//
+	// Security note: a backendSelector rule whose CEL expression reads request.auth.jwt
+	// (claims or scopes) only reflects verified JWT data when SecurityPolicy.OAuth is
+	// configured for this route; the XValidation below enforces that pairing so that
+	// unauthenticated or forged bearer tokens can't influence backend selection.
 	//
 	// +kubebuilder:validation:Optional
 	// +optional
@@ -411,7 +418,7 @@ type MCPBackendAPIKey struct {
 
 // MCPRouteSecurityPolicy defines the security policy for a MCPRoute.
 //
-// +kubebuilder:validation:XValidation:rule="!(has(self.authorization) && self.authorization.rules.exists(r, has(r.source) && has(r.source.jwt)) && !has(self.oauth))",message="oauth must be configured when any authorization rule uses a jwt source"
+// +kubebuilder:validation:XValidation:rule="!(has(self.authorization) && self.authorization.rules.exists(r, (has(r.source) && has(r.source.jwt)) || (has(r.cel) && r.cel.contains('auth.jwt'))) && !has(self.oauth))",message="oauth must be configured when any authorization rule uses a jwt source or references request.auth.jwt in a cel expression"
 type MCPRouteSecurityPolicy struct {
 	// OAuth defines the configuration for the MCP spec compatible OAuth authentication.
 	//
@@ -477,6 +484,24 @@ type MCPRouteOAuth struct {
 	//
 	// +optional
 	JWKS *JWKS `json:"jwks,omitempty"`
+
+	// AuthorizationServerMetadataURL is the URL the controller fetches the OAuth 2.0 Authorization
+	// Server Metadata document from, as defined in RFC 8414. When set, it replaces the well-known
+	// URIs derived from Issuer.
+	//
+	// Set this when the metadata lives somewhere the issuer does not lead to, for example an issuer
+	// of "https://example.com/api/idp/authn" whose document is served only at
+	// "https://example.com/api/idp/v4/authn/.well-known/openid-configuration".
+	//
+	// Issuer is unaffected by this field. It continues to identify the authorization server in the
+	// protected resource metadata the gateway publishes, and to derive the well-known URIs when this
+	// field is unset. When JWKS is not set, the JWKS URI is discovered from the document fetched here.
+	//
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Format=uri
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	AuthorizationServerMetadataURL *string `json:"authorizationServerMetadataUrl,omitempty"`
 
 	// ProtectedResourceMetadata defines the OAuth 2.0 Resource Server Metadata as per RFC 8414.
 	// This is used to expose the metadata endpoint for mcp clients to discover the authorization servers,
@@ -710,9 +735,25 @@ type ProtectedResourceMetadata struct {
 	// Resource is the identifier of the protected resource.
 	// This should match the MCPRoute's URL. For example, if the MCPRoute's URL is
 	// "https://api.example.com/mcp", the Resource should be "https://api.example.com/mcp".
-	// +kubebuilder:validation:Required
+	//
+	// When omitted, the gateway derives the resource identifier per request from the
+	// scheme, authority and path the client actually used to reach the MCP endpoint.
+	// Leave it unset unless the gateway is fronted by something that rewrites the
+	// externally visible URL in a way the forwarded headers do not reflect.
+	//
+	// The derived identifier names the request's Host. Set Hostnames to restrict which hosts
+	// it can name: the metadata endpoint is only reachable on hosts Hostnames matches. Without
+	// Hostnames, every authority the Gateway listener accepts is reflected as-is.
+	//
+	// Audiences need not be the resource URL; it is whatever the authorization server puts in
+	// the token's "aud". Only an authorization server that honours RFC 8707 binds "aud" to the
+	// "resource" parameter, which clients set to the advertised identifier. With such a server
+	// and a non-empty Audiences, a derived identifier has to agree with Audiences, so list every
+	// address the route is reachable on, or set Resource explicitly.
+	//
 	// +kubebuilder:validation:Format=uri
-	Resource string `json:"resource"`
+	// +optional
+	Resource string `json:"resource,omitempty"`
 
 	// ResourceName is a human-readable name for the protected resource.
 	// +kubebuilder:validation:Optional

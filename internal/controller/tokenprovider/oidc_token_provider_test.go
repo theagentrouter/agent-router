@@ -7,6 +7,7 @@ package tokenprovider
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -115,7 +116,7 @@ func TestOidcTokenProvider_GetToken(t *testing.T) {
 				},
 				Scopes: []string{"scope1", "scope2"},
 			}
-			provider, err := NewOidcTokenProvider(ctx, client, oidcConfig)
+			provider, err := NewOidcTokenProvider(ctx, client, oidcConfig, "default", nil)
 			if tc.expErr {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tc.expErrMsg)
@@ -174,7 +175,7 @@ func TestOidcTokenProvider_GetToken_Success(t *testing.T) {
 			Scopes: []string{"scope1", "scope2"},
 		}
 
-		provider, err := NewOidcTokenProvider(ctx, client, oidcConfig)
+		provider, err := NewOidcTokenProvider(ctx, client, oidcConfig, "default", nil)
 		require.NoError(t, err)
 		require.NotNil(t, provider)
 		token, err := provider.GetToken(ctx)
@@ -182,5 +183,86 @@ func TestOidcTokenProvider_GetToken_Success(t *testing.T) {
 		require.NotNil(t, token)
 		require.Equal(t, "some-access-token", token.Token)
 		require.WithinRange(t, token.ExpiresAt, time.Now().Add(-1*time.Minute), time.Now().Add(time.Minute))
+	})
+}
+
+// Verifies GetToken authorizes a cross-namespace OIDC ClientSecret reference via
+// SecretReferenceValidator before reading the Secret, defaulting to deny when no validator is
+// configured.
+func TestOidcTokenProvider_GetToken_CrossNamespace(t *testing.T) {
+	const ownerNamespace, secretNamespace, secretName = "tenant-a", "tenant-b", "clientSecret"
+
+	scheme := runtime.NewScheme()
+	scheme.AddKnownTypes(corev1.SchemeGroupVersion, &corev1.Secret{})
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: secretNamespace},
+		Data:       map[string][]byte{"client-secret": []byte("some-client-secret")},
+	}).Build()
+
+	discoveryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, err := w.Write([]byte(`{"issuer": "issuer", "token_endpoint": "token_endpoint", "authorization_endpoint": "authorization_endpoint", "jwks_uri": "jwks_uri", "scopes_supported": []}`))
+		require.NoError(t, err)
+	}))
+	defer discoveryServer.Close()
+
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Add("Content-Type", "application/json")
+		b, err := json.Marshal(oauth2.Token{AccessToken: "some-access-token", ExpiresIn: 60})
+		require.NoError(t, err)
+		_, err = w.Write(b)
+		require.NoError(t, err)
+	}))
+	defer tokenServer.Close()
+
+	newProvider := func(t *testing.T, ctx context.Context, validator SecretReferenceValidator) TokenProvider {
+		oidcConfig := &egv1a1.OIDC{
+			ClientID: ptr.To("clientID"),
+			ClientSecret: gwapiv1.SecretObjectReference{
+				Name:      secretName,
+				Namespace: ptr.To[gwapiv1.Namespace](secretNamespace),
+			},
+			Provider: egv1a1.OIDCProvider{
+				Issuer:        discoveryServer.URL,
+				TokenEndpoint: &tokenServer.URL,
+			},
+			Scopes: []string{"scope1"},
+		}
+		provider, err := NewOidcTokenProvider(ctx, client, oidcConfig, ownerNamespace, validator)
+		require.NoError(t, err)
+		require.NotNil(t, provider)
+		return provider
+	}
+
+	t.Run("nil validator denies cross-namespace reference", func(t *testing.T) {
+		ctx := oidcv3.InsecureIssuerURLContext(t.Context(), discoveryServer.URL)
+		provider := newProvider(t, ctx, nil)
+		_, err := provider.GetToken(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "is not permitted")
+	})
+
+	t.Run("validator rejection denies cross-namespace reference", func(t *testing.T) {
+		ctx := oidcv3.InsecureIssuerURLContext(t.Context(), discoveryServer.URL)
+		provider := newProvider(t, ctx, func(context.Context, string, string, string) error {
+			return fmt.Errorf("no ReferenceGrant permits this reference")
+		})
+		_, err := provider.GetToken(ctx)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no ReferenceGrant permits this reference")
+	})
+
+	t.Run("validator approval allows cross-namespace reference", func(t *testing.T) {
+		ctx := oidcv3.InsecureIssuerURLContext(t.Context(), discoveryServer.URL)
+		var gotFrom, gotTo, gotName string
+		provider := newProvider(t, ctx, func(_ context.Context, from, to, name string) error {
+			gotFrom, gotTo, gotName = from, to, name
+			return nil
+		})
+		token, err := provider.GetToken(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "some-access-token", token.Token)
+		require.Equal(t, ownerNamespace, gotFrom)
+		require.Equal(t, secretNamespace, gotTo)
+		require.Equal(t, secretName, gotName)
 	})
 }

@@ -30,6 +30,7 @@ func TestGenAIProviders_matchTracing(t *testing.T) {
 		{genaiProviderGCPAnthropic, otelgenai.ProviderGCPAnthropic},
 		{genaiProviderAnthropic, otelgenai.ProviderAnthropic},
 		{genaiProviderCohere, otelgenai.ProviderCohere},
+		{genaiProviderTypeSafe, otelgenai.ProviderTypeSafe},
 	} {
 		t.Run(tc.metric, func(t *testing.T) {
 			require.Equal(t, tc.metric, string(tc.span))
