@@ -1377,8 +1377,27 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingResponseBody(t *
 				// The finish_reason chunk must contain "delta":{} to comply with the OpenAI streaming format.
 				require.Contains(t, bodyStr, `"delta":{}`)
 				require.Contains(t, bodyStr, `"finish_reason":"length"`)
+				require.NotContains(t, bodyStr, `native_finish_reason`)
 				// The usage chunk must have empty choices.
 				require.Contains(t, bodyStr, `"choices":[]`)
+			},
+		},
+		{
+			name:          "safety block maps to a standard finish_reason and exposes the native one",
+			gcpChunk:      `{"candidates":[{"finishReason":"SAFETY","safetyRatings":[{"category":"HARM_CATEGORY_HARASSMENT","probability":"HIGH","blocked":true}]}]}`,
+			expectedUsage: tokenUsageFrom(-1, -1, -1, -1, -1, -1),
+			assertBody: func(t *testing.T, bodyStr string) {
+				require.Contains(t, bodyStr, `"finish_reason":"content_filter"`)
+				require.Contains(t, bodyStr, `"native_finish_reason":"SAFETY"`)
+			},
+		},
+		{
+			name:          "malformed function call maps to stop and exposes the native reason",
+			gcpChunk:      `{"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"MALFORMED_FUNCTION_CALL"}]}`,
+			expectedUsage: tokenUsageFrom(-1, -1, -1, -1, -1, -1),
+			assertBody: func(t *testing.T, bodyStr string) {
+				require.Contains(t, bodyStr, `"finish_reason":"stop"`)
+				require.Contains(t, bodyStr, `"native_finish_reason":"MALFORMED_FUNCTION_CALL"`)
 			},
 		},
 	}

@@ -461,6 +461,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 		if choice.FinishReason == openai.ChatCompletionChoicesFinishReasonStop && o.streamedToolCall {
 			choice.FinishReason = openai.ChatCompletionChoicesFinishReasonToolCalls
 		}
+		choice.NativeFinishReason = geminiNativeFinishReason(candidate.FinishReason)
 
 		choices = append(choices, choice)
 	}
