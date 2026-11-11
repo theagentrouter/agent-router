@@ -160,14 +160,35 @@ func TestResponsesViaChatCompletion_Reasoning(t *testing.T) {
 				if streaming {
 					events := parseSSEEventsFromBytes(output)
 					var reasoning, answer string
+					var partStarted, partDone bool
 					for i, event := range span.events {
 						if added := event.OfResponseOutputItemAdded; added != nil && added.Item.OfReasoning != nil {
 							require.Len(t, added.Item.OfReasoning.Content, 1)
 							require.Empty(t, added.Item.OfReasoning.Content[0].Text)
 						}
 						if delta := event.OfResponseReasoningTextDelta; delta != nil {
+							require.True(t, partStarted)
+							require.False(t, partDone)
 							reasoning += delta.Delta
 							require.Equal(t, int64(0), delta.OutputIndex)
+						}
+						if added := event.OfResponseContentPartAdded; added != nil && added.Part.OfResponsContentPartAddedEventPartReasoningText != nil {
+							require.False(t, partStarted)
+							partStarted = true
+							require.Equal(t, int64(0), added.OutputIndex)
+							require.Equal(t, int64(0), added.ContentIndex)
+							require.Empty(t, added.Part.OfResponsContentPartAddedEventPartReasoningText.Text)
+						}
+						if done := event.OfResponseContentPartDone; done != nil && done.Part.OfResponsContentPartDoneEventPartReasoningText != nil {
+							require.True(t, partStarted)
+							require.False(t, partDone)
+							partDone = true
+							require.Equal(t, int64(0), done.OutputIndex)
+							require.Equal(t, int64(0), done.ContentIndex)
+							require.Equal(t, "private plan", done.Part.OfResponsContentPartDoneEventPartReasoningText.Text)
+						}
+						if done := event.OfResponseOutputItemDone; done != nil && done.Item.OfReasoning != nil {
+							require.True(t, partDone)
 						}
 						if delta := event.OfResponseTextDelta; delta != nil {
 							answer += delta.Delta
@@ -176,6 +197,7 @@ func TestResponsesViaChatCompletion_Reasoning(t *testing.T) {
 						requireJSONFields(t, fmt.Sprintf(`{"sequence_number":%d}`, i), []byte(events[i].data))
 					}
 					require.Equal(t, "private plan", reasoning)
+					require.True(t, partDone)
 					require.Equal(t, "answer", answer)
 					require.Contains(t, string(output), "event: response.reasoning_text.done")
 					response = span.events[len(span.events)-1].OfResponseCompleted.Response
@@ -280,6 +302,78 @@ func TestResponsesViaChatCompletion_Refusal(t *testing.T) {
 				require.Len(t, parts, 1)
 			}
 		})
+	}
+}
+
+func TestResponsesViaChatCompletion_AnthropicFormats(t *testing.T) {
+	for _, provider := range []string{"aws", "gcp"} {
+		for _, tc := range []struct {
+			name, model, override, format string
+			blocked                       bool
+		}{
+			{"JSON object", "claude-sonnet-4-6", "", `{"type":"json_object"}`, true},
+			{"unsupported schema", "claude-3-sonnet", "", `{"type":"json_schema","name":"answer","schema":{"type":"object"}}`, true},
+			{"supported schema", "claude-sonnet-4-6", "", `{"type":"json_schema","name":"answer","schema":{"type":"object"}}`, false},
+			{"supported override", "alias", "claude-sonnet-4-6", `{"type":"json_schema","name":"answer","schema":{"type":"object"}}`, false},
+			{"unsupported override", "claude-sonnet-4-6", "claude-3-sonnet", `{"type":"json_schema","name":"answer","schema":{"type":"object"}}`, true},
+			{"provider-specific model", "claude-opus-4-8", "", `{"type":"json_schema","name":"answer","schema":{"type":"object"}}`, provider == "aws"},
+			{"plain text", "claude-3-sonnet", "", `{"type":"text"}`, false},
+		} {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				inner := NewChatCompletionOpenAIToAWSAnthropicTranslator("", tc.override)
+				if provider == "gcp" {
+					inner = NewChatCompletionOpenAIToGCPAnthropicTranslator("v1", tc.override)
+				}
+				var req openai.ResponseRequest
+				require.NoError(t, json.Unmarshal([]byte(fmt.Sprintf(`{"model":%q,"input":"Hello","text":{"format":%s}}`, tc.model, tc.format)), &req))
+				headers, body, err := NewResponsesViaChatCompletionTranslator(inner).RequestBody(nil, &req, false)
+				if tc.blocked {
+					require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+					require.Nil(t, headers)
+					require.Nil(t, body)
+				} else {
+					require.NoError(t, err)
+					if tc.format != `{"type":"text"}` {
+						requireJSONFields(t, `{"output_config":{"format":{"type":"json_schema","schema":{"type":"object"}}}}`, body)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestResponsesViaChatCompletion_AnthropicRefusal(t *testing.T) {
+	for _, provider := range []string{"aws", "gcp"} {
+		for _, stop := range []string{"end_turn", "refusal"} {
+			t.Run(provider+"/"+stop, func(t *testing.T) {
+				inner := NewChatCompletionOpenAIToAWSAnthropicTranslator("", "")
+				if provider == "gcp" {
+					inner = NewChatCompletionOpenAIToGCPAnthropicTranslator("v1", "")
+				}
+				translator := NewResponsesViaChatCompletionTranslator(inner)
+				_, _, err := translator.RequestBody(nil, &openai.ResponseRequest{Model: "claude"}, false)
+				require.NoError(t, err)
+				body := fmt.Sprintf(`{"id":"msg_1","type":"message","model":"claude","role":"assistant","content":[{"type":"text","text":"answer"}],"stop_reason":%q,"usage":{"input_tokens":10,"output_tokens":5}}`, stop)
+				span := &responsesRecordingSpan{}
+				_, converted, _, _, err := translator.ResponseBody(nil, strings.NewReader(body), true, span)
+				require.NoError(t, err)
+				var response openai.Response
+				require.NoError(t, json.Unmarshal(converted, &response))
+				require.Len(t, response.Output, 1)
+				parts := response.Output[0].OfOutputMessage.Content.OfContentArray
+				require.Len(t, parts, 1)
+				if stop == "refusal" {
+					require.NotNil(t, parts[0].OfRefusal)
+					require.Equal(t, "answer", parts[0].OfRefusal.Refusal)
+					require.Equal(t, "incomplete", response.Status)
+					require.Equal(t, "content_filter", response.IncompleteDetails.Reason)
+				} else {
+					require.NotNil(t, parts[0].OfOutputText)
+					require.Equal(t, "answer", parts[0].OfOutputText.Text)
+					require.Equal(t, "completed", response.Status)
+				}
+			})
+		}
 	}
 }
 

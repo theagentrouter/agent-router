@@ -1386,7 +1386,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			},
 		},
 		{
-			name:      "structured output skipped on unsupported model",
+			name:      "structured output rejected on unsupported model",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-3-sonnet",
@@ -1407,7 +1407,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 					},
 				},
 			},
-			expectSchema: false,
+			expectErr: true,
 		},
 		{
 			name:      "no response format",
@@ -1512,7 +1512,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 		{
 			// Mirror of the case above: the same GCP-only model must NOT enable
 			// structured output on the AWS Bedrock (InvokeModel) path.
-			name:      "structured output skipped on AWS for GCP-only model",
+			name:      "structured output rejected on AWS for GCP-only model",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
 				Model:               "claude-opus-4-8",
@@ -1533,7 +1533,7 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 					},
 				},
 			},
-			expectSchema: false,
+			expectErr: true,
 		},
 	}
 

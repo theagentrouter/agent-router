@@ -781,7 +781,10 @@ func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema fil
 	if modelNameOverride != "" {
 		featureCheckModel = modelNameOverride
 	}
-	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil && outputConfigAvailable(apiSchema, featureCheckModel) {
+	if format := openAIReq.ResponseFormat; format != nil && (format.OfJSONObject != nil || (format.OfJSONSchema != nil && !outputConfigAvailable(apiSchema, featureCheckModel))) {
+		return nil, fmt.Errorf("%w: requested response format is not supported by Anthropic model %q on %s", internalapi.ErrInvalidRequestBody, featureCheckModel, apiSchema)
+	}
+	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil {
 		// Validate that the OpenAI JSON schema is an object while retaining its
 		// original bytes. Anthropic's SDK sorts map keys when marshaling, which
 		// would otherwise change the property order seen by Claude.
@@ -1460,6 +1463,10 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 				}
 			}
 		}
+	}
+	if anthropicResp.StopReason == anthropic.StopReasonRefusal {
+		choice.Message.Refusal = choice.Message.Content
+		choice.Message.Content = nil
 	}
 	openAIResp.Choices = append(openAIResp.Choices, choice)
 	return openAIResp, tokenUsage, nil

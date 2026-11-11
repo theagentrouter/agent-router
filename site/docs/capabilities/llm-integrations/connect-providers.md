@@ -102,6 +102,8 @@ The bridge forwards `user` and includes it with the requested tool configuration
 
 For Gemini Flash models that support thinking levels, `reasoning.effort: minimal` selects minimal thinking.
 
+For `AWSAnthropic` and `GCPAnthropic`, `text.format.type: json_object` is rejected. JSON schema output is accepted only for models supported by the selected backend, using the configured model override when present. See [Anthropic structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
+
 `AWSAnthropic`, `GCPAnthropic`, and `GCPVertexAI` already use the bridge for Responses requests and do not need this setting.
 
 ### BackendSecurityPolicy

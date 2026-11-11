@@ -356,6 +356,13 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 				Type: "response.output_item.added", SequenceNumber: c.nextSeq(), OutputIndex: c.reasoning.outputIndex,
 				Item: responsesReasoningItem(id, "", "in_progress"),
 			})...)
+			output = append(output, marshalSSEEvent("response.content_part.added", openai.ResponseContentPartAddedEvent{
+				Type: "response.content_part.added", SequenceNumber: c.nextSeq(), ItemID: id,
+				OutputIndex: c.reasoning.outputIndex, ContentIndex: 0,
+				Part: openai.ResponseContentPartAddedEventPartUnion{
+					OfResponsContentPartAddedEventPartReasoningText: &openai.ResponseContentPartAddedEventPartReasoningText{Type: "reasoning_text"},
+				},
+			})...)
 		}
 		c.reasoning.text.WriteString(delta.ReasoningContent.Text)
 		output = append(output, marshalSSEEvent("response.reasoning_text.delta", openai.ResponseReasoningTextDeltaEvent{
@@ -473,6 +480,13 @@ func (c *chatCompletionStreamToResponsesConverter) processLine(line []byte) (out
 			output = append(output, marshalSSEEvent("response.reasoning_text.done", openai.ResponseReasoningTextDoneEvent{
 				Type: "response.reasoning_text.done", SequenceNumber: c.nextSeq(),
 				ItemID: "rs_" + c.responseID, OutputIndex: c.reasoning.outputIndex, ContentIndex: 0, Text: c.reasoning.text.String(),
+			})...)
+			output = append(output, marshalSSEEvent("response.content_part.done", openai.ResponseContentPartDoneEvent{
+				Type: "response.content_part.done", SequenceNumber: c.nextSeq(), ItemID: "rs_" + c.responseID,
+				OutputIndex: c.reasoning.outputIndex, ContentIndex: 0,
+				Part: openai.ResponseContentPartDoneEventPartUnion{
+					OfResponsContentPartDoneEventPartReasoningText: &openai.ResponseContentPartDoneEventPartReasoningText{Type: "reasoning_text", Text: c.reasoning.text.String()},
+				},
 			})...)
 		}
 		if c.textStarted {
