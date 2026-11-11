@@ -6,10 +6,12 @@
 package dataplane
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -106,6 +108,18 @@ func TestWithTestUpstream(t *testing.T) {
 	}
 
 	was5xx := false
+	var multipartBody bytes.Buffer
+	multipartWriter := multipart.NewWriter(&multipartBody)
+	require.NoError(t, multipartWriter.WriteField("model", "whisper-1"))
+	require.NoError(t, multipartWriter.WriteField("temperature", "bad"))
+	filePart, err := multipartWriter.CreateFormFile("file", "test.mp3")
+	require.NoError(t, err)
+	_, err = io.WriteString(filePart, "synthetic audio bytes")
+	require.NoError(t, err)
+	require.NoError(t, multipartWriter.Close())
+	multipartRequestBody := multipartBody.String()
+	multipartContentType := multipartWriter.FormDataContentType()
+
 	for _, tc := range []struct {
 		// name is the name of the test case.
 		name,
@@ -181,11 +195,30 @@ func TestWithTestUpstream(t *testing.T) {
 			expResponseBody: `{"error":{"type":"OpenAIBackendError","message":"backend timeout","code":"503"},"type":"error"}`,
 		},
 		{
-			name:            "unknown path",
-			path:            "/unknown",
-			requestBody:     `{"prompt": "hello"}`,
-			expStatus:       http.StatusNotFound,
-			expResponseBody: `unsupported path: /unknown`,
+			name:        "unknown path",
+			path:        "/unknown",
+			requestBody: `{"prompt": "hello"}`,
+			expStatus:   http.StatusNotFound,
+			expResponseHeaders: map[string]string{
+				"content-type":   "application/json",
+				"content-length": strconv.Itoa(len(`{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path: /unknown"}}`)),
+			},
+			expResponseBodyFunc: func(t require.TestingT, body []byte) {
+				require.JSONEq(t, `{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path: /unknown"}}`, string(body))
+				var got struct {
+					Type  string `json:"type"`
+					Error struct {
+						Type    string `json:"type"`
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(body, &got))
+				require.Equal(t, "error", got.Type)
+				require.Equal(t, "NotFound", got.Error.Type)
+				require.Equal(t, "404", got.Error.Code)
+				require.Equal(t, "unsupported path: /unknown", got.Error.Message)
+			},
 		},
 		{
 			name:        "openai - /v1/chat/completions - malformed JSON request",
@@ -200,6 +233,37 @@ func TestWithTestUpstream(t *testing.T) {
 				require.Contains(t, bodyStr, `"type":"BadRequest"`)
 				require.Contains(t, bodyStr, `"code":"400"`)
 				require.Contains(t, bodyStr, `malformed request: failed to parse JSON for /v1/chat/completions:`)
+			},
+		},
+		{
+			name:           "multipart temperature invalid JSON error",
+			backend:        "openai",
+			path:           "/v1/audio/transcriptions",
+			method:         http.MethodPost,
+			requestBody:    multipartRequestBody,
+			expPath:        "/v1/audio/transcriptions",
+			responseStatus: strconv.Itoa(http.StatusOK),
+			responseBody:   `{"text":"unexpected upstream response"}`,
+			requestHeaders: map[string]string{"Content-Type": multipartContentType},
+			expStatus:      http.StatusBadRequest,
+			expResponseHeaders: map[string]string{
+				"content-type": "application/json",
+			},
+			expResponseBodyFunc: func(t require.TestingT, body []byte) {
+				require.JSONEq(t, `{"type":"error","error":{"type":"BadRequest","code":"400","message":"malformed request: invalid temperature value \"bad\": strconv.ParseFloat: parsing \"bad\": invalid syntax"}}`, string(body))
+				var got struct {
+					Type  string `json:"type"`
+					Error struct {
+						Type    string `json:"type"`
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(body, &got))
+				require.Equal(t, "BadRequest", got.Error.Type)
+				require.Equal(t, "400", got.Error.Code)
+				require.Contains(t, got.Error.Message, `invalid temperature value "bad"`)
+				require.Contains(t, got.Error.Message, `strconv.ParseFloat: parsing "bad": invalid syntax`)
 			},
 		},
 		{
