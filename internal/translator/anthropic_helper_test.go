@@ -2252,3 +2252,83 @@ data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
 		require.Empty(t, body)
 	})
 }
+
+func TestAnthropicStreamParser_SSELineEndings(t *testing.T) {
+	events := []string{
+		"event: message_start\n" +
+			`data: {"type":"message_start","message":{"id":"msg_crlf","type":"message","role":"assistant","content":[],"usage":{"input_tokens":10,"output_tokens":0}}}`,
+		"event: content_block_start\n" +
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		"event: content_block_delta\n" +
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`,
+		"event: content_block_stop\n" +
+			`data: {"type":"content_block_stop","index":0}`,
+		"event: message_delta\n" +
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":16}}`,
+		"event: message_stop\n" +
+			`data: {"type":"message_stop"}`,
+	}
+	lf := func(e string) string { return e + "\n\n" }
+	crlf := func(e string) string { return strings.ReplaceAll(e, "\n", "\r\n") + "\r\n\r\n" }
+
+	var lfStream, crlfStream, mixedStream strings.Builder
+	for i, e := range events {
+		lfStream.WriteString(lf(e))
+		crlfStream.WriteString(crlf(e))
+		if i%2 == 0 {
+			mixedStream.WriteString(lf(e))
+		} else {
+			mixedStream.WriteString(crlf(e))
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		stream string
+	}{
+		{name: "LF", stream: lfStream.String()},
+		{name: "CRLF", stream: crlfStream.String()},
+		{name: "mixed LF and CRLF", stream: mixedStream.String()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Deliver the whole stream before end of stream: every event must be
+			// translated as it arrives, not deferred to the final call.
+			t.Run("single chunk", func(t *testing.T) {
+				parser := newAnthropicStreamParser("test-model")
+				_, body, _, _, err := parser.Process(strings.NewReader(tc.stream), false, nil)
+				require.NoError(t, err)
+				require.Contains(t, string(body), `"content":"Hello"`)
+
+				_, _, tokenUsage, _, err := parser.Process(strings.NewReader(""), true, nil)
+				require.NoError(t, err)
+				assertLineEndingTestTokens(t, tokenUsage)
+			})
+
+			// Deliver one byte at a time so event separators are split across reads.
+			t.Run("byte by byte", func(t *testing.T) {
+				parser := newAnthropicStreamParser("test-model")
+				var body []byte
+				for i := 0; i < len(tc.stream); i++ {
+					_, out, _, _, err := parser.Process(strings.NewReader(tc.stream[i:i+1]), false, nil)
+					require.NoError(t, err)
+					body = append(body, out...)
+				}
+				require.Contains(t, string(body), `"content":"Hello"`)
+
+				_, _, tokenUsage, _, err := parser.Process(strings.NewReader(""), true, nil)
+				require.NoError(t, err)
+				assertLineEndingTestTokens(t, tokenUsage)
+			})
+		})
+	}
+}
+
+func assertLineEndingTestTokens(t *testing.T, tokenUsage metrics.TokenUsage) {
+	t.Helper()
+	inputTokens, inputSet := tokenUsage.InputTokens()
+	require.True(t, inputSet)
+	require.Equal(t, uint32(10), inputTokens)
+	outputTokens, outputSet := tokenUsage.OutputTokens()
+	require.True(t, outputSet)
+	require.Equal(t, uint32(16), outputTokens)
+}
