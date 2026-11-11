@@ -83,12 +83,15 @@ func TestEndpointCoverage(t *testing.T) {
 			},
 		},
 		{
-			// TODO: input messages and streaming chunks are not mapped yet.
+			// Complete. Chunks fold into the response so streaming reuses the
+			// unary path. Instructions are a separate field, so they map to
+			// system instructions rather than a message.
 			name:   "responses",
 			actual: coverageOf(t, NewResponsesRecorder(cfg)),
 			expected: coverage{
-				requestAttrs: true, responseAttrs: true,
-				outputMessages: true, systemInstructions: true, conversationID: true,
+				requestAttrs: true, responseAttrs: true, foldChunks: true,
+				inputMessages: true, outputMessages: true,
+				systemInstructions: true, conversationID: true,
 			},
 		},
 		{
