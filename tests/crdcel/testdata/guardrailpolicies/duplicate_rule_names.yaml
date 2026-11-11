@@ -1,0 +1,26 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GuardrailPolicy
+metadata:
+  name: duplicate-rule-names
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: backend
+  rules:
+    - name: duplicate
+      phase: Request
+      provider:
+        type: Regex
+        pattern: request
+    - name: duplicate
+      phase: Response
+      provider:
+        type: Regex
+        pattern: response
