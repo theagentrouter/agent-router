@@ -66,6 +66,8 @@ Different providers require different schema configurations:
 Many providers offer OpenAI-compatible APIs, which allows them to use the OpenAI schema configuration with provider-specific version paths.
 :::
 
+`AIServiceBackend` can also filter individual values out of multi-valued request headers with `headerValueFilters`. See [Filtering Anthropic Beta Headers](./anthropic-beta-filtering.md) for when and how to use it with Claude on AWS Bedrock and GCP Vertex AI.
+
 ### BackendSecurityPolicy
 
 The `BackendSecurityPolicy` resource configures authentication credentials needed to access upstream AI services securely.
