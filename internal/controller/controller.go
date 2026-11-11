@@ -643,24 +643,27 @@ const aiGatewayControllerFinalizer = "aigateway.envoyproxy.io/finalizer"
 // onDeletionFn can be nil, in which case it will not be called. The function can return an error but should not
 // be a recoverable error. For example, onDeletionFn only propagates the deletion of the object to other resources.
 // See the call sites of this function for examples.
+//
+// The returned error is non-nil only when removing the finalizer fails. Callers must return it from Reconcile so that
+// the removal is retried: the object stays Terminating until it is reconciled again.
 func handleFinalizer[objType client.Object](
-	ctx context.Context, client client.Client,
+	ctx context.Context, c client.Client,
 	logger logr.Logger,
 	o objType,
 	onDeletionFn func(ctx context.Context, o objType) error,
-) (onDelete bool) {
+) (onDelete bool, err error) {
 	if o.GetDeletionTimestamp().IsZero() {
 		if !ctrlutil.ContainsFinalizer(o, aiGatewayControllerFinalizer) {
+			base := o.DeepCopyObject().(objType)
 			ctrlutil.AddFinalizer(o, aiGatewayControllerFinalizer)
-			if err := client.Update(ctx, o); err != nil {
-				// This shouldn't happen in normal operation, but if it does, we log the error.
-				logger.Error(err, "Failed to add finalizer to object",
-					"namespace", o.GetNamespace(), "name", o.GetName())
+			if err := c.Patch(ctx, o, client.MergeFrom(base)); err != nil {
+				return false, fmt.Errorf("failed to add finalizer to %s/%s: %w", o.GetNamespace(), o.GetName(), err)
 			}
 		}
-		return false
+		return false, nil
 	}
 	if ctrlutil.ContainsFinalizer(o, aiGatewayControllerFinalizer) {
+		base := o.DeepCopyObject().(objType)
 		ctrlutil.RemoveFinalizer(o, aiGatewayControllerFinalizer)
 		if onDeletionFn != nil {
 			if err := onDeletionFn(ctx, o); err != nil {
@@ -669,13 +672,11 @@ func handleFinalizer[objType client.Object](
 					"namespace", o.GetNamespace(), "name", o.GetName())
 			}
 		}
-		if err := client.Update(ctx, o); err != nil {
-			// This shouldn't happen in normal operation, but if it does, we log the error.
-			logger.Error(err, "Failed to remove finalizer from object",
-				"namespace", o.GetNamespace(), "name", o.GetName())
+		if err := c.Patch(ctx, o, client.MergeFrom(base)); err != nil {
+			return true, fmt.Errorf("failed to remove finalizer from %s/%s: %w", o.GetNamespace(), o.GetName(), err)
 		}
 	}
-	return true
+	return true, nil
 }
 
 // isKubernetes133OrLater returns true if the Kubernetes version is 1.33 or later.
