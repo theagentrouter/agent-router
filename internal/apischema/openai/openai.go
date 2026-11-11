@@ -4043,6 +4043,7 @@ type ResponseInputItemUnionParam struct {
 	OfCustomToolCallOutput *ResponseCustomToolCallOutputParam
 	OfCustomToolCall       *ResponseCustomToolCall
 	OfCompactionTrigger    *ResponseInputItemCompactionTriggerParam
+	OfConfigurationUpdate  *ResponseInputItemConfigurationUpdateParam
 	OfItemReference        *ResponseInputItemItemReferenceParam
 	// Codex-emitted item types whose schema is not yet part of the public Responses API.
 	// Preserve their raw JSON so OpenAI-compatible backends can handle them unchanged.
@@ -4109,6 +4110,8 @@ func (r ResponseInputItemUnionParam) MarshalJSON() ([]byte, error) { // nolint:g
 		return json.Marshal(r.OfCustomToolCall)
 	case r.OfCompactionTrigger != nil:
 		return json.Marshal(r.OfCompactionTrigger)
+	case r.OfConfigurationUpdate != nil:
+		return json.Marshal(r.OfConfigurationUpdate)
 	case r.OfItemReference != nil:
 		return json.Marshal(r.OfItemReference)
 	case r.OfAgentMessage != nil:
@@ -4329,6 +4332,12 @@ func (r *ResponseInputItemUnionParam) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		r.OfCompactionTrigger = &ct
+	case "configuration_update":
+		var cu ResponseInputItemConfigurationUpdateParam
+		if err := json.Unmarshal(data, &cu); err != nil {
+			return err
+		}
+		r.OfConfigurationUpdate = &cu
 	case "item_reference":
 		var ir ResponseInputItemItemReferenceParam
 		if err := json.Unmarshal(data, &ir); err != nil {
@@ -6247,6 +6256,18 @@ type ResponseInputItemItemReferenceParam struct {
 type ResponseInputItemCompactionTriggerParam struct {
 	// The type of the item. Always `compaction_trigger`.
 	Type string `json:"type"`
+}
+
+// ResponseInputItemConfigurationUpdateParam changes the request configuration for
+// the items that follow it, such as the reasoning effort, without invalidating the
+// prompt cache.
+//
+// https://developers.openai.com/api/docs/guides/reasoning#change-reasoning-mid-conversation
+type ResponseInputItemConfigurationUpdateParam struct {
+	// The type of the item. Always `configuration_update`.
+	Type string `json:"type"`
+	// The reasoning configuration for the items that follow.
+	Reasoning *ReasoningParam `json:"reasoning,omitempty"`
 }
 
 // ResponseToolChoiceUnion is a union type for tool choice configuration in Responses API.
