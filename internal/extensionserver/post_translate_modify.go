@@ -736,6 +736,11 @@ func (s *Server) maybeModifyListenerAndRoutes(listeners []*listenerv3.Listener, 
 				listenerToInferencePools[listener] = append(listenerToInferencePools[listener], pool)
 			}
 		}
+		// The map iteration above has no stable order. Envoy drains every filter chain of a
+		// listener whose config changes, so emit the filters in the same order on every pass.
+		slices.SortFunc(listenerToInferencePools[listener], func(a, b *gwaiev1.InferencePool) int {
+			return strings.Compare(a.Namespace+"/"+a.Name, b.Namespace+"/"+b.Name)
+		})
 	}
 
 	// patch the listeners, the route configs and the virtual hosts with inference pool filters.

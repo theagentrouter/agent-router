@@ -1228,6 +1228,49 @@ func TestMaybeModifyListenerAndRoutes(t *testing.T) {
 		require.NoError(t, err)
 		// Should handle gracefully when referenced route config is not found.
 	})
+
+	t.Run("inference pool filters are emitted in a stable order", func(t *testing.T) {
+		poolRoute := func(routeName, poolName string) *routev3.Route {
+			return &routev3.Route{
+				Name: routeName,
+				Metadata: &corev3.Metadata{
+					FilterMetadata: map[string]*structpb.Struct{
+						internalapi.InternalEndpointMetadataNamespace: {
+							Fields: map[string]*structpb.Value{
+								"per_route_rule_inference_pool": structpb.NewStringValue("ns/" + poolName + "/" + poolName + "-epp/9002/duplex/false"),
+							},
+						},
+					},
+				},
+			}
+		}
+		var rs []*routev3.Route
+		for _, pool := range []string{"pool-c", "pool-a", "pool-b"} {
+			rs = append(rs, poolRoute(pool+"-0", pool), poolRoute(pool+"-1", pool))
+		}
+		// The order varies with Go map iteration, so a few passes are needed to expose it.
+		for range 10 {
+			listener := createListener("test-listener", "test-route-config")
+			routes := []*routev3.RouteConfiguration{{
+				Name:         "test-route-config",
+				VirtualHosts: []*routev3.VirtualHost{{Name: "test-vh", Routes: rs}},
+			}}
+			require.NoError(t, s.maybeModifyListenerAndRoutes([]*listenerv3.Listener{listener}, routes))
+
+			hcm := &httpconnectionmanagerv3.HttpConnectionManager{}
+			require.NoError(t, listener.DefaultFilterChain.Filters[0].GetTypedConfig().UnmarshalTo(hcm))
+			var names []string
+			for _, f := range hcm.HttpFilters {
+				names = append(names, f.Name)
+			}
+			require.Equal(t, []string{
+				"envoy.filters.http.ext_proc/endpointpicker/pool-a_ns_ext_proc",
+				"envoy.filters.http.ext_proc/endpointpicker/pool-b_ns_ext_proc",
+				"envoy.filters.http.ext_proc/endpointpicker/pool-c_ns_ext_proc",
+				"envoy.filters.http.router",
+			}, names)
+		}
+	})
 }
 
 // TestPatchListenerWithInferencePoolFilters tests the patchListenerWithInferencePoolFilters function.
