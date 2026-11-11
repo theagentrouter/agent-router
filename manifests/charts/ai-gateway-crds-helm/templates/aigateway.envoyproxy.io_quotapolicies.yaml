@@ -54,6 +54,45 @@ spec:
             description: QuotaPolicySpec specifies rules for computing token based
               costs of requests.
             properties:
+              aggregateUserBudget:
+                description: |-
+                  AggregateUserBudget charges all priced models and target backends to one
+                  authenticated user's UTC calendar-month balance. Only verified JWT metadata
+                  is used for identity and tier; headers supplied by clients are never trusted.
+                  Requires a rate-limit service with UTC calendar-month support.
+                properties:
+                  jwtProvider:
+                    description: JWTProvider is the verified payload key in envoy.filters.http.jwt_authn
+                      metadata.
+                    minLength: 1
+                    type: string
+                  name:
+                    description: Name identifies the shared balance independently
+                      of policy, backend and model.
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  tierClaim:
+                    description: TierClaim is the scalar claim selecting the user's
+                      allowance.
+                    minLength: 1
+                    type: string
+                  tierLimits:
+                    additionalProperties:
+                      format: int32
+                      type: integer
+                    description: |-
+                      TierLimits maps approved tier claim values to monthly micro-dollar allowances.
+                      Tier is deliberately not part of the balance key, so changing tier does not reset usage.
+                    maxProperties: 16
+                    minProperties: 1
+                    type: object
+                required:
+                - jwtProvider
+                - name
+                - tierClaim
+                - tierLimits
+                type: object
               perModelQuotas:
                 description: |-
                   PerModelQuotas specifies quota for different models served by the AIServiceBackend(s) where this

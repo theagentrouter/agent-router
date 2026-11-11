@@ -108,13 +108,14 @@ func TestInjectQuotaPolicyCostExpressions(t *testing.T) {
 		Backends: []filterapi.Backend{{AIServiceBackendName: "route-ns/backend"}},
 	}
 	injected := make(map[string]struct{})
-	controller.injectQuotaPolicyCostExpressions(t.Context(), config, injected, "route")
+	route := &aigv1b1.AIGatewayRoute{}
+	controller.injectQuotaPolicyCostExpressions(t.Context(), route, config, injected, "route")
 	require.Len(t, config.LLMRequestCosts, 1)
 	require.Equal(t, expression, config.LLMRequestCosts[0].CEL)
 	require.Equal(t, "route-ns/backend", config.LLMRequestCosts[0].Backend)
 	require.Equal(t, model, config.LLMRequestCosts[0].Model)
 
-	controller.injectQuotaPolicyCostExpressions(t.Context(), config, injected, "route")
+	controller.injectQuotaPolicyCostExpressions(t.Context(), route, config, injected, "route")
 	require.Len(t, config.LLMRequestCosts, 1)
 }
 
