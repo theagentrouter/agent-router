@@ -72,12 +72,53 @@ func sendJSON(req *http.Request, client *http.Client, response any) error {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("provider returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return &providerError{statusCode: resp.StatusCode, body: strings.TrimSpace(string(body))}
 	}
 	if err = json.NewDecoder(resp.Body).Decode(response); err != nil {
 		return fmt.Errorf("cannot decode provider response: %w", err)
 	}
 	return nil
+}
+
+// providerError is a non-2xx response from a guardrail provider. It matches
+// filterapi.ErrGuardrailThrottled and filterapi.ErrGuardrailPayloadTooLarge with errors.Is so
+// callers can pick a recovery strategy without knowing each provider's error format.
+type providerError struct {
+	statusCode int
+	body       string
+}
+
+func (e *providerError) Error() string {
+	return fmt.Sprintf("provider returned HTTP %d: %s", e.statusCode, e.body)
+}
+
+func (e *providerError) Is(target error) bool {
+	switch target {
+	case filterapi.ErrGuardrailThrottled:
+		return e.statusCode == http.StatusTooManyRequests
+	case filterapi.ErrGuardrailPayloadTooLarge:
+		return e.statusCode == http.StatusRequestEntityTooLarge ||
+			(e.statusCode == http.StatusBadRequest && bodyIndicatesPayloadTooLarge(e.body))
+	default:
+		return false
+	}
+}
+
+// payloadTooLargeHints are fragments of the 400 messages providers return for oversized input
+// (e.g. Bedrock ValidationException, Azure Content Safety InvalidRequestBody, Model Armor).
+var payloadTooLargeHints = []string{
+	"too large", "too long", "exceeds the maximum", "exceeds maximum", "exceeded the maximum",
+	"maximum length", "max length", "length exceeds", "size exceeds", "payload size", "token limit",
+}
+
+func bodyIndicatesPayloadTooLarge(body string) bool {
+	lower := strings.ToLower(body)
+	for _, hint := range payloadTooLargeHints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 // textSpan is a detected region of evaluated text. Offsets are Unicode code point

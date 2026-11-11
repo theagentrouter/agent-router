@@ -136,19 +136,27 @@ func evaluateGuardrailsForPhase(ctx context.Context, guardrails []filterapi.Runt
 		}
 
 		// External providers receive all extracted text fields in a single call, so one LLM
-		// request results in at most one request per guardrail provider.
+		// request results in one request per guardrail provider unless the provider throttles
+		// it or rejects it as too large (see guardrail_bisection.go).
 		if g.Evaluator == nil {
 			return outcome, fmt.Errorf("guardrail %q uses provider %q without an evaluator", g.Name, g.Provider.Type)
 		}
-		evaluation, err := g.Evaluator.Evaluate(ctx, joinGuardrailContents(contents), phase)
-		if err != nil {
+		fragments := make([]guardrailFragment, len(contents))
+		for j := range contents {
+			fragments[j] = guardrailFragment{content: j, text: contents[j].text}
+		}
+		bisector := newGuardrailBisector(ctx, g, phase)
+		if err = bisector.evaluate(fragments); err != nil {
+			if errors.Is(err, errGuardrailNoMaskedContent) {
+				return outcome, err
+			}
 			if g.Provider.FailureMode == filterapi.GuardrailFailureModeFailOpen || action == filterapi.GuardrailActionMonitor {
 				failOpenErrors = append(failOpenErrors, fmt.Errorf("guardrail %q evaluation failed: %w", g.Name, err))
 				continue
 			}
 			return outcome, fmt.Errorf("guardrail %q evaluation failed: %w", g.Name, err)
 		}
-		if !evaluation.Matched {
+		if !bisector.matched {
 			continue
 		}
 		switch action {
@@ -156,22 +164,7 @@ func evaluateGuardrailsForPhase(ctx context.Context, guardrails []filterapi.Runt
 			outcome.Monitored = true
 			outcome.RuleName = g.Name
 		case filterapi.GuardrailActionMask:
-			if len(evaluation.Replacement) == 0 {
-				return outcome, fmt.Errorf("guardrail %q matched but provider %q returned no masked content", g.Name, g.Provider.Type)
-			}
-			replacements, ok := splitGuardrailReplacement(contents, evaluation.Replacement)
-			if !ok {
-				// The provider rewrote the text in a way that cannot be mapped back to the
-				// original fields; fall back to evaluating each field on its own.
-				replacements, err = evaluateGuardrailContentsIndividually(ctx, g, contents, phase)
-				if err != nil {
-					if g.Provider.FailureMode == filterapi.GuardrailFailureModeFailOpen {
-						failOpenErrors = append(failOpenErrors, fmt.Errorf("guardrail %q evaluation failed: %w", g.Name, err))
-						continue
-					}
-					return outcome, fmt.Errorf("guardrail %q evaluation failed: %w", g.Name, err)
-				}
-			}
+			replacements := bisector.maskedContents(len(contents))
 			for j, content := range contents {
 				if replacements[j] == nil || bytes.Equal(replacements[j], content.text) {
 					continue
@@ -199,55 +192,31 @@ func evaluateGuardrailsForPhase(ctx context.Context, guardrails []filterapi.Runt
 // picked up by PII or content-safety detectors.
 const guardrailContentSeparator = "\n␞\n"
 
-func joinGuardrailContents(contents []guardrailContent) []byte {
-	if len(contents) == 1 {
-		return contents[0].text
-	}
-	texts := make([][]byte, len(contents))
-	for i := range contents {
-		texts[i] = contents[i].text
+func joinGuardrailTexts(texts [][]byte) []byte {
+	if len(texts) == 1 {
+		return texts[0]
 	}
 	return bytes.Join(texts, []byte(guardrailContentSeparator))
 }
 
-// splitGuardrailReplacement maps a masked version of the joined payload back to the extracted
-// fields. It returns false when the mapping is ambiguous, e.g. a field contains the separator
+// splitGuardrailReplacement maps a masked version of the joined payload back to the original
+// texts. It returns false when the mapping is ambiguous, e.g. a text contains the separator
 // or the provider removed or added separators.
-func splitGuardrailReplacement(contents []guardrailContent, replacement []byte) ([][]byte, bool) {
-	if len(contents) == 1 {
+func splitGuardrailReplacement(texts [][]byte, replacement []byte) ([][]byte, bool) {
+	if len(texts) == 1 {
 		return [][]byte{replacement}, true
 	}
 	separator := []byte(guardrailContentSeparator)
-	for i := range contents {
-		if bytes.Contains(contents[i].text, separator) {
+	for i := range texts {
+		if bytes.Contains(texts[i], separator) {
 			return nil, false
 		}
 	}
 	parts := bytes.Split(replacement, separator)
-	if len(parts) != len(contents) {
+	if len(parts) != len(texts) {
 		return nil, false
 	}
 	return parts, true
-}
-
-// evaluateGuardrailContentsIndividually evaluates each extracted field with its own provider call.
-// It returns the masked text per field, or nil for fields the provider did not match.
-func evaluateGuardrailContentsIndividually(ctx context.Context, g *filterapi.RuntimeGuardrail, contents []guardrailContent, phase filterapi.GuardrailPhase) ([][]byte, error) {
-	replacements := make([][]byte, len(contents))
-	for i := range contents {
-		evaluation, err := g.Evaluator.Evaluate(ctx, contents[i].text, phase)
-		if err != nil {
-			return nil, err
-		}
-		if !evaluation.Matched {
-			continue
-		}
-		if len(evaluation.Replacement) == 0 {
-			return nil, fmt.Errorf("provider %q matched but returned no masked content", g.Provider.Type)
-		}
-		replacements[i] = evaluation.Replacement
-	}
-	return replacements, nil
 }
 
 func guardrailAction(action filterapi.GuardrailAction) filterapi.GuardrailAction {

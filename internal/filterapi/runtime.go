@@ -7,6 +7,7 @@ package filterapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 
@@ -31,6 +32,16 @@ type NewBackendAuthHandlerFunc func(ctx context.Context, auth *BackendAuth) (Bac
 type GuardrailEvaluator interface {
 	Evaluate(ctx context.Context, body []byte, phase GuardrailPhase) (GuardrailEvaluationResult, error)
 }
+
+var (
+	// ErrGuardrailPayloadTooLarge is matched (via errors.Is) by evaluator errors caused by the
+	// provider rejecting the payload because of its size. Waiting does not fix it, so callers
+	// partition the payload instead of retrying it as is.
+	ErrGuardrailPayloadTooLarge = errors.New("guardrail provider rejected the payload as too large")
+	// ErrGuardrailThrottled is matched (via errors.Is) by evaluator errors caused by transient
+	// provider throttling (HTTP 429). Callers may retry the same payload with backoff.
+	ErrGuardrailThrottled = errors.New("guardrail provider throttled the request")
+)
 
 // GuardrailEvaluationResult is the provider-neutral outcome for one text fragment.
 type GuardrailEvaluationResult struct {

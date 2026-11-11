@@ -57,10 +57,14 @@ func (c *GuardrailPolicyController) Reconcile(ctx context.Context, req reconcile
 	}
 
 	c.logger.Info("Reconciling GuardrailPolicy", "namespace", req.Namespace, "name", req.Name)
-	if handleFinalizer(ctx, c.client, c.logger, &policy, func(ctx context.Context, policy *aigv1b1.GuardrailPolicy) error {
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, &policy, func(ctx context.Context, policy *aigv1b1.GuardrailPolicy) error {
 		c.notifyAIGatewayRoutesForGuardrailPolicy(ctx, policy)
 		return nil
-	}) {
+	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if onDelete {
 		return ctrl.Result{}, nil
 	}
 	if err := c.syncGuardrailPolicy(ctx, &policy); err != nil {

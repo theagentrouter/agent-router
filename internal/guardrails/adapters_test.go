@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,35 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/gcpauth"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
+
+func TestProviderErrorClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		status       int
+		body         string
+		expThrottled bool
+		expTooLarge  bool
+	}{
+		{name: "throttled", status: http.StatusTooManyRequests, body: `{"message":"Too many requests"}`, expThrottled: true},
+		{name: "entity too large", status: http.StatusRequestEntityTooLarge, expTooLarge: true},
+		{name: "bedrock validation size", status: http.StatusBadRequest, body: `{"message":"Input text exceeds the maximum allowed length"}`, expTooLarge: true},
+		{name: "unrelated bad request", status: http.StatusBadRequest, body: `{"message":"invalid guardrail version"}`},
+		{name: "server error", status: http.StatusInternalServerError, body: "boom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, tc.body, tc.status)
+			}))
+			t.Cleanup(server.Close)
+			evaluator, err := newPresidioEvaluator(&filterapi.PresidioGuardrailProvider{Endpoint: server.URL}, "", server.Client())
+			require.NoError(t, err)
+			_, err = evaluator.Evaluate(t.Context(), []byte("payload"), filterapi.GuardrailPhaseRequest)
+			require.Error(t, err)
+			require.Equal(t, tc.expThrottled, errors.Is(err, filterapi.ErrGuardrailThrottled))
+			require.Equal(t, tc.expTooLarge, errors.Is(err, filterapi.ErrGuardrailPayloadTooLarge))
+		})
+	}
+}
 
 func TestPresidioEvaluatorHTTP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
