@@ -97,16 +97,16 @@ func TestDetectClientEra_DeclaredVersion(t *testing.T) {
 	t.Run("modern version routes to modern validation", func(t *testing.T) {
 		r := newHTTPRequest(t, http.MethodPost, map[string]string{
 			mcpProtocolVersionHeader: protocolVersion20260728,
-			mcpMethodHeader:          "tools/call",
+			mcpMethodHeader:          "tools/list",
 		})
-		msg := newRequestMsg(t, "tools/call", "id", modernMeta(protocolVersion20260728, []byte(`{"tools":{}}`)))
+		msg := newRequestMsg(t, "tools/list", "id", modernMeta(protocolVersion20260728, []byte(`{"tools":{}}`)))
 		got := detectClientEra(r, msg)
 		require.Nil(t, got.err)
 		require.Equal(t, eraModern, got.era)
 		require.Equal(t, protocolVersion20260728, got.version)
 	})
 
-	for _, v := range []string{"2025-11-25", "2025-06-18"} {
+	for _, v := range []string{"2025-11-25", "2025-06-18", "2025-03-26"} {
 		t.Run("legacy version "+v+" routes to legacy validation", func(t *testing.T) {
 			r := newHTTPRequest(t, http.MethodPost, map[string]string{
 				mcpProtocolVersionHeader: v,
@@ -120,15 +120,74 @@ func TestDetectClientEra_DeclaredVersion(t *testing.T) {
 		})
 	}
 
-	t.Run("unknown version is treated as legacy", func(t *testing.T) {
+	t.Run("modern _meta without version header is a header mismatch", func(t *testing.T) {
+		r := newHTTPRequest(t, http.MethodPost, nil)
+		msg := newRequestMsg(t, "tools/list", "id", modernMeta(protocolVersion20260728, []byte(`{}`)))
+		got := detectClientEra(r, msg)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeHeaderMismatch, got.err.Code)
+		require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
+		require.Contains(t, got.err.Message, "is required")
+	})
+
+	t.Run("modern _meta with legacy version header is a header mismatch", func(t *testing.T) {
 		r := newHTTPRequest(t, http.MethodPost, map[string]string{
-			mcpProtocolVersionHeader: "1999-01-01",
+			mcpProtocolVersionHeader: "2025-06-18",
+			sessionIDHeader:          "sess",
+		})
+		msg := newRequestMsg(t, "tools/list", "id", modernMeta(protocolVersion20260728, []byte(`{}`)))
+		got := detectClientEra(r, msg)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeHeaderMismatch, got.err.Code)
+		require.Contains(t, got.err.Message, "does not match")
+	})
+
+	t.Run("notification with modern _meta and no header is a header mismatch", func(t *testing.T) {
+		r := newHTTPRequest(t, http.MethodPost, nil)
+		msg := newRequestMsg(t, "notifications/progress", nil, modernMeta(protocolVersion20260728, nil))
+		got := detectClientEra(r, msg)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeHeaderMismatch, got.err.Code)
+	})
+
+	for _, v := range []string{"1999-01-01", "2024-11-05", "2025-99-99", "2026-01-01"} {
+		t.Run("unknown pre-modern date "+v+" is rejected with unsupported protocol version", func(t *testing.T) {
+			r := newHTTPRequest(t, http.MethodPost, map[string]string{
+				mcpProtocolVersionHeader: v,
+				sessionIDHeader:          "sess",
+			})
+			msg := newRequestMsg(t, "tools/call", "id", nil)
+			got := detectClientEra(r, msg)
+			require.NotNil(t, got.err)
+			require.Equal(t, errCodeUnsupportedProtocolVersion, got.err.Code)
+			require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
+			require.Equal(t, &mcp.UnsupportedProtocolVersionData{
+				Supported: []string{"2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"},
+				Requested: v,
+			}, got.err.Data)
+		})
+	}
+
+	t.Run("future version is rejected with unsupported protocol version", func(t *testing.T) {
+		r := newHTTPRequest(t, http.MethodPost, map[string]string{
+			mcpProtocolVersionHeader: "2027-01-01",
 		})
 		msg := newRequestMsg(t, "tools/call", "id", nil)
 		got := detectClientEra(r, msg)
-		require.Nil(t, got.err)
-		require.Equal(t, eraLegacy, got.era)
-		require.Equal(t, "1999-01-01", got.version)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeUnsupportedProtocolVersion, got.err.Code)
+		require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
+	})
+
+	t.Run("malformed version is rejected with unsupported protocol version", func(t *testing.T) {
+		r := newHTTPRequest(t, http.MethodPost, map[string]string{
+			mcpProtocolVersionHeader: "not-a-version",
+		})
+		msg := newRequestMsg(t, "tools/call", "id", nil)
+		got := detectClientEra(r, msg)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeUnsupportedProtocolVersion, got.err.Code)
+		require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
 	})
 }
 
@@ -168,25 +227,28 @@ func TestDetectClientEra_NoVersionHeader(t *testing.T) {
 		}
 	})
 
-	t.Run("Mcp-Method without version header is treated as legacy", func(t *testing.T) {
-		// Mcp-Method alone is not discriminating: only the version header value
-		// selects the modern path. Without it, the request falls through to legacy.
+	t.Run("Mcp-Method without version header is rejected", func(t *testing.T) {
+		// Mcp-Method alone without a version header is ambiguous: the client
+		// looks modern but didn't declare a version, so the gateway rejects
+		// rather than silently trusting the mirrored header on the legacy path.
 		r := newHTTPRequest(t, http.MethodPost, map[string]string{mcpMethodHeader: "tools/call"})
 		msg := newRequestMsg(t, "tools/call", "id", nil)
 		got := detectClientEra(r, msg)
-		require.Nil(t, got.err)
-		require.Equal(t, eraLegacy, got.era)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeHeaderMismatch, got.err.Code)
+		require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
 	})
 
-	t.Run("Mcp-Method with session ID is still legacy", func(t *testing.T) {
+	t.Run("Mcp-Method with session ID but no version header is rejected", func(t *testing.T) {
 		r := newHTTPRequest(t, http.MethodPost, map[string]string{
 			mcpMethodHeader: "tools/call",
 			sessionIDHeader: "sess",
 		})
 		msg := newRequestMsg(t, "tools/call", "id", nil)
 		got := detectClientEra(r, msg)
-		require.Nil(t, got.err)
-		require.Equal(t, eraLegacy, got.era)
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeHeaderMismatch, got.err.Code)
+		require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
 	})
 
 	t.Run("plain request with nothing declared defaults to legacy", func(t *testing.T) {
@@ -241,8 +303,8 @@ func TestValidateModernRequest(t *testing.T) {
 	t.Run("well-formed call passes", func(t *testing.T) {
 		got := validateModernRequest(&requestDetails{
 			headerVersion:   protocolVersion20260728,
-			headerMethod:    "tools/call",
-			method:          "tools/call",
+			headerMethod:    "tools/list",
+			method:          "tools/list",
 			isRequest:       true,
 			expectsResponse: true,
 			params:          modernMeta(protocolVersion20260728, caps),
@@ -280,11 +342,54 @@ func TestValidateModernRequest(t *testing.T) {
 		require.Contains(t, got.err.Message, "does not match body value")
 	})
 
+	t.Run("Mcp-Name", func(t *testing.T) {
+		withName := func(params string) []byte {
+			return []byte(`{` + params + `,"_meta":{"` + metaProtocolVersion + `":"` + protocolVersion20260728 + `","` + metaClientCapabilities + `":{}}}`)
+		}
+		tests := []struct {
+			name       string
+			method     string
+			headerName string
+			params     []byte
+			wantErr    string
+		}{
+			{name: "tools/call matching", method: "tools/call", headerName: "b__sum", params: withName(`"name":"b__sum"`)},
+			{name: "prompts/get matching", method: "prompts/get", headerName: "b__greet", params: withName(`"name":"b__greet"`)},
+			{name: "resources/read matching", method: "resources/read", headerName: "file:///x", params: withName(`"uri":"file:///x"`)},
+			{name: "tools/call missing header", method: "tools/call", params: withName(`"name":"b__sum"`), wantErr: "is required"},
+			{name: "resources/read missing header", method: "resources/read", params: withName(`"uri":"file:///x"`), wantErr: "is required"},
+			{name: "tools/call mismatched header", method: "tools/call", headerName: "b__other", params: withName(`"name":"b__sum"`), wantErr: "does not match body value"},
+			{name: "prompts/get mismatched header", method: "prompts/get", headerName: "b__other", params: withName(`"name":"b__greet"`), wantErr: "does not match body value"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				got := validateModernRequest(&requestDetails{
+					headerVersion:   protocolVersion20260728,
+					headerMethod:    tt.method,
+					headerName:      tt.headerName,
+					method:          tt.method,
+					isRequest:       true,
+					expectsResponse: true,
+					params:          tt.params,
+				})
+				if tt.wantErr == "" {
+					require.Nil(t, got.err)
+					return
+				}
+				require.NotNil(t, got.err)
+				require.Equal(t, errCodeHeaderMismatch, got.err.Code)
+				require.Equal(t, http.StatusBadRequest, got.err.HTTPStatus)
+				require.Contains(t, got.err.Message, mcpNameHeader)
+				require.Contains(t, got.err.Message, tt.wantErr)
+			})
+		}
+	})
+
 	t.Run("session ID is not allowed under modern", func(t *testing.T) {
 		got := validateModernRequest(&requestDetails{
 			headerVersion:   protocolVersion20260728,
-			headerMethod:    "tools/call",
-			method:          "tools/call",
+			headerMethod:    "tools/list",
+			method:          "tools/list",
 			sessionID:       "sess",
 			isRequest:       true,
 			expectsResponse: true,
@@ -314,8 +419,8 @@ func TestValidateModernRequest(t *testing.T) {
 	t.Run("undecodable _meta is invalid params", func(t *testing.T) {
 		got := validateModernRequest(&requestDetails{
 			headerVersion:   protocolVersion20260728,
-			headerMethod:    "tools/call",
-			method:          "tools/call",
+			headerMethod:    "tools/list",
+			method:          "tools/list",
 			isRequest:       true,
 			expectsResponse: true,
 			params:          []byte(`{"_meta":123}`),
@@ -328,8 +433,8 @@ func TestValidateModernRequest(t *testing.T) {
 	t.Run("missing protocolVersion in _meta", func(t *testing.T) {
 		got := validateModernRequest(&requestDetails{
 			headerVersion:   protocolVersion20260728,
-			headerMethod:    "tools/call",
-			method:          "tools/call",
+			headerMethod:    "tools/list",
+			method:          "tools/list",
 			isRequest:       true,
 			expectsResponse: true,
 			params:          modernMeta("", caps),
@@ -342,8 +447,8 @@ func TestValidateModernRequest(t *testing.T) {
 	t.Run("protocolVersion in _meta disagrees with header", func(t *testing.T) {
 		got := validateModernRequest(&requestDetails{
 			headerVersion:   protocolVersion20260728,
-			headerMethod:    "tools/call",
-			method:          "tools/call",
+			headerMethod:    "tools/list",
+			method:          "tools/list",
 			isRequest:       true,
 			expectsResponse: true,
 			params:          modernMeta("2025-11-25", caps),
@@ -356,8 +461,8 @@ func TestValidateModernRequest(t *testing.T) {
 	t.Run("call without client capabilities is rejected", func(t *testing.T) {
 		got := validateModernRequest(&requestDetails{
 			headerVersion:   protocolVersion20260728,
-			headerMethod:    "tools/call",
-			method:          "tools/call",
+			headerMethod:    "tools/list",
+			method:          "tools/list",
 			isRequest:       true,
 			expectsResponse: true,
 			params:          modernMeta(protocolVersion20260728, nil),
@@ -372,8 +477,8 @@ func TestValidateModernRequest(t *testing.T) {
 		params := []byte(`{"_meta":{"` + metaProtocolVersion + `":"` + protocolVersion20260728 + `","` + metaClientCapabilities + `":null}}`)
 		got := validateModernRequest(&requestDetails{
 			headerVersion:   protocolVersion20260728,
-			headerMethod:    "tools/call",
-			method:          "tools/call",
+			headerMethod:    "tools/list",
+			method:          "tools/list",
 			isRequest:       true,
 			expectsResponse: true,
 			params:          params,

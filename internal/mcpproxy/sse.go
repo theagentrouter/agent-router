@@ -115,9 +115,9 @@ func (s *sseEventParser) parseEvent(chunk []byte) (*sseEvent, error) {
 			ret.id = string(bytes.TrimSpace(line[len(sseIDPrefix):]))
 		case bytes.HasPrefix(line, sseDataPrefix):
 			data := bytes.TrimSpace(line[len(sseDataPrefix):])
-			if len(data) == 0 {
-				// Empty data line (e.g. a keep-alive/heartbeat event). There is
-				// nothing to decode, so skip it rather than failing the event.
+			if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+				// Empty data line (e.g. a keep-alive/heartbeat event) or the
+				// non-JSON [DONE] sentinel. Nothing to decode.
 				continue
 			}
 			msg, err := jsonrpc.DecodeMessage(data)
@@ -129,6 +129,40 @@ func (s *sseEventParser) parseEvent(chunk []byte) (*sseEvent, error) {
 	}
 
 	return ret, nil
+}
+
+// hasPendingMessage reports whether the already-read buffer holds another
+// complete SSE event with a JSON-RPC data line. It does not read from the
+// underlying stream, so a caller can decide to emit a response instead of
+// blocking on a backend that keeps the connection open.
+func (s *sseEventParser) hasPendingMessage() bool {
+	rest := s.buf
+	for {
+		idx := bytes.Index(rest, sseLFLF)
+		if idx < 0 {
+			return false
+		}
+		if sseChunkHasMessage(rest[:idx]) {
+			return true
+		}
+		rest = rest[idx+len(sseLFLF):]
+	}
+}
+
+// sseChunkHasMessage reports whether one SSE event chunk carries a data line
+// other than an empty keep-alive or the [DONE] sentinel.
+func sseChunkHasMessage(chunk []byte) bool {
+	for line := range bytes.SplitSeq(chunk, sseLF) {
+		if !bytes.HasPrefix(line, sseDataPrefix) {
+			continue
+		}
+		data := bytes.TrimSpace(line[len(sseDataPrefix):])
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // extractEvent tries to find a complete event (double newline) in remainder.
