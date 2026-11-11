@@ -71,7 +71,7 @@ func TestCountTokensToAWSAnthropic_RequestBody(t *testing.T) {
 			translator := NewCountTokensToAWSAnthropicTranslator("bedrock-2023-05-31", tt.override)
 			require.NotNil(t, translator)
 
-			raw := []byte(`{"model":"` + tt.model + `","messages":[{"role":"user","content":"hello"}]}`)
+			raw := []byte(`{"model":"` + tt.model + `","messages":[{"role":"user","content":"hello"}],"output_format":{"type":"json_schema"}}`)
 			req := &anthropicschema.CountTokensRequest{Model: tt.model}
 
 			headerMutation, bodyMutation, err := translator.RequestBody(raw, req, false)
@@ -103,6 +103,8 @@ func TestCountTokensToAWSAnthropic_RequestBody(t *testing.T) {
 			require.NoError(t, json.Unmarshal(decoded, &innerBody))
 			assert.Equal(t, "bedrock-2023-05-31", innerBody["anthropic_version"])
 			assert.NotContains(t, innerBody, "model")
+			assert.Equal(t, map[string]any{"format": map[string]any{"type": "json_schema"}}, innerBody["output_config"])
+			assert.NotContains(t, innerBody, "output_format")
 		})
 	}
 }

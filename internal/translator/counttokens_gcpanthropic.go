@@ -62,6 +62,7 @@ func (t *countTokensToGCPAnthropicTranslator) RequestBody(raw []byte, body *anth
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to set model: %w", err)
 	}
+	newBody = moveOutputFormatToOutputConfig(newBody)
 
 	// GCP Vertex AI uses the special "count-tokens" model path with rawPredict.
 	// The actual model name stays in the request body.
