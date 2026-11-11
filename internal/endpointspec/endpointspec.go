@@ -250,13 +250,23 @@ func (ChatCompletionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Ch
 // ParseBody implements [EndpointSpec.ParseBody].
 func (CompletionsEndpointSpec) ParseBody(
 	body []byte,
-	_ bool,
+	costConfigured bool,
 ) (internalapi.OriginalModel, *openai.CompletionRequest, bool, []byte, error) {
 	var openAIReq openai.CompletionRequest
 	if err := json.Unmarshal(body, &openAIReq); err != nil {
 		return "", nil, false, nil, fmt.Errorf("%w: failed to parse JSON for /v1/completions: %w", internalapi.ErrMalformedRequest, err)
 	}
-	return openAIReq.Model, &openAIReq, openAIReq.Stream, nil, nil
+	var mutatedBody []byte
+	if openAIReq.Stream && costConfigured && (openAIReq.StreamOptions == nil || !openAIReq.StreamOptions.IncludeUsage) {
+		// Same as /v1/chat/completions: without the usage chunk every token cost evaluates to 0.
+		openAIReq.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
+		var err error
+		mutatedBody, err = forceStreamOptionsIncludeUsage(body)
+		if err != nil {
+			return "", nil, false, nil, fmt.Errorf("%w: failed to set stream_options.include_usage", internalapi.ErrMalformedRequest)
+		}
+	}
+	return openAIReq.Model, &openAIReq, openAIReq.Stream, mutatedBody, nil
 }
 
 // ParseMultipartBody implements [Spec.ParseMultipartBody].
