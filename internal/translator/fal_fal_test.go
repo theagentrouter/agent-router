@@ -7,10 +7,12 @@ package translator
 
 import (
 	"bytes"
+	"errors"
 	"maps"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/require"
 	"k8s.io/utils/ptr"
@@ -152,6 +154,19 @@ func TestFalToFalTranslator_Response(t *testing.T) {
 			require.Nil(t, body)
 		})
 	}
+}
+
+func TestFalToFalTranslator_ResponseReadError(t *testing.T) {
+	tr := NewFalToFalTranslator("/fal", internalapi.FalURLSchemeHTTPS)
+	readErr := errors.New("read failed")
+
+	_, _, _, _, err := tr.ResponseBody(nil, iotest.ErrReader(readErr), true, nil)
+	require.ErrorIs(t, err, readErr)
+	require.ErrorContains(t, err, "failed to read fal response body")
+
+	_, _, err = tr.ResponseError(nil, iotest.ErrReader(readErr))
+	require.ErrorIs(t, err, readErr)
+	require.ErrorContains(t, err, "failed to read fal error body")
 }
 
 func TestFalToFalTranslator_ResponseBody(t *testing.T) {

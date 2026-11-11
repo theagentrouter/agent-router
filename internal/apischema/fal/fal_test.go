@@ -87,6 +87,7 @@ func TestParsePath(t *testing.T) {
 		{name: "requests in another case is still the queue namespace", path: "/fal/queue/fal-ai/flux/Requests/7f1c/other"},
 		{name: "requests in another case inside a run endpoint", path: "/fal/run/fal-ai/flux/Requests/7f1c"},
 		{name: "poll with a path after cancel", path: "/fal/queue/fal-ai/flux/requests/7f1c/cancel/x"},
+		{name: "poll with a path after status stream", path: "/fal/queue/fal-ai/flux/requests/7f1c/status/stream/x"},
 		{name: "poll stream without status", path: "/fal/queue/fal-ai/flux/requests/7f1c/stream"},
 		{name: "poll request id with a slash-free escape", path: "/fal/queue/fal-ai/flux/requests/7f%2F1c"},
 		{name: "poll request id too long", path: "/fal/queue/fal-ai/flux/requests/" + strings.Repeat("a", MaxRequestIDLength+1)},
