@@ -745,4 +745,13 @@ func TestAnthropicToAWSAnthropicTranslator_ResponseError(t *testing.T) {
 			assert.Nil(t, mutated)
 		})
 	}
+
+	t.Run("read error", func(t *testing.T) {
+		translator := NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+		_, _, err := translator.ResponseError(
+			map[string]string{statusHeaderName: "400", contentTypeHeaderName: "application/json"},
+			alwaysErrReader{},
+		)
+		require.ErrorContains(t, err, "failed to read error body")
+	})
 }
