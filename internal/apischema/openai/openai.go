@@ -1441,19 +1441,17 @@ type ChatCompletionResponse struct {
 // content was omitted due to a flag from our content filters, `tool_calls` if the
 // model called a tool, or `function_call` (deprecated) if the model called a
 // function.
+//
+// Only the values defined by the OpenAI API are emitted: OpenAI SDKs and frameworks validate this
+// field against a closed enum, so any other value breaks them. Provider-specific detail that does not
+// fit these values is surfaced through NativeFinishReason on the choice instead.
 type ChatCompletionChoicesFinishReason string
 
 const (
-	ChatCompletionChoicesFinishReasonStop                  ChatCompletionChoicesFinishReason = "stop"
-	ChatCompletionChoicesFinishReasonLength                ChatCompletionChoicesFinishReason = "length"
-	ChatCompletionChoicesFinishReasonToolCalls             ChatCompletionChoicesFinishReason = "tool_calls"
-	ChatCompletionChoicesFinishReasonContentFilter         ChatCompletionChoicesFinishReason = "content_filter"
-	ChatCompletionChoicesFinishReasonRecitation            ChatCompletionChoicesFinishReason = "recitation"
-	ChatCompletionChoicesFinishReasonMalformedFunctionCall ChatCompletionChoicesFinishReason = "malformed_function_call"
-	ChatCompletionChoicesFinishReasonUnexpectedToolCall    ChatCompletionChoicesFinishReason = "unexpected_tool_call"
-	ChatCompletionChoicesFinishReasonLanguage              ChatCompletionChoicesFinishReason = "language"
-	ChatCompletionChoicesFinishReasonNoImage               ChatCompletionChoicesFinishReason = "no_image"
-	ChatCompletionChoicesFinishReasonError                 ChatCompletionChoicesFinishReason = "error"
+	ChatCompletionChoicesFinishReasonStop          ChatCompletionChoicesFinishReason = "stop"
+	ChatCompletionChoicesFinishReasonLength        ChatCompletionChoicesFinishReason = "length"
+	ChatCompletionChoicesFinishReasonToolCalls     ChatCompletionChoicesFinishReason = "tool_calls"
+	ChatCompletionChoicesFinishReasonContentFilter ChatCompletionChoicesFinishReason = "content_filter"
 )
 
 type ChatCompletionTokenLogprobTopLogprob struct {
@@ -1513,6 +1511,12 @@ type ChatCompletionResponseChoice struct {
 	// Message is described in the OpenAI API documentation:
 	// https://platform.openai.com/docs/api-reference/chat/object#chat/object-choices
 	Message ChatCompletionResponseChoiceMessage `json:"message,omitempty"`
+
+	// NativeFinishReason is a non-standard extension carrying the finish reason reported by the
+	// upstream provider verbatim (e.g. Gemini's "MALFORMED_FUNCTION_CALL" or "RECITATION") when it has
+	// no exact OpenAI equivalent and FinishReason is therefore an approximation. It is omitted when the
+	// provider's reason maps losslessly onto FinishReason.
+	NativeFinishReason string `json:"native_finish_reason,omitempty"`
 }
 
 // ChatCompletionResponseChoiceMessage is described in the OpenAI API documentation:
@@ -1694,6 +1698,9 @@ type ChatCompletionResponseChunkChoice struct {
 	Delta        *ChatCompletionResponseChunkChoiceDelta `json:"delta,omitzero"`
 	Logprobs     *ChatCompletionChoicesLogprobs          `json:"logprobs,omitzero"`
 	FinishReason ChatCompletionChoicesFinishReason       `json:"finish_reason,omitempty"`
+	// NativeFinishReason is a non-standard extension carrying the upstream provider's finish reason
+	// verbatim when it has no exact OpenAI equivalent. See ChatCompletionResponseChoice.NativeFinishReason.
+	NativeFinishReason string `json:"native_finish_reason,omitempty"`
 }
 
 type ChatCompletionChunkChoiceDeltaToolCall struct {

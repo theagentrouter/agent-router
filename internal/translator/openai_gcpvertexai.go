@@ -465,10 +465,14 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 		// was streamed in an earlier chunk, the correct OpenAI finish_reason for the
 		// completion is still "tool_calls". Older Gemini models carried the
 		// functionCall and STOP in the same chunk, so this only affects the newer
-		// split-chunk shape.
-		if choice.FinishReason == openai.ChatCompletionChoicesFinishReasonStop && o.streamedToolCall {
+		// split-chunk shape. The rewrite is gated on the raw Gemini reason being
+		// STOP: reasons such as MALFORMED_FUNCTION_CALL or OTHER are approximated
+		// to "stop" as well, but they signal a failed or absent tool call, so they
+		// must not advertise tool_calls that the client would then try to execute.
+		if candidate.FinishReason == genai.FinishReasonStop && len(toolCalls) == 0 && o.streamedToolCall {
 			choice.FinishReason = openai.ChatCompletionChoicesFinishReasonToolCalls
 		}
+		choice.NativeFinishReason = geminiNativeFinishReason(candidate.FinishReason)
 
 		choices = append(choices, choice)
 	}

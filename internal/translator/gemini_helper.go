@@ -848,6 +848,7 @@ func geminiCandidatesToOpenAIChoices(candidates []*genai.Candidate, responseMode
 		}
 
 		choice.FinishReason = geminiFinishReasonToOpenAI(candidate.FinishReason, toolCalls)
+		choice.NativeFinishReason = geminiNativeFinishReason(candidate.FinishReason)
 
 		choices = append(choices, choice)
 	}
@@ -860,7 +861,11 @@ type toolCallSlice interface {
 	[]openai.ChatCompletionMessageToolCallParam | []openai.ChatCompletionChunkChoiceDeltaToolCall
 }
 
-// geminiFinishReasonToOpenAI converts Gemini finish reason to OpenAI finish reason.
+// geminiFinishReasonToOpenAI converts a Gemini finish reason to an OpenAI finish reason.
+//
+// Only values defined by the OpenAI API are returned, because OpenAI SDKs validate finish_reason
+// against a closed enum and reject anything else. Gemini reasons without an exact equivalent are
+// approximated here and preserved verbatim through geminiNativeFinishReason.
 func geminiFinishReasonToOpenAI[T toolCallSlice](reason genai.FinishReason, toolCalls T) openai.ChatCompletionChoicesFinishReason {
 	switch reason {
 	case genai.FinishReasonStop:
@@ -871,24 +876,33 @@ func geminiFinishReasonToOpenAI[T toolCallSlice](reason genai.FinishReason, tool
 	case genai.FinishReasonMaxTokens:
 		return openai.ChatCompletionChoicesFinishReasonLength
 	case genai.FinishReasonSafety, genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
-		genai.FinishReasonSPII, genai.FinishReasonImageSafety, genai.FinishReasonImageProhibitedContent:
+		genai.FinishReasonSPII, genai.FinishReasonImageSafety, genai.FinishReasonImageProhibitedContent,
+		genai.FinishReasonRecitation, genai.FinishReasonImageRecitation, genai.FinishReasonLanguage:
+		// The candidate was blocked by the provider (safety, blocklist, PII, copyright recitation
+		// or unsupported language): no model output was returned, which is what content_filter means.
 		return openai.ChatCompletionChoicesFinishReasonContentFilter
-	case genai.FinishReasonRecitation, genai.FinishReasonImageRecitation:
-		return openai.ChatCompletionChoicesFinishReasonRecitation
-	case genai.FinishReasonMalformedFunctionCall:
-		return openai.ChatCompletionChoicesFinishReasonMalformedFunctionCall
-	case genai.FinishReasonUnexpectedToolCall:
-		return openai.ChatCompletionChoicesFinishReasonUnexpectedToolCall
-	case genai.FinishReasonLanguage:
-		return openai.ChatCompletionChoicesFinishReasonLanguage
-	case genai.FinishReasonNoImage:
-		return openai.ChatCompletionChoicesFinishReasonNoImage
 	case "":
 		// For intermediate chunks in a streaming response, the finish reason is an empty string.
 		// This is normal behavior and should not be treated as an error.
 		return ""
 	default:
-		return openai.ChatCompletionChoicesFinishReasonError
+		// MALFORMED_FUNCTION_CALL, UNEXPECTED_TOOL_CALL, NO_IMAGE, OTHER, IMAGE_OTHER,
+		// FINISH_REASON_UNSPECIFIED and any reason added by Gemini in the future: generation ended
+		// without a usable tool call and without hitting a limit or a filter, so "stop" is the closest
+		// standard value. The exact reason is kept in native_finish_reason for diagnosis.
+		return openai.ChatCompletionChoicesFinishReasonStop
+	}
+}
+
+// geminiNativeFinishReason returns the Gemini finish reason to expose verbatim as native_finish_reason.
+// It is empty when the reason maps losslessly onto an OpenAI finish_reason (STOP, MAX_TOKENS) or when
+// no reason was reported, as in intermediate streaming chunks.
+func geminiNativeFinishReason(reason genai.FinishReason) string {
+	switch reason {
+	case "", genai.FinishReasonStop, genai.FinishReasonMaxTokens:
+		return ""
+	default:
+		return string(reason)
 	}
 }
 
