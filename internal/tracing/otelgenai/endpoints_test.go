@@ -16,6 +16,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/fal"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
@@ -269,6 +270,7 @@ func TestRecorders_operations(t *testing.T) {
 		{name: "translation", spanName: mustStartName(t, NewTranslationRecorder(cfg), &openai.TranslationRequest{Model: "m"}), expectedOperation: "translation m"},
 		{name: "rerank", spanName: mustStartName(t, NewRerankRecorder(cfg), &cohere.RerankV2Request{Model: "m"}), expectedOperation: "rerank m"},
 		{name: "systemone", spanName: mustStartName(t, NewSystemOneRecorder(cfg), &typesafe.SystemOneRequest{Model: "m"}), expectedOperation: "systemone m"},
+		{name: "fal", spanName: mustStartName(t, NewFalRecorder(cfg), &fal.Request{}), expectedOperation: "fal"},
 		// Anthropic messages are chat completions, so they share the chat
 		// operation rather than minting an "anthropic" one.
 		{name: "message", spanName: mustStartName(t, NewMessageRecorder(cfg), &anthropic.MessagesRequest{Model: "m"}), expectedOperation: "chat m"},
@@ -538,6 +540,51 @@ func TestSystemOneRecorder_RecordResponse(t *testing.T) {
 			},
 		},
 		{name: "empty response", resp: &typesafe.SystemOneResponse{}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			span := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+				r.RecordResponse(span, tc.resp)
+				return false
+			})
+			testotel.RequireAttributesEqual(t, tc.expected, span.Attributes)
+			require.Equal(t, codes.Ok, span.Status.Code)
+		})
+	}
+}
+
+// TestFalRecorder_RecordResponse pins that fal reports the routed model and
+// token usage, omitting whatever is absent.
+func TestFalRecorder_RecordResponse(t *testing.T) {
+	r := NewFalRecorder(NewConfig())
+
+	tests := []struct {
+		name     string
+		resp     *fal.Response
+		expected []attribute.KeyValue
+	}{
+		{
+			name: "model and usage",
+			resp: &fal.Response{
+				Model: "openrouter/router",
+				Body:  []byte(`{"output":"hi"}`),
+				Usage: &fal.Usage{InputTokens: ptr(40), OutputTokens: ptr(227)},
+			},
+			expected: []attribute.KeyValue{
+				attribute.String(ResponseModel, "openrouter/router"),
+				attribute.Int(UsageInputTokens, 40),
+				attribute.Int(UsageOutputTokens, 227),
+			},
+		},
+		{
+			name: "media result without usage",
+			resp: &fal.Response{Model: "fal-ai/flux/dev", Body: []byte(`{"images":[]}`)},
+			expected: []attribute.KeyValue{
+				attribute.String(ResponseModel, "fal-ai/flux/dev"),
+			},
+		},
+		{name: "empty response", resp: &fal.Response{}},
 	}
 
 	for _, tc := range tests {

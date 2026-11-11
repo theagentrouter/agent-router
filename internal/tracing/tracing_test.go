@@ -20,6 +20,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	falschema "github.com/envoyproxy/ai-gateway/internal/apischema/fal"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
@@ -882,6 +883,7 @@ func TestNewTracingFromEnv_everyTracerWired(t *testing.T) {
 			require.NotNil(t, tracing.TranslationTracer(), "TranslationTracer")
 			require.NotNil(t, tracing.RerankTracer(), "RerankTracer")
 			require.NotNil(t, tracing.SystemOneTracer(), "SystemOneTracer")
+			require.NotNil(t, tracing.FalTracer(), "FalTracer")
 			require.NotNil(t, tracing.MessageTracer(), "MessageTracer")
 			require.NotNil(t, tracing.TokenizeTracer(), "TokenizeTracer")
 			require.NotNil(t, tracing.ResponsesInputTokensTracer(), "ResponsesInputTokensTracer")
@@ -901,16 +903,19 @@ func TestTracingImpl_Getters_ImageGenerationAndRerank(t *testing.T) {
 	ig := tracingapi.NoopTracer[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}]{}
 	rr := tracingapi.NoopTracer[cohereschema.RerankV2Request, cohereschema.RerankV2Response, struct{}]{}
 	so := tracingapi.NoopTracer[typesafeschema.SystemOneRequest, typesafeschema.SystemOneResponse, struct{}]{}
+	fa := tracingapi.NoopTracer[falschema.Request, falschema.Response, struct{}]{}
 
 	ti := &tracingImpl{
 		imageGenerationTracer: ig,
 		rerankTracer:          rr,
 		systemOneTracer:       so,
+		falTracer:             fa,
 	}
 
 	require.Equal(t, ig, ti.ImageGenerationTracer())
 	require.Equal(t, rr, ti.RerankTracer())
 	require.Equal(t, so, ti.SystemOneTracer())
+	require.Equal(t, fa, ti.FalTracer())
 }
 
 func TestTracingImpl_Getters_TranscriptionAndTranslation(t *testing.T) {

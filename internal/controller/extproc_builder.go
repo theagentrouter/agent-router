@@ -67,6 +67,7 @@ func newExtProcBuilder(options *Options, extProcAsSideCar bool, logger logr.Logg
 		logRequestHeaderAttributes:             options.LogRequestHeaderAttributes,
 		rootPrefix:                             options.RootPrefix,
 		endpointPrefixes:                       options.EndpointPrefixes,
+		falURLScheme:                           options.ExtProcFalURLScheme,
 		extraEnvVars:                           parsedEnvVars,
 		imagePullSecrets:                       parsedImagePullSecrets,
 		maxRecvMsgSize:                         options.ExtProcMaxRecvMsgSize,
@@ -99,6 +100,7 @@ type extProcBuilder struct {
 
 	rootPrefix       string
 	endpointPrefixes string
+	falURLScheme     string
 
 	extraEnvVars     []corev1.EnvVar
 	imagePullSecrets []corev1.LocalObjectReference
@@ -268,6 +270,7 @@ type extProcConfigDigest struct {
 	ExtProcAsSideCar               bool
 	NeedMCP                        bool
 	GatewayConfigExtProc           *aigv1b1.GatewayConfigExtProc
+	FalURLScheme                   string `json:",omitempty"`
 }
 
 // extProcContainerHash returns a stable hash of the extproc injection inputs.
@@ -291,6 +294,7 @@ func (b *extProcBuilder) extProcContainerHash(input extProcContainerInput) strin
 		ExtProcAsSideCar:               b.extProcAsSideCar,
 		NeedMCP:                        input.needMCP,
 		GatewayConfigExtProc:           extProcSpecFromInput(input),
+		FalURLScheme:                   b.falURLScheme,
 	}
 	marshaled, _ := stdjson.Marshal(digest)
 	sum := sha256.Sum256(marshaled)
@@ -356,6 +360,9 @@ func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {
 	}
 	if b.endpointPrefixes != "" {
 		args = append(args, "-endpointPrefixes", b.endpointPrefixes)
+	}
+	if b.falURLScheme != "" {
+		args = append(args, "-falURLScheme", b.falURLScheme)
 	}
 	if b.enableRedaction {
 		args = append(args, "-enableRedaction")

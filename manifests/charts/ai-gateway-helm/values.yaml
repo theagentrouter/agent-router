@@ -33,10 +33,12 @@ endpointConfig:
   #   cohere: "/cohere"   # results in /cohere/v2/...
   #   anthropic: "/anthropic" # results in /anthropic/v1/...
   #   typesafe: "/typesafe"   # results in /typesafe/v1/...
+  #   fal: "/fal"             # results in /fal/run/... and /fal/queue/...
   openai: ""
   cohere: "/cohere"
   anthropic: "/anthropic"
   typesafe: "/typesafe"
+  fal: "/fal"
 
 extProc:
   image:
@@ -50,6 +52,9 @@ extProc:
   # Log output format. One of "text" or "json". Set to "json" when logs are ingested by a pipeline
   # that parses structured records, such as Cloud Logging, Loki, Datadog or ELK.
   logFormat: text
+  # Scheme of the gateway URLs that replace fal URLs in fal responses. One of "https" or "http".
+  # Empty uses the request's x-forwarded-proto, else its :scheme.
+  falURLScheme: ""
   # Enable redaction of sensitive information in debug logs (only takes effect when logLevel is "debug").
   enableRedaction: false
 

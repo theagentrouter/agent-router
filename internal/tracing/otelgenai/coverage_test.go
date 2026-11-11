@@ -137,6 +137,11 @@ func TestEndpointCoverage(t *testing.T) {
 			expected: coverage{responseAttrs: true},
 		},
 		{
+			name:     "fal",
+			actual:   coverageOf(t, NewFalRecorder(cfg)),
+			expected: coverage{responseAttrs: true},
+		},
+		{
 			// TODO: reuses the chat and completion mapping once those land.
 			name:     "tokenize",
 			actual:   coverageOf(t, NewTokenizeRecorder(cfg)),

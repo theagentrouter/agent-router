@@ -36,6 +36,7 @@ func TestProviderBySchema_matchesFilterAPI(t *testing.T) {
 		{schema: filterapi.APISchemaAnthropic, expected: ProviderAnthropic},
 		{schema: filterapi.APISchemaCohere, expected: ProviderCohere},
 		{schema: filterapi.APISchemaTypeSafe, expected: ProviderTypeSafe},
+		{schema: filterapi.APISchemaFal, expected: ProviderFal},
 	}
 
 	for _, tc := range tests {
@@ -140,6 +141,7 @@ func TestRecorder_RecordBackend_allEndpoints(t *testing.T) {
 		"translation":     NewTranslationRecorder(cfg),
 		"rerank":          NewRerankRecorder(cfg),
 		"systemOne":       NewSystemOneRecorder(cfg),
+		"fal":             NewFalRecorder(cfg),
 		"message":         NewMessageRecorder(cfg),
 		"tokenize":        NewTokenizeRecorder(cfg),
 	}

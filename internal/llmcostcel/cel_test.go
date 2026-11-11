@@ -75,6 +75,13 @@ func TestEvaluateProgram(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(150), v)
 	})
+	t.Run("billable_units variable", func(t *testing.T) {
+		prog, err := NewProgram("uint(billable_units * 1000000.0)")
+		require.NoError(t, err)
+		v, err := EvaluateProgramWithBillableUnits(prog, "cool_model", "cool_backend", "cool_route", 0, 0, 0, 0, 0, 0, 0.5)
+		require.NoError(t, err)
+		require.Equal(t, uint64(500000), v)
+	})
 	t.Run("ensure concurrency safety", func(t *testing.T) {
 		prog, err := NewProgram("model == 'cool_model' ?  input_tokens * output_tokens : total_tokens")
 		require.NoError(t, err)

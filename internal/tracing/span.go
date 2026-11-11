@@ -10,6 +10,7 @@ import (
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	falschema "github.com/envoyproxy/ai-gateway/internal/apischema/fal"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
@@ -67,6 +68,7 @@ type (
 	translationSpan          = span[openai.TranslationResponse, struct{}]
 	rerankSpan               = span[cohereschema.RerankV2Response, struct{}]
 	systemOneSpan            = span[typesafeschema.SystemOneResponse, struct{}]
+	falSpan                  = span[falschema.Response, struct{}]
 	messageSpan              = span[anthropicschema.MessagesResponse, anthropicschema.MessagesStreamChunk]
 	tokenizeSpan             = span[tokenize.Response, struct{}]
 	responsesInputTokensSpan = span[openai.ResponsesInputTokensResponse, struct{}]

@@ -21,6 +21,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/fal"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -372,6 +373,25 @@ func TestNewSystemOneTracer_BuildsGenericRequestTracer(t *testing.T) {
 	require.IsType(t, (*systemOneSpan)(nil), s)
 }
 
+func TestNewFalTracer_BuildsGenericRequestTracer(t *testing.T) {
+	tp := trace.NewTracerProvider()
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	headerAttrs := map[string]string{"agent-session-id": "session.id"}
+
+	tracer := newFalTracer(tp.Tracer("test"), autoprop.NewTextMapPropagator(), testFalTracerRecorder{}, headerAttrs)
+	impl, ok := tracer.(*requestTracerImpl[
+		fal.Request,
+		fal.Response,
+		struct{},
+	])
+	require.True(t, ok)
+	require.Equal(t, headerAttrs, impl.headerAttributes)
+	require.NotNil(t, impl.newSpan)
+	s := tracer.StartSpanAndInjectHeaders(context.Background(), nil, propagation.MapCarrier{}, &fal.Request{}, []byte("{}"))
+	require.IsType(t, (*falSpan)(nil), s)
+}
+
 func TestNewImageGenerationTracer_BuildsGenericRequestTracer(t *testing.T) {
 	tp := trace.NewTracerProvider()
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
@@ -588,6 +608,26 @@ func (testSystemOneTracerRecorder) RecordResponseOnError(span oteltrace.Span, st
 }
 
 func (testSystemOneTracerRecorder) RecordResponse(span oteltrace.Span, resp *typesafe.SystemOneResponse) {
+	span.SetAttributes(attribute.String("response_model", resp.Model))
+}
+
+type testFalTracerRecorder struct {
+	tracingapi.NoopChunkRecorder[struct{}]
+}
+
+func (testFalTracerRecorder) StartParams(*fal.Request, []byte) (string, []oteltrace.SpanStartOption) {
+	return "Fal", []oteltrace.SpanStartOption{oteltrace.WithSpanKind(oteltrace.SpanKindServer)}
+}
+
+func (testFalTracerRecorder) RecordRequest(span oteltrace.Span, _ *fal.Request, body []byte) {
+	span.SetAttributes(attribute.Int("body_len", len(body)))
+}
+
+func (testFalTracerRecorder) RecordResponseOnError(span oteltrace.Span, statusCode int, _ []byte) {
+	span.SetAttributes(attribute.Int("status", statusCode))
+}
+
+func (testFalTracerRecorder) RecordResponse(span oteltrace.Span, resp *fal.Response) {
 	span.SetAttributes(attribute.String("response_model", resp.Model))
 }
 

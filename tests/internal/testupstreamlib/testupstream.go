@@ -25,6 +25,10 @@ const (
 	// ExpectedRawQueryHeaderKey is the key for the expected raw query in the request.
 	// E.g. "key1=value1&key2=value2".
 	ExpectedRawQueryHeaderKey = "x-expected-raw-query"
+	// ExpectedNoQueryHeaderKey, when set to any value, requires the request to carry no query string.
+	ExpectedNoQueryHeaderKey = "x-expected-no-query"
+	// ExpectedMethodHeaderKey is the key for the expected HTTP method of the request, e.g. "GET".
+	ExpectedMethodHeaderKey = "x-expected-method"
 	// ExpectedRequestBodyHeaderKey is the key for the expected request body in the request.
 	// The value is a base64 encoded.
 	ExpectedRequestBodyHeaderKey = "x-expected-request-body"
