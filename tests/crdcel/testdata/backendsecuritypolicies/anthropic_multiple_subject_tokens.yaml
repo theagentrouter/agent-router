@@ -1,0 +1,27 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: anthropic-multiple-subject-tokens-policy
+  namespace: default
+spec:
+  type: AnthropicCredentials
+  anthropicCredentials:
+    workloadIdentityFederationConfig:
+      organizationID: 00000000-0000-0000-0000-000000000000
+      serviceAccountID: svac_placeholder
+      federationRuleID: fdrl_placeholder
+      subjectToken:
+        spiffeJWTSVID:
+          audience: https://api.anthropic.com
+        oidcExchangeToken:
+          oidc:
+            provider:
+              issuer: https://placeholder
+            clientID: placeholder
+            clientSecret:
+              name: placeholder

@@ -265,6 +265,28 @@ func TestBackendSecurityPolicies(t *testing.T) {
 			name:   "apikey_with_openai_credentials.yaml",
 			expErr: "When type is APIKey, only apiKey field should be set",
 		},
+		{name: "anthropic_spiffe.yaml"},
+		{name: "anthropic_oidc.yaml"},
+		{
+			name:   "anthropic_missing_subject_token.yaml",
+			expErr: "Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified",
+		},
+		{
+			name:   "anthropic_multiple_subject_tokens.yaml",
+			expErr: "Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified",
+		},
+		{
+			name:   "anthropic_missing_federation_rule_id.yaml",
+			expErr: "spec.anthropicCredentials.workloadIdentityFederationConfig.federationRuleID in body should be at least 1 chars long",
+		},
+		{
+			name:   "anthropic_with_apikey.yaml",
+			expErr: "When type is AnthropicCredentials, only anthropicCredentials field should be set",
+		},
+		{
+			name:   "openai_with_anthropic_credentials.yaml",
+			expErr: "When type is OpenAICredentials, only openAICredentials field should be set",
+		},
 		{name: "targetrefs_basic.yaml"},
 		{name: "targetrefs_multiple.yaml"},
 		{name: "targetrefs_inferencepool.yaml"},

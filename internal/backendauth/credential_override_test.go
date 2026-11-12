@@ -271,6 +271,20 @@ func TestCredentialOverrideHandler_PerAuthType(t *testing.T) {
 		require.Equal(t, "proj_456", headers["OpenAI-Project"])
 	})
 
+	t.Run("anthropic credentials sets Authorization Bearer", func(t *testing.T) {
+		h, err := NewHandler(t.Context(), &filterapi.BackendAuth{
+			AnthropicAuth:      &filterapi.AnthropicAuth{AccessToken: "static"},
+			CredentialOverride: makeHeaderOverride("x-aigw-anthropic-access-token", false),
+		})
+		require.NoError(t, err)
+
+		headers := map[string]string{"x-aigw-anthropic-access-token": "per-req-token"}
+		_, err = h.Do(t.Context(), headers, nil)
+		require.NoError(t, err)
+		require.Equal(t, "Bearer per-req-token", headers["Authorization"])
+		require.NotContains(t, headers, "x-api-key")
+	})
+
 	t.Run("gcp credentials sets Authorization Bearer and rewrites path", func(t *testing.T) {
 		inner, err := newGCPHandler(t.Context(), &filterapi.GCPAuth{
 			AccessToken: "static-token",

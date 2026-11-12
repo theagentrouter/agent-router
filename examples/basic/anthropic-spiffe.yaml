@@ -1,0 +1,97 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: envoy-ai-gateway-basic-anthropic-spiffe
+  namespace: default
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway-basic
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: claude-sonnet-4-5
+      backendRefs:
+        - name: envoy-ai-gateway-basic-anthropic-spiffe
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: envoy-ai-gateway-basic-anthropic-spiffe
+  namespace: default
+spec:
+  schema:
+    name: Anthropic
+  backendRef:
+    name: envoy-ai-gateway-basic-anthropic-spiffe
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: envoy-ai-gateway-basic-anthropic-spiffe-credentials
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: envoy-ai-gateway-basic-anthropic-spiffe
+  type: AnthropicCredentials
+  # The controller fetches a JWT-SVID for its own SPIFFE ID and exchanges it for a short-lived Anthropic
+  # access token via Anthropic Workload Identity Federation, rotating it before it expires. The SPIFFE
+  # Workload API socket must be mounted into the controller, with SPIFFE_ENDPOINT_SOCKET pointing at it
+  # (or set socketPath below).
+  #
+  # The federation issuer (your SPIFFE trust domain's OIDC issuer), the service account and the federation
+  # rule must be configured in your Anthropic organization:
+  # https://platform.claude.com/docs/en/manage-claude/workload-identity-federation
+  #
+  # The issued access token lives at most twice the remaining lifetime of the JWT-SVID, and must outlive
+  # the controller's credential pre-rotation window (5 minutes by default).
+  #
+  # The SPIFFE identity is owned by the controller, not by this policy (unlike oidcExchangeToken, where
+  # the policy supplies its own credentials). Every policy using spiffeJWTSVID authenticates as the
+  # controller, so only trusted cluster admins should be allowed to create them.
+  anthropicCredentials:
+    workloadIdentityFederationConfig:
+      organizationID: ANTHROPIC_ORGANIZATION_ID # Replace with your Anthropic organization UUID.
+      serviceAccountID: ANTHROPIC_SERVICE_ACCOUNT_ID # Replace with your Anthropic service account ID (svac_...).
+      federationRuleID: ANTHROPIC_FEDERATION_RULE_ID # Replace with your Anthropic federation rule ID (fdrl_...).
+      workspaceID: ANTHROPIC_WORKSPACE_ID # Optional. Replace with your Anthropic workspace ID (wrkspc_...), or remove.
+      subjectToken:
+        spiffeJWTSVID:
+          audience: ANTHROPIC_FEDERATION_RULE_AUDIENCE # Replace with the audience the federation rule matches.
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: envoy-ai-gateway-basic-anthropic-spiffe
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: api.anthropic.com
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: envoy-ai-gateway-basic-anthropic-spiffe-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: "gateway.envoyproxy.io"
+      kind: Backend
+      name: envoy-ai-gateway-basic-anthropic-spiffe
+  validation:
+    wellKnownCACertificates: "System"
+    hostname: api.anthropic.com

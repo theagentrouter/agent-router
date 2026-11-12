@@ -848,6 +848,8 @@ func defaultOverrideHeaderName(t aigv1b1.BackendSecurityPolicyType) string {
 		return "x-aigw-gcp-access-token"
 	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
 		return "x-aigw-openai-access-token"
+	case aigv1b1.BackendSecurityPolicyTypeAnthropicCredentials:
+		return "x-aigw-anthropic-access-token"
 	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
 		return internalapi.AWSCredentialOverrideHeaderPrefix
 	default:
@@ -1022,6 +1024,14 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 			Organization: spec.OpenAICredentials.Organization,
 			Project:      spec.OpenAICredentials.Project,
 		}}
+		hasStaticCred = true
+	case aigv1b1.BackendSecurityPolicyTypeAnthropicCredentials:
+		secretName := rotators.GetBSPSecretName(backendSecurityPolicy.Name)
+		anthropicAccessToken, getErr := c.getSecretData(ctx, namespace, secretName, rotators.AnthropicAccessTokenKey)
+		if getErr != nil {
+			return nil, getErr
+		}
+		auth = &filterapi.BackendAuth{AnthropicAuth: &filterapi.AnthropicAuth{AccessToken: anthropicAccessToken}}
 		hasStaticCred = true
 	default:
 		return nil, fmt.Errorf("invalid backend security type %s for policy %s", spec.Type, backendSecurityPolicy.Name)

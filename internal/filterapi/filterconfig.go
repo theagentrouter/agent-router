@@ -256,6 +256,8 @@ type BackendAuth struct {
 	GCPAuth *GCPAuth `json:"gcp,omitempty"`
 	// OpenAIAuth specifies the OpenAI access token obtained via token exchange.
 	OpenAIAuth *OpenAIAuth `json:"openai,omitempty"`
+	// AnthropicAuth specifies the Anthropic access token obtained via token exchange.
+	AnthropicAuth *AnthropicAuth `json:"anthropic,omitempty"`
 	// CredentialOverride, when non-nil, sources the credential per-request instead of the
 	// static credential above. nil disables per-request sourcing (the default).
 	CredentialOverride *CredentialOverride `json:"credentialOverride,omitempty"`
@@ -362,6 +364,17 @@ func (a OpenAIAuth) LogValue() slog.Value {
 		slog.String("organization", a.Organization),
 		slog.String("project", a.Project),
 	)
+}
+
+// AnthropicAuth defines the Anthropic access token obtained via workload identity federation.
+type AnthropicAuth struct {
+	// AccessToken is the access token as a literal string.
+	AccessToken string `json:"accessToken"`
+}
+
+// LogValue implements slog.LogValuer for AnthropicAuth to redact sensitive information.
+func (a AnthropicAuth) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("accessToken", "[REDACTED]"))
 }
 
 // GCPAuth defines the GCP authentication configuration used to access Google Cloud AI services.
