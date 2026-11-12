@@ -3189,6 +3189,7 @@ MCPRouteList contains a list of MCPRoute.
 - [BackendSecurityPolicyOIDC](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyoidc)
 - [BackendSecurityPolicyOpenAICredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyopenaicredentials)
 - [BackendSecurityPolicySPIFFEJWTSVID](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspiffejwtsvid)
+- [BackendSecurityPolicyServiceAccountToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyserviceaccounttoken)
 - [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspec)
 - [BackendSecurityPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicystatus)
 - [BackendSecurityPolicyType](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicytype)
@@ -3962,6 +3963,33 @@ BackendSecurityPolicySPIFFEJWTSVID specifies how to obtain a JWT-SVID from the S
   type="string"
   required="false"
   description="SocketPath is the address of the SPIFFE Workload API, e.g. `unix:///run/spire/sockets/agent.sock`.<br />When unset, the SPIFFE_ENDPOINT_SOCKET environment variable of the controller is used."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyserviceaccounttoken">BackendSecurityPolicyServiceAccountToken</a>
+
+
+
+**Appears in:**
+- [OpenAISubjectToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-openaisubjecttoken)
+
+BackendSecurityPolicyServiceAccountToken specifies how to obtain a Kubernetes ServiceAccount token from the
+TokenRequest API.
+
+##### Fields
+
+
+
+<ApiField
+  name="serviceAccountName"
+  type="string"
+  required="true"
+  description="ServiceAccountName is the name of the ServiceAccount in the namespace of the policy that the token is<br />requested for."
+/><ApiField
+  name="audience"
+  type="string"
+  required="true"
+  description="Audience is the audience (`aud` claim) of the requested token. The token exchange endpoint validates<br />it, so it must match the audience that endpoint expects, e.g. the audience configured for the<br />OpenAI Workload Identity Provider."
 />
 
 
@@ -5331,6 +5359,11 @@ Exactly one source must be configured.
   type="[BackendSecurityPolicySPIFFEJWTSVID](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspiffejwtsvid)"
   required="false"
   description="SPIFFEJWTSVID obtains the subject token as a JWT-SVID from the SPIFFE Workload API.<br />The SPIFFE identity is owned by the controller, not by the policy: the JWT-SVID is issued for the<br />controller's SPIFFE ID. This differs from OIDCExchangeToken, where the policy supplies its own<br />credentials. Every policy using this source authenticates as the controller and can obtain access<br />tokens for any OpenAI service account mapped to the controller's SPIFFE ID, so only trusted cluster<br />admins should be allowed to create such policies."
+/><ApiField
+  name="serviceAccountToken"
+  type="[BackendSecurityPolicyServiceAccountToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyserviceaccounttoken)"
+  required="false"
+  description="ServiceAccountToken obtains the subject token from the Kubernetes TokenRequest API, as a token for a<br />ServiceAccount in the namespace of the policy. The issuer of the token is the Kubernetes API server.<br />Unlike SPIFFEJWTSVID, each policy authenticates as its own ServiceAccount. The controller needs the<br />`create` permission on the `serviceaccounts/token` subresource for that ServiceAccount, which can be<br />granted per namespace and per ServiceAccount name with a Role and RoleBinding.<br />A new token is requested for every token exchange, including retries, so that token exchange<br />endpoints accepting each token ID (`jti` claim) only once can be used."
 />
 
 

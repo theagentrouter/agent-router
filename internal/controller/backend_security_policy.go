@@ -367,11 +367,14 @@ func (c *BackendSecurityPolicyController) newOpenAITokenProvider(ctx context.Con
 	case wif.SubjectToken.SPIFFEJWTSVID != nil:
 		svid := wif.SubjectToken.SPIFFEJWTSVID
 		subjectTokens, err = tokenprovider.NewSPIFFETokenProvider(svid.SocketPath, svid.Audience)
+	case wif.SubjectToken.ServiceAccountToken != nil:
+		sat := wif.SubjectToken.ServiceAccountToken
+		subjectTokens, err = tokenprovider.NewServiceAccountTokenProvider(c.kube, bsp.Namespace, sat.ServiceAccountName, sat.Audience)
 	case wif.SubjectToken.OIDCExchangeToken != nil:
 		subjectTokens, err = tokenprovider.NewOidcTokenProvider(ctx, c.client, &wif.SubjectToken.OIDCExchangeToken.OIDC,
 			bsp.Namespace, c.referenceGrantValidator.validateSecretReference)
 	default:
-		return nil, fmt.Errorf("one of spiffeJWTSVID or oidcExchangeToken must be defined, namespace %s name %s", bsp.Namespace, bsp.Name)
+		return nil, fmt.Errorf("one of spiffeJWTSVID, serviceAccountToken or oidcExchangeToken must be defined, namespace %s name %s", bsp.Namespace, bsp.Name)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize subject token provider: %w", err)

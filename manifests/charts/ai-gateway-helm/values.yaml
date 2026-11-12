@@ -129,6 +129,16 @@ controller:
     # If not set and create is true, a name is generated using the fullname template
     name: ""
 
+  # -- ServiceAccount tokens --
+  # BackendSecurityPolicies with subjectToken.serviceAccountToken need the controller to have "create" on
+  # "serviceaccounts/token" for the referenced ServiceAccount. This is not granted by default: grant it per
+  # namespace and ServiceAccount name with a Role and RoleBinding, as in examples/basic/openai-serviceaccount-token.yaml.
+  serviceAccountTokens:
+    # If true, the controller's ClusterRole allows requesting tokens for every ServiceAccount in every namespace.
+    # Anyone who can create a BackendSecurityPolicy in a namespace can then make the controller authenticate as
+    # any ServiceAccount of that namespace.
+    grantClusterWide: false
+
   # Enable leader election mechanism for protecting against split brain if multiple operator pods/replicas are started.
   leaderElection:
     enabled: true
