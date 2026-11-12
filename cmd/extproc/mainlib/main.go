@@ -395,6 +395,10 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	// under a single prefix processor that routes by encoded backend id.
 	server.RegisterPrefix(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/files"),
 		extproc.NewFilesProcessorFactory(flagFileIDCodec))
+	// Register the OpenAI Batch API endpoints (/v1/batches, /v1/batches/{id}, /v1/batches/{id}/cancel).
+	// They share the Files codec so batch output/error file ids are readable via /v1/files/{id}/content.
+	server.RegisterPrefix(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/batches"),
+		extproc.NewBatchesProcessorFactory(flagFileIDCodec))
 
 	// Create and register gRPC server with ExternalProcessorServer (the service Envoy calls).
 	serverConfigReceiver := newFileIDSeedWarner(server, l, flags.fileIDEncryptionSeed)

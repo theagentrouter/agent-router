@@ -65,6 +65,20 @@ static_resources:
                             filter_metadata:
                               aigateway.envoy.io:
                                 route_name: "test-ns/files-route"
+                        # Batch API shares the files backend so batch input/output file ids
+                        # minted by the Files API resolve to the same single backend.
+                        - match:
+                            prefix: "/v1/batches"
+                            headers:
+                              - name: x-ai-eg-model
+                                string_match:
+                                  exact: files-test-model
+                          route:
+                            cluster: testupstream-files
+                          metadata:
+                            filter_metadata:
+                              aigateway.envoy.io:
+                                route_name: "test-ns/files-route"
                         - match:
                             prefix: "/"
                             headers:
