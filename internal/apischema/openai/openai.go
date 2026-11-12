@@ -9137,6 +9137,14 @@ type TranscriptionResponse struct {
 	Duration float64                `json:"duration,omitempty"`
 	Segments []TranscriptionSegment `json:"segments,omitempty"`
 	Words    []TranscriptionWord    `json:"words,omitempty"`
+	Usage    *TranscriptionUsage    `json:"usage,omitempty"`
+}
+
+// TranscriptionUsage is the usage object of transcription and translation responses.
+// Only the "duration" type is modeled; token-billed models report "tokens" instead.
+type TranscriptionUsage struct {
+	Type    string  `json:"type"`
+	Seconds float64 `json:"seconds,omitempty"`
 }
 
 // TranscriptionSegment represents a segment in verbose transcription output.
@@ -9184,7 +9192,8 @@ const (
 
 // TranslationResponse represents the JSON response from /v1/audio/translations.
 type TranslationResponse struct {
-	Text string `json:"text"`
+	Text  string              `json:"text"`
+	Usage *TranscriptionUsage `json:"usage,omitempty"`
 }
 
 // ResponsesInputTokensResponse represents the response from /v1/responses/input_tokens.

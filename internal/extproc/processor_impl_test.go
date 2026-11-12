@@ -2423,6 +2423,24 @@ func TestBuildDynamicMetadata_routeScoped(t *testing.T) {
 	}
 }
 
+func TestBuildDynamicMetadata_inputAudioSeconds(t *testing.T) {
+	celProg, err := llmcostcel.NewProgram("int(input_audio_seconds / 60.0 * 600.0)")
+	require.NoError(t, err)
+	requestCosts := []filterapi.RuntimeRequestCost{
+		{LLMRequestCost: &filterapi.LLMRequestCost{MetadataKey: "audio_seconds", RouteName: "ns/r", Type: filterapi.LLMRequestCostTypeInputAudioSeconds}},
+		{LLMRequestCost: &filterapi.LLMRequestCost{MetadataKey: "audio_cel", RouteName: "ns/r", Type: filterapi.LLMRequestCostTypeCEL}, CELProg: celProg},
+	}
+	var tu metrics.TokenUsage
+	tu.SetInputAudioSeconds(90.5)
+
+	md, err := buildDynamicMetadata(nil, requestCosts, &tu, map[string]string{internalapi.ModelNameHeaderKeyDefault: "whisper-1"}, "be", "ns/r", "")
+	require.NoError(t, err)
+
+	ns := md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields
+	require.Equal(t, float64(90), ns["audio_seconds"].GetNumberValue())
+	require.Equal(t, float64(905), ns["audio_cel"].GetNumberValue())
+}
+
 // TestBuildDynamicMetadata_GlobalAndRouteScoped tests the two-tier precedence logic
 // where route-scoped costs override global costs on a per-metadataKey basis.
 func TestBuildDynamicMetadata_GlobalAndRouteScoped(t *testing.T) {

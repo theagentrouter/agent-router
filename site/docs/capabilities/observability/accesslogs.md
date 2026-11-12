@@ -38,6 +38,8 @@ spec:
       type: OutputToken
     - metadataKey: llm_total_token
       type: TotalToken
+    - metadataKey: llm_input_audio_seconds
+      type: InputAudioSeconds
   rules:
     (...)
 ```
@@ -74,6 +76,7 @@ spec:
               gen_ai.usage.total_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_total_token)%"
               gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
               gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.input_audio_seconds: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_audio_seconds)%"
               # Common fields
               start_time: "%START_TIME%"
               method: "%REQ(:METHOD)%"

@@ -153,6 +153,9 @@ const (
 	LLMRequestCostTypeTotalToken LLMRequestCostType = "TotalToken"
 	// LLMRequestCostTypeReasoningToken specifies that the request cost is calculated from the reasoning token.
 	LLMRequestCostTypeReasoningToken LLMRequestCostType = "ReasoningToken"
+	// LLMRequestCostTypeInputAudioSeconds specifies that the request cost is calculated from the input audio
+	// duration in seconds, truncated to whole seconds.
+	LLMRequestCostTypeInputAudioSeconds LLMRequestCostType = "InputAudioSeconds"
 	// LLMRequestCostTypeCEL specifies that the request cost is calculated from the CEL expression.
 	LLMRequestCostTypeCEL LLMRequestCostType = "CEL"
 )

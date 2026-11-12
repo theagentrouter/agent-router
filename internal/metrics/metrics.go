@@ -153,8 +153,10 @@ type TokenUsage struct {
 	cacheCreationInputTokens uint32
 	// ReasoningTokens is the number of reasoning tokens consumed.
 	reasoningTokens uint32
+	// InputAudioSeconds is the duration of the input audio in seconds.
+	inputAudioSeconds float64
 
-	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet, reasoningTokenSet bool
+	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet, reasoningTokenSet, inputAudioSecondsSet bool
 }
 
 // InputTokens returns the number of input tokens and whether it was set.
@@ -223,6 +225,17 @@ func (u *TokenUsage) SetReasoningTokens(tokens uint32) {
 	u.reasoningTokenSet = true
 }
 
+// InputAudioSeconds returns the input audio duration in seconds and whether it was set.
+func (u *TokenUsage) InputAudioSeconds() (float64, bool) {
+	return u.inputAudioSeconds, u.inputAudioSecondsSet
+}
+
+// SetInputAudioSeconds sets the input audio duration in seconds and marks the field as set.
+func (u *TokenUsage) SetInputAudioSeconds(seconds float64) {
+	u.inputAudioSeconds = seconds
+	u.inputAudioSecondsSet = true
+}
+
 // AddInputTokens increments the recorded input tokens and marks the field as set.
 func (u *TokenUsage) AddInputTokens(tokens uint32) {
 	u.inputTokenSet = true
@@ -256,7 +269,8 @@ func (u *TokenUsage) AddReasoningTokens(tokens uint32) {
 // IsZero reports whether no token usage field has been set.
 func (u *TokenUsage) IsZero() bool {
 	return !u.inputTokenSet && !u.outputTokenSet && !u.totalTokenSet &&
-		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet
+		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet &&
+		!u.inputAudioSecondsSet
 }
 
 // Override updates the TokenUsage fields with values from another TokenUsage instance.
@@ -285,6 +299,10 @@ func (u *TokenUsage) Override(other TokenUsage) {
 	if other.reasoningTokenSet {
 		u.reasoningTokens = other.reasoningTokens
 		u.reasoningTokenSet = true
+	}
+	if other.inputAudioSecondsSet {
+		u.inputAudioSeconds = other.inputAudioSeconds
+		u.inputAudioSecondsSet = true
 	}
 }
 
