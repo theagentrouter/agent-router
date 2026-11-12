@@ -6,14 +6,17 @@
 package dataplaneenv
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -221,23 +224,7 @@ func requireEnvoy(t testing.TB,
 	listenerPort, adminPort, extProcPort, extProcMCPPort int,
 	miscPorts, miscPortDefaults map[string]int,
 ) {
-	// Use specific patterns to avoid breaking cluster names.
-	replacements := map[string]string{
-		"port_value: 1062": "port_value: " + strconv.Itoa(listenerPort),
-		"port_value: 9901": "port_value: " + strconv.Itoa(adminPort),
-		"port_value: 1063": "port_value: " + strconv.Itoa(extProcPort),
-		"port_value: 9856": "port_value: " + strconv.Itoa(extProcMCPPort),
-		// Handle any docker substitutions. These are ignored otherwise.
-		"address: extproc":              "address: 127.0.0.1",
-		"address: host.docker.internal": "address: 127.0.0.1",
-	}
-	for name, port := range miscPorts {
-		defaultPort, ok := miscPortDefaults[name]
-		require.True(t, ok, "missing default port for misc port %q", name)
-		replacements["port_value: "+strconv.Itoa(defaultPort)] = "port_value: " + strconv.Itoa(port)
-	}
-
-	processedConfig := replaceTokens(config, replacements)
+	processedConfig := replaceTokens(config, envoyConfigReplacements(t, listenerPort, adminPort, extProcPort, extProcMCPPort, miscPorts, miscPortDefaults))
 
 	envoyYamlPath := t.TempDir() + "/envoy.yaml"
 	require.NoError(t, os.WriteFile(envoyYamlPath, []byte(processedConfig), 0o600))
@@ -340,11 +327,38 @@ func requireExtProc(t testing.TB, out io.Writer, config string, env []string, ex
 	}
 }
 
-// replaceTokens replaces all occurrences of tokens in content with their corresponding values.
-func replaceTokens(content string, replacements map[string]string) string {
-	result := content
-	for token, value := range replacements {
-		result = strings.ReplaceAll(result, token, value)
+// envoyConfigReplacements maps the placeholder ports and addresses in an Envoy config to the ports of this test
+// environment. The patterns include "port_value: " so that cluster names are not touched.
+func envoyConfigReplacements(t testing.TB,
+	listenerPort, adminPort, extProcPort, extProcMCPPort int,
+	miscPorts, miscPortDefaults map[string]int,
+) map[string]string {
+	replacements := map[string]string{
+		"port_value: 1062": "port_value: " + strconv.Itoa(listenerPort),
+		"port_value: 9901": "port_value: " + strconv.Itoa(adminPort),
+		"port_value: 1063": "port_value: " + strconv.Itoa(extProcPort),
+		"port_value: 9856": "port_value: " + strconv.Itoa(extProcMCPPort),
+		// Handle any docker substitutions. These are ignored otherwise.
+		"address: extproc":              "address: 127.0.0.1",
+		"address: host.docker.internal": "address: 127.0.0.1",
 	}
-	return result
+	for name, port := range miscPorts {
+		defaultPort, ok := miscPortDefaults[name]
+		require.True(t, ok, "missing default port for misc port %q", name)
+		replacements["port_value: "+strconv.Itoa(defaultPort)] = "port_value: " + strconv.Itoa(port)
+	}
+	return replacements
+}
+
+// replaceTokens replaces all occurrences of tokens in content with their corresponding values in a single pass,
+// so a value written for one token is never matched by another token. Longer tokens take precedence.
+func replaceTokens(content string, replacements map[string]string) string {
+	tokens := slices.SortedFunc(maps.Keys(replacements), func(a, b string) int {
+		return cmp.Or(cmp.Compare(len(b), len(a)), cmp.Compare(a, b))
+	})
+	oldnew := make([]string, 0, 2*len(tokens))
+	for _, token := range tokens {
+		oldnew = append(oldnew, token, replacements[token])
+	}
+	return strings.NewReplacer(oldnew...).Replace(content)
 }
