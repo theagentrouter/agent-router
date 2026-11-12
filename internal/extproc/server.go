@@ -141,6 +141,12 @@ func (s *Server) LoadConfig(ctx context.Context, config *filterapi.Config) error
 		}
 		auth, ok := rb.Handler.(filterapi.GCPAuthHandler)
 		if !ok {
+			// A handler wrapped for per-request credential override does not expose the GCP
+			// token source, project and region the resolver needs, so the backend is served
+			// without context caching.
+			logger.Warn("context caching is not supported for this backend; serving uncached",
+				slog.String("backend", rb.Backend.Name),
+				slog.Bool("credentialOverride", rb.Backend.Auth != nil && rb.Backend.Auth.CredentialOverride != nil))
 			continue
 		}
 		name := rb.Backend.Name

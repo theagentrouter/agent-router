@@ -90,6 +90,17 @@ func TestServer_LoadConfig_CacheResolver(t *testing.T) {
 	require.Nil(t, s.config.Backends["openai"].CacheResolver)
 }
 
+// A Gemini backend with per-request credential override gets no resolver, since the wrapped
+// handler does not expose GCP credentials.
+func TestServer_LoadConfig_CacheResolver_CredentialOverrideSkipped(t *testing.T) {
+	s := cachingServer(t)
+	b := gcpBackend("gemini-override")
+	b.Auth.CredentialOverride = &filterapi.CredentialOverride{HeaderName: "x-gcp-token", FallbackToConfigured: true}
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{Backends: []filterapi.Backend{b}}))
+	require.Nil(t, s.config.Backends["gemini-override"].CacheResolver)
+	require.Empty(t, s.cacheResolvers)
+}
+
 // Without EnableContextCache no backend gets a resolver.
 func TestServer_LoadConfig_CacheDisabled(t *testing.T) {
 	s := &Server{}

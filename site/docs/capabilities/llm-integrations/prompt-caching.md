@@ -304,6 +304,9 @@ ignored.
   at the same moment, each may create its own cache, and each create is billed. Afterwards all
   replicas reuse whichever one Redis holds.
 - **Caches are scoped to the GCP project and region** of the backend.
+- **Not supported with per-request credential override.** A backend whose
+  `BackendSecurityPolicy` sources credentials per request is served without context caching,
+  and the gateway logs a warning when it loads the configuration.
 
 #### When caching fails
 
