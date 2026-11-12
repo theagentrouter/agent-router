@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"strconv"
 	"testing"
 	"unsafe"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/propagation"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
@@ -2601,19 +2603,94 @@ func mustCompileCEL(t *testing.T, expr string) cel.Program {
 }
 
 func Test_formatUserFacingErrorJSON(t *testing.T) {
-	t.Run("plain message keeps the documented shape", func(t *testing.T) {
-		body := formatUserFacingErrorJSON("BadRequest", 400, "ordinary error")
-		require.JSONEq(t, `{"type":"error","error":{"type":"BadRequest","code":"400","message":"ordinary error"}}`, string(body))
-	})
-	t.Run("quotes, backslashes and newlines are escaped", func(t *testing.T) {
-		message := "malformed request: invalid temperature value \"bad\": strconv.ParseFloat: parsing \"bad\": invalid syntax\nC:\\path"
-		body := formatUserFacingErrorJSON("BadRequest", 400, message)
-		var decoded struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		require.NoError(t, json.Unmarshal(body, &decoded), "body is not valid JSON: %s", body)
-		require.Equal(t, message, decoded.Error.Message)
-	})
+	for _, tc := range []struct {
+		name       string
+		errorType  string
+		statusCode int
+		message    string
+		want       string
+	}{
+		{
+			name:       "plain message keeps the documented shape",
+			errorType:  "BadRequest",
+			statusCode: 400,
+			message:    "ordinary error",
+			want:       `{"type":"error","error":{"type":"BadRequest","code":"400","message":"ordinary error"}}`,
+		},
+		{
+			name:       "quotes in the type and the message",
+			errorType:  `Bad"Request`,
+			statusCode: 400,
+			message:    `message says "hello"`,
+			want:       `{"type":"error","error":{"type":"Bad\"Request","code":"400","message":"message says \"hello\""}}`,
+		},
+		{
+			name:       "backslashes",
+			errorType:  `Bad\Request`,
+			statusCode: 422,
+			message:    `path C:\temp`,
+			want:       `{"type":"error","error":{"type":"Bad\\Request","code":"422","message":"path C:\\temp"}}`,
+		},
+		{
+			name:       "newline, tab and NUL",
+			errorType:  "BadRequest",
+			statusCode: 400,
+			message:    "line one\nline two\ttab\x00nul",
+			want:       `{"type":"error","error":{"type":"BadRequest","code":"400","message":"line one\nline two\ttab\u0000nul"}}`,
+		},
+		{
+			name:       "the malformed temperature message from the transcription path",
+			errorType:  "BadRequest",
+			statusCode: 400,
+			message:    "malformed request: invalid temperature value \"bad\": strconv.ParseFloat: parsing \"bad\": invalid syntax",
+			want:       `{"type":"error","error":{"type":"BadRequest","code":"400","message":"malformed request: invalid temperature value \"bad\": strconv.ParseFloat: parsing \"bad\": invalid syntax"}}`,
+		},
+		{
+			name:       "unicode",
+			errorType:  "BadRequest",
+			statusCode: 422,
+			message:    "temperature 雪 🌡️",
+			want:       `{"type":"error","error":{"type":"BadRequest","code":"422","message":"temperature 雪 🌡️"}}`,
+		},
+		{
+			name:       "empty strings",
+			errorType:  "",
+			statusCode: 400,
+			message:    "",
+			want:       `{"type":"error","error":{"type":"","code":"400","message":""}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := formatUserFacingErrorJSON(tc.errorType, tc.statusCode, tc.message)
+			// The decoder behind JSONEq is lenient about raw control bytes in
+			// strings, so the exact escaped form is what pins the escaping.
+			require.JSONEq(t, tc.want, string(body))
+			require.NotContains(t, string(body), "\n", "control bytes must be escaped, not written raw")
+			require.NotContains(t, string(body), "\t")
+			require.NotContains(t, string(body), "\x00")
+		})
+	}
+}
+
+func Test_createUserFacingErrorResponse(t *testing.T) {
+	message := `temperature "bad" at 20°C ☃`
+	for _, statusCode := range []int{400, 422} {
+		t.Run(strconv.Itoa(statusCode), func(t *testing.T) {
+			resp := createUserFacingErrorResponse(statusCode, "BadRequest", message)
+			imm := resp.GetImmediateResponse()
+			require.NotNil(t, imm)
+			require.Equal(t, typev3.StatusCode(statusCode), imm.Status.Code)
+			require.Equal(t, uint32(codes.InvalidArgument), imm.GetGrpcStatus().GetStatus())
+
+			headers := map[string]string{}
+			for _, h := range imm.Headers.SetHeaders {
+				headers[h.Header.Key] = string(h.Header.RawValue)
+			}
+			require.Equal(t, map[string]string{
+				"content-type":   "application/json",
+				"content-length": strconv.Itoa(len(imm.Body)),
+			}, headers)
+			require.JSONEq(t, fmt.Sprintf(`{"type":"error","error":{"type":"BadRequest","code":"%d","message":"temperature \"bad\" at 20°C ☃"}}`, statusCode), string(imm.Body))
+		})
+	}
 }
