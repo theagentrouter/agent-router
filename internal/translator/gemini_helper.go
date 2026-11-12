@@ -62,8 +62,8 @@ func OpenAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 
 // OpenAIToolsToGeminiTools converts OpenAI tools to Gemini tools.
 // It is exported so that the gcpcache resolver can include tools in the cached prefix.
-func OpenAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAvailable bool) ([]genai.Tool, error) {
-	return openAIToolsToGeminiTools(openaiTools, parametersJSONSchemaAvailable)
+func OpenAIToolsToGeminiTools(openaiTools []openai.Tool) ([]genai.Tool, error) {
+	return openAIToolsToGeminiTools(openaiTools)
 }
 
 // openAIMessagesToGeminiContents converts OpenAI messages to Gemini Contents and SystemInstruction.
@@ -442,7 +442,7 @@ func assistantMsgToGeminiParts(msg *openai.ChatCompletionAssistantMessageParam) 
 //	}
 //
 // ].
-func openAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAvailable bool) ([]genai.Tool, error) {
+func openAIToolsToGeminiTools(openaiTools []openai.Tool) ([]genai.Tool, error) {
 	if len(openaiTools) == 0 {
 		return nil, nil
 	}
@@ -461,21 +461,7 @@ func openAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAva
 					Description: tool.Function.Description,
 				}
 
-				if parametersJSONSchemaAvailable {
-					functionDecl.ParametersJsonSchema = tool.Function.Parameters
-				} else if tool.Function.Parameters != nil {
-					paramsMap, ok := tool.Function.Parameters.(map[string]any)
-					if !ok {
-						return nil, fmt.Errorf("%w: tool %s parameters must be a JSON object", internalapi.ErrInvalidRequestBody, tool.Function.Name)
-					}
-
-					if len(paramsMap) > 0 {
-						var err error
-						if functionDecl.Parameters, err = jsonSchemaToGemini(paramsMap); err != nil {
-							return nil, fmt.Errorf("%w: invalid JSON schema for parameters in tool %s: %w", internalapi.ErrInvalidRequestBody, tool.Function.Name, err)
-						}
-					}
-				}
+				functionDecl.ParametersJsonSchema = tool.Function.Parameters
 				functionDecls = append(functionDecls, functionDecl)
 			}
 		case openai.ToolTypeImageGeneration:
@@ -594,11 +580,6 @@ func openAIToolChoiceToGeminiToolConfig(toolChoice *openai.ChatCompletionToolCho
 // Check and Update these functions when new Gemini model versions are released
 // and their feature support changes.
 
-// it only works with models after gemini2.5 according to https://ai.google.dev/gemini-api/docs/structured-output#json-schema, separate it as a small function to make it easier to maintain
-func responseJSONSchemaAvailable(requestModel internalapi.RequestModel) bool {
-	return strings.Contains(requestModel, "gemini") && (strings.Contains(requestModel, "2.5") || strings.Contains(requestModel, "3"))
-}
-
 // mediaResolutionAvailable checks if the model supports media resolution settings.
 // Only Gemini 3.0+ models support this feature for controlling image/video quality.
 func mediaResolutionAvailable(requestModel internalapi.RequestModel) bool {
@@ -702,16 +683,7 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 
 			responseMode = responseModeJSON
 
-			if responseJSONSchemaAvailable(requestModel) {
-				gc.ResponseJsonSchema = schemaMap
-			} else {
-				convertedSchema, err := jsonSchemaToGemini(schemaMap)
-				if err != nil {
-					return nil, responseMode, fmt.Errorf("%w: invalid JSON schema: %w", internalapi.ErrInvalidRequestBody, err)
-				}
-				gc.ResponseSchema = convertedSchema
-
-			}
+			gc.ResponseJsonSchema = schemaMap
 		}
 	}
 

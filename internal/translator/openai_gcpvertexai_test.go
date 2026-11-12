@@ -112,7 +112,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
                 {
                     "name": "get_weather",
                     "description": "Get the current weather in a given location",
-                    "parameters": {
+                    "parametersJsonSchema": {
                         "type": "object",
                         "properties": {
                             "location": {
@@ -158,7 +158,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
                 {
                     "name": "test_function",
                     "description": "A test function",
-                    "parameters": {
+                    "parametersJsonSchema": {
                         "type": "object",
                         "properties": {
                             "param1": {
@@ -198,7 +198,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
                 {
                     "name": "test_function",
                     "description": "A test function",
-                    "parameters": {
+                    "parametersJsonSchema": {
                         "type": "object",
                         "properties": {
                             "param1": {
@@ -270,7 +270,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
         {
           "name": "test_function",
           "description": "A test function",
-          "parameters": {
+          "parametersJsonSchema": {
             "type": "object",
             "properties": {
               "param1": {
@@ -313,7 +313,7 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
         {
           "name": "test_function",
           "description": "A test function",
-          "parameters": {
+          "parametersJsonSchema": {
             "type": "object",
             "properties": {
               "param1": {

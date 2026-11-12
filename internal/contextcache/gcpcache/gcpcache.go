@@ -191,7 +191,7 @@ func (r *Resolver) Resolve(ctx context.Context, openAIReq *openai.ChatCompletion
 	if err != nil {
 		return nil, fmt.Errorf("gcpcache: failed to convert cached messages to Gemini format: %w", err)
 	}
-	geminiTools, err := translator.OpenAIToolsToGeminiTools(openAIReq.Tools, false)
+	geminiTools, err := translator.OpenAIToolsToGeminiTools(openAIReq.Tools)
 	if err != nil {
 		return nil, fmt.Errorf("gcpcache: failed to convert tools to Gemini format: %w", err)
 	}

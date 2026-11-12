@@ -25,9 +25,8 @@ import (
 )
 
 type compiledAuthorization struct {
-	ResourceMetadataURL string
-	Rules               []compiledAuthorizationRule
-	DefaultAction       filterapi.AuthorizationAction
+	Rules         []compiledAuthorizationRule
+	DefaultAction filterapi.AuthorizationAction
 	// VerifiedJWT mirrors filterapi.MCPRouteAuthorization.VerifiedJWT: true only when Envoy
 	// verifies the bearer JWT's signature before the request reaches the MCP proxy. JWT
 	// claims/scopes must never be trusted for authorization decisions unless this is true.
@@ -49,8 +48,7 @@ func (a *compiledAuthorization) same(other *compiledAuthorization) bool {
 	if a == nil || other == nil {
 		return a == other
 	}
-	if a.ResourceMetadataURL != other.ResourceMetadataURL || a.DefaultAction != other.DefaultAction ||
-		a.VerifiedJWT != other.VerifiedJWT {
+	if a.DefaultAction != other.DefaultAction || a.VerifiedJWT != other.VerifiedJWT {
 		return false
 	}
 	return slices.EqualFunc(a.Rules, other.Rules, func(ra, rb compiledAuthorizationRule) bool {
@@ -88,9 +86,8 @@ func compileAuthorization(auth *filterapi.MCPRouteAuthorization) (*compiledAutho
 	}
 
 	compiled := &compiledAuthorization{
-		ResourceMetadataURL: auth.ResourceMetadataURL,
-		DefaultAction:       auth.DefaultAction,
-		VerifiedJWT:         auth.VerifiedJWT,
+		DefaultAction: auth.DefaultAction,
+		VerifiedJWT:   auth.VerifiedJWT,
 	}
 
 	for _, rule := range auth.Rules {
