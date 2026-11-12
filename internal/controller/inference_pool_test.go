@@ -7,16 +7,19 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	gwaiev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -884,7 +887,7 @@ func TestInferencePoolController_UpdateInferencePoolStatus(t *testing.T) {
 	require.NoError(t, fakeClient.Create(context.Background(), inferencePool))
 
 	// Test updateInferencePoolStatus with NotAccepted condition.
-	c.updateInferencePoolStatus(context.Background(), inferencePool, "NotAccepted", "test error message")
+	require.NoError(t, c.updateInferencePoolStatus(context.Background(), inferencePool, "NotAccepted", "test error message"))
 
 	// Check that the status was updated.
 	var updatedInferencePool gwaiev1.InferencePool
@@ -1136,6 +1139,70 @@ func TestInferencePoolController_Reconcile_ErrorHandling(t *testing.T) {
 	require.Error(t, err, "Should error when ExtensionRef service doesn't exist")
 	require.Contains(t, err.Error(), "ExtensionReference service non-existent-service not found")
 	require.Equal(t, ctrl.Result{}, result)
+}
+
+func TestInferencePoolController_Reconcile_StatusUpdateConflict(t *testing.T) {
+	inner := requireNewFakeClientWithIndexesAndInferencePool(t)
+	conflicts := 1
+	fakeClient := interceptor.NewClient(inner.(client.WithWatch), interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, cl client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			if conflicts > 0 {
+				conflicts--
+				return apierrors.NewConflict(gwaiev1.Resource("inferencepools"), obj.GetName(), errors.New("the object has been modified"))
+			}
+			return cl.SubResource(subResourceName).Update(ctx, obj, opts...)
+		},
+	})
+	c := NewInferencePoolController(fakeClient, kubefake.NewSimpleClientset(), ctrl.Log, make(chan event.GenericEvent), make(chan event.GenericEvent, 100))
+
+	require.NoError(t, fakeClient.Create(t.Context(), &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "epp", Namespace: "default"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 9002}}},
+	}))
+	require.NoError(t, fakeClient.Create(t.Context(), &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-gateway", Namespace: "default"},
+		Spec:       gwapiv1.GatewaySpec{GatewayClassName: "test-class"},
+	}))
+	require.NoError(t, fakeClient.Create(t.Context(), &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+		Spec: gwapiv1.HTTPRouteSpec{
+			CommonRouteSpec: gwapiv1.CommonRouteSpec{ParentRefs: []gwapiv1.ParentReference{{Name: "test-gateway"}}},
+			Rules: []gwapiv1.HTTPRouteRule{{
+				BackendRefs: []gwapiv1.HTTPBackendRef{{BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{
+					Group: ptr.To(gwapiv1.Group("inference.networking.k8s.io")),
+					Kind:  ptr.To(gwapiv1.Kind("InferencePool")),
+					Name:  "test-inference-pool",
+				}}}},
+			}},
+		},
+	}))
+	require.NoError(t, fakeClient.Create(t.Context(), &gwaiev1.InferencePool{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-inference-pool", Namespace: "default"},
+		Spec: gwaiev1.InferencePoolSpec{
+			Selector: gwaiev1.LabelSelector{MatchLabels: map[gwaiev1.LabelKey]gwaiev1.LabelValue{
+				"app": "test-app",
+			}},
+			TargetPorts:       []gwaiev1.Port{{Number: 8080}},
+			EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "epp"},
+		},
+	}))
+	req := ctrl.Request{NamespacedName: client.ObjectKey{Name: "test-inference-pool", Namespace: "default"}}
+
+	// The conflict must be returned so that controller-runtime requeues the InferencePool.
+	_, err := c.Reconcile(t.Context(), req)
+	require.Error(t, err)
+	require.True(t, apierrors.IsConflict(err), "expected a conflict error, got %v", err)
+
+	var pool gwaiev1.InferencePool
+	require.NoError(t, fakeClient.Get(t.Context(), req.NamespacedName, &pool))
+	require.Empty(t, pool.Status.Parents)
+
+	// The requeued reconcile reads the fresh object and writes the status.
+	_, err = c.Reconcile(t.Context(), req)
+	require.NoError(t, err)
+	require.NoError(t, fakeClient.Get(t.Context(), req.NamespacedName, &pool))
+	require.Len(t, pool.Status.Parents, 1)
+	require.Equal(t, "test-gateway", string(pool.Status.Parents[0].ParentRef.Name))
 }
 
 func TestInferencePoolController_Reconcile_EndpointPickerRefMissing(t *testing.T) {
@@ -1528,7 +1595,7 @@ func TestInferencePoolController_UpdateInferencePoolStatus_MultipleGateways(t *t
 	require.NoError(t, fakeClient.Create(context.Background(), inferencePool))
 
 	// Test updateInferencePoolStatus with Accepted condition for multiple gateways.
-	c.updateInferencePoolStatus(context.Background(), inferencePool, "Accepted", "all references resolved")
+	require.NoError(t, c.updateInferencePoolStatus(context.Background(), inferencePool, "Accepted", "all references resolved"))
 
 	// Check that the status was updated for both gateways.
 	var updatedInferencePool gwaiev1.InferencePool
@@ -1707,7 +1774,7 @@ func TestInferencePoolController_UpdateInferencePoolStatus_ExtensionRefError(t *
 
 	// Test updateInferencePoolStatus with ExtensionReference error message.
 	extRefErrorMessage := "ExtensionReference service non-existent-service not found in namespace default"
-	c.updateInferencePoolStatus(context.Background(), inferencePool, "NotAccepted", extRefErrorMessage)
+	require.NoError(t, c.updateInferencePoolStatus(context.Background(), inferencePool, "NotAccepted", extRefErrorMessage))
 
 	// Check that the status was updated with ExtensionReference error.
 	var updatedInferencePool gwaiev1.InferencePool

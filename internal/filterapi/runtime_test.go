@@ -131,4 +131,18 @@ func TestServer_LoadConfig(t *testing.T) {
 		require.Contains(t, err.Error(), "must have non-empty RouteName")
 		require.Contains(t, err.Error(), "missing_route")
 	})
+	noAuth := func(_ context.Context, _ *BackendAuth) (BackendAuthHandler, error) { return nil, nil }
+	t.Run("file id codec", func(t *testing.T) {
+		rc, err := NewRuntimeConfig(t.Context(), &Config{}, noAuth)
+		require.NoError(t, err)
+		require.Nil(t, rc.FileIDCodec)
+
+		rc, err = NewRuntimeConfig(t.Context(), &Config{FileIDEncryption: &FileIDEncryption{Seed: "seed", Iterations: 1000}}, noAuth)
+		require.NoError(t, err)
+		require.NotNil(t, rc.FileIDCodec)
+	})
+	t.Run("error - invalid file id encryption", func(t *testing.T) {
+		_, err := NewRuntimeConfig(t.Context(), &Config{FileIDEncryption: &FileIDEncryption{Seed: "", Iterations: 1000}}, noAuth)
+		require.ErrorContains(t, err, "cannot create file id codec")
+	})
 }

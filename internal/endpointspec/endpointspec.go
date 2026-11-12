@@ -435,6 +435,9 @@ func (DecisionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, 
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return translator.NewDecisionsOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+	case filterapi.APISchemaAzureOpenAI:
+		// Azure serves Decisions only on its v1 API: deployment name in the body, no api-version.
+		return translator.NewDecisionsOpenAIToOpenAITranslator("openai/v1", modelNameOverride), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
@@ -449,7 +452,7 @@ func (DecisionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Decision
 	redacted.Questions = make([]openai.DecisionQuestion, len(req.Questions))
 	for i := range req.Questions {
 		q := req.Questions[i]
-		q.Instructions = redaction.RedactString(q.Instructions)
+		q.Instructions = redactRawJSON(q.Instructions)
 		q.Choices = make([]openai.DecisionChoiceOption, len(req.Questions[i].Choices))
 		for j := range req.Questions[i].Choices {
 			q.Choices[j] = openai.DecisionChoiceOption{
@@ -515,18 +518,25 @@ func (MessagesEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, m
 // RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
 func (MessagesEndpointSpec) RedactSensitiveInfoFromRequest(req *anthropic.MessagesRequest) (redactedReq *anthropic.MessagesRequest, err error) {
 	redacted := *req
-	// Message content (text or []ContentBlockParam) and the system prompt hold user/developer
-	// text. They are JSON unions, so redact every nested string leaf generically.
-	redacted.Messages = make([]anthropic.MessageParam, len(req.Messages))
-	for i, msg := range req.Messages {
+	redacted.Messages, redacted.System = redactAnthropicMessagesAndSystem(req.Messages, req.System)
+	return &redacted, nil
+}
+
+// redactAnthropicMessagesAndSystem returns redacted copies of Anthropic messages and system prompt.
+// Message content (text or []ContentBlockParam) and the system prompt hold user/developer
+// text. They are JSON unions, so redact every nested string leaf generically.
+func redactAnthropicMessagesAndSystem(msgs []anthropic.MessageParam, system *anthropic.SystemPrompt) ([]anthropic.MessageParam, *anthropic.SystemPrompt) {
+	redactedMsgs := make([]anthropic.MessageParam, len(msgs))
+	for i, msg := range msgs {
 		redactedMsg := msg
 		redactedMsg.Content = redactUnionField(msg.Content)
-		redacted.Messages[i] = redactedMsg
+		redactedMsgs[i] = redactedMsg
 	}
-	if req.System != nil {
-		redacted.System = ptr.To(redactUnionField(*req.System))
+	var redactedSystem *anthropic.SystemPrompt
+	if system != nil {
+		redactedSystem = ptr.To(redactUnionField(*system))
 	}
-	return &redacted, nil
+	return redactedMsgs, redactedSystem
 }
 
 // ParseBody implements [EndpointSpec.ParseBody].
@@ -568,7 +578,10 @@ func (MessagesCountTokensEndpointSpec) ParseMultipartBody([]byte, string, bool) 
 
 // RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
 func (MessagesCountTokensEndpointSpec) RedactSensitiveInfoFromRequest(req *anthropic.CountTokensRequest) (redactedReq *anthropic.CountTokensRequest, err error) {
-	return req, nil
+	redacted := *req
+	// Same message/system shapes as /v1/messages.
+	redacted.Messages, redacted.System = redactAnthropicMessagesAndSystem(req.Messages, req.System)
+	return &redacted, nil
 }
 
 // ParseBody implements [EndpointSpec.ParseBody].
@@ -728,6 +741,9 @@ func (TokenizeEndpointSpec) RedactSensitiveInfoFromRequest(req *tokenize.Request
 		for i, msg := range req.Messages {
 			redactedOfChat.Messages[i] = redactMessage(msg)
 		}
+		// Template kwargs are rendered into the prompt and may carry user data.
+		redactedOfChat.ChatTemplateKwargs = redactUnionField(req.ChatTemplateKwargs)
+		// ChatTemplate, Tools, and MmProcessorKwargs are developer-authored format/schema/processor config, not user data — kept as-is.
 		redacted.ChatRequest = &redactedOfChat
 		redacted.CompletionRequest = nil
 	}
@@ -1279,7 +1295,8 @@ func (ResponsesInputTokensEndpointSpec) ParseMultipartBody([]byte, string, bool)
 
 // RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
 func (ResponsesInputTokensEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.ResponseRequest) (*openai.ResponseRequest, error) {
-	return req, nil
+	// Same request schema as /v1/responses — reuse its redaction.
+	return ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
 }
 
 // readFormField reads the entire value of a multipart form field as a string.

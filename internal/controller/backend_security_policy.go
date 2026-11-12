@@ -103,7 +103,12 @@ func (c *BackendSecurityPolicyController) Reconcile(ctx context.Context, req ctr
 
 // reconcile reconciles BackendSecurityPolicy but extracted from Reconcile to centralize error handling.
 func (c *BackendSecurityPolicyController) reconcile(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy) (res ctrl.Result, err error) {
-	if handleFinalizer(ctx, c.client, c.logger, bsp, c.syncBackendSecurityPolicy) { // Propagate the bsp deletion all the way to relevant Gateways.
+	// Propagate the bsp deletion all the way to relevant Gateways.
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, bsp, c.syncBackendSecurityPolicy)
+	if err != nil {
+		return res, err
+	}
+	if onDelete {
 		return res, nil
 	}
 	// Determine if credential rotation is needed
