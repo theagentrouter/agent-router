@@ -1,0 +1,147 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# This example configures access to Azure OpenAI using an Azure managed identity of the data plane,
+# e.g. Azure Workload Identity on AKS. No client secret is needed. Access tokens are obtained by the
+# external processor running in the Envoy proxy pods, with the identity of those pods; the
+# controller's own identity is not used.
+#
+# Prerequisites for Azure Workload Identity:
+# 1. AKS cluster with the OIDC issuer and Workload Identity enabled
+# 2. A user-assigned managed identity with a role that allows accessing the Azure OpenAI resource,
+#    e.g. "Cognitive Services OpenAI User"
+# 3. A federated credential on that identity for the ServiceAccount below
+#    (subject: system:serviceaccount:envoy-gateway-system:ai-gateway-dataplane-azure)
+#
+# For Azure Workload Identity setup instructions, see:
+# https://learn.microsoft.com/azure/aks/workload-identity-deploy-cluster
+
+---
+# Step 1: Create a ServiceAccount for the data plane, federated to the managed identity
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-gateway-dataplane-azure
+  namespace: envoy-gateway-system
+  annotations:
+    # Replace with the client ID of the user-assigned managed identity.
+    azure.workload.identity/client-id: AZURE_MANAGED_IDENTITY_CLIENT_ID
+---
+# Step 2: Create custom EnvoyProxy configuration that uses the ServiceAccount
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: ai-gateway-with-azure
+  namespace: default
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        pod:
+          # This tells Envoy Gateway to use our Azure-enabled ServiceAccount
+          serviceAccountName: ai-gateway-dataplane-azure
+          labels:
+            # This makes Azure Workload Identity inject the federated token into the proxy pods.
+            azure.workload.identity/use: "true"
+---
+# Step 3: Create Gateway that references the custom EnvoyProxy
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: envoy-ai-gateway-basic
+  namespace: default
+spec:
+  gatewayClassName: envoy-ai-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+  infrastructure:
+    parametersRef:
+      # This links the Gateway to use our custom EnvoyProxy with the Azure identity
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: ai-gateway-with-azure
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: envoy-ai-gateway-basic-azure
+  namespace: default
+spec:
+  parentRefs:
+    - name: envoy-ai-gateway-basic
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: gpt-4.5-preview
+      backendRefs:
+        - name: envoy-ai-gateway-basic-azure
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: envoy-ai-gateway-basic-azure
+  namespace: default
+spec:
+  schema:
+    name: AzureOpenAI
+    version: 2025-01-01-preview
+    ## OR using OpenAI compatible API
+    # name: OpenAI
+    # version: openai/v1
+  backendRef:
+    name: envoy-ai-gateway-basic-azure
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: envoy-ai-gateway-basic-azure-credentials
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: envoy-ai-gateway-basic-azure
+  type: AzureCredentials
+  azureCredentials:
+    # Use the user-assigned managed identity with this client ID.
+    managedIdentity:
+      clientID: AZURE_MANAGED_IDENTITY_CLIENT_ID # Replace with the client ID of the user-assigned managed identity.
+    ## OR use the default Azure credential chain of the proxy pods (Workload Identity using the
+    ## ServiceAccount's client ID annotation, or the system-assigned managed identity of the node).
+    # managedIdentity: {}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: envoy-ai-gateway-basic-azure
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: dummy-azure-resource.openai.azure.com # Replace "dummy-azure-resource" with your Azure OpenAI resource e.g. <azure_resource_name>.openai.azure.com
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: envoy-ai-gateway-basic-azure-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: "gateway.envoyproxy.io"
+      kind: Backend
+      name: envoy-ai-gateway-basic-azure
+  validation:
+    wellKnownCACertificates: "System"
+    hostname: dummy-azure-resource.openai.azure.com # Replace "dummy-azure-resource" with your Azure OpenAI resource e.g. <azure_resource_name>.openai.azure.com
