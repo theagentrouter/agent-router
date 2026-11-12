@@ -408,7 +408,7 @@ type OpenAIWorkloadIdentityFederationConfig struct {
 // OpenAISubjectToken specifies the source of the subject token exchanged for an OpenAI access token.
 // Exactly one source must be configured.
 //
-// +kubebuilder:validation:XValidation:rule="[has(self.oidcExchangeToken), has(self.spiffeJWTSVID)].filter(x, x).size() == 1",message="Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified"
+// +kubebuilder:validation:XValidation:rule="[has(self.oidcExchangeToken), has(self.spiffeJWTSVID), has(self.serviceAccountToken)].filter(x, x).size() == 1",message="Exactly one of oidcExchangeToken, spiffeJWTSVID or serviceAccountToken must be specified"
 type OpenAISubjectToken struct {
 	// OIDCExchangeToken obtains the subject token from an OIDC provider via the client-credentials flow.
 	// The OIDC provider must return a JWT access token.
@@ -426,6 +426,39 @@ type OpenAISubjectToken struct {
 	//
 	// +optional
 	SPIFFEJWTSVID *BackendSecurityPolicySPIFFEJWTSVID `json:"spiffeJWTSVID,omitempty"`
+
+	// ServiceAccountToken obtains the subject token from the Kubernetes TokenRequest API, as a token for a
+	// ServiceAccount in the namespace of the policy. The issuer of the token is the Kubernetes API server.
+	//
+	// Unlike SPIFFEJWTSVID, each policy authenticates as its own ServiceAccount. The controller needs the
+	// "create" permission on the "serviceaccounts/token" subresource for that ServiceAccount, which can be
+	// granted per namespace and per ServiceAccount name with a Role and RoleBinding.
+	//
+	// A new token is requested for every token exchange, including retries, so that token exchange
+	// endpoints accepting each token ID ("jti" claim) only once can be used.
+	//
+	// +optional
+	ServiceAccountToken *BackendSecurityPolicyServiceAccountToken `json:"serviceAccountToken,omitempty"`
+}
+
+// BackendSecurityPolicyServiceAccountToken specifies how to obtain a Kubernetes ServiceAccount token from the
+// TokenRequest API.
+type BackendSecurityPolicyServiceAccountToken struct {
+	// ServiceAccountName is the name of the ServiceAccount in the namespace of the policy that the token is
+	// requested for.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	ServiceAccountName string `json:"serviceAccountName"`
+
+	// Audience is the audience ("aud" claim) of the requested token. The token exchange endpoint validates
+	// it, so it must match the audience that endpoint expects, e.g. the audience configured for the
+	// OpenAI Workload Identity Provider.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Audience string `json:"audience"`
 }
 
 // BackendSecurityPolicySPIFFEJWTSVID specifies how to obtain a JWT-SVID from the SPIFFE Workload API.

@@ -419,6 +419,8 @@ helm-test: helm-package  ## Test the helm chart with a dummy version.
 	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "mcp-session-encryption-fallback"
 	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "mcp-session-encryption-fallback"
 	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "bXktb2xkLXNlZWQ="
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "serviceaccounts/token"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.serviceAccountTokens.grantClusterWide=true | grep -q -- "serviceaccounts/token"
 
 # This pushes the helm chart to the OCI registry, requiring the access to the registry endpoint.
 .PHONY: helm-push

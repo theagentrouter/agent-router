@@ -14861,6 +14861,36 @@ spec:
                             required:
                             - oidc
                             type: object
+                          serviceAccountToken:
+                            description: |-
+                              ServiceAccountToken obtains the subject token from the Kubernetes TokenRequest API, as a token for a
+                              ServiceAccount in the namespace of the policy. The issuer of the token is the Kubernetes API server.
+
+                              Unlike SPIFFEJWTSVID, each policy authenticates as its own ServiceAccount. The controller needs the
+                              "create" permission on the "serviceaccounts/token" subresource for that ServiceAccount, which can be
+                              granted per namespace and per ServiceAccount name with a Role and RoleBinding.
+
+                              A new token is requested for every token exchange, including retries, so that token exchange
+                              endpoints accepting each token ID ("jti" claim) only once can be used.
+                            properties:
+                              audience:
+                                description: |-
+                                  Audience is the audience ("aud" claim) of the requested token. The token exchange endpoint validates
+                                  it, so it must match the audience that endpoint expects, e.g. the audience configured for the
+                                  OpenAI Workload Identity Provider.
+                                minLength: 1
+                                type: string
+                              serviceAccountName:
+                                description: |-
+                                  ServiceAccountName is the name of the ServiceAccount in the namespace of the policy that the token is
+                                  requested for.
+                                maxLength: 253
+                                minLength: 1
+                                type: string
+                            required:
+                            - audience
+                            - serviceAccountName
+                            type: object
                           spiffeJWTSVID:
                             description: |-
                               SPIFFEJWTSVID obtains the subject token as a JWT-SVID from the SPIFFE Workload API.
@@ -14889,10 +14919,11 @@ spec:
                             type: object
                         type: object
                         x-kubernetes-validations:
-                        - message: Exactly one of oidcExchangeToken or spiffeJWTSVID
-                            must be specified
-                          rule: '[has(self.oidcExchangeToken), has(self.spiffeJWTSVID)].filter(x,
-                            x).size() == 1'
+                        - message: Exactly one of oidcExchangeToken, spiffeJWTSVID
+                            or serviceAccountToken must be specified
+                          rule: '[has(self.oidcExchangeToken), has(self.spiffeJWTSVID),
+                            has(self.serviceAccountToken)].filter(x, x).size() ==
+                            1'
                     required:
                     - identityProviderID
                     - serviceAccountID
