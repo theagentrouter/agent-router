@@ -49,7 +49,7 @@ type BatchesTranslator = Translator[BatchesRequest, any]
 func NewBatchCreateTranslator(schema filterapi.VersionedAPISchema) (BatchesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
-		return &openAIBatchCreateTranslator{}, nil
+		return &openAIBatchCreateTranslator{newOpenAIBatchPassthrough(schema.OpenAIPrefix())}, nil
 	default:
 		return nil, errUnsupportedBatchesSchema(schema)
 	}
@@ -59,7 +59,7 @@ func NewBatchCreateTranslator(schema filterapi.VersionedAPISchema) (BatchesTrans
 func NewBatchRetrieveTranslator(schema filterapi.VersionedAPISchema) (BatchesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
-		return &openAIBatchRetrieveTranslator{}, nil
+		return &openAIBatchRetrieveTranslator{newOpenAIBatchPassthrough(schema.OpenAIPrefix())}, nil
 	default:
 		return nil, errUnsupportedBatchesSchema(schema)
 	}
@@ -69,7 +69,7 @@ func NewBatchRetrieveTranslator(schema filterapi.VersionedAPISchema) (BatchesTra
 func NewBatchCancelTranslator(schema filterapi.VersionedAPISchema) (BatchesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
-		return &openAIBatchCancelTranslator{}, nil
+		return &openAIBatchCancelTranslator{newOpenAIBatchPassthrough(schema.OpenAIPrefix())}, nil
 	default:
 		return nil, errUnsupportedBatchesSchema(schema)
 	}
@@ -79,7 +79,7 @@ func NewBatchCancelTranslator(schema filterapi.VersionedAPISchema) (BatchesTrans
 func NewBatchListTranslator(schema filterapi.VersionedAPISchema) (BatchesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
-		return &openAIBatchListTranslator{}, nil
+		return &openAIBatchListTranslator{newOpenAIBatchPassthrough(schema.OpenAIPrefix())}, nil
 	default:
 		return nil, errUnsupportedBatchesSchema(schema)
 	}

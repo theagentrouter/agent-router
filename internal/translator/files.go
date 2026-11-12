@@ -37,7 +37,7 @@ type FilesTranslator = Translator[FilesRequest, any]
 func NewFileUploadTranslator(schema filterapi.VersionedAPISchema) (FilesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
-		return &openAIFileUploadTranslator{}, nil
+		return &openAIFileUploadTranslator{filesPath: openAIFilesPath(schema.OpenAIPrefix())}, nil
 	default:
 		return nil, errUnsupportedFilesSchema(schema)
 	}
@@ -47,7 +47,7 @@ func NewFileUploadTranslator(schema filterapi.VersionedAPISchema) (FilesTranslat
 func NewFileRetrieveTranslator(schema filterapi.VersionedAPISchema) (FilesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
-		return &openAIFileRetrieveTranslator{}, nil
+		return &openAIFileRetrieveTranslator{filesPath: openAIFilesPath(schema.OpenAIPrefix())}, nil
 	default:
 		return nil, errUnsupportedFilesSchema(schema)
 	}
@@ -57,7 +57,7 @@ func NewFileRetrieveTranslator(schema filterapi.VersionedAPISchema) (FilesTransl
 func NewFileContentTranslator(schema filterapi.VersionedAPISchema) (FilesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
-		return &openAIFileContentTranslator{}, nil
+		return &openAIFileContentTranslator{filesPath: openAIFilesPath(schema.OpenAIPrefix())}, nil
 	default:
 		return nil, errUnsupportedFilesSchema(schema)
 	}
@@ -67,7 +67,7 @@ func NewFileContentTranslator(schema filterapi.VersionedAPISchema) (FilesTransla
 func NewFileDeleteTranslator(schema filterapi.VersionedAPISchema) (FilesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
-		return &openAIFileDeleteTranslator{}, nil
+		return &openAIFileDeleteTranslator{filesPath: openAIFilesPath(schema.OpenAIPrefix())}, nil
 	default:
 		return nil, errUnsupportedFilesSchema(schema)
 	}
@@ -77,7 +77,7 @@ func NewFileDeleteTranslator(schema filterapi.VersionedAPISchema) (FilesTranslat
 func NewFileListTranslator(schema filterapi.VersionedAPISchema) (FilesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
-		return &openAIFileListTranslator{}, nil
+		return &openAIFileListTranslator{filesPath: openAIFilesPath(schema.OpenAIPrefix())}, nil
 	default:
 		return nil, errUnsupportedFilesSchema(schema)
 	}

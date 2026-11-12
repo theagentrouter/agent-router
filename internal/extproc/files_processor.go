@@ -470,8 +470,12 @@ func (p *filesProcessor) reEncodeListResponse(raw []byte) *extprocv3.ProcessingR
 	// An upstream error (or any non-list body) either fails to unmarshal or has no data array;
 	// return an error so the client is not misled by a response that cannot be safely re-encoded.
 	var page openai.FileListResponse
-	if err := json.Unmarshal(workingBody, &page); err != nil || page.Data == nil {
-		p.logger.Error("failed to unmarshal files list response body; cannot re-encode ids")
+	if err := json.Unmarshal(workingBody, &page); err != nil {
+		p.logger.Error("failed to unmarshal files list response body; cannot re-encode ids", slog.String("error", err.Error()))
+		return filesReEncodeError("invalid or non-list body in upstream files list response")
+	}
+	if page.Data == nil {
+		p.logger.Error("files list response body has no data array; cannot re-encode ids")
 		return filesReEncodeError("invalid or non-list body in upstream files list response")
 	}
 
