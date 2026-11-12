@@ -242,8 +242,12 @@ floating point — for example `uint(double(cached_input_tokens) * 0.1)`.
 
 Cohere bills rerank in search units and reports no tokens, so the default `total_tokens` cost is
 always 0 for Cohere rerank models. The gateway reports their search units as `billable_units`, so
-use `costExpression: "uint(billable_units)"` for them instead. `billable_units` is a double: a bare
-`billable_units` does not evaluate to an integer and the expression is rejected, so always cast it,
+use `costExpression: "uint(billable_units)"` for them instead.
+
+`billable_units` is a double, so a bare `billable_units` does not evaluate to an integer and is not
+a valid cost expression. A QuotaPolicy with an invalid `costExpression` is not rejected: the
+controller logs `invalid QuotaPolicy cost expression, skipping` and skips the cost for that
+per-model quota, so the policy still shows `Accepted` and nothing is ever charged. Always cast it,
 for example `total_tokens + uint(billable_units) * 1000u`.
 :::
 
