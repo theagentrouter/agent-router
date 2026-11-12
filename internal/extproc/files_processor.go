@@ -122,14 +122,16 @@ type filesProcessor struct {
 
 	// routeProcessor is the router processor, set by SetBackend on the upstream filter.
 	routeProcessor *filesProcessor
+	// handler is the backend auth handler of the selected backend, set by SetBackend on the upstream filter.
+	handler filterapi.BackendAuthHandler
 }
 
 var _ Processor = (*filesProcessor)(nil)
 
 // ProcessRequestHeaders implements [Processor.ProcessRequestHeaders].
-func (p *filesProcessor) ProcessRequestHeaders(_ context.Context, _ *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {
+func (p *filesProcessor) ProcessRequestHeaders(ctx context.Context, _ *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {
 	if p.isUpstreamFilter {
-		return p.translateUpstreamRequest()
+		return p.translateUpstreamRequest(ctx)
 	}
 
 	method := p.requestHeaders[":method"]
@@ -538,12 +540,13 @@ func (p *filesProcessor) SetBackend(_ context.Context, backend *filterapi.Runtim
 		return fmt.Errorf("files API not supported for schema %s: %w", backend.Backend.Schema.Name, err)
 	}
 	p.routeProcessor = rp
+	p.handler = backend.Handler
 	return nil
 }
 
 // translateUpstreamRequest runs translator.RequestBody at the upstream filter, after SetBackend,
 // and applies the returned headers and body.
-func (p *filesProcessor) translateUpstreamRequest() (*extprocv3.ProcessingResponse, error) {
+func (p *filesProcessor) translateUpstreamRequest(ctx context.Context) (*extprocv3.ProcessingResponse, error) {
 	rp := p.routeProcessor
 	if rp == nil || rp.translator == nil {
 		// No backend resolved.
@@ -558,6 +561,13 @@ func (p *filesProcessor) translateUpstreamRequest() (*extprocv3.ProcessingRespon
 		return nil, fmt.Errorf("failed to transform files request: %w", err)
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
+	authBody := newBody
+	if authBody == nil {
+		authBody = rp.requestBody
+	}
+	if resp, err := applyUpstreamBackendAuth(ctx, p.handler, p.requestHeaders, headerMutation, authBody); err != nil || resp != nil {
+		return resp, err
+	}
 	if bodyMutation == nil {
 		return &extprocv3.ProcessingResponse{
 			Response: &extprocv3.ProcessingResponse_RequestHeaders{
