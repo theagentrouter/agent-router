@@ -680,6 +680,41 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_UsageWithFinishReason(t *tes
 	assert.Equal(t, uint32(5), outputTokens)
 }
 
+// TestOpenAIStreamToAnthropicState_ProcessBuffer_UsageOnFinishChunkThenUsageOnlyChunk covers a proxy
+// that reports usage on the finish_reason chunk and again in a trailing usage-only chunk. The later
+// report wins, and the closing events are emitted once.
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_UsageOnFinishChunkThenUsageOnlyChunk(t *testing.T) {
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "claude-3",
+	}
+
+	input := "data: {\"id\":\"chatcmpl-abc\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}],\"model\":\"gpt-4o\"}\n\n" +
+		"data: {\"id\":\"chatcmpl-abc\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n" +
+		"data: {\"id\":\"chatcmpl-abc\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":7,\"total_tokens\":19}}\n\n" +
+		"data: [DONE]\n\n"
+	state.buffer.WriteString(input)
+
+	var out []byte
+	require.NoError(t, state.processBuffer(&out, true))
+
+	var messageDeltas []string
+	for _, e := range parseSSEEventsFromBytes(out) {
+		if e.eventType == "message_delta" {
+			messageDeltas = append(messageDeltas, e.data)
+		}
+	}
+	require.Len(t, messageDeltas, 1, "the closing events must be emitted once")
+	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":12,"output_tokens":7}}`, messageDeltas[0])
+
+	inputTokens, ok := state.tokenUsage.InputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(12), inputTokens)
+	outputTokens, ok := state.tokenUsage.OutputTokens()
+	require.True(t, ok)
+	assert.Equal(t, uint32(7), outputTokens)
+}
+
 // TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens is a regression test guarding
 // against double-counting OpenAI's cached_tokens/cache_write_tokens (a breakdown
 // within prompt_tokens) as if they were additive, Anthropic-native cache usage fields.
