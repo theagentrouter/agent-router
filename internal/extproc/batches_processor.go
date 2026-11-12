@@ -106,14 +106,16 @@ type batchesProcessor struct {
 
 	// routeProcessor is the router processor, set by SetBackend on the upstream filter.
 	routeProcessor *batchesProcessor
+	// handler is the backend auth handler of the selected backend, set by SetBackend on the upstream filter.
+	handler filterapi.BackendAuthHandler
 }
 
 var _ Processor = (*batchesProcessor)(nil)
 
 // ProcessRequestHeaders implements [Processor.ProcessRequestHeaders].
-func (p *batchesProcessor) ProcessRequestHeaders(_ context.Context, _ *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {
+func (p *batchesProcessor) ProcessRequestHeaders(ctx context.Context, _ *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {
 	if p.isUpstreamFilter {
-		return p.translateUpstreamRequest()
+		return p.translateUpstreamRequest(ctx)
 	}
 
 	method := p.requestHeaders[":method"]
@@ -141,7 +143,7 @@ func (p *batchesProcessor) ProcessRequestHeaders(_ context.Context, _ *corev3.He
 // and applies the returned headers and body. It mirrors filesProcessor.translateUpstreamRequest.
 // The create translator owns provider-specific endpoint support: an error wrapping
 // [translator.ErrUnsupportedBatchEndpoint] becomes a 400.
-func (p *batchesProcessor) translateUpstreamRequest() (*extprocv3.ProcessingResponse, error) {
+func (p *batchesProcessor) translateUpstreamRequest(ctx context.Context) (*extprocv3.ProcessingResponse, error) {
 	rp := p.routeProcessor
 	if rp == nil || rp.translator == nil {
 		// No backend resolved.
@@ -161,6 +163,13 @@ func (p *batchesProcessor) translateUpstreamRequest() (*extprocv3.ProcessingResp
 		return nil, fmt.Errorf("failed to transform batches request: %w", err)
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
+	authBody := newBody
+	if authBody == nil {
+		authBody = rp.requestBody
+	}
+	if resp, err := applyUpstreamBackendAuth(ctx, p.handler, p.requestHeaders, headerMutation, authBody); err != nil || resp != nil {
+		return resp, err
+	}
 	if bodyMutation == nil {
 		return &extprocv3.ProcessingResponse{
 			Response: &extprocv3.ProcessingResponse_RequestHeaders{
@@ -474,6 +483,7 @@ func (p *batchesProcessor) SetBackend(_ context.Context, backend *filterapi.Runt
 	}
 	rp.backend = &backendKey{namespace: ns, name: name}
 	p.routeProcessor = rp
+	p.handler = backend.Handler
 
 	if err := rp.resolveTranslator(backend.Backend.Schema); err != nil {
 		return fmt.Errorf("batch API not supported for schema %s: %w", backend.Backend.Schema.Name, err)

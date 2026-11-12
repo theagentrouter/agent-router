@@ -62,6 +62,7 @@ func doBatchRequest(t *testing.T, addr string, r *batchRequest, expStatus int) [
 		if r.body != "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		setExpectedFilesAuthHeader(req)
 		if r.responseBody != "" {
 			req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(r.responseBody)))
 		}
@@ -119,6 +120,7 @@ func TestBatchAPI_Lifecycle(t *testing.T) {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, addr+"/v1/files", bytes.NewReader(uploadBody))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", ct)
+		setExpectedFilesAuthHeader(req)
 		req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString(
 			[]byte(`{"id":"file-in-native","object":"file","bytes":21,"purpose":"batch"}`)))
 		resp, err := http.DefaultClient.Do(req)

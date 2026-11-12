@@ -37,6 +37,16 @@ const filesTestBackendName1 = "test-ns/files-backend/route/files-route/rule/0/re
 // filesTestModel is the routing model matched by the files test route.
 const filesTestModel = "files-test-model"
 
+// filesTestAPIKey is the API key configured on the files test backend. The test upstream asserts
+// that every Files and Batch API request it receives carries it, verifying backend auth injection.
+const filesTestAPIKey = "files-test-api-key"
+
+// setExpectedFilesAuthHeader asks the test upstream to require the backend's Authorization header.
+func setExpectedFilesAuthHeader(req *http.Request) {
+	req.Header.Set(testupstreamlib.ExpectedHeadersKey,
+		base64.StdEncoding.EncodeToString([]byte("Authorization:Bearer "+filesTestAPIKey)))
+}
+
 // newFilesTestCodec creates the id codec with the default test seed.
 func newFilesTestCodec() idcodec.Codec {
 	c, err := idcodec.NewCodec(filesTestEncryptionSeed, 100_000, "", 0)
@@ -78,6 +88,7 @@ func filesTestConfig() string {
 			{
 				Name:   filesTestBackendName1,
 				Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
+				Auth:   &filterapi.BackendAuth{APIKey: &filterapi.APIKeyAuth{Key: filesTestAPIKey}},
 			},
 			// Existing backends so the main TestWithTestUpstream still works.
 			testUpstreamOpenAIBackend,
@@ -301,6 +312,7 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 			if reqContentType != "" {
 				req.Header.Set("Content-Type", reqContentType)
 			}
+			setExpectedFilesAuthHeader(req)
 			if tc.responseBody != "" {
 				req.Header.Set(testupstreamlib.ResponseBodyHeaderKey,
 					base64.StdEncoding.EncodeToString([]byte(tc.responseBody)))
@@ -371,6 +383,7 @@ func TestFilesAPI_UploadResponseIDDecodes(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, addr+"/v1/files",
 		bytes.NewReader(body))
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	req.Header.Set("Content-Type", ct)
 	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey,
 		base64.StdEncoding.EncodeToString([]byte(upstreamResponse)))
@@ -453,6 +466,7 @@ func TestFilesAPI_ListModelStrippedFromUpstream(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
 		addr+"/v1/files?model=files-test-model&limit=5", http.NoBody)
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	// Assert the upstream receives /v1/files?limit=5 (no model=).
 	req.Header.Set(testupstreamlib.ExpectedPathHeaderKey,
 		base64.StdEncoding.EncodeToString([]byte("/v1/files")))
@@ -493,6 +507,7 @@ func TestFilesAPI_RetrieveNativePath(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
 		addr+"/v1/files/"+gwID, http.NoBody)
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	// Assert upstream receives the native path, not the gateway id path.
 	req.Header.Set(testupstreamlib.ExpectedPathHeaderKey,
 		base64.StdEncoding.EncodeToString([]byte("/v1/files/"+nativeID)))
@@ -538,6 +553,7 @@ func TestFilesAPI_UploadModelStrippedFromBody(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, addr+"/v1/files",
 		strings.NewReader(bodyStr))
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	req.Header.Set("Content-Type", ct)
 	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey,
 		base64.StdEncoding.EncodeToString([]byte(
@@ -569,6 +585,7 @@ func TestFilesAPI_UpstreamErrorPassThrough(t *testing.T) {
 	body, ct := buildUploadBody(t, filesTestModel)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, addr+"/v1/files", bytes.NewReader(body))
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	req.Header.Set("Content-Type", ct)
 	req.Header.Set(testupstreamlib.ResponseStatusKey, "400")
 	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(upstreamErr)))
@@ -603,6 +620,7 @@ func TestFilesAPI_StableIDs(t *testing.T) {
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, addr+"/v1/files/"+gwID, http.NoBody)
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString(
 		[]byte(fmt.Sprintf(`{"id":%q,"object":"file"}`, nativeID))))
 

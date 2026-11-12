@@ -6,13 +6,20 @@
 package extproc
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 
+	"github.com/envoyproxy/ai-gateway/internal/backendauth"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
 // This file holds the helpers shared by the processors that route by a gateway-encoded id
@@ -152,4 +159,44 @@ func isSuccessStatus(responseHeaders map[string]string) bool {
 		return true
 	}
 	return code >= 200 && code < 300
+}
+
+// applyUpstreamBackendAuth runs the backend auth handler for an upstream id-routing request
+// (Files API and Batch API), the
+// translated headers are first applied to requestHeaders so the handler sees the final
+// upstream path, then the headers returned by the handler (e.g. Authorization, or a GCP path
+// prefix) are set on headerMutation. The internal upstream host header is always stripped.
+//
+// A non-nil ProcessingResponse is a local reply to return to Envoy (401 on missing credential).
+func applyUpstreamBackendAuth(
+	ctx context.Context,
+	handler filterapi.BackendAuthHandler,
+	requestHeaders map[string]string,
+	headerMutation *extprocv3.HeaderMutation,
+	body []byte,
+) (*extprocv3.ProcessingResponse, error) {
+	if requestHeaders == nil {
+		requestHeaders = make(map[string]string)
+	}
+	for _, h := range headerMutation.SetHeaders {
+		requestHeaders[h.Header.Key] = string(h.Header.RawValue)
+	}
+	headerMutation.RemoveHeaders = append(headerMutation.RemoveHeaders, internalapi.UpstreamHostHeader)
+	if handler == nil {
+		return nil, nil
+	}
+	hdrs, err := handler.Do(ctx, requestHeaders, body)
+	if err != nil {
+		if errors.Is(err, backendauth.ErrCredentialMissing) {
+			return createUserFacingErrorResponse(http.StatusUnauthorized, "Unauthorized", "missing upstream credential"), nil
+		}
+		return nil, fmt.Errorf("failed to do auth request: %w", err)
+	}
+	for _, h := range hdrs {
+		headerMutation.SetHeaders = append(headerMutation.SetHeaders, &corev3.HeaderValueOption{
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			Header:       &corev3.HeaderValue{Key: h.Key(), RawValue: []byte(h.Value())},
+		})
+	}
+	return nil, nil
 }
