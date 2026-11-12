@@ -148,13 +148,17 @@ func (ChatCompletionsEndpointSpec) ParseBody(
 		// Rewrite the original bytes to include the stream_options.include_usage=true so that forcing the request body
 		// mutation, which uses this raw body, will also result in the stream_options.include_usage=true.
 		var err error
-		mutatedBody, err = forceStreamOptionsIncludeUsage(body)
+		mutatedBody, err = forceStreamOptionsIncludeUsageFn(body)
 		if err != nil {
 			return "", nil, false, nil, fmt.Errorf("%w: failed to set stream_options.include_usage", internalapi.ErrMalformedRequest)
 		}
 	}
 	return req.Model, &req, req.Stream, mutatedBody, nil
 }
+
+// forceStreamOptionsIncludeUsageFn is a variable so that tests can exercise the error path,
+// which is unreachable for any body that json.Unmarshal accepts.
+var forceStreamOptionsIncludeUsageFn = forceStreamOptionsIncludeUsage
 
 // forceStreamOptionsIncludeUsage rewrites body so that it has exactly one top-level
 // "stream_options" key with include_usage forced to true. Other fields on it (e.g. vLLM's
@@ -250,13 +254,26 @@ func (ChatCompletionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Ch
 // ParseBody implements [EndpointSpec.ParseBody].
 func (CompletionsEndpointSpec) ParseBody(
 	body []byte,
-	_ bool,
+	costConfigured bool,
 ) (internalapi.OriginalModel, *openai.CompletionRequest, bool, []byte, error) {
 	var openAIReq openai.CompletionRequest
 	if err := json.Unmarshal(body, &openAIReq); err != nil {
 		return "", nil, false, nil, fmt.Errorf("%w: failed to parse JSON for /v1/completions: %w", internalapi.ErrMalformedRequest, err)
 	}
-	return openAIReq.Model, &openAIReq, openAIReq.Stream, nil, nil
+	var mutatedBody []byte
+	if openAIReq.Stream && costConfigured && (openAIReq.StreamOptions == nil || !openAIReq.StreamOptions.IncludeUsage) {
+		// If the request is a streaming request and cost metrics are configured, we need to include usage in the response
+		// to avoid the bypassing of the token usage calculation.
+		openAIReq.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
+		// Rewrite the original bytes to include the stream_options.include_usage=true so that forcing the request body
+		// mutation, which uses this raw body, will also result in the stream_options.include_usage=true.
+		var err error
+		mutatedBody, err = forceStreamOptionsIncludeUsageFn(body)
+		if err != nil {
+			return "", nil, false, nil, fmt.Errorf("%w: failed to set stream_options.include_usage", internalapi.ErrMalformedRequest)
+		}
+	}
+	return openAIReq.Model, &openAIReq, openAIReq.Stream, mutatedBody, nil
 }
 
 // ParseMultipartBody implements [Spec.ParseMultipartBody].
