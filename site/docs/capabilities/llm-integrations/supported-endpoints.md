@@ -449,7 +449,7 @@ curl -H "Content-Type: application/json" \
 
 - ✅ Single-query document reranking
 - ✅ Model selection via request body or `x-ai-eg-model` header
-- ✅ Token usage tracking and cost calculation
+- ✅ Token usage tracking and cost calculation (Cohere bills rerank in search units, not tokens: use `uint(billable_units)` in a CEL cost)
 - ✅ Provider fallback and load balancing
 
 **Supported Providers:**
