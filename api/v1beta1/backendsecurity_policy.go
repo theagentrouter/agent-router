@@ -16,13 +16,14 @@ import (
 type BackendSecurityPolicyType string
 
 const (
-	BackendSecurityPolicyTypeAPIKey            BackendSecurityPolicyType = "APIKey"
-	BackendSecurityPolicyTypeAWSCredentials    BackendSecurityPolicyType = "AWSCredentials"
-	BackendSecurityPolicyTypeAzureAPIKey       BackendSecurityPolicyType = "AzureAPIKey"
-	BackendSecurityPolicyTypeAnthropicAPIKey   BackendSecurityPolicyType = "AnthropicAPIKey" // #nosec G101
-	BackendSecurityPolicyTypeAzureCredentials  BackendSecurityPolicyType = "AzureCredentials"
-	BackendSecurityPolicyTypeGCPCredentials    BackendSecurityPolicyType = "GCPCredentials"
-	BackendSecurityPolicyTypeOpenAICredentials BackendSecurityPolicyType = "OpenAICredentials" // #nosec G101
+	BackendSecurityPolicyTypeAPIKey               BackendSecurityPolicyType = "APIKey"
+	BackendSecurityPolicyTypeAWSCredentials       BackendSecurityPolicyType = "AWSCredentials"
+	BackendSecurityPolicyTypeAzureAPIKey          BackendSecurityPolicyType = "AzureAPIKey"
+	BackendSecurityPolicyTypeAnthropicAPIKey      BackendSecurityPolicyType = "AnthropicAPIKey" // #nosec G101
+	BackendSecurityPolicyTypeAzureCredentials     BackendSecurityPolicyType = "AzureCredentials"
+	BackendSecurityPolicyTypeGCPCredentials       BackendSecurityPolicyType = "GCPCredentials"
+	BackendSecurityPolicyTypeOpenAICredentials    BackendSecurityPolicyType = "OpenAICredentials"    // #nosec G101
+	BackendSecurityPolicyTypeAnthropicCredentials BackendSecurityPolicyType = "AnthropicCredentials" // #nosec G101
 )
 
 // BackendSecurityPolicy specifies configuration for authentication and authorization rules on the traffic
@@ -48,13 +49,14 @@ type BackendSecurityPolicy struct {
 //
 // Only one type of BackendSecurityPolicy can be defined.
 // +kubebuilder:validation:MaxProperties=4
-// +kubebuilder:validation:XValidation:rule="self.type == 'APIKey' ? (has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is APIKey, only apiKey field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'AWSCredentials' ? (has(self.awsCredentials) && !has(self.apiKey) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is AWSCredentials, only awsCredentials field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'AzureAPIKey' ? (has(self.azureAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is AzureAPIKey, only azureAPIKey field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'AzureCredentials' ? (has(self.azureCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is AzureCredentials, only azureCredentials field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'GCPCredentials' ? (has(self.gcpCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is GCPCredentials, only gcpCredentials field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'AnthropicAPIKey' ? (has(self.anthropicAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.openAICredentials)) : true",message="When type is AnthropicAPIKey, only anthropicAPIKey field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'OpenAICredentials' ? (has(self.openAICredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey)) : true",message="When type is OpenAICredentials, only openAICredentials field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'APIKey' ? (has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.anthropicCredentials)) : true",message="When type is APIKey, only apiKey field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'AWSCredentials' ? (has(self.awsCredentials) && !has(self.apiKey) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.anthropicCredentials)) : true",message="When type is AWSCredentials, only awsCredentials field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'AzureAPIKey' ? (has(self.azureAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.anthropicCredentials)) : true",message="When type is AzureAPIKey, only azureAPIKey field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'AzureCredentials' ? (has(self.azureCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.anthropicCredentials)) : true",message="When type is AzureCredentials, only azureCredentials field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'GCPCredentials' ? (has(self.gcpCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.anthropicCredentials)) : true",message="When type is GCPCredentials, only gcpCredentials field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'AnthropicAPIKey' ? (has(self.anthropicAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.openAICredentials) && !has(self.anthropicCredentials)) : true",message="When type is AnthropicAPIKey, only anthropicAPIKey field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'OpenAICredentials' ? (has(self.openAICredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.anthropicCredentials)) : true",message="When type is OpenAICredentials, only openAICredentials field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'AnthropicCredentials' ? (has(self.anthropicCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is AnthropicCredentials, only anthropicCredentials field should be set"
 type BackendSecurityPolicySpec struct {
 	// TargetRefs are the names of the AIServiceBackend or InferencePool resources this BackendSecurityPolicy is being attached to.
 	// Attaching multiple BackendSecurityPolicies to the same resource is invalid and will result in an error
@@ -67,7 +69,7 @@ type BackendSecurityPolicySpec struct {
 
 	// Type specifies the type of the backend security policy.
 	//
-	// +kubebuilder:validation:Enum=APIKey;AWSCredentials;AzureAPIKey;AzureCredentials;GCPCredentials;AnthropicAPIKey;OpenAICredentials
+	// +kubebuilder:validation:Enum=APIKey;AWSCredentials;AzureAPIKey;AzureCredentials;GCPCredentials;AnthropicAPIKey;OpenAICredentials;AnthropicCredentials
 	Type BackendSecurityPolicyType `json:"type"`
 
 	// APIKey is a mechanism to access a backend(s). The API key will be injected into the Authorization header.
@@ -107,6 +109,13 @@ type BackendSecurityPolicySpec struct {
 	//
 	// +optional
 	OpenAICredentials *BackendSecurityPolicyOpenAICredentials `json:"openAICredentials,omitempty"`
+
+	// AnthropicCredentials is a mechanism to access Anthropic backend(s) without a static API key. The controller
+	// exchanges a subject token for a short-lived access token via Anthropic Workload Identity Federation, which is
+	// injected into the Authorization header.
+	//
+	// +optional
+	AnthropicCredentials *BackendSecurityPolicyAnthropicCredentials `json:"anthropicCredentials,omitempty"`
 
 	// CredentialOverride, when set, sources the upstream credential per-request instead of using
 	// the static credential configured above.
@@ -405,7 +414,8 @@ type OpenAIWorkloadIdentityFederationConfig struct {
 	SubjectToken OpenAISubjectToken `json:"subjectToken"`
 }
 
-// OpenAISubjectToken specifies the source of the subject token exchanged for an OpenAI access token.
+// OpenAISubjectToken specifies the source of the subject token exchanged for an access token via workload
+// identity federation. It is used by both OpenAICredentials and AnthropicCredentials.
 // Exactly one source must be configured.
 //
 // +kubebuilder:validation:XValidation:rule="[has(self.oidcExchangeToken), has(self.spiffeJWTSVID)].filter(x, x).size() == 1",message="Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified"
@@ -421,18 +431,71 @@ type OpenAISubjectToken struct {
 	// The SPIFFE identity is owned by the controller, not by the policy: the JWT-SVID is issued for the
 	// controller's SPIFFE ID. This differs from OIDCExchangeToken, where the policy supplies its own
 	// credentials. Every policy using this source authenticates as the controller and can obtain access
-	// tokens for any OpenAI service account mapped to the controller's SPIFFE ID, so only trusted cluster
+	// tokens for any service account mapped to the controller's SPIFFE ID, so only trusted cluster
 	// admins should be allowed to create such policies.
 	//
 	// +optional
 	SPIFFEJWTSVID *BackendSecurityPolicySPIFFEJWTSVID `json:"spiffeJWTSVID,omitempty"`
 }
 
+// BackendSecurityPolicyAnthropicCredentials contains the supported authentication mechanisms to access Anthropic.
+type BackendSecurityPolicyAnthropicCredentials struct {
+	// WorkloadIdentityFederationConfig is the configuration for Anthropic Workload Identity Federation.
+	//
+	// +kubebuilder:validation:Required
+	WorkloadIdentityFederationConfig AnthropicWorkloadIdentityFederationConfig `json:"workloadIdentityFederationConfig"`
+}
+
+// AnthropicWorkloadIdentityFederationConfig specifies how the controller obtains an Anthropic access token via
+// Anthropic Workload Identity Federation. The controller obtains a subject token, exchanges it at
+// https://api.anthropic.com/v1/oauth/token with the RFC 7523 jwt-bearer grant for a short-lived Anthropic access
+// token, and stores the access token in a secret, rotating it before it expires.
+//
+// The federation issuer, service account and federation rule must be configured in the Anthropic organization.
+// Anthropic accepts a subject token with a "jti" claim only once, so the controller obtains a new subject token
+// for every exchange. The lifetime of the issued access token is capped at twice the remaining lifetime of the
+// subject token, and must be longer than the controller's credential pre-rotation window.
+//
+// https://platform.claude.com/docs/en/manage-claude/workload-identity-federation
+type AnthropicWorkloadIdentityFederationConfig struct {
+	// OrganizationID is the UUID of the Anthropic organization.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	OrganizationID string `json:"organizationID"`
+
+	// ServiceAccountID is the ID of the Anthropic service account the access token acts as, e.g. "svac_...".
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	ServiceAccountID string `json:"serviceAccountID"`
+
+	// FederationRuleID is the ID of the Anthropic federation rule the subject token is evaluated against,
+	// e.g. "fdrl_...".
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	FederationRuleID string `json:"federationRuleID"`
+
+	// WorkspaceID is the ID of the Anthropic workspace the access token is scoped to, e.g. "wrkspc_...".
+	// It is required when the federation rule is enabled for more than one workspace. When unset, Anthropic
+	// selects the rule's only enabled workspace.
+	//
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	WorkspaceID string `json:"workspaceID,omitempty"`
+
+	// SubjectToken specifies where the subject token is obtained from. The subject token must be a JWT.
+	//
+	// +kubebuilder:validation:Required
+	SubjectToken OpenAISubjectToken `json:"subjectToken"`
+}
+
 // BackendSecurityPolicySPIFFEJWTSVID specifies how to obtain a JWT-SVID from the SPIFFE Workload API.
 type BackendSecurityPolicySPIFFEJWTSVID struct {
 	// Audience is the audience ("aud" claim) of the requested JWT-SVID. The token exchange endpoint
 	// validates it, so it must match the audience that endpoint expects, e.g. the audience configured
-	// for the OpenAI Workload Identity Provider.
+	// for the OpenAI Workload Identity Provider or the Anthropic federation rule.
 	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
@@ -479,6 +542,7 @@ type CredentialOverrideFromRequestHeaders struct {
 	//   AzureCredentials → x-aigw-azure-access-token
 	//   GCPCredentials  → x-aigw-gcp-access-token
 	//   OpenAICredentials → x-aigw-openai-access-token
+	//   AnthropicCredentials → x-aigw-anthropic-access-token
 	//
 	// For AWSCredentials this is a prefix, not a single header name, since SigV4 needs three
 	// inputs. Defaults to "x-aigw-aws-", yielding:

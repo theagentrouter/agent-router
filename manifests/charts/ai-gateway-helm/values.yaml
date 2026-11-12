@@ -206,6 +206,9 @@ controller:
   ##   # OpenAI Workload Identity Federation token exchange requests will use this proxy if set.
   ##   - name: AI_GATEWAY_OPENAI_PROXY_URL
   ##     value: "http://proxy.example.com:8080"
+  ##   # Anthropic Workload Identity Federation token exchange requests will use this proxy if set.
+  ##   - name: AI_GATEWAY_ANTHROPIC_PROXY_URL
+  ##     value: "http://proxy.example.com:8080"
   extraEnvVars: []
 
   # Example of volumes

@@ -147,6 +147,12 @@ func TestOpenAIAuthLogValue(t *testing.T) {
 	require.Equal(t, "proj_456", attrs["project"])
 }
 
+func TestAnthropicAuthLogValue(t *testing.T) {
+	a := filterapi.AnthropicAuth{AccessToken: "my-access-token"}
+	attrs := logAttrs(a.LogValue())
+	require.Equal(t, "[REDACTED]", attrs["accessToken"])
+}
+
 func TestGCPAuthLogValue(t *testing.T) {
 	g := filterapi.GCPAuth{AccessToken: "gcp-token", Region: "us-central1", ProjectName: "my-project"}
 	attrs := logAttrs(g.LogValue())
