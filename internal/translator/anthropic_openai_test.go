@@ -879,6 +879,23 @@ func TestAnthropicMessagesToOpenAI_ToolConversation(t *testing.T) {
 		assert.Equal(t, "hello!", msgs[2].OfAssistant.Content.Value)
 		require.NotNil(t, msgs[3].OfUser)
 	})
+
+	t.Run("inline system message is promoted to the system prompt", func(t *testing.T) {
+		body := &anthropic.MessagesRequest{
+			Model:     "claude-3",
+			MaxTokens: 100,
+			Messages: []anthropic.MessageParam{
+				{Role: "system", Content: anthropic.MessageContent{Text: "You are helpful."}},
+				{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "hi"}},
+			},
+		}
+		msgs := anthropicMessagesToOpenAI(body)
+		require.Len(t, msgs, 2)
+		require.NotNil(t, msgs[0].OfSystem)
+		assert.Equal(t, "You are helpful.", msgs[0].OfSystem.Content.Value)
+		require.NotNil(t, msgs[1].OfUser)
+		assert.Equal(t, "hi", msgs[1].OfUser.Content.Value)
+	})
 }
 
 func TestAnthropicToOpenAITranslator_RequestBody_ThinkingConfig(t *testing.T) {
