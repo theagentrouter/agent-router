@@ -13,6 +13,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
@@ -25,14 +26,6 @@ func TestOpenAIBatchesTranslators_Identity(t *testing.T) {
 	}
 
 	for op, tr := range translators {
-		t.Run(op+"/RequestBody is a no-op", func(t *testing.T) {
-			in := &BatchesRequest{NativeID: "batch_native", Path: "/v1/batches/batch_native", Method: "GET"}
-			hdrs, body, err := tr.RequestBody([]byte("ignored"), in, false)
-			require.NoError(t, err)
-			require.Nil(t, hdrs)
-			require.Nil(t, body)
-		})
-
 		t.Run(op+"/ResponseHeaders is a no-op", func(t *testing.T) {
 			hdrs, err := tr.ResponseHeaders(map[string]string{"content-type": "application/json"})
 			require.NoError(t, err)
@@ -119,7 +112,35 @@ func TestOpenAIBatchCreateTranslator_AcceptsAllEndpoints(t *testing.T) {
 	} {
 		hdrs, body, err := tr.RequestBody([]byte(`{}`), &BatchesRequest{Endpoint: ep}, false)
 		require.NoError(t, err, ep)
-		require.Nil(t, hdrs)
+		require.Equal(t, []internalapi.Header{{":path", "/batches"}}, hdrs)
 		require.Nil(t, body)
+	}
+}
+
+func TestOpenAIBatchesTranslators_RequestPathPrefix(t *testing.T) {
+	type tc struct {
+		newTranslator func(filterapi.VersionedAPISchema) (BatchesTranslator, error)
+		req           BatchesRequest
+		wantSuffix    string
+	}
+	ops := map[string]tc{
+		"create":   {NewBatchCreateTranslator, BatchesRequest{Path: "/v1/batches", Method: "POST"}, "/batches"},
+		"retrieve": {NewBatchRetrieveTranslator, BatchesRequest{NativeID: "batch_n", Path: "/v1/batches/batch_n"}, "/batches/batch_n"},
+		"cancel":   {NewBatchCancelTranslator, BatchesRequest{NativeID: "batch_n", Path: "/v1/batches/batch_n/cancel"}, "/batches/batch_n/cancel"},
+		"list":     {NewBatchListTranslator, BatchesRequest{Path: "/v1/batches?after=batch_n&limit=2", Query: "?after=batch_n&limit=2"}, "/batches?after=batch_n&limit=2"},
+	}
+	prefixes := map[string]string{"": "", "v1": "/v1", "/v1beta/openai": "/v1beta/openai", "/compatibility/v1/": "/compatibility/v1"}
+	for op, c := range ops {
+		for prefix, wantPrefix := range prefixes {
+			t.Run(op+"/prefix="+prefix, func(t *testing.T) {
+				tr, err := c.newTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: prefix})
+				require.NoError(t, err)
+				req := c.req
+				hdrs, body, err := tr.RequestBody([]byte("ignored"), &req, false)
+				require.NoError(t, err)
+				require.Nil(t, body)
+				require.Equal(t, []internalapi.Header{{":path", wantPrefix + c.wantSuffix}}, hdrs)
+			})
+		}
 	}
 }

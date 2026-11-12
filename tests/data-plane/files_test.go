@@ -86,8 +86,9 @@ func filesTestConfig() string {
 		Version: version.Parse(),
 		Backends: []filterapi.Backend{
 			{
-				Name:   filesTestBackendName1,
-				Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
+				Name: filesTestBackendName1,
+				// "v1" is the OpenAI prefix the controller defaults to; it yields /v1/files and /v1/batches upstream.
+				Schema: openAISchema,
 				Auth:   &filterapi.BackendAuth{APIKey: &filterapi.APIKeyAuth{Key: filesTestAPIKey}},
 			},
 			// Existing backends so the main TestWithTestUpstream still works.
