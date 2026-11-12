@@ -74,17 +74,20 @@ func (o *openAIToOpenAITranslatorV1Translation) ResponseBody(_ map[string]string
 	newHeaders []internalapi.Header, newBody []byte, tokenUsage metrics.TokenUsage, responseModel internalapi.ResponseModel, err error,
 ) {
 	responseModel = o.requestModel
-	if span != nil {
-		data, readErr := io.ReadAll(body)
-		if readErr == nil {
-			var resp openai.TranslationResponse
-			if jsonErr := json.Unmarshal(data, &resp); jsonErr == nil {
-				span.RecordResponse(&resp)
-			} else {
-				span.RecordResponse(&openai.TranslationResponse{
-					Text: string(data),
-				})
+	data, readErr := io.ReadAll(body)
+	if readErr == nil {
+		var resp openai.TranslationResponse
+		if jsonErr := json.Unmarshal(data, &resp); jsonErr == nil {
+			if seconds, ok := inputAudioSeconds(resp.Usage); ok {
+				tokenUsage.SetInputAudioSeconds(seconds)
 			}
+			if span != nil {
+				span.RecordResponse(&resp)
+			}
+		} else if span != nil {
+			span.RecordResponse(&openai.TranslationResponse{
+				Text: string(data),
+			})
 		}
 	}
 	return

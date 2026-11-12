@@ -96,20 +96,32 @@ func (o *openAIToOpenAITranslatorV1Transcription) ResponseBody(respHeaders map[s
 		return
 	}
 
-	if span != nil {
-		data, readErr := io.ReadAll(body)
-		if readErr == nil {
-			var resp openai.TranscriptionResponse
-			if jsonErr := json.Unmarshal(data, &resp); jsonErr == nil {
-				span.RecordResponse(&resp)
-			} else {
-				span.RecordResponse(&openai.TranscriptionResponse{
-					Text: string(data),
-				})
+	data, readErr := io.ReadAll(body)
+	if readErr == nil {
+		var resp openai.TranscriptionResponse
+		if jsonErr := json.Unmarshal(data, &resp); jsonErr == nil {
+			if seconds, ok := inputAudioSeconds(resp.Usage); ok {
+				tokenUsage.SetInputAudioSeconds(seconds)
 			}
+			if span != nil {
+				span.RecordResponse(&resp)
+			}
+		} else if span != nil {
+			span.RecordResponse(&openai.TranscriptionResponse{
+				Text: string(data),
+			})
 		}
 	}
 	return
+}
+
+// inputAudioSeconds returns the input audio duration reported in the "usage" object of a
+// transcription or translation response.
+func inputAudioSeconds(usage *openai.TranscriptionUsage) (float64, bool) {
+	if usage != nil && usage.Seconds > 0 {
+		return usage.Seconds, true
+	}
+	return 0, false
 }
 
 // recordTranscriptionStreamChunks scans o.sseBuffer for complete SSE `data:` lines and forwards
