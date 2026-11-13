@@ -55,12 +55,13 @@ func TestNewBatchTranslators(t *testing.T) {
 	type opCase struct {
 		newTranslator func(filterapi.VersionedAPISchema) (BatchesTranslator, error)
 		wantType      BatchesTranslator
+		wantGCPType   BatchesTranslator
 	}
 	ops := map[string]opCase{
-		"create":   {NewBatchCreateTranslator, &openAIBatchCreateTranslator{}},
-		"retrieve": {NewBatchRetrieveTranslator, &openAIBatchRetrieveTranslator{}},
-		"cancel":   {NewBatchCancelTranslator, &openAIBatchCancelTranslator{}},
-		"list":     {NewBatchListTranslator, &openAIBatchListTranslator{}},
+		"create":   {NewBatchCreateTranslator, &openAIBatchCreateTranslator{}, &openAIToGCPVertexAIBatchCreateTranslator{}},
+		"retrieve": {NewBatchRetrieveTranslator, &openAIBatchRetrieveTranslator{}, &openAIToGCPVertexAIBatchRetrieveTranslator{}},
+		"cancel":   {NewBatchCancelTranslator, &openAIBatchCancelTranslator{}, &openAIToGCPVertexAIBatchCancelTranslator{}},
+		"list":     {NewBatchListTranslator, &openAIBatchListTranslator{}, &openAIToGCPVertexAIBatchListTranslator{}},
 	}
 
 	openAISchemas := []filterapi.VersionedAPISchema{
@@ -70,7 +71,6 @@ func TestNewBatchTranslators(t *testing.T) {
 	unsupportedSchemas := []filterapi.VersionedAPISchema{
 		{Name: filterapi.APISchemaAWSBedrock},
 		{Name: filterapi.APISchemaAzureOpenAI},
-		{Name: filterapi.APISchemaGCPVertexAI},
 		{Name: filterapi.APISchemaGCPAnthropic},
 		{Name: filterapi.APISchemaAnthropic},
 		{Name: filterapi.APISchemaAWSAnthropic},
@@ -85,6 +85,11 @@ func TestNewBatchTranslators(t *testing.T) {
 				require.IsType(t, tc.wantType, tr)
 			})
 		}
+		t.Run(op+"/gcp vertex ai returns its translator", func(t *testing.T) {
+			tr, err := tc.newTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaGCPVertexAI})
+			require.NoError(t, err)
+			require.IsType(t, tc.wantGCPType, tr)
+		})
 		for _, schema := range unsupportedSchemas {
 			t.Run(op+"/"+string(schema.Name)+" fails closed", func(t *testing.T) {
 				tr, err := tc.newTranslator(schema)
@@ -143,4 +148,15 @@ func TestOpenAIBatchesTranslators_RequestPathPrefix(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestOpenAIBatchCreateTranslator_StripsExtensionFields(t *testing.T) {
+	tr, err := NewBatchCreateTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: "v1"})
+	require.NoError(t, err)
+	raw := []byte(`{"input_file_id":"file-1","endpoint":"/v1/chat/completions","completion_window":"24h",` +
+		`"model":"gpt-4o","output_uri_prefix":"gs://b/o/","display_name":"d","labels":{"a":"b"},"metadata":{"k":"v"}}`)
+	hdrs, body, err := tr.RequestBody(raw, &BatchesRequest{Path: "/v1/batches"}, false)
+	require.NoError(t, err)
+	require.Equal(t, []internalapi.Header{{":path", "/v1/batches"}}, hdrs)
+	require.JSONEq(t, `{"input_file_id":"file-1","endpoint":"/v1/chat/completions","completion_window":"24h","metadata":{"k":"v"}}`, string(body))
 }

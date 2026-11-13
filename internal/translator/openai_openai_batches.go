@@ -6,8 +6,12 @@
 package translator
 
 import (
+	"fmt"
 	"io"
 	"path"
+
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -42,15 +46,6 @@ var (
 	_ BatchesTranslator = (*openAIBatchListTranslator)(nil)
 )
 
-// RequestBody implements [Translator.RequestBody] for create: POST {prefix}/batches. A nil body
-// keeps the processor's native-id-substituted body. Every batch endpoint is accepted, including ones
-// the gateway does not know yet: an OpenAI-compatible upstream validates the endpoint itself.
-func (t *openAIBatchCreateTranslator) RequestBody(_ []byte, req *BatchesRequest, _ bool) (
-	newHeaders []internalapi.Header, mutatedBody []byte, err error,
-) {
-	return pathHeader(t.batchesPath + requestQuery(req.Path)), nil, nil
-}
-
 // RequestBody implements [Translator.RequestBody] for retrieve: GET {prefix}/batches/{native_id}.
 func (t *openAIBatchRetrieveTranslator) RequestBody(_ []byte, req *BatchesRequest, _ bool) (
 	newHeaders []internalapi.Header, mutatedBody []byte, err error,
@@ -71,6 +66,32 @@ func (t *openAIBatchListTranslator) RequestBody(_ []byte, req *BatchesRequest, _
 	newHeaders []internalapi.Header, mutatedBody []byte, err error,
 ) {
 	return pathHeader(t.batchesPath + requestQuery(req.Path)), nil, nil
+}
+
+// batchCreateExtensionFields are gateway/vendor extension fields of a batch create request
+// (see [openai.BatchNewParams]) that OpenAI does not accept, so they are removed before forwarding.
+var batchCreateExtensionFields = []string{"model", "output_uri_prefix", "display_name", "labels"}
+
+// RequestBody implements [Translator.RequestBody] for create: POST {prefix}/batches. Gateway/vendor
+// extension fields (e.g. "model" or the GCP Vertex AI fields) are removed; when none are present a
+// nil body keeps the processor's native-id-substituted body. Every batch endpoint is accepted,
+// including ones the gateway does not know yet: an OpenAI-compatible upstream validates the endpoint
+// itself.
+func (t *openAIBatchCreateTranslator) RequestBody(raw []byte, req *BatchesRequest, _ bool) (
+	newHeaders []internalapi.Header, mutatedBody []byte, err error,
+) {
+	for _, field := range batchCreateExtensionFields {
+		if !gjson.GetBytes(raw, field).Exists() {
+			continue
+		}
+		if mutatedBody == nil {
+			mutatedBody = raw
+		}
+		if mutatedBody, err = sjson.DeleteBytes(mutatedBody, field); err != nil {
+			return nil, nil, fmt.Errorf("failed to remove %q from batch create request: %w", field, err)
+		}
+	}
+	return pathHeader(t.batchesPath + requestQuery(req.Path)), mutatedBody, nil
 }
 
 // ResponseHeaders implements [Translator.ResponseHeaders]. The OpenAI response headers need no

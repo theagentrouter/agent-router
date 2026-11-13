@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -290,6 +291,9 @@ func (p *batchesProcessor) ProcessRequestBody(_ context.Context, rawBody *extpro
 	if inputFileID == "" {
 		return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error", "the 'input_file_id' field is required"), nil
 	}
+	if isStorageURI(inputFileID) {
+		return p.handleStorageURICreate(body)
+	}
 	decoded, err := p.codec.Decode(inputFileID)
 	if err != nil || decoded.Kind != idcodec.KindFile {
 		p.logger.Info("rejecting batch create with undecodable input_file_id", slog.String("input_file_id", inputFileID))
@@ -324,6 +328,32 @@ func (p *batchesProcessor) ProcessRequestBody(_ context.Context, rawBody *extpro
 	}, nil
 }
 
+// handleStorageURICreate routes a create whose input_file_id is a provider storage URI (e.g. a
+// "gs://" Cloud Storage URI) rather than a gateway file id. There is no id to carry the model, so
+// the request is routed by the "model" extension field, and the URI is forwarded unchanged.
+func (p *batchesProcessor) handleStorageURICreate(body []byte) (*extprocv3.ProcessingResponse, error) {
+	model := gjson.GetBytes(body, "model").String()
+	if model == "" {
+		return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error",
+			"the 'model' field is required when input_file_id is a storage URI"), nil
+	}
+	p.requestBody = body
+	headerMutation := p.newRequestHeaderMutation()
+	p.routeByModel(headerMutation, model)
+	p.batchesRequestMetadata.Model = model
+	return &extprocv3.ProcessingResponse{
+		Response: &extprocv3.ProcessingResponse_RequestBody{RequestBody: &extprocv3.BodyResponse{
+			Response: &extprocv3.CommonResponse{HeaderMutation: headerMutation, ClearRouteCache: true},
+		}},
+	}, nil
+}
+
+// isStorageURI reports whether a batch file field holds a provider storage URI ("gs://...")
+// instead of a gateway file id. Such values are forwarded and returned unchanged.
+func isStorageURI(v string) bool {
+	return strings.HasPrefix(v, "gs://")
+}
+
 // ProcessResponseHeaders implements [Processor.ProcessResponseHeaders]. Captures the upstream
 // response headers for the status check and translator calls.
 func (p *batchesProcessor) ProcessResponseHeaders(_ context.Context, headers *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {
@@ -339,15 +369,28 @@ func (p *batchesProcessor) ProcessResponseHeaders(_ context.Context, headers *co
 // ProcessResponseBody implements [Processor.ProcessResponseBody]. Successful bodies get their
 // backend-native ids re-encoded into gateway ids; error bodies pass through unchanged.
 func (p *batchesProcessor) ProcessResponseBody(_ context.Context, body *extprocv3.HttpBody) (*extprocv3.ProcessingResponse, error) {
-	if p.isUpstreamFilter || !isSuccessStatus(p.responseHeaders) {
+	if p.isUpstreamFilter {
 		return passThroughResponseBody(), nil
 	}
-	workingBody, errResp := p.translatedResponseBody(body.GetBody())
+	// Upstreams may compress the response (e.g. Vertex AI answers with gzip). Every rewrite below
+	// works on the decoded JSON, so decode once and drop content-encoding when the body is replaced.
+	raw, isEncoded, err := decodeBatchesResponseBody(body.GetBody(), p.responseHeaders["content-encoding"])
+	if err != nil {
+		p.logger.Error("failed to decode batches response body", slog.String("error", err.Error()))
+		return batchesReEncodeError("failed to decode upstream batches response"), nil
+	}
+	if !isSuccessStatus(p.responseHeaders) {
+		resp, translateErr := p.translateResponseError(raw)
+		if translateErr != nil {
+			return nil, translateErr
+		}
+		return withDecodedBody(resp, isEncoded), nil
+	}
+	workingBody, errResp := p.translatedResponseBody(raw)
 	if errResp != nil {
 		return errResp, nil
 	}
 	var newBody []byte
-	var err error
 	if p.op == batchesOpList {
 		newBody, err = p.reEncodeList(workingBody)
 	} else {
@@ -357,7 +400,34 @@ func (p *batchesProcessor) ProcessResponseBody(_ context.Context, body *extprocv
 		p.logger.Error("failed to re-encode batches response", slog.String("error", err.Error()))
 		return batchesReEncodeError(err.Error()), nil
 	}
-	return bodyMutationResponse(newBody), nil
+	return withDecodedBody(bodyMutationResponse(newBody), isEncoded), nil
+}
+
+// decodeBatchesResponseBody returns the decompressed response body and whether it was encoded.
+func decodeBatchesResponseBody(body []byte, contentEncoding string) ([]byte, bool, error) {
+	res, err := decodeContentIfNeeded(body, contentEncoding)
+	if err != nil {
+		return nil, false, err
+	}
+	if !res.isEncoded {
+		return body, false, nil
+	}
+	decoded, err := io.ReadAll(res.reader)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to decompress %s body: %w", contentEncoding, err)
+	}
+	return decoded, true, nil
+}
+
+// withDecodedBody removes content-encoding from a response whose body was replaced with a
+// decoded one. A pass-through response keeps the original (still encoded) body and headers.
+func withDecodedBody(resp *extprocv3.ProcessingResponse, isEncoded bool) *extprocv3.ProcessingResponse {
+	common := resp.GetResponseBody().GetResponse()
+	if common == nil {
+		return resp
+	}
+	common.HeaderMutation = removeContentEncodingIfNeeded(common.HeaderMutation, common.BodyMutation, isEncoded)
+	return resp
 }
 
 // translatedResponseBody validates that the response can be re-encoded and runs the translator.
@@ -384,6 +454,19 @@ func (p *batchesProcessor) translatedResponseBody(raw []byte) ([]byte, *extprocv
 		return mutatedBody, nil
 	}
 	return raw, nil
+}
+
+// translateResponseError runs translator.ResponseError on a non-2xx response body so provider
+// error envelopes reach the client in the OpenAI shape.
+func (p *batchesProcessor) translateResponseError(raw []byte) (*extprocv3.ProcessingResponse, error) {
+	if p.translator == nil {
+		return passThroughResponseBody(), nil
+	}
+	newHeaders, newBody, err := p.translator.ResponseError(p.responseHeaders, bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("failed to transform batches response error: %w", err)
+	}
+	return translatedBodyResponse(newHeaders, newBody), nil
 }
 
 // encodeID encodes a backend-native id of the given kind into a gateway id for the current backend.
@@ -414,7 +497,7 @@ func (p *batchesProcessor) reEncodeBatch(body []byte, prefix string) ([]byte, er
 	}
 	for _, field := range batchFileIDFields {
 		v := gjson.GetBytes(body, prefix+field)
-		if v.Type != gjson.String || v.String() == "" {
+		if v.Type != gjson.String || v.String() == "" || isStorageURI(v.String()) {
 			continue
 		}
 		gw, err := p.encodeID(idcodec.KindFile, v.String())
@@ -482,6 +565,7 @@ func (p *batchesProcessor) SetBackend(_ context.Context, backend *filterapi.Runt
 		return fmt.Errorf("id belongs to backend %s/%s, but the request was routed to %s/%s", d.namespace, d.name, ns, name)
 	}
 	rp.backend = &backendKey{namespace: ns, name: name}
+	rp.batchesRequestMetadata.ModelNameOverride = backend.Backend.ModelNameOverride
 	p.routeProcessor = rp
 	p.handler = backend.Handler
 

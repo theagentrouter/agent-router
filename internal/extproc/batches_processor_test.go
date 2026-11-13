@@ -6,6 +6,8 @@
 package extproc
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -539,4 +541,70 @@ type userFacingErrTranslator struct{ *fakeBatchCreateTranslator }
 func (u *userFacingErrTranslator) RequestBody(_ []byte, req *translator.BatchesRequest, _ bool) ([]internalapi.Header, []byte, error) {
 	u.got = req
 	return nil, nil, fmt.Errorf("%w: bad field", internalapi.ErrInvalidRequestBody)
+}
+
+func gzipBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	_, err := w.Write([]byte(s))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	return buf.Bytes()
+}
+
+// Vertex AI answers batch requests with Content-Encoding: gzip. The body must be decompressed
+// before translation and re-encoding, and content-encoding dropped from the replaced body.
+func TestBatches_ResponseBody_GzipEncoded(t *testing.T) {
+	codec := newTestCodec()
+	const job = `{"name":"projects/p/locations/l/batchPredictionJobs/123","model":"publishers/google/models/gemini-2.5-flash",` +
+		`"state":"JOB_STATE_QUEUED","inputConfig":{"instancesFormat":"jsonl","gcsSource":{"uris":["gs://b/in.jsonl"]}}}`
+
+	t.Run("success is decoded, translated and re-encoded", func(t *testing.T) {
+		p := newResponseBatchesProcessor(codec, batchesOpRetrieve, "200")
+		p.responseHeaders["content-encoding"] = "gzip"
+		tr, err := translator.NewBatchRetrieveTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaGCPVertexAI})
+		require.NoError(t, err)
+		p.translator = tr
+
+		resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: gzipBytes(t, job), EndOfStream: true})
+		require.NoError(t, err)
+		require.Nil(t, resp.GetImmediateResponse(), "decode failure would be an immediate 502")
+		body := resp.GetResponseBody().Response.BodyMutation.GetBody()
+		decodeOrFail(t, codec, gjson.GetBytes(body, "id").String(), idcodec.KindBatch, "123")
+		require.Equal(t, "validating", gjson.GetBytes(body, "status").String())
+		require.Equal(t, "gs://b/in.jsonl", gjson.GetBytes(body, "input_file_id").String())
+		require.Contains(t, resp.GetResponseBody().Response.HeaderMutation.RemoveHeaders, "content-encoding")
+	})
+
+	t.Run("error is decoded and translated", func(t *testing.T) {
+		p := newResponseBatchesProcessor(codec, batchesOpRetrieve, "404")
+		p.responseHeaders["content-encoding"] = "gzip"
+		tr, err := translator.NewBatchRetrieveTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaGCPVertexAI})
+		require.NoError(t, err)
+		p.translator = tr
+
+		resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{
+			Body: gzipBytes(t, `{"error":{"code":404,"message":"job not found","status":"NOT_FOUND"}}`), EndOfStream: true,
+		})
+		require.NoError(t, err)
+		body := resp.GetResponseBody().Response.BodyMutation.GetBody()
+		require.Equal(t, "job not found", gjson.GetBytes(body, "error.message").String())
+		require.Contains(t, resp.GetResponseBody().Response.HeaderMutation.RemoveHeaders, "content-encoding")
+	})
+
+	t.Run("corrupt gzip is a 502", func(t *testing.T) {
+		p := newResponseBatchesProcessor(codec, batchesOpRetrieve, "200")
+		p.responseHeaders["content-encoding"] = "gzip"
+		resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: []byte("\x1f\x8bnot-gzip"), EndOfStream: true})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadGateway, immediateStatus(resp))
+	})
+
+	t.Run("identity body keeps content-encoding untouched", func(t *testing.T) {
+		p := newResponseBatchesProcessor(codec, batchesOpRetrieve, "200")
+		resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: []byte(`{"id":"batch_1"}`)})
+		require.NoError(t, err)
+		require.NotContains(t, resp.GetResponseBody().Response.HeaderMutation.RemoveHeaders, "content-encoding")
+	})
 }

@@ -34,6 +34,8 @@ type BatchesRequest struct {
 	Query string
 	// Endpoint is the batch "endpoint" from the create request body; "" for other operations.
 	Endpoint openai.BatchNewParamsEndpoint
+	// ModelNameOverride is the backend's model name override, if any; "" otherwise.
+	ModelNameOverride string
 }
 
 // BatchesTranslator maps the OpenAI Batch API request/response shapes to a provider's batch API.
@@ -45,11 +47,13 @@ type BatchesTranslator = Translator[BatchesRequest, any]
 // The create translator owns endpoint support: its RequestBody receives the requested endpoint in
 // [BatchesRequest.Endpoint] and returns an error wrapping [ErrUnsupportedBatchEndpoint] when the
 // provider cannot run batches for it. The OpenAI translator accepts every endpoint and leaves
-// validation to the upstream.
+// validation to the upstream; the GCP Vertex AI translator accepts chat completions and embeddings.
 func NewBatchCreateTranslator(schema filterapi.VersionedAPISchema) (BatchesTranslator, error) {
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return &openAIBatchCreateTranslator{newOpenAIBatchPassthrough(schema.OpenAIPrefix())}, nil
+	case filterapi.APISchemaGCPVertexAI:
+		return &openAIToGCPVertexAIBatchCreateTranslator{}, nil
 	default:
 		return nil, errUnsupportedBatchesSchema(schema)
 	}
@@ -60,6 +64,8 @@ func NewBatchRetrieveTranslator(schema filterapi.VersionedAPISchema) (BatchesTra
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return &openAIBatchRetrieveTranslator{newOpenAIBatchPassthrough(schema.OpenAIPrefix())}, nil
+	case filterapi.APISchemaGCPVertexAI:
+		return &openAIToGCPVertexAIBatchRetrieveTranslator{}, nil
 	default:
 		return nil, errUnsupportedBatchesSchema(schema)
 	}
@@ -70,6 +76,8 @@ func NewBatchCancelTranslator(schema filterapi.VersionedAPISchema) (BatchesTrans
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return &openAIBatchCancelTranslator{newOpenAIBatchPassthrough(schema.OpenAIPrefix())}, nil
+	case filterapi.APISchemaGCPVertexAI:
+		return &openAIToGCPVertexAIBatchCancelTranslator{}, nil
 	default:
 		return nil, errUnsupportedBatchesSchema(schema)
 	}
@@ -80,6 +88,8 @@ func NewBatchListTranslator(schema filterapi.VersionedAPISchema) (BatchesTransla
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return &openAIBatchListTranslator{newOpenAIBatchPassthrough(schema.OpenAIPrefix())}, nil
+	case filterapi.APISchemaGCPVertexAI:
+		return &openAIToGCPVertexAIBatchListTranslator{}, nil
 	default:
 		return nil, errUnsupportedBatchesSchema(schema)
 	}

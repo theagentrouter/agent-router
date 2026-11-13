@@ -9499,6 +9499,26 @@ type BatchNewParams struct {
 	// OutputExpiresAfter is the optional expiration policy for the output and/or error file that are generated for a
 	// batch.
 	OutputExpiresAfter *BatchNewParamsOutputExpiresAfter `json:"output_expires_after,omitempty"`
+
+	// Model is a gateway extension field that routes a batch whose input is a provider storage URI
+	// (e.g. "gs://...") rather than a gateway file id, which would otherwise carry the model.
+	Model string `json:"model,omitempty"`
+
+	// GCPVertexAIBatchVendorFields configures the GCP Vertex AI specific fields during schema translation.
+	*GCPVertexAIBatchVendorFields `json:",inline,omitempty"`
+}
+
+// GCPVertexAIBatchVendorFields contains GCP Vertex AI vendor-specific fields for batch creation.
+// They are sent by OpenAI SDK clients through "extra_body".
+type GCPVertexAIBatchVendorFields struct {
+	// OutputURIPrefix is the Cloud Storage prefix under which Vertex AI writes the predictions
+	// (outputConfig.gcsDestination.outputUriPrefix). Defaults to "<input directory>/output/".
+	OutputURIPrefix string `json:"output_uri_prefix,omitempty"`
+	// DisplayName is the Vertex AI batch job display name. Defaults to "aigw-batch-<unix seconds>".
+	DisplayName string `json:"display_name,omitempty"`
+	// Labels are the Vertex AI batch job labels. Defaults to the batch metadata, sanitized to the
+	// Vertex AI label rules.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // The time frame within which the batch should be processed.
