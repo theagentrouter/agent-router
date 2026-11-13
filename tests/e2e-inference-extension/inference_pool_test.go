@@ -148,7 +148,7 @@ func TestInferencePoolIntegration(t *testing.T) {
 	for _, tc := range noEPPCases {
 		t.Run(tc.name, func(t *testing.T) {
 			if !supported {
-				t.Skipf("needs Envoy Gateway %s, have %s", e2elib.EnvoyGatewayLatestVersion, e2elib.EnvoyGatewayVersion())
+				t.Skipf("needs Envoy Gateway v1.11.0-rc.1 or later, have %s", e2elib.EnvoyGatewayVersion())
 			}
 			requireInferenceGatewayStatusSplit(t, egSelector, tc.testCase, tc.wantOK)
 		})

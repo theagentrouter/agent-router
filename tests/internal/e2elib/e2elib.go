@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/mod/semver"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -417,15 +418,19 @@ func EnvoyGatewaySupportsLimitFromMetadata() bool {
 	return EnvoyGatewayVersion() == EnvoyGatewayLatestVersion
 }
 
+// envoyGatewayMultipleInferencePoolsPerRuleVersion is the first Envoy Gateway release that builds
+// one cluster per InferencePool backendRef of a route rule.
+const envoyGatewayMultipleInferencePoolsPerRuleVersion = "v1.11.0-rc.1"
+
 // EnvoyGatewaySupportsMultipleInferencePoolsPerRule reports whether the installed Envoy Gateway
-// builds one cluster per InferencePool backendRef of a route rule. Tagged releases up to v1.10
-// pass every InferencePool of the rule to a single PostClusterModify call, which the extension
-// server rejects, so EG skips publishing the whole xDS update.
-//
-// TODO: this only recognizes the "latest" main build. Relax it to a version comparison once a tagged
-// EG release builds one cluster per InferencePool, otherwise it will keep skipping on that release.
+// builds one cluster per InferencePool backendRef of a route rule: the main build, or
+// v1.11.0-rc.1 and later. Older releases pass every InferencePool of the rule to a single
+// PostClusterModify call, which the extension server rejects, so EG skips publishing the whole
+// xDS update.
 func EnvoyGatewaySupportsMultipleInferencePoolsPerRule() bool {
-	return EnvoyGatewayVersion() == EnvoyGatewayLatestVersion
+	v := EnvoyGatewayVersion()
+	return v == EnvoyGatewayLatestVersion ||
+		semver.Compare(v, envoyGatewayMultipleInferencePoolsPerRuleVersion) >= 0
 }
 
 // initEnvoyGateway initializes the Envoy Gateway in the kind cluster following the quickstart guide:

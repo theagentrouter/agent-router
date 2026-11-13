@@ -63,8 +63,8 @@ func TestGatewayAPIInferenceExtension(t *testing.T) {
 	if !e2elib.EnvoyGatewaySupportsMultipleInferencePoolsPerRule() {
 		// Its HTTPRoute splits one rule across two InferencePools, which older Envoy Gateway
 		// releases can't translate.
-		tlog.Logf(t, "Skipping GatewayWeightedAcrossTwoInferencePools: needs Envoy Gateway %s, have %s",
-			e2elib.EnvoyGatewayLatestVersion, e2elib.EnvoyGatewayVersion())
+		tlog.Logf(t, "Skipping GatewayWeightedAcrossTwoInferencePools: needs Envoy Gateway v1.11.0-rc.1 or later, have %s",
+			e2elib.EnvoyGatewayVersion())
 		options.SkipTests = append(options.SkipTests, "GatewayWeightedAcrossTwoInferencePools")
 	}
 
