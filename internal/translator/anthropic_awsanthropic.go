@@ -146,6 +146,12 @@ func (a *anthropicToAWSAnthropicTranslator) ResponseError(respHeaders map[string
 	if !strings.Contains(respHeaders[contentTypeHeaderName], jsonContentType) {
 		return a.anthropicToAnthropicTranslator.ResponseError(respHeaders, body)
 	}
+	return bedrockJSONErrorToAnthropic(respHeaders[statusHeaderName], body)
+}
+
+// bedrockJSONErrorToAnthropic wraps a Bedrock JSON error body in an Anthropic error envelope. A body that already is
+// one passes through untouched.
+func bedrockJSONErrorToAnthropic(statusCode string, body io.Reader) (newHeaders []internalapi.Header, mutatedBody []byte, err error) {
 	buf, err := io.ReadAll(body)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read error body: %w", err)
@@ -160,7 +166,7 @@ func (a *anthropicToAWSAnthropicTranslator) ResponseError(respHeaders map[string
 	if json.Unmarshal(buf, &bedrockError) == nil && bedrockError.Message != "" {
 		message = bedrockError.Message
 	}
-	return anthropicErrorResponse(respHeaders[statusHeaderName], message)
+	return anthropicErrorResponse(statusCode, message)
 }
 
 // ResponseHeaders implements [AnthropicMessagesTranslator.ResponseHeaders].
