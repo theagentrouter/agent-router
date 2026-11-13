@@ -642,6 +642,21 @@ type sseMessageStop struct {
 	Type string `json:"type"`
 }
 
+type ssePing struct {
+	Type string `json:"type"`
+}
+
+// emitPing emits an Anthropic ping SSE event. Anthropic streams may include any
+// number of ping events at any position, and clients ignore them.
+func emitPing(out *[]byte) error {
+	data, err := json.Marshal(ssePing{Type: "ping"})
+	if err != nil {
+		return fmt.Errorf("failed to marshal ping: %w", err)
+	}
+	appendAnthropicSSEEvent(out, "ping", data)
+	return nil
+}
+
 // openAIStreamToAnthropicState tracks the state for converting OpenAI SSE chunks to Anthropic SSE events.
 type openAIStreamToAnthropicState struct {
 	buffer           bytes.Buffer
@@ -667,15 +682,25 @@ type streamToolCall struct {
 }
 
 // processBuffer processes the buffered OpenAI SSE data and emits Anthropic SSE events.
-func (s *openAIStreamToAnthropicState) processBuffer(out *[]byte, endOfStream bool) error {
-	// Loop through all event blocks that are separated by a blank line
+// pingWorthy is true when at least one complete block was consumed and none of them was
+// a valid protocol block, that is, only keepalive comments or undecodable data. Valid
+// blocks that produce no event (finish_reason-only chunks, [DONE]) and incomplete
+// buffered fragments never set it.
+func (s *openAIStreamToAnthropicState) processBuffer(out *[]byte, endOfStream bool) (pingWorthy bool, err error) {
+	blocksProcessed, validBlocks := 0, 0
+	// Loop through all event blocks that are separated by a blank line (LF or CRLF).
 	for {
-		eventBlock, remaining, found := bytes.Cut(s.buffer.Bytes(), []byte("\n\n"))
+		eventBlock, remaining, found := nextSSEEvent(s.buffer.Bytes())
 		if !found {
 			break
 		}
-		if err := s.processEventBlock(eventBlock, out); err != nil {
-			return err
+		valid, err := s.processEventBlock(eventBlock, out)
+		if err != nil {
+			return false, err
+		}
+		blocksProcessed++
+		if valid {
+			validBlocks++
 		}
 		// Clear buffer and add back remaining SSE data
 		s.buffer.Reset()
@@ -687,19 +712,23 @@ func (s *openAIStreamToAnthropicState) processBuffer(out *[]byte, endOfStream bo
 		if s.buffer.Len() > 0 {
 			remaining := s.buffer.Bytes()
 			s.buffer.Reset()
-			if err := s.processEventBlock(remaining, out); err != nil {
-				return err
+			if _, err := s.processEventBlock(remaining, out); err != nil {
+				return false, err
 			}
 		}
 		if !s.closingEmitted {
-			return s.emitClosingEvents(out)
+			return false, s.emitClosingEvents(out)
 		}
+		return false, nil
 	}
-	return nil
+	return blocksProcessed > 0 && validBlocks == 0, nil
 }
 
-// processEventBlock processes a single SSE event block (data between consecutive \n\n separators).
-func (s *openAIStreamToAnthropicState) processEventBlock(block []byte, out *[]byte) error {
+// processEventBlock processes a single SSE event block (data between consecutive blank
+// lines). It reports whether the block was a valid protocol block: a well-formed data
+// event or the [DONE] marker. Comment-only blocks, which backends send as keepalives,
+// and undecodable data report false.
+func (s *openAIStreamToAnthropicState) processEventBlock(block []byte, out *[]byte) (valid bool, err error) {
 	var eventData []byte
 	for line := range bytes.SplitSeq(block, []byte("\n")) {
 		if after, ok := cutSSEDataPrefix(line); ok {
@@ -711,21 +740,21 @@ func (s *openAIStreamToAnthropicState) processEventBlock(block []byte, out *[]by
 	}
 
 	if len(eventData) == 0 {
-		return nil
+		return false, nil
 	}
 
 	// Skip the [DONE] marker; closing events are emitted on the usage chunk or endOfStream.
 	if bytes.Equal(eventData, sseDoneMessage) {
-		return nil
+		return true, nil
 	}
 
 	var chunk openai.ChatCompletionResponseChunk
 	if err := json.Unmarshal(eventData, &chunk); err != nil {
 		// Skip malformed chunks silently.
-		return nil
+		return false, nil
 	}
 
-	return s.handleChunk(&chunk, out)
+	return true, s.handleChunk(&chunk, out)
 }
 
 // handleChunk converts a single OpenAI ChatCompletionResponseChunk to Anthropic SSE events.
@@ -774,6 +803,11 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 		// Handle reasoning/thinking content (must come before text).
 		if delta.ReasoningContent != nil {
 			if err := s.handleReasoningDelta(delta.ReasoningContent, out); err != nil {
+				return err
+			}
+		} else if delta.Reasoning != nil && *delta.Reasoning != "" {
+			// Plain-string reasoning delta. reasoning_content wins if both are present.
+			if err := s.handleReasoningDelta(&openai.StreamReasoningContent{Text: *delta.Reasoning}, out); err != nil {
 				return err
 			}
 		}
