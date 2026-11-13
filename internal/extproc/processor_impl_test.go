@@ -120,6 +120,30 @@ func Test_chatCompletionProcessorRouterFilter_ProcessRequestBody(t *testing.T) {
 		require.Contains(t, body, "malformed request: failed to parse JSON for /v1/chat/completions:")
 	})
 
+	t.Run("model name with invalid characters", func(t *testing.T) {
+		for _, model := range []string{"gpt-4\n", "gpt-4\r", "gpt-4\x00", "gpt\n-4", "\rgpt\n-4", "gpt-4\x0b", "gpt-4\x1f", "gpt-4\x7f"} {
+			p := &chatCompletionProcessorRouterFilter{
+				tracer:         tracingapi.NoopTracer[openai.ChatCompletionRequest, openai.ChatCompletionResponse, openai.ChatCompletionResponseChunk]{},
+				config:         &filterapi.RuntimeConfig{},
+				requestHeaders: map[string]string{":path": "/foo"},
+				logger:         slog.Default(),
+			}
+			resp, err := p.ProcessRequestBody(t.Context(), &extprocv3.HttpBody{Body: bodyFromModel(t, model, false, nil)})
+			require.NoError(t, err, "Should not return error when returning immediate response")
+			require.NotNil(t, resp, "Response should not be nil")
+
+			immediateResp, ok := resp.Response.(*extprocv3.ProcessingResponse_ImmediateResponse)
+			require.True(t, ok, "Response should be an immediate response")
+			require.Equal(t, typev3.StatusCode(400), immediateResp.ImmediateResponse.Status.Code)
+			body := string(immediateResp.ImmediateResponse.Body)
+			require.Contains(t, body, `"type":"error"`)
+			require.Contains(t, body, `"type":"BadRequest"`)
+			require.Contains(t, body, `"code":"400"`)
+			require.Contains(t, string(immediateResp.ImmediateResponse.Body),
+				"malformed request: model name contains invalid characters")
+		}
+	})
+
 	t.Run("ok", func(t *testing.T) {
 		headers := map[string]string{":path": "/foo"}
 		p := &chatCompletionProcessorRouterFilter{
