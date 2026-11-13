@@ -44,6 +44,11 @@ type batchRequest struct {
 	// upstream expectations / canned response.
 	expPath, expQuery, expBody   string
 	responseBody, responseStatus string
+	// expHeaders overrides the expected upstream headers ("Key:Value,..."); empty means the files
+	// backend's API key.
+	expHeaders string
+	// responseType is the test upstream response type, e.g. "gzip" to compress the response.
+	responseType string
 }
 
 // doBatchRequest sends the request (retrying until expStatus, as Envoy may still be warming up)
@@ -62,7 +67,14 @@ func doBatchRequest(t *testing.T, addr string, r *batchRequest, expStatus int) [
 		if r.body != "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		setExpectedFilesAuthHeader(req)
+		if r.expHeaders != "" {
+			req.Header.Set(testupstreamlib.ExpectedHeadersKey, base64.StdEncoding.EncodeToString([]byte(r.expHeaders)))
+		} else {
+			setExpectedFilesAuthHeader(req)
+		}
+		if r.responseType != "" {
+			req.Header.Set(testupstreamlib.ResponseTypeKey, r.responseType)
+		}
 		if r.responseBody != "" {
 			req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(r.responseBody)))
 		}

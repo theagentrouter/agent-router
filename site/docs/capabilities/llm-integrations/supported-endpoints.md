@@ -696,15 +696,17 @@ See the [Files API](./files-api.md) guide for full usage, configuration, and cav
 - `GET /v1/batches/{batch_id}` (retrieve)
 - `POST /v1/batches/{batch_id}/cancel` (cancel)
 
-**Status:** ✅ Supported (OpenAI schema only)
+**Status:** ✅ Supported (OpenAI and GCP Vertex AI schemas)
 
 **Description:** Create and manage asynchronous batch jobs. A batch is routed to the backend that
-holds its input file; batch output and error files are downloadable via the Files API.
+holds its input file; batch output and error files are downloadable via the Files API. On GCP
+Vertex AI, the input and output are Cloud Storage URIs instead.
 
 **Features:**
 
 - ✅ Backend-sticky routing via gateway-issued, encrypted batch ids
 - ✅ No `model` needed on create: the backend is taken from the gateway `input_file_id`
+  (a `gs://` input for GCP Vertex AI takes a `model` extension field instead)
 - ✅ List pagination (`?model=` on the first page; `after` cursors are gateway-issued ids)
 - ✅ Output and error file ids are gateway file ids, downloadable via `/v1/files/{id}/content`
 - ⚠️ Exactly **one backend per route rule** — rules with multiple `backendRefs` are rejected, so
@@ -715,8 +717,9 @@ holds its input file; batch output and error files are downloadable via the File
 
 - OpenAI
 - Any OpenAI-compatible provider that supports the Batch API
+- GCP Vertex AI (chat completions and embeddings batches, translated to batch prediction jobs)
 
-Non-OpenAI backend schemas are not supported and the request fails with an error.
+Other backend schemas are not supported and the request fails with an error.
 
 Batch ids use the same encryption seed as file ids; see the warning in [Files](#files).
 
