@@ -126,23 +126,33 @@ func TestInferencePoolIntegration(t *testing.T) {
 
 	// Test an InferencePool without an endpointPickerRef: its share of a rule's traffic fails with
 	// a 500, as an invalid backendRef's does, while the rule's other backends keep their share.
-	const noEPPManifest = "testdata/inference-pool-without-epp.yaml"
-	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), noEPPManifest))
-	t.Cleanup(func() {
-		_ = e2elib.KubectlDeleteManifest(context.Background(), noEPPManifest)
-	})
+	noEPPCases := []struct {
+		name, testCase string
+		wantOK         bool
+	}{
+		{"httproute_service_and_inference_pool_without_epp", "service-and-no-epp-pool", true},
+		{"httproute_inference_pools_with_and_without_epp", "epp-pool-and-no-epp-pool", true},
+		{"httproute_only_inference_pool_without_epp", "only-no-epp-pool", false},
+	}
+	// The manifest has rules with two InferencePools. Older Envoy Gateway releases fail the whole
+	// xDS translation on those, which would break every route on the Gateway, so don't apply it.
+	supported := e2elib.EnvoyGatewaySupportsMultipleInferencePoolsPerRule()
+	if supported {
+		const noEPPManifest = "testdata/inference-pool-without-epp.yaml"
+		require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), noEPPManifest))
+		t.Cleanup(func() {
+			_ = e2elib.KubectlDeleteManifest(context.Background(), noEPPManifest)
+		})
+	}
 
-	t.Run("httproute_service_and_inference_pool_without_epp", func(t *testing.T) {
-		requireInferenceGatewayStatusSplit(t, egSelector, "service-and-no-epp-pool", true)
-	})
-
-	t.Run("httproute_inference_pools_with_and_without_epp", func(t *testing.T) {
-		requireInferenceGatewayStatusSplit(t, egSelector, "epp-pool-and-no-epp-pool", true)
-	})
-
-	t.Run("httproute_only_inference_pool_without_epp", func(t *testing.T) {
-		requireInferenceGatewayStatusSplit(t, egSelector, "only-no-epp-pool", false)
-	})
+	for _, tc := range noEPPCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !supported {
+				t.Skipf("needs Envoy Gateway %s, have %s", e2elib.EnvoyGatewayLatestVersion, e2elib.EnvoyGatewayVersion())
+			}
+			requireInferenceGatewayStatusSplit(t, egSelector, tc.testCase, tc.wantOK)
+		})
+	}
 }
 
 // requireInferenceGatewayStatusSplit sends requests matching the x-test-case rule of

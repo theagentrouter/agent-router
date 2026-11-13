@@ -60,6 +60,13 @@ func TestGatewayAPIInferenceExtension(t *testing.T) {
 	config.SetupTimeoutConfig(&defaultTimeoutConfig)
 	options.TimeoutConfig = defaultTimeoutConfig
 	options.GatewayClassName = "inference-pool"
+	if !e2elib.EnvoyGatewaySupportsMultipleInferencePoolsPerRule() {
+		// Its HTTPRoute splits one rule across two InferencePools, which older Envoy Gateway
+		// releases can't translate.
+		tlog.Logf(t, "Skipping GatewayWeightedAcrossTwoInferencePools: needs Envoy Gateway %s, have %s",
+			e2elib.EnvoyGatewayLatestVersion, e2elib.EnvoyGatewayVersion())
+		options.SkipTests = append(options.SkipTests, "GatewayWeightedAcrossTwoInferencePools")
+	}
 
 	// Setup cleanup to print report even if test fails
 	t.Cleanup(func() {

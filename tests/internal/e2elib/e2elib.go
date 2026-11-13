@@ -417,6 +417,17 @@ func EnvoyGatewaySupportsLimitFromMetadata() bool {
 	return EnvoyGatewayVersion() == EnvoyGatewayLatestVersion
 }
 
+// EnvoyGatewaySupportsMultipleInferencePoolsPerRule reports whether the installed Envoy Gateway
+// builds one cluster per InferencePool backendRef of a route rule. Tagged releases up to v1.10
+// pass every InferencePool of the rule to a single PostClusterModify call, which the extension
+// server rejects, so EG skips publishing the whole xDS update.
+//
+// TODO: this only recognizes the "latest" main build. Relax it to a version comparison once a tagged
+// EG release builds one cluster per InferencePool, otherwise it will keep skipping on that release.
+func EnvoyGatewaySupportsMultipleInferencePoolsPerRule() bool {
+	return EnvoyGatewayVersion() == EnvoyGatewayLatestVersion
+}
+
 // initEnvoyGateway initializes the Envoy Gateway in the kind cluster following the quickstart guide:
 // https://gateway.envoyproxy.io/latest/tasks/quickstart/
 func initEnvoyGateway(ctx context.Context, namespace string, inferenceExtension bool) (err error) {
