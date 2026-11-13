@@ -2674,12 +2674,19 @@ func Test_formatUserFacingErrorJSON(t *testing.T) {
 
 func Test_createUserFacingErrorResponse(t *testing.T) {
 	message := `temperature "bad" at 20°C ☃`
-	for _, statusCode := range []int{400, 422} {
+	for _, tc := range []struct {
+		statusCode int
+		want       typev3.StatusCode
+	}{
+		{400, typev3.StatusCode_BadRequest},
+		{422, typev3.StatusCode_UnprocessableEntity},
+	} {
+		statusCode := tc.statusCode
 		t.Run(strconv.Itoa(statusCode), func(t *testing.T) {
 			resp := createUserFacingErrorResponse(statusCode, "BadRequest", message)
 			imm := resp.GetImmediateResponse()
 			require.NotNil(t, imm)
-			require.Equal(t, typev3.StatusCode(statusCode), imm.Status.Code)
+			require.Equal(t, tc.want, imm.Status.Code)
 			require.Equal(t, uint32(codes.InvalidArgument), imm.GetGrpcStatus().GetStatus())
 
 			headers := map[string]string{}
