@@ -240,7 +240,7 @@ spec:
 
 ##### Secrets in another namespace
 
-A `secretRef` or `clientSecretRef` without `namespace` refers to a Secret in the BackendSecurityPolicy's own namespace. A Secret in another namespace also needs a [ReferenceGrant](https://gateway-api.sigs.k8s.io/api-types/referencegrant/) in the Secret's namespace that allows the reference. Without it, the BackendSecurityPolicy is marked `NotAccepted`.
+A `secretRef` or `clientSecretRef` without `namespace` refers to a Secret in the BackendSecurityPolicy's own namespace. A Secret in another namespace also needs a [ReferenceGrant](https://gateway-api.sigs.k8s.io/reference/api-types/referencegrant/) in the Secret's namespace that allows the reference. Without it, the BackendSecurityPolicy is marked `NotAccepted`.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1beta1
