@@ -4,7 +4,7 @@ title: Supported AI Providers
 sidebar_position: 8
 ---
 
-Since the Envoy AI Gateway is designed to provide a Unified API for routing and managing LLM/AI traffic, it supports various AI providers out of the box.
+Since the Agent Router is designed to provide a Unified API for routing and managing LLM/AI traffic, it supports various AI providers out of the box.
 A "support of provider" means two things: the API schema support and the Authentication support. \
 The former can be configured in the `AIServiceBackend` resource's `schema` field, while the latter is configured in the `BackendSecurityPolicy`.
 

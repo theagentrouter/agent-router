@@ -29,10 +29,12 @@ type tracingImpl struct {
 	imageGenerationTracer      tracingapi.ImageGenerationTracer
 	embeddingsTracer           tracingapi.EmbeddingsTracer
 	responsesTracer            tracingapi.ResponsesTracer
+	decisionsTracer            tracingapi.DecisionsTracer
 	speechTracer               tracingapi.SpeechTracer
 	transcriptionTracer        tracingapi.TranscriptionTracer
 	translationTracer          tracingapi.TranslationTracer
 	rerankTracer               tracingapi.RerankTracer
+	systemOneTracer            tracingapi.SystemOneTracer
 	messageTracer              tracingapi.MessageTracer
 	tokenizeTracer             tracingapi.TokenizeTracer
 	responsesInputTokensTracer tracingapi.ResponsesInputTokensTracer
@@ -67,6 +69,11 @@ func (t *tracingImpl) ResponsesTracer() tracingapi.ResponsesTracer {
 	return t.responsesTracer
 }
 
+// DecisionsTracer implements the same method as documented on tracingapi.Tracing.
+func (t *tracingImpl) DecisionsTracer() tracingapi.DecisionsTracer {
+	return t.decisionsTracer
+}
+
 // SpeechTracer implements the same method as documented on tracingapi.Tracing.
 func (t *tracingImpl) SpeechTracer() tracingapi.SpeechTracer {
 	return t.speechTracer
@@ -85,6 +92,11 @@ func (t *tracingImpl) TranslationTracer() tracingapi.TranslationTracer {
 // RerankTracer implements the same method as documented on tracingapi.Tracing.
 func (t *tracingImpl) RerankTracer() tracingapi.RerankTracer {
 	return t.rerankTracer
+}
+
+// SystemOneTracer implements the same method as documented on tracingapi.Tracing.
+func (t *tracingImpl) SystemOneTracer() tracingapi.SystemOneTracer {
+	return t.systemOneTracer
 }
 
 // MCPTracer implements the same method as documented on tracingapi.Tracing.
@@ -262,6 +274,12 @@ func NewTracingFromEnv(ctx context.Context, stdout io.Writer, headerAttributeMap
 			recorders.responses,
 			headerAttrs,
 		),
+		decisionsTracer: newDecisionsTracer(
+			tracer,
+			propagator,
+			recorders.decisions,
+			headerAttrs,
+		),
 		speechTracer: newSpeechTracer(
 			tracer,
 			propagator,
@@ -284,6 +302,12 @@ func NewTracingFromEnv(ctx context.Context, stdout io.Writer, headerAttributeMap
 			tracer,
 			propagator,
 			recorders.rerank,
+			headerAttrs,
+		),
+		systemOneTracer: newSystemOneTracer(
+			tracer,
+			propagator,
+			recorders.systemOne,
 			headerAttrs,
 		),
 		messageTracer: newMessageTracer(

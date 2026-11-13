@@ -9,7 +9,7 @@ import vars from '../../\_vars.json';
 
 # Connect Tetrate Agent Router Service (TARS)
 
-This guide will help you configure Envoy AI Gateway to work with Tetrate Agent Router Service (TARS)'s models.
+This guide will help you configure Agent Router to work with Tetrate Agent Router Service (TARS)'s models.
 
 ## Prerequisites
 
@@ -28,7 +28,7 @@ Ensure you have followed the steps in [Connect Providers](../connect-providers/)
 ### 1. Download configuration template
 
 <CodeBlock language="shell">
-{`curl -O https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/basic/tars.yaml`}
+{`curl -O https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/basic/tars.yaml`}
 </CodeBlock>
 
 ### 2. Configure Tetrate Agent Router Service (TARS) Credentials

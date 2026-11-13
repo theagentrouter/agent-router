@@ -647,7 +647,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_TextStreaming(t *testing.T) 
 }
 
 // TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens is a regression test guarding
-// against double-counting OpenAI's cached_tokens/cache_creation_input_tokens (a breakdown
+// against double-counting OpenAI's cached_tokens/cache_write_tokens (a breakdown
 // within prompt_tokens) as if they were additive, Anthropic-native cache usage fields.
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens(t *testing.T) {
 	state := &openAIStreamToAnthropicState{
@@ -665,7 +665,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens(t *testing.T) {
 	input := fmt.Sprintf(
 		"data: {\"id\":\"chatcmpl-cache\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}],\"model\":\"gpt-4o\"}\n\n"+
 			"data: {\"id\":\"chatcmpl-cache\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"+
-			"data: {\"id\":\"chatcmpl-cache\",\"choices\":[],\"usage\":{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"prompt_tokens_details\":{\"cached_tokens\":%d,\"cache_creation_input_tokens\":%d}}}\n\n"+
+			"data: {\"id\":\"chatcmpl-cache\",\"choices\":[],\"usage\":{\"prompt_tokens\":%d,\"completion_tokens\":%d,\"prompt_tokens_details\":{\"cached_tokens\":%d,\"cache_write_tokens\":%d}}}\n\n"+
 			"data: [DONE]\n\n",
 		promptTokens, completionTokens, cachedTokens, cacheCreationTokens,
 	)
@@ -1039,6 +1039,19 @@ func TestBuildOpenAIChatCompletionRequest_ThinkingConfig(t *testing.T) {
 		require.NotNil(t, req.Thinking)
 		require.NotNil(t, req.Thinking.OfAdaptive)
 		assert.Equal(t, "adaptive", req.Thinking.OfAdaptive.Type)
+	})
+
+	t.Run("thinking between_tools", func(t *testing.T) {
+		body := &anthropic.MessagesRequest{
+			Model:     "claude-3",
+			MaxTokens: 100,
+			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
+			Thinking:  &anthropic.Thinking{BetweenTools: &anthropic.ThinkingBetweenTools{Type: "between_tools"}},
+		}
+		req := buildOpenAIChatCompletionRequest(body, "")
+		require.NotNil(t, req.Thinking)
+		require.NotNil(t, req.Thinking.OfBetweenTools)
+		assert.Equal(t, "between_tools", req.Thinking.OfBetweenTools.Type)
 	})
 
 	t.Run("no thinking config", func(t *testing.T) {

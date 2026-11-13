@@ -84,6 +84,10 @@ func getAwsBedrockThinkingMap(tu *openai.ThinkingUnion) map[string]any {
 			reasoningConfigMap["display"] = tu.OfAdaptive.Display
 		}
 		resultMap["thinking"] = reasoningConfigMap
+	case tu.OfBetweenTools != nil:
+		resultMap["thinking"] = map[string]any{
+			"type": "between_tools",
+		}
 	}
 
 	return resultMap
@@ -309,7 +313,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) bedrockStopReasonToOpenAI
 		return openai.ChatCompletionChoicesFinishReasonStop
 	case awsbedrock.StopReasonMaxTokens:
 		return openai.ChatCompletionChoicesFinishReasonLength
-	case awsbedrock.StopReasonContentFiltered:
+	case awsbedrock.StopReasonContentFiltered, awsbedrock.StopReasonGuardrailIntervened:
 		return openai.ChatCompletionChoicesFinishReasonContentFilter
 	case awsbedrock.StopReasonToolUse:
 		return openai.ChatCompletionChoicesFinishReasonToolCalls
@@ -440,13 +444,13 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) ResponseBody(_ map[string
 		}
 		if bedrockResp.Usage.CacheWriteInputTokens != nil {
 			tokenUsage.SetCacheCreationInputTokens(uint32(*bedrockResp.Usage.CacheWriteInputTokens)) //nolint:gosec
-			openAIResp.Usage.PromptTokensDetails.CacheCreationTokens = int(*bedrockResp.Usage.CacheWriteInputTokens)
+			openAIResp.Usage.PromptTokensDetails.CacheWriteTokens = int(*bedrockResp.Usage.CacheWriteInputTokens)
 		}
 	}
 
 	// AWS Bedrock Converse API does not support N(multiple choices) > 0, so there could be only one choice.
 	choice := openai.ChatCompletionResponseChoice{
-		Index: (int64)(0),
+		Index: int64(0),
 		Message: openai.ChatCompletionResponseChoiceMessage{
 			Role: bedrockResp.Output.Message.Role,
 		},
@@ -454,6 +458,10 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) ResponseBody(_ map[string
 	}
 
 	for _, output := range bedrockResp.Output.Message.Content {
+		// Content elements are pointers, so a null element decodes to nil.
+		if output == nil {
+			continue
+		}
 		// The AWS Content Block data type is a UNION,
 		// so only one of the members can be specified when used or returned.
 		// see: https: //docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ContentBlock.html
@@ -578,7 +586,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) convertEvent(event *awsbe
 			chunk.Usage.PromptTokensDetails.CachedTokens = int(*event.Usage.CacheReadInputTokens)
 		}
 		if event.Usage.CacheWriteInputTokens != nil {
-			chunk.Usage.PromptTokensDetails.CacheCreationTokens = int(*event.Usage.CacheWriteInputTokens)
+			chunk.Usage.PromptTokensDetails.CacheWriteTokens = int(*event.Usage.CacheWriteInputTokens)
 		}
 	// messageStart event.
 	case awsbedrock.ConverseStreamEventTypeMessageStart.String():

@@ -580,6 +580,11 @@ func Test_isSensitiveHeader(t *testing.T) {
 		{"authorization", true},
 		{"Authorization", true},
 		{"x-api-key", true},
+		// Azure API key and AWS SigV4 session token set by the backendauth handlers.
+		{"api-key", true},
+		{"Api-Key", true},
+		{"X-Amz-Security-Token", true},
+		{"X-Amz-Date", false},
 		// x-aigw- headers carry per-request credential overrides.
 		{"x-aigw-api-key", true},
 		{"x-aigw-aws-secret-access-key", true},
@@ -785,6 +790,60 @@ func TestServer_processMsg_RedactsCredentialMutation(t *testing.T) {
 	// But the debug log must not leak the credential.
 	require.Contains(t, buf.String(), "[REDACTED]")
 	require.NotContains(t, buf.String(), "secret-backend-key")
+}
+
+func Test_redactImmediateResponse(t *testing.T) {
+	buf := internaltesting.CaptureOutput("test")[0]
+	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	t.Run("nil", func(t *testing.T) {
+		require.Equal(t, &extprocv3.ProcessingResponse_ImmediateResponse{}, redactImmediateResponse(nil, logger, sensitiveHeaderKeys))
+		require.Equal(t, &extprocv3.ProcessingResponse_ImmediateResponse{},
+			redactImmediateResponse(&extprocv3.ProcessingResponse_ImmediateResponse{}, logger, sensitiveHeaderKeys))
+	})
+
+	t.Run("no headers", func(t *testing.T) {
+		resp := &extprocv3.ProcessingResponse_ImmediateResponse{
+			ImmediateResponse: &extprocv3.ImmediateResponse{
+				Status:  &typev3.HttpStatus{Code: typev3.StatusCode_BadRequest},
+				Body:    []byte("malformed request"),
+				Details: "bad_request",
+			},
+		}
+		filtered := redactImmediateResponse(resp, logger, sensitiveHeaderKeys)
+		require.Nil(t, filtered.ImmediateResponse.GetHeaders())
+		require.Equal(t, typev3.StatusCode_BadRequest, filtered.ImmediateResponse.GetStatus().GetCode())
+		require.Equal(t, []byte("malformed request"), filtered.ImmediateResponse.GetBody())
+		require.Equal(t, "bad_request", filtered.ImmediateResponse.GetDetails())
+	})
+
+	t.Run("redacts sensitive headers", func(t *testing.T) {
+		resp := &extprocv3.ProcessingResponse_ImmediateResponse{
+			ImmediateResponse: &extprocv3.ImmediateResponse{
+				Status: &typev3.HttpStatus{Code: typev3.StatusCode_Unauthorized},
+				Headers: &extprocv3.HeaderMutation{
+					SetHeaders: []*corev3.HeaderValueOption{
+						{Header: &corev3.HeaderValue{Key: "content-type", RawValue: []byte("text/plain")}},
+						{Header: &corev3.HeaderValue{Key: "api-key", RawValue: []byte("secret-azure-key")}},
+					},
+					RemoveHeaders: []string{"x-foo"},
+				},
+				Body: []byte("unauthorized"),
+			},
+		}
+		filtered := redactImmediateResponse(resp, logger, sensitiveHeaderKeys)
+		require.Equal(t, []*corev3.HeaderValueOption{
+			{Header: &corev3.HeaderValue{Key: "content-type", RawValue: []byte("text/plain")}},
+			{Header: &corev3.HeaderValue{Key: "api-key", RawValue: []byte("[REDACTED]")}},
+		}, filtered.ImmediateResponse.GetHeaders().GetSetHeaders())
+		require.Equal(t, []string{"x-foo"}, filtered.ImmediateResponse.GetHeaders().GetRemoveHeaders())
+		require.Equal(t, []byte("unauthorized"), filtered.ImmediateResponse.GetBody())
+		// The original response sent to Envoy must not be modified.
+		require.Equal(t, []byte("secret-azure-key"), resp.ImmediateResponse.Headers.SetHeaders[1].Header.RawValue)
+		require.NotContains(t, buf.String(), "secret-azure-key")
+	})
 }
 
 func Test_redactRequestBodyResponseFull(t *testing.T) {
@@ -1187,4 +1246,65 @@ func TestServer_ProcessorForPath_QueryParameterStripping(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServer_ProcessorForPath_Prefix(t *testing.T) {
+	s, err := NewServer(slog.Default(), false)
+	require.NoError(t, err)
+	s.config = &filterapi.RuntimeConfig{}
+
+	exactProc, filesProc, nestedProc := &mockProcessor{}, &mockProcessor{}, &mockProcessor{}
+	factory := func(p Processor) ProcessorFactory {
+		return func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
+			return p, nil
+		}
+	}
+	s.Register("/v1/files/special", factory(exactProc))
+	s.RegisterPrefix("/v1/files", factory(filesProc))
+	// A longer, nested prefix registered after a shorter one must still win.
+	s.RegisterPrefix("/v1/files/batch", factory(nestedProc))
+
+	tests := []struct {
+		name       string
+		headers    map[string]string
+		isUpstream bool
+		exp        Processor
+	}{
+		{name: "prefix itself", headers: map[string]string{":path": "/v1/files"}, exp: filesProc},
+		{name: "prefix with trailing slash", headers: map[string]string{":path": "/v1/files/"}, exp: filesProc},
+		{name: "nested id", headers: map[string]string{":path": "/v1/files/file-abc"}, exp: filesProc},
+		{name: "nested id content", headers: map[string]string{":path": "/v1/files/file-abc/content"}, exp: filesProc},
+		{name: "query stripped", headers: map[string]string{":path": "/v1/files?model=m1&after=x"}, exp: filesProc},
+		{name: "exact registration wins over prefix", headers: map[string]string{":path": "/v1/files/special"}, exp: exactProc},
+		{name: "longest prefix wins", headers: map[string]string{":path": "/v1/files/batch/file-1"}, exp: nestedProc},
+		{name: "longest prefix exact", headers: map[string]string{":path": "/v1/files/batch"}, exp: nestedProc},
+		{name: "segment boundary is respected", headers: map[string]string{":path": "/v1/files/batchx"}, exp: filesProc},
+		{
+			name:       "upstream filter uses original path",
+			headers:    map[string]string{":path": "/v1/files/native-1", originalPathHeader: "/v1/files/file-gw?x=1"},
+			isUpstream: true,
+			exp:        filesProc,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, pErr := s.processorForPath(tt.headers, tt.isUpstream, slog.Default())
+			require.NoError(t, pErr)
+			require.Same(t, tt.exp, p)
+		})
+	}
+
+	// Paths that merely share the prefix string, but not on a segment boundary, do not match.
+	for _, path := range []string{"/v1/filesx", "/v1/file", "/v2/files", "/prefix/v1/filesx/1"} {
+		t.Run("no match "+path, func(t *testing.T) {
+			p, pErr := s.processorForPath(map[string]string{":path": path}, false, slog.Default())
+			require.ErrorIs(t, pErr, errNoProcessor)
+			require.Nil(t, p)
+		})
+	}
+
+	// The upstream filter must not fall back to :path when the original path header is absent.
+	p, err := s.processorForPath(map[string]string{":path": "/v1/files"}, true, slog.Default())
+	require.ErrorIs(t, err, errNoProcessor)
+	require.Nil(t, p)
 }

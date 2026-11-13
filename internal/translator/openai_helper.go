@@ -80,6 +80,10 @@ func anthropicThinkingToOpenAI(t *anthropic.Thinking) *openai.ThinkingUnion {
 		return &openai.ThinkingUnion{OfAdaptive: &openai.ThinkingAdaptive{
 			Type: "adaptive",
 		}}
+	case t.BetweenTools != nil:
+		return &openai.ThinkingUnion{OfBetweenTools: &openai.ThinkingBetweenTools{
+			Type: "between_tools",
+		}}
 	default:
 		return nil
 	}
@@ -739,7 +743,7 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 	if len(chunk.Choices) == 0 && chunk.Usage != nil {
 		s.inputTokens = chunk.Usage.PromptTokens
 		s.outputTokens = chunk.Usage.CompletionTokens
-		// OpenAI's cached_tokens/cache_creation_input_tokens are a breakdown within
+		// OpenAI's cached_tokens/cache_write_tokens are a breakdown within
 		// prompt_tokens, not additive like Anthropic's native cache fields, so we don't
 		// forward them here to avoid double-counting.
 		s.tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(

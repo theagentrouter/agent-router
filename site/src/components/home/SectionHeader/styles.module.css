@@ -1,0 +1,49 @@
+.head {
+  text-align: center;
+  max-width: 60ch;
+  margin: 0 auto 56px;
+}
+
+.label {
+  display: block;
+  margin-bottom: 16px;
+  font: 600 var(--ar-text-xs) / 1 var(--ar-font-ui);
+  letter-spacing: var(--ar-tracking-label);
+  text-transform: uppercase;
+}
+
+/* one accent per section (kit rule) — cream-safe steps on light */
+.accent_marquee { color: var(--ar-on-cream-marquee); }
+.accent_verdigris { color: var(--ar-on-cream-verdigris); }
+.accent_spotlight { color: var(--ar-on-cream-spotlight); }
+.accent_gilt { color: var(--ar-on-cream-gilt); }
+.accent_curtain { color: var(--ar-on-cream-curtain); }
+.accent_velvet { color: var(--ar-on-cream-velvet); }
+
+:global([data-theme='dark']) .accent_marquee { color: var(--ar-marquee-400); }
+:global([data-theme='dark']) .accent_verdigris { color: var(--ar-verdigris-400); }
+:global([data-theme='dark']) .accent_spotlight { color: var(--ar-spotlight-300); }
+:global([data-theme='dark']) .accent_gilt { color: var(--ar-gilt-300); }
+:global([data-theme='dark']) .accent_curtain { color: var(--ar-curtain-400); }
+:global([data-theme='dark']) .accent_velvet { color: var(--ar-velvet-400); }
+
+.title {
+  font: 800 var(--ar-text-2xl) / 1.15 var(--ar-font-display);
+  letter-spacing: -0.01em;
+  margin: 0;
+  text-wrap: balance;
+}
+
+/* chosen underscore: plain hairline (see design/mockups/header-underscore-options.html) */
+.hairline {
+  width: min(240px, 60%);
+  height: 1px;
+  background: var(--ar-ink-200);
+  margin: 22px auto 0;
+}
+:global([data-theme='dark']) .hairline { background: var(--ar-border); }
+
+.standfirst {
+  margin: 18px 0 0;
+  color: var(--ar-fg-muted);
+}

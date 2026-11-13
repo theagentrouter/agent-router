@@ -111,7 +111,9 @@ spec:
                                   description: Selects a key of a ConfigMap.
                                   properties:
                                     key:
-                                      description: The key to select.
+                                      description: |-
+                                        The key to select from the ConfigMap's Data field.
+                                        Keys in the BinaryData field are not currently propagated to container env vars.
                                       type: string
                                     name:
                                       default: ""
@@ -520,10 +522,21 @@ spec:
                           description: VolumeMount describes a mounting of a Volume
                             within a container.
                           properties:
-                            mountPath:
+                            bindMountOptions:
                               description: |-
-                                Path within the container at which the volume should be mounted.  Must
-                                not contain ':'.
+                                bindMountOptions is the list of additional bind mount options to apply when
+                                mounting this volume into the container. Allowed values are noexec,
+                                nodev, and nosuid. These are Linux mount options and have no effect on
+                                Windows nodes.
+                                This field is not supported with image volumes.
+                                This is an alpha field and requires enabling the VolumeBindMountOptions feature gate.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: set
+                            mountPath:
+                              description: Path within the container at which the
+                                volume should be mounted.
                               type: string
                             mountPropagation:
                               description: |-
@@ -825,7 +838,9 @@ spec:
                                   description: Selects a key of a ConfigMap.
                                   properties:
                                     key:
-                                      description: The key to select.
+                                      description: |-
+                                        The key to select from the ConfigMap's Data field.
+                                        Keys in the BinaryData field are not currently propagated to container env vars.
                                       type: string
                                     name:
                                       default: ""
@@ -1234,10 +1249,21 @@ spec:
                           description: VolumeMount describes a mounting of a Volume
                             within a container.
                           properties:
-                            mountPath:
+                            bindMountOptions:
                               description: |-
-                                Path within the container at which the volume should be mounted.  Must
-                                not contain ':'.
+                                bindMountOptions is the list of additional bind mount options to apply when
+                                mounting this volume into the container. Allowed values are noexec,
+                                nodev, and nosuid. These are Linux mount options and have no effect on
+                                Windows nodes.
+                                This field is not supported with image volumes.
+                                This is an alpha field and requires enabling the VolumeBindMountOptions feature gate.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: set
+                            mountPath:
+                              description: Path within the container at which the
+                                volume should be mounted.
                               type: string
                             mountPropagation:
                               description: |-
@@ -1296,6 +1322,23 @@ spec:
                     x-kubernetes-validations:
                     - message: Either image or imageRepository can be set.
                       rule: '!has(self.image) || !has(self.imageRepository)'
+                  metadataForwardingNamespaces:
+                    description: |-
+                      MetadataForwardingNamespaces lists the untyped dynamic metadata namespaces Envoy forwards
+                      to the external processor for this Gateway's AI traffic. A BackendSecurityPolicy using
+                      credentialOverride.fromDynamicMetadata receives metadata only from a namespace listed here.
+
+                      Under Envoy Gateway's mergeGateways, every Gateway in the class shares one Envoy, so a
+                      namespace any one of them declares is forwarded for all of their AI traffic.
+                    items:
+                      maxLength: 256
+                      type: string
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-validations:
+                    - message: metadata namespaces may only contain letters, digits,
+                        '.', '_', '/' and '-'
+                      rule: self.all(n, n.matches('^[A-Za-z0-9._/-]+$'))
                 type: object
               forwardProxy:
                 description: |-

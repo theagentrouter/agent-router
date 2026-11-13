@@ -1,5 +1,21 @@
 [
     {
+        "date": "2026-09-17",
+        "title": "Your Agents Need a Router: One Integration for Every Model and Tool",
+        "url": "https://agntconmcpconeu26.sched.com/event/2WF5u/your-agents-need-a-router-one-integration-for-every-model-and-tool-ignasi-barrera-tetrateio",
+        "event": "AGNTCon + MCPCon EUrope 2026",
+        "speaker": "Ignasi Barrera (Tetrate)",
+        "description": "Every agent starts simple: one model, one SDK, a demo that works. Then comes the second provider, the MCP tools, the fallback logic, the rate-limit backoff — and suddenly half your codebase is integration glue that has nothing to do with what your agent actually does. Agent Router collapses all of it into a single integration: every model, every tool, one declarative API. We walk through a live agent workload end-to-end: routing across model providers with automatic failover; understanding exactly what each agent and team spends — and capping it before it surprises you; and choosing which MCP tools each agent can see and call. All declared in one place, none of it in your application code."
+    },
+    {
+        "date": "2026-06-19",
+        "title": "When LLMs Hit Production: Why You Need an AI Gateway",
+        "url": "https://www.youtube.com/watch?v=u5O_in_LF1E",
+        "event": "KubeCon India 2026",
+        "speaker": "Gavrish Prabhu (Nutanix)",
+        "description": "The surge of Generative AI and large language models (LLMs) is introducing new operational challenges for Kubernetes platforms. This session, presented by the project maintainers, examines Envoy AI Gateway, a CNCF-hosted open source project, and its role as a Kubernetes-native control plane for GenAI workloads.. We’ll break down an end-to-end architecture that uses Envoy AI Gateway to manage and govern traffic across multiple LLM backends both self-hosted and cloud-based while enforcing policies such as token-aware rate limiting, authentication, and dynamic model selection."
+    },
+    {
         "date": "2026-03-25",
         "title": "The Future of AI Traffic: What's New in Envoy AI Gateway 2026",
         "url": "https://kccnceu2026.sched.com/event/372ab7dc653c2138e0485e5ed7e3456a?iframe=no",

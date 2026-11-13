@@ -124,6 +124,14 @@ func TestReadConfig(t *testing.T) {
 		require.EqualError(t, err, "you must supply at least OPENAI_API_KEY, AZURE_OPENAI_API_KEY, ANTHROPIC_API_KEY, or a config file path")
 	})
 
+	t.Run("includes ENVOY_VERSION in inline MCP autoconfig", func(t *testing.T) {
+		t.Setenv("ENVOY_VERSION", "1.2.3")
+
+		config, err := readConfig("", testMcpServers, false)
+		require.NoError(t, err)
+		require.Contains(t, config, `envoyVersion: "1.2.3"`)
+	})
+
 	t.Run("error when file does not exist", func(t *testing.T) {
 		_, err := readConfig("/non/existent/file.yaml", nil, false)
 		require.Error(t, err)

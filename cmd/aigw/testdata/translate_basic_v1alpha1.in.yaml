@@ -101,7 +101,6 @@ spec:
   apiKey:
     secretRef:
       name: envoy-ai-gateway-basic-openai-apikey
-      namespace: default
 ---
 apiVersion: aigateway.envoyproxy.io/v1alpha1
 kind: BackendSecurityPolicy

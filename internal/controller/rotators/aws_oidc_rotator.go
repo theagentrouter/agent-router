@@ -49,6 +49,9 @@ type AWSOIDCRotator struct {
 	roleArn string
 	// region is the AWS region for the credentials.
 	region string
+	// validateSecretRef authorizes cross-namespace reads of the OIDC client secret. See
+	// [tokenprovider.SecretReferenceValidator].
+	validateSecretRef tokenprovider.SecretReferenceValidator
 }
 
 // NewAWSOIDCRotator creates a new AWS OIDC rotator with the specified configuration.
@@ -65,6 +68,7 @@ func NewAWSOIDCRotator(
 	oidc *egv1a1.OIDC,
 	roleArn string,
 	region string,
+	validateSecretRef tokenprovider.SecretReferenceValidator,
 ) (*AWSOIDCRotator, error) {
 	cfg, err := defaultAWSConfig(ctx)
 	if err != nil {
@@ -94,6 +98,7 @@ func NewAWSOIDCRotator(
 		oidc:                           oidc,
 		roleArn:                        roleArn,
 		region:                         region,
+		validateSecretRef:              validateSecretRef,
 	}, nil
 }
 
@@ -145,7 +150,7 @@ func (r *AWSOIDCRotator) Rotate(ctx context.Context) (time.Time, error) {
 
 	r.logger.Info("rotating aws credentials secret", "namespace", bspNamespace, "name", bspName)
 	// TODO  move provider as part of constructor to make mock test possible when implement Azure OIDC.
-	oidcProvider, err := tokenprovider.NewOidcTokenProvider(ctx, r.client, r.oidc)
+	oidcProvider, err := tokenprovider.NewOidcTokenProvider(ctx, r.client, r.oidc, bspNamespace, r.validateSecretRef)
 	if err != nil {
 		r.logger.Error(err, "failed to construct oidc provider")
 		return time.Time{}, err

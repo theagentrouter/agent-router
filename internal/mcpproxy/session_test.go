@@ -283,9 +283,10 @@ func TestBackendSessionIDs_Success(t *testing.T) {
 	idB := "session-b"
 	routeName := "some-route"
 	composite := clientToGatewaySessionID(routeName + "@" + "subject" + "@" + backendA + ":" + base64.StdEncoding.EncodeToString([]byte(idA)) + "," + backendB + ":" + base64.StdEncoding.EncodeToString([]byte(idB)))
-	m, route, err := composite.backendSessionIDs()
+	m, route, subject, err := composite.backendSessionIDs()
 	require.NoError(t, err)
 	require.Equal(t, routeName, route)
+	require.Equal(t, "subject", subject)
 	require.Equal(t, idA, string(m[backendA].sessionID))
 	require.Equal(t, idB, string(m[backendB].sessionID))
 	// Old format without capability hex should default to all capabilities.
@@ -311,9 +312,10 @@ func TestBackendSessionIDs_WithCapabilities(t *testing.T) {
 			"backendA:" + base64.StdEncoding.EncodeToString([]byte("sid-a")) + ":" + capHex + "," +
 			"backendB:" + base64.StdEncoding.EncodeToString([]byte("sid-b")) + ":000",
 	)
-	m, route, err := composite.backendSessionIDs()
+	m, route, subject, err := composite.backendSessionIDs()
 	require.NoError(t, err)
 	require.Equal(t, routeName, route)
+	require.Equal(t, "subject", subject)
 	require.Equal(t, "sid-a", string(m["backendA"].sessionID))
 	require.Equal(t, "sid-b", string(m["backendB"].sessionID))
 	// backendA should have tools + logging.
@@ -339,9 +341,10 @@ func TestClientToGatewaySessionIDFromEntries_WithCapabilities(t *testing.T) {
 	id := clientToGatewaySessionIDFromEntries("subj", entries, "route1")
 
 	// Parse it back.
-	m, route, err := id.backendSessionIDs()
+	m, route, subject, err := id.backendSessionIDs()
 	require.NoError(t, err)
 	require.Equal(t, "route1", route)
+	require.Equal(t, "subj", subject)
 	require.Equal(t, "sid-1", string(m["b1"].sessionID))
 	require.Equal(t, "sid-2", string(m["b2"].sessionID))
 
@@ -376,9 +379,10 @@ func TestBackendSessionIDs_EmailSubject(t *testing.T) {
 					backendA + ":" + base64.StdEncoding.EncodeToString([]byte(idA)) + "," +
 					backendB + ":" + base64.StdEncoding.EncodeToString([]byte(idB)),
 			)
-			m, route, err := composite.backendSessionIDs()
+			m, route, gotSubject, err := composite.backendSessionIDs()
 			require.NoError(t, err)
 			require.Equal(t, routeName, route)
+			require.Equal(t, subject, gotSubject)
 			require.Equal(t, idA, string(m[backendA].sessionID))
 			require.Equal(t, idB, string(m[backendB].sessionID))
 		})
@@ -401,7 +405,7 @@ func TestBackendSessionIDs_Errors(t *testing.T) {
 		{input: "@@backend:not-base64", expErr: `invalid session ID: failed to base64 decode session ID in part "backend:not-base64"`},
 	} {
 		t.Run(string(tc.input), func(t *testing.T) {
-			_, _, err := tc.input.backendSessionIDs()
+			_, _, _, err := tc.input.backendSessionIDs()
 			require.ErrorContains(t, err, tc.expErr)
 		})
 	}
@@ -684,7 +688,7 @@ func TestSendRequestPerBackend_BOMPrefixedJSON(t *testing.T) {
 	bomBody := append([]byte{0xEF, 0xBB, 0xBF}, msg1...)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(bomBody)
 	}))
@@ -706,6 +710,40 @@ func TestSendRequestPerBackend_BOMPrefixedJSON(t *testing.T) {
 		events = append(events, e)
 	}
 	require.Len(t, events, 1, "expected 1 event from BOM-prefixed JSON response")
+	require.Equal(t, "message", events[0].event)
+	require.Len(t, events[0].messages, 1)
+	resp, ok := events[0].messages[0].(*jsonrpc.Response)
+	require.True(t, ok)
+	require.Equal(t, id1, resp.ID)
+}
+
+func TestSendRequestPerBackend_JSONContentTypeWithCharset(t *testing.T) {
+	id1, _ := jsonrpc.MakeID("1")
+	msg1, _ := jsonrpc.EncodeMessage(&jsonrpc.Response{ID: id1, Result: []byte(`{"ok":true}`)})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(msg1)
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+	s := &session{reqCtx: proxy}
+	ch := make(chan *backendEvent, 10)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	err := s.sendRequestPerBackend(ctx, ch, "route1", filterapi.MCPBackend{Name: "backend1"}, &compositeSessionEntry{
+		sessionID: "sess1",
+	}, http.MethodGet, nil, nil)
+	require.NoError(t, err)
+	close(ch)
+	var events []*backendEvent
+	for e := range ch {
+		events = append(events, e)
+	}
+	require.Len(t, events, 1, "expected 1 event from application/json;charset=UTF-8 response")
 	require.Equal(t, "message", events[0].event)
 	require.Len(t, events[0].messages, 1)
 	resp, ok := events[0].messages[0].(*jsonrpc.Response)

@@ -33,7 +33,7 @@ graph TB
     end
     style UserAppliedResources fill:none,stroke-dasharray:5
 
-    AIGateway((Envoy AI Gateway
+    AIGateway((Agent Router
                     Controller)):::aiGatewayStyle
     EnvoyGateway((Envoy Gateway
                     Controller)):::envoyGatewayStyle
@@ -74,16 +74,16 @@ graph TB
 
 The control plane operates through a chain of components that work together to manage the configuration:
 
-1. The Envoy AI Gateway controller watches AI Gateway Custom Resources (CRs)
+1. The Agent Router controller watches AI Gateway Custom Resources (CRs)
 2. When changes are detected, it updates/generates the Envoy Gateway configuration
-3. The Envoy Gateway communicates with the Envoy AI Gateway controller via the [Envoy Gateway Extension server] protocol, and the Envoy AI Gateway controller then fine-tunes the xDS configuration before the Envoy Gateway applies it to the Envoy Proxy.
+3. The Envoy Gateway communicates with the Agent Router controller via the [Envoy Gateway Extension server] protocol, and the Agent Router controller then fine-tunes the xDS configuration before the Envoy Gateway applies it to the Envoy Proxy.
 4. The data plane (Envoy Proxy) processes AI traffic based on this configuration where the AI Gateway ExtProc runs as a sidecar to handle AI-specific processing. The sidecar container is inserted by the AI Gateway controller into the Envoy Proxy Pod.
 
 This architecture ensures a clear separation of concerns, where the AI Gateway controller focuses on AI-specific configuration while leveraging Envoy Gateway for general proxy management.
 
 ## Components
 
-### 1. Envoy AI Gateway Controller
+### 1. Agent Router Controller
 
 The AI Gateway Controller manages AI-specific components and configurations:
 

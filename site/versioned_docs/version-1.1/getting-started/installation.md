@@ -9,11 +9,11 @@ import TabItem from '@theme/TabItem';
 import CodeBlock from '@theme/CodeBlock';
 import vars from '../\_vars.json';
 
-This guide will walk you through installing Envoy AI Gateway and its required components.
+This guide will walk you through installing Agent Router and its required components.
 
-## Installing Envoy AI Gateway
+## Installing Agent Router
 
-The easiest way to install Envoy AI Gateway is using the Helm charts. You need to install the CRDs first, followed by the AI Gateway controller.
+The easiest way to install Agent Router is using the Helm charts. You need to install the CRDs first, followed by the AI Gateway controller.
 
 ### Step 1: Install AI Gateway CRDs
 
@@ -40,12 +40,12 @@ kubectl wait --timeout=2m -n envoy-ai-gateway-system deployment/ai-gateway-contr
 </CodeBlock>
 
 :::tip
-Note that you are browsing the documentation for the main branch version of Envoy AI Gateway, which is not a stable release.
-We highly recommend you replace `v0.0.0-latest` with `v0.0.0-${commit hash of https://github.com/envoyproxy/ai-gateway}` to pin to a specific version.
+Note that you are browsing the documentation for the main branch version of Agent Router, which is not a stable release.
+We highly recommend you replace `v0.0.0-latest` with `v0.0.0-${commit hash of https://github.com/theagentrouter/agent-router}` to pin to a specific version.
 Otherwise, the controller will be installed with the latest version at the time of installation, which can be unstable over time due to ongoing development (the latest container tags are overwritten).
 :::
 
-> If you are experiencing network issues with `docker.io`, you can install the helm charts from the code repo [ai-gateway-crds-helm](https://github.com/envoyproxy/ai-gateway/tree/{vars.aigwGitRef}/manifests/charts/ai-gateway-crds-helm) and [ai-gateway-helm](https://github.com/envoyproxy/ai-gateway/tree/{vars.aigwGitRef}/manifests/charts/ai-gateway-helm) instead.
+> If you are experiencing network issues with `docker.io`, you can install the helm charts from the code repo [ai-gateway-crds-helm](https://github.com/theagentrouter/agent-router/tree/{vars.aigwGitRef}/manifests/charts/ai-gateway-crds-helm) and [ai-gateway-helm](https://github.com/theagentrouter/agent-router/tree/{vars.aigwGitRef}/manifests/charts/ai-gateway-helm) instead.
 
 :::tip Verify Installation
 

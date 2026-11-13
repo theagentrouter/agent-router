@@ -8,6 +8,9 @@ package controller
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	stdjson "encoding/json" //nolint: depguard // byte-stable hashing; sonic does not guarantee stable field order.
 	"errors"
 	"fmt"
 	"slices"
@@ -28,6 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	"sigs.k8s.io/yaml"
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
@@ -40,8 +44,6 @@ import (
 )
 
 const (
-	// FilterConfigKeyInSecret is the key to store the filter config in the secret.
-	FilterConfigKeyInSecret = "filter-config.yaml" //nolint: gosec
 	// defaultOwnedBy is the default value for the ModelsOwnedBy field in the filter config.
 	defaultOwnedBy = "Envoy AI Gateway"
 )
@@ -60,13 +62,14 @@ func NewGatewayController(
 		uf = uuid.NewString
 	}
 	return &GatewayController{
-		client:                client,
-		kube:                  kube,
-		logger:                logger,
-		envoyGatewayNamespace: envoyGatewayNamespace,
-		standAlone:            standAlone,
-		uuidFn:                uf,
-		extProcBuilder:        newExtProcBuilder(options, extProcAsSideCar, logger),
+		client:                  client,
+		kube:                    kube,
+		logger:                  logger,
+		envoyGatewayNamespace:   envoyGatewayNamespace,
+		standAlone:              standAlone,
+		uuidFn:                  uf,
+		extProcBuilder:          newExtProcBuilder(options, extProcAsSideCar, logger),
+		referenceGrantValidator: newReferenceGrantValidator(client),
 	}
 }
 
@@ -82,6 +85,9 @@ type GatewayController struct {
 	// extProcBuilder is shared with the mutating webhook so the template hash
 	// computed here matches the extproc container injected by the webhook.
 	*extProcBuilder
+	// referenceGrantValidator authorizes cross-namespace AIServiceBackend/InferencePool
+	// references (and their BackendSecurityPolicy credentials) via Gateway API ReferenceGrant.
+	referenceGrantValidator *referenceGrantValidator
 }
 
 // Reconcile implements the reconcile.Reconciler for gwapiv1.Gateway.
@@ -137,10 +143,20 @@ func (c *GatewayController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		defaultLLMCosts = gwConfig.Spec.GlobalLLMRequestCosts
 	}
 
+	// Envoy Gateway watches Gateways, not GatewayConfigs, so a config edit reaches the data plane
+	// only through the stamp below.
+	if err = c.stampGatewayConfigHash(ctx, gw, gwConfig); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// We need to create the filter config in Envoy Gateway system namespace because the sidecar extproc need
 	// to access it.
 	var hasEffectiveRoutes bool // indicates whether the filter config is effective (i.e., there is at least one active route).
-	hasEffectiveRoutes, err = c.reconcileFilterConfigSecret(ctx, gw.Name, gw.Namespace, namespace, aiRoutes.Items, mcpRoutes.Items, uid, defaultLLMCosts)
+	var declaredMetadataNamespaces []string
+	if gwConfig != nil && gwConfig.Spec.ExtProc != nil {
+		declaredMetadataNamespaces = gwConfig.Spec.ExtProc.MetadataForwardingNamespaces
+	}
+	hasEffectiveRoutes, err = c.reconcileFilterConfigSecret(ctx, gw.Name, gw.Namespace, namespace, aiRoutes.Items, mcpRoutes.Items, uid, defaultLLMCosts, declaredMetadataNamespaces)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -159,9 +175,14 @@ func (c *GatewayController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func schemaToFilterAPI(schema aigv1b1.VersionedAPISchema) filterapi.VersionedAPISchema {
 	ret := filterapi.VersionedAPISchema{}
 	ret.Name = filterapi.APISchemaName(schema.Name)
-	if schema.Name == aigv1b1.APISchemaOpenAI || schema.Name == aigv1b1.APISchemaAnthropic {
+	switch schema.Name {
+	case aigv1b1.APISchemaOpenAI, aigv1b1.APISchemaAnthropic:
 		ret.Prefix = cmp.Or(ptr.Deref(schema.Prefix, ""), "v1")
-	} else {
+	case aigv1b1.APISchemaAWSOpenAI:
+		ret.Prefix = cmp.Or(ptr.Deref(schema.Prefix, ""), "openai/v1")
+	case aigv1b1.APISchemaTypeSafe:
+		ret.Version = cmp.Or(ptr.Deref(schema.Version, ""), "v1")
+	default:
 		ret.Version = ptr.Deref(schema.Version, "")
 	}
 	return ret
@@ -381,6 +402,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	mcpRoutes []aigv1b1.MCPRoute,
 	uuid string,
 	defaultLLMCosts []aigv1b1.LLMRequestCost,
+	declaredMetadataNamespaces []string,
 ) (hasEffectiveRoute bool, _ error) {
 	// Precondition: aiGatewayRoutes is not empty as we early return if it is empty.
 	ec := &filterapi.Config{UUID: uuid, Version: version.Parse()}
@@ -410,7 +432,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 			continue
 		}
 		hasEffectiveRoute = true
-		routeName := fmt.Sprintf("%s/%s", aiGatewayRoute.Namespace, aiGatewayRoute.Name)
+		routeName := NamespacedNameKey(aiGatewayRoute.Namespace, aiGatewayRoute.Name)
 		hostnames := aiGatewayRoute.Spec.Hostnames
 		spec := aiGatewayRoute.Spec
 		routeBackendNamesSet := map[string]struct{}{}
@@ -418,6 +440,10 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 		injectedQuotaCosts := make(map[string]struct{})
 		for ruleIndex := range spec.Rules {
 			rule := &spec.Rules[ruleIndex]
+			if rule.ExcludeFromModelsEndpoint {
+				continue
+			}
+
 			for _, m := range rule.Matches {
 				for _, h := range m.Headers {
 					// If explicitly set to something that is not an exact match, skip.
@@ -429,7 +455,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 					}
 					model := filterapi.Model{
 						Name:      h.Value,
-						CreatedAt: ptr.Deref[metav1.Time](rule.ModelsCreatedAt, aiGatewayRoute.CreationTimestamp).UTC(),
+						CreatedAt: ptr.Deref(rule.ModelsCreatedAt, aiGatewayRoute.CreationTimestamp).UTC(),
 						OwnedBy:   ptr.Deref(rule.ModelsOwnedBy, defaultOwnedBy),
 					}
 					ec.Models = append(ec.Models, model)
@@ -448,6 +474,11 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 					}
 				}
 			}
+		}
+		// Second pass: backends are collected for every rule, including rules excluded from
+		// /v1/models — those rules still route traffic and need their backends in the config.
+		for ruleIndex := range spec.Rules {
+			rule := &spec.Rules[ruleIndex]
 			for backendRefIndex := range rule.BackendRefs {
 				backendRef := &rule.BackendRefs[backendRefIndex]
 				b := filterapi.Backend{}
@@ -456,6 +487,26 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 				var bsp *aigv1b1.BackendSecurityPolicy
 				backendNamespace := backendRef.GetNamespace(aiGatewayRoute.Namespace)
+				if !backendRef.IsInferencePool() {
+					b.AIServiceBackendName = NamespacedNameKey(backendNamespace, backendRef.Name)
+				}
+
+				if backendRef.IsCrossNamespace(aiGatewayRoute.Namespace) {
+					var rgErr error
+					if backendRef.IsInferencePool() {
+						rgErr = c.referenceGrantValidator.validateInferencePoolReference(
+							ctx, aiGatewayRoute.Namespace, backendNamespace, backendRef.Name)
+					} else {
+						rgErr = c.referenceGrantValidator.validateAIServiceBackendReference(
+							ctx, aiGatewayRoute.Namespace, backendNamespace, backendRef.Name)
+					}
+					if rgErr != nil {
+						c.logger.Error(rgErr, "cross-namespace backendRef rejected: no valid ReferenceGrant. Skipping this backend.",
+							"backend_name", backendRef.Name, "aigatewayroute", aiGatewayRoute.Name,
+							"namespace", backendNamespace)
+						continue
+					}
+				}
 
 				if backendRef.IsInferencePool() {
 					// We assume that InferencePools are all OpenAI schema.
@@ -542,7 +593,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 			}
 			// Inject QuotaPolicy cost expressions as LLMRequestCost entries so ext_proc
 			// computes and stores them in metadata for the HitsAddend to read.
-			c.injectQuotaPolicyCostExpressions(ctx, aiGatewayRoute, ec, injectedQuotaCosts, routeName)
+			c.injectQuotaPolicyCostExpressions(ctx, ec, injectedQuotaCosts, routeName)
 
 			for _, fc := range dedup {
 				ec.LLMRequestCosts = append(ec.LLMRequestCosts, fc)
@@ -565,7 +616,13 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	// Configuration for MCP processor.
 	var effectiveMCPRoute bool
 	ec.MCPConfig, effectiveMCPRoute = mcpConfig(mcpRoutes)
+	if ec.MCPConfig != nil {
+		ec.MCPConfig.SessionEncryption = c.mcpSessionEncryption()
+	}
 	hasEffectiveRoute = hasEffectiveRoute || effectiveMCPRoute
+	ec.FileIDEncryption = c.fileIDEncryption()
+
+	c.warnUndeclaredMetadataNamespaces(ec, declaredMetadataNamespaces, gatewayName, gatewayNamespace)
 
 	marshaled, err := yaml.Marshal(ec)
 	if err != nil {
@@ -574,48 +631,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	if err = c.writeFilterConfigBundle(ctx, gatewayName, gatewayNamespace, configSecretNamespace, marshaled, uuid); err != nil {
 		return false, err
 	}
-	// TODO(huabing): this can be removed in the next release.
-	if err = c.writeLegacyFilterConfigSecret(ctx, gatewayName, gatewayNamespace, configSecretNamespace, marshaled); err != nil {
-		return false, err
-	}
 	return hasEffectiveRoute, nil
-}
-
-func (c *GatewayController) writeLegacyFilterConfigSecret(
-	ctx context.Context,
-	gatewayName,
-	gatewayNamespace,
-	configSecretNamespace string,
-	marshaled []byte,
-) error {
-	legacySecretName := legacyFilterConfigSecretName(gatewayName, gatewayNamespace)
-
-	// Create legacy secret only if the secret name and content still fit Kubernetes limits.
-	if len(legacySecretName) > k8sObjectNameMaxLen || len(marshaled) > corev1.MaxSecretSize {
-		return nil
-	}
-
-	data := map[string]string{FilterConfigKeyInSecret: string(marshaled)}
-	secret, err := c.kube.CoreV1().Secrets(configSecretNamespace).Get(ctx, legacySecretName, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			secret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: legacySecretName, Namespace: configSecretNamespace},
-				StringData: data,
-			}
-			if _, err = c.kube.CoreV1().Secrets(configSecretNamespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-				return fmt.Errorf("failed to create secret %s: %w", legacySecretName, err)
-			}
-			return nil
-		}
-		return fmt.Errorf("failed to get secret %s: %w", legacySecretName, err)
-	}
-
-	secret.StringData = data
-	if _, err := c.kube.CoreV1().Secrets(configSecretNamespace).Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("failed to update secret %s: %w", secret.Name, err)
-	}
-	return nil
 }
 
 // reconcileFilterConfigSecretForMCPGateway updates the filter config secret for the external processor.
@@ -634,7 +650,7 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 		}
 		hasEffectiveRoute = true
 		mcpRoute := filterapi.MCPRoute{
-			Name:     fmt.Sprintf("%s/%s", route.Namespace, route.Name),
+			Name:     NamespacedNameKey(route.Namespace, route.Name),
 			Backends: []filterapi.MCPBackend{},
 		}
 		for _, b := range route.Spec.BackendRefs {
@@ -650,6 +666,14 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 					ExcludeRegex: b.ToolSelector.ExcludeRegex,
 				}
 			}
+			if b.PromptSelector != nil {
+				mcpBackend.PromptSelector = &filterapi.MCPPromptSelector{
+					Include:      b.PromptSelector.Include,
+					IncludeRegex: b.PromptSelector.IncludeRegex,
+					Exclude:      b.PromptSelector.Exclude,
+					ExcludeRegex: b.PromptSelector.ExcludeRegex,
+				}
+			}
 			for _, fh := range b.ForwardHeaders {
 				hf := filterapi.MCPHeaderForward{Name: fh.Name}
 				if fh.BackendHeader != nil {
@@ -657,16 +681,32 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 				}
 				mcpBackend.ForwardHeaders = append(mcpBackend.ForwardHeaders, hf)
 			}
+			// Propagate per-backend PrefixMode for all valid enum values.
+			if b.PrefixMode != nil {
+				mcpBackend.PrefixMode = filterapi.PrefixMode(*b.PrefixMode)
+			}
 			mcpRoute.Backends = append(
 				mcpRoute.Backends, mcpBackend)
 		}
+		// Add the OAuth protected resource metadata for the route. This is independent of the
+		// authorization rules below: the MCP proxy serves the metadata document, and advertises
+		// it in WWW-Authenticate challenges, whenever OAuth is configured at all.
+		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.OAuth != nil {
+			mcpRoute.ProtectedResourceMetadata = mcpRouteOAuth(route.Spec.SecurityPolicy.OAuth)
+		}
+
+		// hasVerifiedJWT is true only when Envoy has been configured (via SecurityPolicy.OAuth)
+		// to cryptographically verify the bearer JWT before the request reaches the MCP proxy.
+		// Without it, the proxy must never trust JWT claims/scopes surfaced to authorization
+		// (Source.JWT or CEL's request.auth.jwt.*), since an attacker can forge an unsigned or
+		// otherwise unverified token. See MCPRouteAuthorization.VerifiedJWT.
+		hasVerifiedJWT := route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.OAuth != nil
+
 		// Add authorization configuration for the route.
 		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.Authorization != nil {
 			authorization := route.Spec.SecurityPolicy.Authorization
-			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{}
-
-			if route.Spec.SecurityPolicy.OAuth != nil {
-				mcpRoute.Authorization.ResourceMetadataURL = buildResourceMetadataURL(&route.Spec.SecurityPolicy.OAuth.ProtectedResourceMetadata)
+			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{
+				VerifiedJWT: hasVerifiedJWT,
 			}
 
 			defaultAction := ptr.Deref(authorization.DefaultAction, egv1a1.AuthorizationActionDeny)
@@ -728,6 +768,7 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			selector := route.Spec.BackendSelector
 			mcpRoute.BackendSelector = &filterapi.MCPRouteAuthorization{
 				DefaultAction: filterapi.AuthorizationAction(ptr.Deref(selector.DefaultAction, egv1a1.AuthorizationActionDeny)),
+				VerifiedJWT:   hasVerifiedJWT,
 			}
 
 			for _, rule := range selector.Rules {
@@ -761,6 +802,10 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 					mcpRoute.ForwardHeaders = append(mcpRoute.ForwardHeaders, *h)
 				}
 			}
+		}
+		// Thread PrefixMode from the k8s spec into the filter config.
+		if route.Spec.PrefixMode != nil && *route.Spec.PrefixMode == aigv1b1.MCPRoutePrefixModeNever {
+			mcpRoute.PrefixMode = filterapi.PrefixModeNever
 		}
 		mc.Routes = append(mc.Routes, mcpRoute)
 	}
@@ -801,6 +846,8 @@ func defaultOverrideHeaderName(t aigv1b1.BackendSecurityPolicyType) string {
 		return "x-aigw-azure-access-token"
 	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
 		return "x-aigw-gcp-access-token"
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		return "x-aigw-openai-access-token"
 	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
 		return internalapi.AWSCredentialOverrideHeaderPrefix
 	default:
@@ -877,24 +924,21 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 
 	switch spec.Type {
 	case aigv1b1.BackendSecurityPolicyTypeAPIKey:
-		secretName := string(spec.APIKey.SecretRef.Name)
-		apiKey, getErr := c.getSecretData(ctx, namespace, secretName, apiKeyInSecret)
+		apiKey, getErr := c.getBSPSecretRefData(ctx, backendSecurityPolicy, apiKeyInSecret)
 		if getErr != nil {
 			return nil, getErr
 		}
 		auth = &filterapi.BackendAuth{APIKey: &filterapi.APIKeyAuth{Key: apiKey}}
 		hasStaticCred = true
 	case aigv1b1.BackendSecurityPolicyTypeAzureAPIKey:
-		secretName := string(spec.AzureAPIKey.SecretRef.Name)
-		apiKey, getErr := c.getSecretData(ctx, namespace, secretName, apiKeyInSecret)
+		apiKey, getErr := c.getBSPSecretRefData(ctx, backendSecurityPolicy, apiKeyInSecret)
 		if getErr != nil {
 			return nil, getErr
 		}
 		auth = &filterapi.BackendAuth{AzureAPIKey: &filterapi.AzureAPIKeyAuth{Key: apiKey}}
 		hasStaticCred = true
 	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
-		secretName := string(spec.AnthropicAPIKey.SecretRef.Name)
-		apiKey, getErr := c.getSecretData(ctx, namespace, secretName, apiKeyInSecret)
+		apiKey, getErr := c.getBSPSecretRefData(ctx, backendSecurityPolicy, apiKeyInSecret)
 		if getErr != nil {
 			return nil, getErr
 		}
@@ -909,13 +953,15 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 			auth = &filterapi.BackendAuth{AWSAuth: &filterapi.AWSAuth{Region: awsCred.Region}}
 		} else {
 			// Otherwise, fetch credentials from secret
-			var secretName string
+			var (
+				credentialsLiteral string
+				getErr             error
+			)
 			if awsCred.CredentialsFile != nil {
-				secretName = string(awsCred.CredentialsFile.SecretRef.Name)
+				credentialsLiteral, getErr = c.getBSPSecretRefData(ctx, backendSecurityPolicy, rotators.AwsCredentialsKey)
 			} else {
-				secretName = rotators.GetBSPSecretName(backendSecurityPolicy.Name)
+				credentialsLiteral, getErr = c.getSecretData(ctx, namespace, rotators.GetBSPSecretName(backendSecurityPolicy.Name), rotators.AwsCredentialsKey)
 			}
-			credentialsLiteral, getErr := c.getSecretData(ctx, namespace, secretName, rotators.AwsCredentialsKey)
 			if getErr != nil {
 				return nil, getErr
 			}
@@ -965,6 +1011,18 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 			}
 			hasStaticCred = true
 		}
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		secretName := rotators.GetBSPSecretName(backendSecurityPolicy.Name)
+		openAIAccessToken, getErr := c.getSecretData(ctx, namespace, secretName, rotators.OpenAIAccessTokenKey)
+		if getErr != nil {
+			return nil, getErr
+		}
+		auth = &filterapi.BackendAuth{OpenAIAuth: &filterapi.OpenAIAuth{
+			AccessToken:  openAIAccessToken,
+			Organization: spec.OpenAICredentials.Organization,
+			Project:      spec.OpenAICredentials.Project,
+		}}
+		hasStaticCred = true
 	default:
 		return nil, fmt.Errorf("invalid backend security type %s for policy %s", spec.Type, backendSecurityPolicy.Name)
 	}
@@ -981,9 +1039,9 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 }
 
 func (c *GatewayController) getSecretData(ctx context.Context, namespace, name, dataKey string) (string, error) {
-	secret := &corev1.Secret{}
-	if err := c.client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, secret); err != nil {
-		return "", fmt.Errorf("failed to get secret %s: %w", name, err)
+	secret, err := c.kube.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get secret %s/%s: %w", namespace, name, err)
 	}
 	if secret.Data != nil {
 		if value, ok := secret.Data[dataKey]; ok {
@@ -995,7 +1053,21 @@ func (c *GatewayController) getSecretData(ctx context.Context, namespace, name, 
 			return value, nil
 		}
 	}
-	return "", fmt.Errorf("secret %s does not contain key %s", name, dataKey)
+	return "", fmt.Errorf("secret %s/%s does not contain key %s", namespace, name, dataKey)
+}
+
+// getBSPSecretRefData returns dataKey from the Secret referenced by the policy's static credential.
+// It resolves the Secret with backendSecurityPolicySecretRef, like the Secret watch index, so a
+// cross-namespace Secret must also be allowed by a ReferenceGrant.
+func (c *GatewayController) getBSPSecretRefData(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy, dataKey string) (string, error) {
+	name, namespace, ok := backendSecurityPolicySecretRef(bsp)
+	if !ok {
+		return "", fmt.Errorf("secretRef is not set for policy %s/%s", bsp.Namespace, bsp.Name)
+	}
+	if err := c.referenceGrantValidator.validateSecretReference(ctx, bsp.Namespace, namespace, name); err != nil {
+		return "", err
+	}
+	return c.getSecretData(ctx, namespace, name, dataKey)
 }
 
 // injectQuotaPolicyCostExpressions looks up QuotaPolicies targeting the backends
@@ -1004,26 +1076,52 @@ func (c *GatewayController) getSecretData(ctx context.Context, namespace, name, 
 // dynamic metadata for the rate limit filter's HitsAddend to read.
 func (c *GatewayController) injectQuotaPolicyCostExpressions(
 	ctx context.Context,
-	route *aigv1b1.AIGatewayRoute,
 	ec *filterapi.Config,
 	injectedQuotaCosts map[string]struct{},
 	routeName string,
 ) {
-	var quotaPolicies aigv1a1.QuotaPolicyList
-	if err := c.client.List(ctx, &quotaPolicies, client.InNamespace(route.Namespace)); err != nil {
-		c.logger.Error(err, "failed to list QuotaPolicies for cost expression injection")
-		return
-	}
-
 	// Collect backend names and model name overrides on this route.
 	routeBackends := make(map[string]bool)
 	routeModels := make(map[string]bool)
-	for _, rule := range route.Spec.Rules {
-		for _, br := range rule.BackendRefs {
-			routeBackends[br.Name] = true
-			if br.ModelNameOverride != "" {
-				routeModels[br.ModelNameOverride] = true
+	for i := range ec.Backends {
+		backend := &ec.Backends[i]
+		if backend.AIServiceBackendName != "" {
+			routeBackends[backend.AIServiceBackendName] = true
+		}
+		if backend.ModelNameOverride != "" {
+			routeModels[backend.ModelNameOverride] = true
+		}
+	}
+
+	// Look up only policies targeting backends on this route. The index key is
+	// backend-name.namespace, while ec.Backends uses namespace/backend-name.
+	seenPolicies := make(map[string]struct{})
+	var quotaPolicies aigv1a1.QuotaPolicyList
+	for backendKey := range routeBackends {
+		backendNamespace, backendName, ok := strings.Cut(backendKey, "/")
+		if !ok || backendNamespace == "" || backendName == "" {
+			continue
+		}
+		indexKey := namespacedNameIndexKey(backendName, backendNamespace)
+
+		var matches aigv1a1.QuotaPolicyList
+		err := c.client.List(ctx, &matches, client.MatchingFields{
+			k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: indexKey,
+		})
+		if err != nil {
+			c.logger.Error(err, "failed to list QuotaPolicies for cost expression injection",
+				"backend", backendKey)
+			return
+		}
+
+		for i := range matches.Items {
+			policy := &matches.Items[i]
+			policyKey := NamespacedNameKey(policy.Namespace, policy.Name)
+			if _, exists := seenPolicies[policyKey]; exists {
+				continue
 			}
+			seenPolicies[policyKey] = struct{}{}
+			quotaPolicies.Items = append(quotaPolicies.Items, *policy)
 		}
 	}
 
@@ -1031,10 +1129,16 @@ func (c *GatewayController) injectQuotaPolicyCostExpressions(
 		qp := &quotaPolicies.Items[i]
 		// Check if this policy targets any backend on this route.
 		targetsRoute := false
+		authorizedTargets := make([]gwapiv1a2.NamespacedPolicyTargetReference, 0, len(qp.Spec.TargetRefs))
 		for _, ref := range qp.Spec.TargetRefs {
-			if routeBackends[string(ref.Name)] {
+			targetNamespace := TargetNamespace(ref, qp.Namespace)
+			if err := c.referenceGrantValidator.validateQuotaPolicyAIServiceBackendReference(
+				ctx, qp.Namespace, targetNamespace, string(ref.Name)); err != nil {
+				continue
+			}
+			authorizedTargets = append(authorizedTargets, ref)
+			if routeBackends[targetNamespace+"/"+string(ref.Name)] {
 				targetsRoute = true
-				break
 			}
 		}
 		if !targetsRoute {
@@ -1061,8 +1165,8 @@ func (c *GatewayController) injectQuotaPolicyCostExpressions(
 			// One LLMRequestCost per target backend with the Backend and Model filters.
 			// ext_proc only evaluates the entry matching the serving backend and model,
 			// storing the result under the shared metadata key.
-			for _, ref := range qp.Spec.TargetRefs {
-				backendKey := route.Namespace + "/" + string(ref.Name)
+			for _, ref := range authorizedTargets {
+				backendKey := NamespacedNameKey(TargetNamespace(ref, qp.Namespace), string(ref.Name))
 				dedupeKey := QuotaCostMetadataKey + "\x00" + *pmq.ModelName + "\x00" + backendKey
 				if _, exists := injectedQuotaCosts[dedupeKey]; exists {
 					continue
@@ -1095,7 +1199,7 @@ func (c *GatewayController) backendWithMaybeBSP(ctx context.Context, namespace, 
 	}
 
 	var backendSecurityPolicyList aigv1b1.BackendSecurityPolicyList
-	key := fmt.Sprintf("%s.%s", name, namespace)
+	key := namespacedNameIndexKey(name, namespace)
 	if err := c.client.List(ctx, &backendSecurityPolicyList, client.InNamespace(namespace),
 		client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingBackendSecurityPolicy: key}); err != nil {
 		return nil, nil, fmt.Errorf("failed to list BackendSecurityPolicies for backend %s: %w", name, err)
@@ -1133,7 +1237,7 @@ func (c *GatewayController) backendWithMaybeBSP(ctx context.Context, namespace, 
 // getBSPForInferencePool retrieves the BackendSecurityPolicy for a given InferencePool if it exists.
 func (c *GatewayController) getBSPForInferencePool(ctx context.Context, namespace, name string) (*aigv1b1.BackendSecurityPolicy, error) {
 	var bspList aigv1b1.BackendSecurityPolicyList
-	key := fmt.Sprintf("%s.%s", name, namespace)
+	key := namespacedNameIndexKey(name, namespace)
 	if err := c.client.List(ctx, &bspList, client.InNamespace(namespace),
 		client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingBackendSecurityPolicy: key}); err != nil {
 		return nil, fmt.Errorf("failed to list BackendSecurityPolicies for inference pool %s: %w", name, err)
@@ -1168,19 +1272,17 @@ func (c *GatewayController) checkPodHasSideCar(pod *corev1.Pod, needMCP bool, de
 		for i := range podSpec.InitContainers {
 			if podSpec.InitContainers[i].Name == extProcContainerName && podSpec.InitContainers[i].Image == desiredImage {
 				hasSideCar = true
-				hasMCPAddr := false
+				mcpAddr := ""
 				for j := range podSpec.InitContainers[i].Args {
 					if j > 0 && podSpec.InitContainers[i].Args[j-1] == "-logLevel" && podSpec.InitContainers[i].Args[j] != c.logLevel {
 						hasSideCar = false
 						break
 					}
 					if j > 0 && podSpec.InitContainers[i].Args[j-1] == "-mcpAddr" {
-						hasMCPAddr = true
+						mcpAddr = podSpec.InitContainers[i].Args[j]
 					}
 				}
-				if needMCP && !hasMCPAddr {
-					c.logger.Info("MCPRoutes exist but sidecar is missing -mcpAddr argument, triggering rollout",
-						"pod", pod.Name, "namespace", pod.Namespace)
+				if needMCP && !c.checkMCPAddr(pod, mcpAddr) {
 					hasSideCar = false
 				}
 				break
@@ -1190,19 +1292,17 @@ func (c *GatewayController) checkPodHasSideCar(pod *corev1.Pod, needMCP bool, de
 		for i := range podSpec.Containers {
 			if podSpec.Containers[i].Name == extProcContainerName && podSpec.Containers[i].Image == desiredImage {
 				hasSideCar = true
-				hasMCPAddr := false
+				mcpAddr := ""
 				for j := range podSpec.Containers[i].Args {
 					if j > 0 && podSpec.Containers[i].Args[j-1] == "-logLevel" && podSpec.Containers[i].Args[j] != c.logLevel {
 						hasSideCar = false
 						break
 					}
 					if j > 0 && podSpec.Containers[i].Args[j-1] == "-mcpAddr" {
-						hasMCPAddr = true
+						mcpAddr = podSpec.Containers[i].Args[j]
 					}
 				}
-				if needMCP && !hasMCPAddr {
-					c.logger.Info("MCPRoutes exist but sidecar is missing -mcpAddr argument, triggering rollout",
-						"pod", pod.Name, "namespace", pod.Namespace)
+				if needMCP && !c.checkMCPAddr(pod, mcpAddr) {
 					hasSideCar = false
 				}
 				break
@@ -1211,6 +1311,24 @@ func (c *GatewayController) checkPodHasSideCar(pod *corev1.Pod, needMCP bool, de
 	}
 
 	return hasSideCar
+}
+
+// checkMCPAddr reports whether the extproc sidecar's -mcpAddr is the desired MCP proxy address.
+// Besides a missing argument, this also rolls pods whose MCP proxy still listens on every interface
+// (created before the proxy was bound to loopback), which would otherwise stay reachable from other
+// pods until something else restarted them.
+func (c *GatewayController) checkMCPAddr(pod *corev1.Pod, mcpAddr string) bool {
+	switch mcpAddr {
+	case internalapi.MCPProxyAddr:
+		return true
+	case "":
+		c.logger.Info("MCPRoutes exist but sidecar is missing -mcpAddr argument, triggering rollout",
+			"pod", pod.Name, "namespace", pod.Namespace)
+	default:
+		c.logger.Info("sidecar -mcpAddr is not the desired MCP proxy address, triggering rollout",
+			"pod", pod.Name, "namespace", pod.Namespace, "mcpAddr", mcpAddr, "desired", internalapi.MCPProxyAddr)
+	}
+	return false
 }
 
 // isRolloutInProgress checks whether any Deployment or DaemonSet is currently rolling out.
@@ -1350,7 +1468,7 @@ func workloadTemplateAnnotationPatch(uuid, desiredHash string, includeUUID, incl
 	if includeHash {
 		annotations = append(annotations, fmt.Sprintf(`"%s":"%s"`, extProcConfigHashAnnotationKey, desiredHash))
 	}
-	return []byte(fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{%s}}}}}`, strings.Join(annotations, ",")))
+	return fmt.Appendf(nil, `{"spec":{"template":{"metadata":{"annotations":{%s}}}}}`, strings.Join(annotations, ","))
 }
 
 // getObjectsForGateway retrieves the pods, deployments, and daemonsets for a given Gateway.
@@ -1422,6 +1540,67 @@ func (c *GatewayController) getObjectsForGateway(ctx context.Context, gw *gwapiv
 		namespace = daemonSets[0].Namespace
 	}
 	return
+}
+
+// warnUndeclaredMetadataNamespaces logs an error for every credentialOverride.fromDynamicMetadata
+// namespace the GatewayConfig leaves out: Envoy will not forward it, so those backends fall back
+// to the static credential. One line per namespace, naming every backend that reads it.
+func (c *GatewayController) warnUndeclaredMetadataNamespaces(ec *filterapi.Config, declared []string, gatewayName, gatewayNamespace string) {
+	var undeclared []string
+	backends := make(map[string][]string)
+	for i := range ec.Backends {
+		b := &ec.Backends[i]
+		if b.Auth == nil || b.Auth.CredentialOverride == nil {
+			continue
+		}
+		ns := b.Auth.CredentialOverride.DynamicMetadataNamespace
+		if ns == "" || slices.Contains(declared, ns) {
+			continue
+		}
+		if _, ok := backends[ns]; !ok {
+			undeclared = append(undeclared, ns)
+		}
+		backends[ns] = append(backends[ns], b.Name)
+	}
+	for _, ns := range undeclared {
+		c.logger.Error(nil, "credentialOverride reads a dynamic metadata namespace the GatewayConfig does not declare in extProc.metadataForwardingNamespaces; Envoy will not forward it, so these backends fall back to the configured credential",
+			"namespace", ns, "backends", backends[ns], "gateway_name", gatewayName, "gateway_namespace", gatewayNamespace)
+	}
+}
+
+// gatewayConfigHashAnnotationKey carries a hash of the referenced GatewayConfig spec; see
+// stampGatewayConfigHash.
+const gatewayConfigHashAnnotationKey = "aigateway.envoyproxy.io/gateway-config-hash"
+
+// stampGatewayConfigHash writes a hash of the GatewayConfig spec into a Gateway annotation, so a
+// config change updates a resource Envoy Gateway watches. The annotation is removed when no
+// config is referenced.
+func (c *GatewayController) stampGatewayConfigHash(ctx context.Context, gw *gwapiv1.Gateway, gwConfig *aigv1b1.GatewayConfig) error {
+	var desired string
+	if gwConfig != nil {
+		marshaled, err := stdjson.Marshal(gwConfig.Spec)
+		if err != nil {
+			return fmt.Errorf("failed to marshal GatewayConfig spec: %w", err)
+		}
+		sum := sha256.Sum256(marshaled)
+		desired = hex.EncodeToString(sum[:8])
+	}
+	if gw.Annotations[gatewayConfigHashAnnotationKey] == desired {
+		return nil
+	}
+	patch := client.MergeFrom(gw.DeepCopy())
+	if desired == "" {
+		delete(gw.Annotations, gatewayConfigHashAnnotationKey)
+	} else {
+		if gw.Annotations == nil {
+			gw.Annotations = make(map[string]string)
+		}
+		gw.Annotations[gatewayConfigHashAnnotationKey] = desired
+	}
+	if err := c.client.Patch(ctx, gw, patch); err != nil {
+		return fmt.Errorf("failed to patch Gateway with GatewayConfig hash: %w", err)
+	}
+	return nil
 }
 
 // fetchGatewayConfig returns the referenced GatewayConfig (if present) for the given Gateway.

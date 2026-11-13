@@ -241,6 +241,10 @@ test-e2e: build-e2e ## Run the end-to-end tests with a local kind cluster.
 	@echo "Run E2E tests"
 	@go test -v ./tests/e2e/... $(GO_TEST_ARGS) $(GO_TEST_E2E_ARGS)
 
+# TODO: remove this once there's a new release for GAIE
+# contains https://github.com/kubernetes-sigs/gateway-api-inference-extension/pull/3033
+WORKAROUND_GAIE_EPP_IMAGE ?= us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-inference-extension/lwepp:main
+
 # This runs the end-to-end tests for the controller and extproc with a local kind cluster.
 .PHONY: test-e2e-inference-extension
 test-e2e-inference-extension: build-e2e ## Run the end-to-end tests with a local kind cluster for Gateway API Inference Extension.
@@ -296,13 +300,20 @@ build.%: ## Build a binary for the given command under the internal/cmd director
 	done
 
 # This builds the docker images for the controller, extproc and testupstream for the e2e tests.
+#
+# Set TEST_SKIP_BUILD=true to skip rebuilding the images, e.g. when they were already built
+# by a previous run and haven't changed.
 .PHONY: build-e2e
 build-e2e: ## Build the docker images for the controller, extproc and testupstream for the e2e tests.
+ifeq ($(TEST_SKIP_BUILD),true)
+	@echo "Skipping build-e2e because TEST_SKIP_BUILD=true"
+else
 	@$(MAKE) docker-build.controller DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.extproc DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.testupstream CMD_PATH_PREFIX=tests/internal/testupstreamlib DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.testmcpserver CMD_PATH_PREFIX=tests/internal/testmcp DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.testextauthserver CMD_PATH_PREFIX=tests/internal/testextauth DOCKER_BUILD_ARGS="--load"
+endif
 
 # This builds a docker image for a given command.
 #
@@ -385,6 +396,29 @@ helm-test: helm-package  ## Test the helm chart with a dummy version.
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "extProcLogFormat=text"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.logFormat=json --set extProc.logFormat=json | grep -q -- "-logFormat=json"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.logFormat=json --set extProc.logFormat=json | grep -q -- "extProcLogFormat=json"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "startupProbe:"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "failureThreshold: 75"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "name: ai-gateway-controller-mcp-session-encryption"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "name: MCP_SESSION_ENCRYPTION_SEED"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "--mcpSessionEncryptionSeed"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "default-insecure-seed"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.seed=my-test-seed | grep -q -- "seed: bXktdGVzdC1zZWVk"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.existingSecret=my-seed-secret | grep -q -- "name: my-seed-secret"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.existingSecret=my-seed-secret | grep -q -- "mcp-session-encryption"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "seed: bXktb2xkLXNlZWQ="
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "my-old-seed"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed --set controller.podAnnotations.foo=bar | grep -q -- "foo: bar"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.fullnameOverride=a-very-long-controller-fullname-override-value --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "name: a-very-long-controller-fullname-mcp-session-encryption-fallback"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -A3 -- "name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED" | grep -q -- "name: my-fallback-secret"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "--mcpFallbackSessionEncryptionIterations="
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "mcp-session-encryption-fallback"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "mcp-session-encryption-fallback"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "bXktb2xkLXNlZWQ="
 
 # This pushes the helm chart to the OCI registry, requiring the access to the registry endpoint.
 .PHONY: helm-push

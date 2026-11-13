@@ -124,7 +124,7 @@ The data plane processes requests through several key steps:
     In this case, we need to do different request transformations and upstream authorizations. So, this logic needs to be in the upstream level filter.
 - Why the External Processor?
   - The External Processor is the most powerful battle-tested and production-ready extension point in Envoy. It allows us to implement complex logic without modifying Envoy's core codebase.
-  - [Dynamic Modules](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/advanced/dynamic_modules) could be a future alternative as it offers better performance as well as less complexity in the overall architecture. The work is tracked in [envoyproxy/ai-gateway#90](https://github.com/envoyproxy/ai-gateway/issues/90).
+  - [Dynamic Modules](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/advanced/dynamic_modules) could be a future alternative as it offers better performance as well as less complexity in the overall architecture. The work is tracked in [envoyproxy/ai-gateway#90](https://github.com/theagentrouter/agent-router/issues/90).
 
 ## Next Steps
 

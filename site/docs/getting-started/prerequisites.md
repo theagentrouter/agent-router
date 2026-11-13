@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 import CodeBlock from '@theme/CodeBlock';
 import vars from '../\_vars.json';
 
-Before you begin using Envoy AI Gateway, you'll need to ensure you have the following prerequisites in place:
+Before you begin using Agent Router, you'll need to ensure you have the following prerequisites in place:
 
 ## Required Tools
 
@@ -46,7 +46,7 @@ curl --version
 ## Kubernetes Cluster
 
 :::info Version Requirements
-Envoy AI Gateway requires Kubernetes version {vars.k8sMinVersion} or higher. We recommend using a recent stable version of Kubernetes for the best experience.
+Agent Router requires Kubernetes version {vars.k8sMinVersion} or higher. We recommend using a recent stable version of Kubernetes for the best experience.
 :::
 
 You need a running Kubernetes cluster with your kubeconfig properly configured. You have several options:
@@ -77,7 +77,7 @@ The server version in the output should show version {vars.k8sMinVersion} or hig
 :::caution
 
 If your cluster is running a version lower than {vars.k8sMinVersion}, our recommendation is to upgrade your cluster to meet the minimum requirements.
-The recommended Kubernetes versions are those that are actively tested and supported by the Envoy AI Gateway team.
+The recommended Kubernetes versions are those that are actively tested and supported by the Agent Router team.
 
 :::
 
@@ -149,18 +149,18 @@ Ensure you're using a clean Envoy Gateway deployment. If you have an existing En
 
 :::info Version Requirements
 
-Envoy AI Gateway requires Envoy Gateway version {vars.egMinVersion} or higher. For the best experience while trying out AI Gateway, we recommend using the latest version as shown in the commands below.
+Agent Router requires Envoy Gateway version {vars.egMinVersion} or higher. For the best experience while trying out AI Gateway, we recommend using the latest version as shown in the commands below.
 
 :::
 
-Envoy AI Gateway is built on top of Envoy Gateway. Install it using Helm and wait for the deployment to be ready.
+Agent Router is built on top of Envoy Gateway. Install it using Helm and wait for the deployment to be ready.
 
 <CodeBlock language="shell">
 {`helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm \\
     --version v${vars.egVersion} \\
     --namespace envoy-gateway-system \\
     --create-namespace \\
-    -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/manifests/envoy-gateway-values.yaml
+    -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/manifests/envoy-gateway-values.yaml
 
 kubectl wait --timeout=2m -n envoy-gateway-system deployment/envoy-gateway --for=condition=Available`}
 </CodeBlock>
@@ -175,12 +175,12 @@ Depending on the additional features you want (like rate limiting or InferencePo
 Currently, supported addons are:
 
 - [**Rate Limiting**](../capabilities/traffic/usage-based-ratelimiting.md):
-  <Link href={`https://github.com/envoyproxy/ai-gateway/blob/${vars.aigwGitRef}/examples/token_ratelimit/envoy-gateway-values-addon.yaml`}>
-  {`https://github.com/envoyproxy/ai-gateway/blob/${vars.aigwGitRef}/examples/token_ratelimit/envoy-gateway-values-addon.yaml`}
+  <Link href={`https://github.com/theagentrouter/agent-router/blob/${vars.aigwGitRef}/examples/token_ratelimit/envoy-gateway-values-addon.yaml`}>
+  {`https://github.com/theagentrouter/agent-router/blob/${vars.aigwGitRef}/examples/token_ratelimit/envoy-gateway-values-addon.yaml`}
   </Link>
 - [**InferencePool**](../capabilities/inference/index.md):
-  <Link href={`https://github.com/envoyproxy/ai-gateway/blob/${vars.aigwGitRef}/examples/inference-pool/envoy-gateway-values-addon.yaml`}>
-  {`https://github.com/envoyproxy/ai-gateway/blob/${vars.aigwGitRef}/examples/inference-pool/envoy-gateway-values-addon.yaml`}
+  <Link href={`https://github.com/theagentrouter/agent-router/blob/${vars.aigwGitRef}/examples/inference-pool/envoy-gateway-values-addon.yaml`}>
+  {`https://github.com/theagentrouter/agent-router/blob/${vars.aigwGitRef}/examples/inference-pool/envoy-gateway-values-addon.yaml`}
   </Link>
 
 For example, to install with all addons enabled, run:
@@ -190,7 +190,7 @@ For example, to install with all addons enabled, run:
     --version v${vars.egVersion} \\
     --namespace envoy-gateway-system \\
     --create-namespace \\
-    -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/manifests/envoy-gateway-values.yaml \\
-    -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/token_ratelimit/envoy-gateway-values-addon.yaml \\
-    -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/inference-pool/envoy-gateway-values-addon.yaml`}
+    -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/manifests/envoy-gateway-values.yaml \\
+    -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/token_ratelimit/envoy-gateway-values-addon.yaml \\
+    -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/inference-pool/envoy-gateway-values-addon.yaml`}
 </CodeBlock>

@@ -17,6 +17,7 @@ import (
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
@@ -38,10 +39,12 @@ var (
 	_ tracingapi.CompletionTracer           = (*completionTracer)(nil)
 	_ tracingapi.ImageGenerationTracer      = (*imageGenerationTracer)(nil)
 	_ tracingapi.ResponsesTracer            = (*responsesTracer)(nil)
+	_ tracingapi.DecisionsTracer            = (*decisionsTracer)(nil)
 	_ tracingapi.SpeechTracer               = (*speechTracer)(nil)
 	_ tracingapi.TranscriptionTracer        = (*transcriptionTracer)(nil)
 	_ tracingapi.TranslationTracer          = (*translationTracer)(nil)
 	_ tracingapi.RerankTracer               = (*rerankTracer)(nil)
+	_ tracingapi.SystemOneTracer            = (*systemOneTracer)(nil)
 	_ tracingapi.ResponsesInputTokensTracer = (*responsesInputTokensTracer)(nil)
 	_ tracingapi.CountTokensTracer          = (*countTokensTracer)(nil)
 	_ tracingapi.TokenizeTracer             = (*tokenizeTracer)(nil)
@@ -53,10 +56,12 @@ type (
 	completionTracer           = requestTracerImpl[openai.CompletionRequest, openai.CompletionResponse, openai.CompletionResponse]
 	imageGenerationTracer      = requestTracerImpl[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}]
 	responsesTracer            = requestTracerImpl[openai.ResponseRequest, openai.Response, openai.ResponseStreamEventUnion]
+	decisionsTracer            = requestTracerImpl[openai.DecisionRequest, openai.DecisionResponse, struct{}]
 	speechTracer               = requestTracerImpl[openai.SpeechRequest, []byte, openai.SpeechStreamChunk]
 	transcriptionTracer        = requestTracerImpl[openai.TranscriptionRequest, openai.TranscriptionResponse, openai.TranscriptionStreamEvent]
 	translationTracer          = requestTracerImpl[openai.TranslationRequest, openai.TranslationResponse, struct{}]
 	rerankTracer               = requestTracerImpl[cohereschema.RerankV2Request, cohereschema.RerankV2Response, struct{}]
+	systemOneTracer            = requestTracerImpl[typesafeschema.SystemOneRequest, typesafeschema.SystemOneResponse, struct{}]
 	responsesInputTokensTracer = requestTracerImpl[openai.ResponseRequest, openai.ResponsesInputTokensResponse, struct{}]
 	countTokensTracer          = requestTracerImpl[anthropicschema.CountTokensRequest, anthropicschema.CountTokensResponse, struct{}]
 	tokenizeTracer             = requestTracerImpl[tokenize.RequestUnion, tokenize.Response, struct{}]
@@ -176,6 +181,18 @@ func newResponsesTracer(tracer trace.Tracer, propagator propagation.TextMapPropa
 	)
 }
 
+func newDecisionsTracer(tracer trace.Tracer, propagator propagation.TextMapPropagator, recorder tracingapi.DecisionsRecorder, headerAttributes map[string]string) tracingapi.DecisionsTracer {
+	return newRequestTracer(
+		tracer,
+		propagator,
+		recorder,
+		headerAttributes,
+		func(span trace.Span, recorder tracingapi.DecisionsRecorder) tracingapi.DecisionsSpan {
+			return &decisionsSpan{span: span, recorder: recorder}
+		},
+	)
+}
+
 func newSpeechTracer(tracer trace.Tracer, propagator propagation.TextMapPropagator, recorder tracingapi.SpeechRecorder, headerAttributes map[string]string) tracingapi.SpeechTracer {
 	return newRequestTracer(
 		tracer,
@@ -220,6 +237,18 @@ func newRerankTracer(tracer trace.Tracer, propagator propagation.TextMapPropagat
 		headerAttributes,
 		func(span trace.Span, recorder tracingapi.RerankRecorder) tracingapi.RerankSpan {
 			return &rerankSpan{span: span, recorder: recorder}
+		},
+	)
+}
+
+func newSystemOneTracer(tracer trace.Tracer, propagator propagation.TextMapPropagator, recorder tracingapi.SystemOneRecorder, headerAttributes map[string]string) tracingapi.SystemOneTracer {
+	return newRequestTracer(
+		tracer,
+		propagator,
+		recorder,
+		headerAttributes,
+		func(span trace.Span, recorder tracingapi.SystemOneRecorder) tracingapi.SystemOneSpan {
+			return &systemOneSpan{span: span, recorder: recorder}
 		},
 	)
 }

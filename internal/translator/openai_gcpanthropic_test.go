@@ -404,6 +404,26 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		require.Equal(t, "adaptive", thinkingBlock.Map()["type"].String())
 		require.Equal(t, "summarized", thinkingBlock.Map()["display"].String())
 	})
+	t.Run("Request with Thinking between_tools", func(t *testing.T) {
+		thinkingReq := &openai.ChatCompletionRequest{
+			Model:     claudeTestModel,
+			Messages:  []openai.ChatCompletionMessageParamUnion{},
+			MaxTokens: ptr.To(int64(100)),
+			Thinking: &openai.ThinkingUnion{
+				OfBetweenTools: &openai.ThinkingBetweenTools{
+					Type: "between_tools",
+				},
+			},
+		}
+		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
+		_, body, err := translator.RequestBody(nil, thinkingReq, false)
+		require.NoError(t, err)
+		require.NotNil(t, body)
+
+		thinkingBlock := gjson.GetBytes(body, "thinking")
+		require.True(t, thinkingBlock.Exists(), "The 'thinking' field should exist in the request body")
+		require.JSONEq(t, `{"type":"between_tools"}`, thinkingBlock.Raw)
+	})
 }
 
 func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.T) {
@@ -442,6 +462,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 					TotalTokens:      38,
 					PromptTokensDetails: &openai.PromptTokensDetails{
 						CachedTokens:        5,
+						CacheWriteTokens:    3,
 						CacheCreationTokens: 3,
 					},
 					CompletionTokensDetails: &openai.CompletionTokensDetails{},
@@ -478,6 +499,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 					PromptTokens: 42, CompletionTokens: 15, TotalTokens: 57,
 					PromptTokensDetails: &openai.PromptTokensDetails{
 						CachedTokens:        10,
+						CacheWriteTokens:    7,
 						CacheCreationTokens: 7,
 					},
 					CompletionTokensDetails: &openai.CompletionTokensDetails{},
@@ -654,7 +676,7 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.
 			expectedTokenUsage := tokenUsageFrom(
 				int32(tt.expectedOpenAIResponse.Usage.PromptTokens),                            // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CachedTokens),        // nolint:gosec
-				int32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CacheCreationTokens), // nolint:gosec
+				int32(tt.expectedOpenAIResponse.Usage.PromptTokensDetails.CacheWriteTokens),    // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.CompletionTokens),                        // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.TotalTokens),                             // nolint:gosec
 				int32(tt.expectedOpenAIResponse.Usage.CompletionTokensDetails.ReasoningTokens), // nolint:gosec

@@ -16,7 +16,7 @@ spec:
     oidcExchangeToken:
       oidc:
         provider:
-          issuer: placeholder
+          issuer: https://placeholder
         clientID: placeholder
         clientSecret:
           name: placeholder

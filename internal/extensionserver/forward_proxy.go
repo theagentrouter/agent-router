@@ -14,9 +14,6 @@ import (
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	http11proxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/http_11_proxy/v3"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 )
@@ -90,26 +87,11 @@ func (s *Server) resolveForwardProxyAddr(ctx context.Context, route *aigv1b1.AIG
 // by the given Gateway's "aigateway.envoyproxy.io/gateway-config" annotation. It returns "" when
 // the Gateway, its annotation, the GatewayConfig, or the forwardProxy field are absent.
 func (s *Server) forwardProxyAddrForGateway(ctx context.Context, gatewayName, gatewayNamespace string) (string, error) {
-	var gateway gwapiv1.Gateway
-	if err := s.k8sClient.Get(ctx, client.ObjectKey{Name: gatewayName, Namespace: gatewayNamespace}, &gateway); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("failed to get Gateway %s/%s: %w", gatewayNamespace, gatewayName, err)
+	gatewayConfig, err := s.gatewayConfigForGateway(ctx, gatewayName, gatewayNamespace)
+	if err != nil {
+		return "", err
 	}
-	configName, ok := gateway.Annotations[gatewayConfigAnnotationKey]
-	if !ok || configName == "" {
-		return "", nil
-	}
-	var gatewayConfig aigv1b1.GatewayConfig
-	// The GatewayConfig must be in the same namespace as the Gateway.
-	if err := s.k8sClient.Get(ctx, client.ObjectKey{Name: configName, Namespace: gatewayNamespace}, &gatewayConfig); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("failed to get GatewayConfig %s/%s: %w", gatewayNamespace, configName, err)
-	}
-	if gatewayConfig.Spec.ForwardProxy == nil {
+	if gatewayConfig == nil || gatewayConfig.Spec.ForwardProxy == nil {
 		return "", nil
 	}
 	return gatewayConfig.Spec.ForwardProxy.Address, nil

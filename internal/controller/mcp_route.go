@@ -30,8 +30,16 @@ import (
 )
 
 const (
+	// mcpProxyBackendDummyIP is the placeholder address of the generated MCP proxy Backend.
+	//
+	// A Backend can only point at a real address, so there is no way to say "forward to a port
+	// in my own pod". It names an address from the RFC 5737 TEST-NET-1 documentation range
+	// instead, which routes nowhere. Envoy Gateway turns it into a cluster and the extension
+	// server rewrites that cluster to reach the in-process proxy on localhost. A cluster that
+	// escapes the rewrite would hang until the request timed out; see
+	// clusterTargetsMCPProxyBackend in internal/extensionserver.
+	mcpProxyBackendDummyIP = "192.0.2.42"
 	defaultMCPPath         = "/mcp"
-	mcpProxyBackendDummyIP = "192.0.2.42" // RFC 5737 TEST-NET-2, used as a dummy IP.
 )
 
 // MCPRouteController implements [reconcile.TypedReconciler].
@@ -88,8 +96,19 @@ func (c *MCPRouteController) Reconcile(ctx context.Context, req reconcile.Reques
 func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
 	// On deletion, propagate to the referenced Gateways and clean up the shared Backend if this
 	// is the last MCPRoute in the namespace.
-	if handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted) {
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted)
+	if err != nil {
+		return err
+	}
+	if onDelete {
 		return nil
+	}
+
+	// Validate prefixMode=Never (whether set per-backend or inherited from the route-level
+	// default): each effectively-Never backend must declare toolSelector.include, and tool
+	// names must be unique across all effectively-Never backends on the route.
+	if err = validatePerBackendPrefixMode(mcpRoute); err != nil {
+		return err
 	}
 
 	// Ensure the shared per-namespace MCP proxy Backend exists before creating/updating the HTTPRoute.
@@ -229,7 +248,7 @@ func (c *MCPRouteController) listExistingPerBackendHTTPRoutes(ctx context.Contex
 	var ownedRoutes gwapiv1.HTTPRouteList
 	if err := c.client.List(ctx, &ownedRoutes,
 		client.InNamespace(mcpRoute.Namespace),
-		client.MatchingFields{k8sClientIndexMCPRouteToOwnedHTTPRoute: fmt.Sprintf("%s.%s", mcpRoute.Name, mcpRoute.Namespace)},
+		client.MatchingFields{k8sClientIndexMCPRouteToOwnedHTTPRoute: namespacedNameIndexKey(mcpRoute.Name, mcpRoute.Namespace)},
 	); err != nil {
 		return nil, fmt.Errorf("failed to list owned HTTPRoutes: %w", err)
 	}
@@ -326,13 +345,16 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 
 	// Add OAuth metadata endpoints if authentication is configured.
 	if mcpRoute.Spec.SecurityPolicy != nil && mcpRoute.Spec.SecurityPolicy.OAuth != nil {
-		// OAuth 2.0 Protected Resource Metadata (RFC 9728) - serve in both root and suffix paths because different clients
-		// may expect either.
-		// TODO: only one MCPRoute targeting the same listener can be configured with OAuth due to the fixed well-known path.
-		httpRouteFilterName := oauthProtectedResourceMetadataName(mcpRoute.Name)
-
+		// OAuth 2.0 Protected Resource Metadata (RFC 9728).
+		//
+		// Served by the MCP proxy rather than by a static direct response. When
+		// protectedResourceMetadata.resource is omitted, the identifier is derived from the
+		// request, which a direct response body cannot do. A pinned resource is served the
+		// same way. The well-known path includes this route's serving path, so MCPRoutes on
+		// one listener can each configure OAuth as long as those paths differ.
+		//
 		// Suffix path: /.well-known/oauth-protected-resource{pathPrefix} (if pathPrefix exists).
-		protectedResourceSuffixPath := fmt.Sprintf("/.well-known/oauth-protected-resource%s", strings.TrimSuffix(servingPath, "/"))
+		protectedResourceSuffixPath := fmt.Sprintf("%s%s", internalapi.OAuthProtectedResourceMetadataPath, strings.TrimSuffix(servingPath, "/"))
 		protectedResourceSuffixRule := gwapiv1.HTTPRouteRule{
 			Name: ptr.To(gwapiv1.SectionName("oauth-protected-resource-metadata")),
 			Matches: []gwapiv1.HTTPRouteMatch{
@@ -341,15 +363,34 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 						Type:  ptr.To(gwapiv1.PathMatchExact),
 						Value: ptr.To(protectedResourceSuffixPath),
 					},
+					Headers: mcpRoute.Spec.Headers,
 				},
 			},
+			BackendRefs: []gwapiv1.HTTPBackendRef{
+				{
+					BackendRef: gwapiv1.BackendRef{
+						BackendObjectReference: gwapiv1.BackendObjectReference{
+							Group:     ptr.To(gwapiv1.Group("gateway.envoyproxy.io")),
+							Kind:      ptr.To(gwapiv1.Kind("Backend")),
+							Name:      gwapiv1.ObjectName(backendName),
+							Namespace: ptr.To(gwapiv1.Namespace(mcpRoute.Namespace)),
+							Port:      ptr.To(gwapiv1.PortNumber(internalapi.MCPProxyPort)),
+						},
+					},
+				},
+			},
+			// The MCP proxy resolves which MCPRoute's OAuth configuration to serve from this
+			// header, exactly as it does for MCP traffic on the main rule.
 			Filters: []gwapiv1.HTTPRouteFilter{
 				{
-					Type: gwapiv1.HTTPRouteFilterExtensionRef,
-					ExtensionRef: &gwapiv1.LocalObjectReference{
-						Group: gwapiv1.Group("gateway.envoyproxy.io"),
-						Kind:  gwapiv1.Kind("HTTPRouteFilter"),
-						Name:  gwapiv1.ObjectName(httpRouteFilterName),
+					Type: gwapiv1.HTTPRouteFilterRequestHeaderModifier,
+					RequestHeaderModifier: &gwapiv1.HTTPHeaderFilter{
+						Set: []gwapiv1.HTTPHeader{
+							{
+								Name:  internalapi.MCPRouteHeader,
+								Value: mcpRouteHeaderValue(mcpRoute),
+							},
+						},
 					},
 				},
 			},
@@ -371,6 +412,7 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 						Type:  ptr.To(gwapiv1.PathMatchExact),
 						Value: ptr.To(authServerSuffixPath),
 					},
+					Headers: mcpRoute.Spec.Headers,
 				},
 			},
 			Filters: []gwapiv1.HTTPRouteFilter{
@@ -394,6 +436,7 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 						Type:  ptr.To(gwapiv1.PathMatchExact),
 						Value: ptr.To(authServerSuffixPathOIDC),
 					},
+					Headers: mcpRoute.Spec.Headers,
 				},
 			},
 			Filters: []gwapiv1.HTTPRouteFilter{
@@ -657,30 +700,33 @@ func (c *MCPRouteController) mcpBackendRefToHTTPRouteRule(ctx context.Context, m
 	egFilterName := mcpBackendRefFilterName(mcpRoute, ref.Name)
 
 	// Determine credential handling from the backend's security policy.
-	// - inline API keys: use RequestHeaderModifier (no security benefit from a Secret since
-	//   the plaintext is already in the MCPRoute CRD manifest).
-	// - secretRef API keys: use credentialInjection via a managed Secret to keep the
-	//   plaintext confined to Secret resources only.
+	// - inline API keys with injectionPolicy Always (default): use RequestHeaderModifier (no security
+	//   benefit from a Secret since the plaintext is already in the MCPRoute CRD manifest).
+	// - secretRef API keys, and inline keys with injectionPolicy IfNotPresent: use credentialInjection
+	//   via a managed Secret. RequestHeaderModifier Set always replaces, so IfNotPresent needs
+	//   HTTPCredentialInjectionFilter.overwrite=false to inject only when the header is absent.
 	// - query param API keys: embed in the URL rewrite path (There is no route filter support for query params).
 	var credentialSecretName string
 	var credentialHeader *string
+	credentialOverwrite := true
 	var inlineHeaderFilter *gwapiv1.HTTPRouteFilter
 	fullPathPtr := ptr.Deref(ref.Path, defaultMCPPath)
 
 	if ref.SecurityPolicy != nil && ref.SecurityPolicy.APIKey != nil {
 		apiKey := ref.SecurityPolicy.APIKey
+		overwrite := ptr.Deref(apiKey.InjectionPolicy, aigv1b1.MCPBackendAPIKeyInjectionAlways) != aigv1b1.MCPBackendAPIKeyInjectionIfNotPresent
 
 		switch {
 		case apiKey.QueryParam != nil:
 			// Query parameter injection cannot use Envoy Gateway's credentialInjection filter;
-			// embed directly in the URL rewrite path.
+			// embed directly in the URL rewrite path. injectionPolicy does not apply here.
 			// TODO: evaluate alternatives to avoid embedding the secret in the HTTPRoute manifest.
 			apiKeyLiteral, err := c.readAPIKey(ctx, mcpRoute.Namespace, apiKey)
 			if err != nil {
 				return gwapiv1.HTTPRouteRule{}, fmt.Errorf("failed to read API key for backend %s: %w", ref.Name, err)
 			}
 			fullPathPtr = fmt.Sprintf("%s?%s=%s", fullPathPtr, *apiKey.QueryParam, apiKeyLiteral)
-		case apiKey.Inline != nil:
+		case apiKey.Inline != nil && overwrite:
 			// Inline API key: inject via RequestHeaderModifier directly. The value is already
 			// visible in the MCPRoute manifest, so a separate Secret adds no security benefit.
 			header := ptr.Deref(apiKey.Header, "Authorization")
@@ -696,20 +742,22 @@ func (c *MCPRouteController) mcpBackendRefToHTTPRouteRule(ctx context.Context, m
 					},
 				},
 			}
-		case apiKey.SecretRef != nil:
-			// SecretRef API key: create a managed credential Secret and use the
-			// HTTPRouteFilter's credentialInjection to keep plaintext out of non-Secret resources.
+		case apiKey.SecretRef != nil || apiKey.Inline != nil:
+			// Header injection that must honor injectionPolicy: create a managed credential Secret
+			// and use HTTPRouteFilter credentialInjection. Inline IfNotPresent shares this
+			// path because RequestHeaderModifier Set always replaces the header.
 			credSecretName := mcpCredentialSecretName(mcpRoute, ref.Name)
 			if err := c.ensureCredentialSecret(ctx, credSecretName, mcpRoute, apiKey); err != nil {
 				return gwapiv1.HTTPRouteRule{}, fmt.Errorf("failed to ensure credential secret for backend %s: %w", ref.Name, err)
 			}
 			credentialSecretName = credSecretName
 			credentialHeader = apiKey.Header
+			credentialOverwrite = overwrite
 		}
 	}
 
 	// Ensure the HTTPRouteFilter for this backend with URL rewrite and optional credential injection.
-	if err := c.ensureMCPBackendRefHTTPFilter(ctx, egFilterName, mcpRoute, credentialSecretName, credentialHeader); err != nil {
+	if err := c.ensureMCPBackendRefHTTPFilter(ctx, egFilterName, mcpRoute, credentialSecretName, credentialHeader, credentialOverwrite); err != nil {
 		return gwapiv1.HTTPRouteRule{}, fmt.Errorf("failed to ensure MCP backend HTTP filter: %w", err)
 	}
 
@@ -771,10 +819,12 @@ func mcpRouteHeaderValue(mcpRoute *aigv1b1.MCPRoute) string {
 
 // ensureMCPBackendRefHTTPFilter ensures that an HTTPRouteFilter exists for the given backend reference in the MCPRoute.
 // When credentialSecretName is non-empty, the filter is configured with credential injection referencing
-// the given secret (which must store the credential under the InjectedCredentialKey key). When empty, only URL
-// hostname rewrite is configured.
+// the given secret (which must store the credential under the InjectedCredentialKey key). overwrite is
+// forwarded to HTTPCredentialInjectionFilter so the API key is only injected when the header is
+// missing if overwrite is false (injectionPolicy IfNotPresent). When credentialSecretName is empty,
+// only URL hostname rewrite is configured.
 func (c *MCPRouteController) ensureMCPBackendRefHTTPFilter(ctx context.Context, filterName string, mcpRoute *aigv1b1.MCPRoute,
-	credentialSecretName string, credentialHeader *string,
+	credentialSecretName string, credentialHeader *string, overwrite bool,
 ) error {
 	filter := &egv1a1.HTTPRouteFilter{
 		ObjectMeta: metav1.ObjectMeta{
@@ -794,7 +844,7 @@ func (c *MCPRouteController) ensureMCPBackendRefHTTPFilter(ctx context.Context, 
 
 	if credentialSecretName != "" {
 		filter.Spec.CredentialInjection = &egv1a1.HTTPCredentialInjectionFilter{
-			Overwrite: ptr.To(true),
+			Overwrite: ptr.To(overwrite),
 			Header:    credentialHeader,
 			Credential: egv1a1.InjectedCredential{
 				ValueRef: gwapiv1.SecretObjectReference{
@@ -911,4 +961,62 @@ func (c *MCPRouteController) readAPIKey(ctx context.Context, namespace string, a
 		}
 	}
 	return key, nil
+}
+
+// validatePerBackendPrefixMode checks that prefixMode=Never is used correctly, whether it is
+// set on a specific backend or inherited from the route-level default: every backend whose
+// *effective* PrefixMode is Never must declare toolSelector.include, and the declared tool
+// names must be unique across all Never-mode backends on the route. Prompt names are validated
+// the same way, but only for backends that opt in by declaring promptSelector.include — a
+// Never-mode backend that leaves promptSelector unset simply keeps its prompts prefixed (see
+// mcpproxy.mergePromptsList), so no declaration is required for backends without prompts.
+//
+// The effective-mode resolution here (per-backend override falling back to the route-level
+// default, itself defaulting to Always) must stay in sync with effectivePrefixMode in
+// internal/mcpproxy/config.go, which performs the same resolution at request time.
+//
+// The exact-list requirement (as opposed to allowing an unfiltered or regex toolSelector/
+// promptSelector for Never mode) is intentional: it is what lets uniqueness of bare names be
+// proven here, at admission time, before the route is ever accepted, rather than discovered as
+// a runtime ambiguity between live backend catalogs that can change independently of this
+// resource. Always-mode backends don't need this restriction because their prefixed names
+// ("<backendName>__<tool>") can't collide with each other as long as backend names are unique,
+// which is already enforced elsewhere.
+func validatePerBackendPrefixMode(mcpRoute *aigv1b1.MCPRoute) error {
+	routeMode := aigv1b1.MCPRoutePrefixModeAlways
+	if mcpRoute.Spec.PrefixMode != nil {
+		routeMode = *mcpRoute.Spec.PrefixMode
+	}
+
+	seenTools := make(map[string]string)   // tool name → first backend name that claimed it
+	seenPrompts := make(map[string]string) // prompt name → first backend name that claimed it
+	for _, ref := range mcpRoute.Spec.BackendRefs {
+		effectiveMode := routeMode
+		if ref.PrefixMode != nil {
+			effectiveMode = *ref.PrefixMode
+		}
+		if effectiveMode != aigv1b1.MCPRoutePrefixModeNever {
+			continue
+		}
+		backendName := string(ref.Name)
+		if ref.ToolSelector == nil || len(ref.ToolSelector.Include) == 0 {
+			return fmt.Errorf("prefixMode Never requires backend %q to explicitly enumerate its tools via toolSelector.include so names can be validated for uniqueness", backendName)
+		}
+		for _, tool := range ref.ToolSelector.Include {
+			if first, collision := seenTools[tool]; collision {
+				return fmt.Errorf("prefixMode Never requires tool names to be unique across backends, but %q is declared by both %q and %q", tool, first, backendName)
+			}
+			seenTools[tool] = backendName
+		}
+		if ref.PromptSelector == nil {
+			continue // Opt-in: this backend's prompts stay prefixed under Never mode.
+		}
+		for _, prompt := range ref.PromptSelector.Include {
+			if first, collision := seenPrompts[prompt]; collision {
+				return fmt.Errorf("prefixMode Never requires prompt names to be unique across backends, but %q is declared by both %q and %q", prompt, first, backendName)
+			}
+			seenPrompts[prompt] = backendName
+		}
+	}
+	return nil
 }

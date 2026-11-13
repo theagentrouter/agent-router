@@ -329,7 +329,11 @@ spec:
   schema:
     name: {{ .OpenAI.SchemaName }}
 {{- if .OpenAI.Version }}
+{{- if eq .OpenAI.SchemaName "AzureOpenAI" }}
     version: "{{ .OpenAI.Version }}"
+{{- else }}
+    prefix: "{{ .OpenAI.Version }}"
+{{- end }}
 {{- end }}
   backendRef:
     name: {{ .OpenAI.BackendName }}
@@ -362,7 +366,7 @@ spec:
   schema:
     name: {{ .Anthropic.SchemaName }}
 {{- if .Anthropic.Version }}
-    version: "{{ .Anthropic.Version }}"
+    prefix: "{{ .Anthropic.Version }}"
 {{- end }}
   backendRef:
     name: {{ .Anthropic.BackendName }}

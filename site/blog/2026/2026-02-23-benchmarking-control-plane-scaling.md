@@ -4,10 +4,10 @@ title: Benchmarking Envoy AI Gateway Control Plane Scaling
 authors: [hrushikeshpatil]
 tags: [features]
 description: How many AIGatewayRoute resources can Envoy AI Gateway handle? We benchmarked the control plane scaling to 2,000 routes and measured latency, CPU, and memory usage.
-image: /img/blog/benchmarking-cp-scaling-feature.png
+image: /img/og/blog/benchmarking-control-plane-scaling.png
 ---
 
-![](/img/blog/benchmarking-cp-scaling-feature.png)
+![](/img/og/blog/benchmarking-control-plane-scaling.png)
 
 # Benchmarking Envoy AI Gateway Control Plane Scaling
 

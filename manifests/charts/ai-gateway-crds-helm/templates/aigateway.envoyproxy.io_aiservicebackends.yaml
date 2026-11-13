@@ -331,6 +331,8 @@ spec:
                     - GCPAnthropic
                     - Anthropic
                     - AWSAnthropic
+                    - AWSOpenAI
+                    - TypeSafe
                     type: string
                   prefix:
                     description: |-
@@ -799,6 +801,8 @@ spec:
                     - GCPAnthropic
                     - Anthropic
                     - AWSAnthropic
+                    - AWSOpenAI
+                    - TypeSafe
                     type: string
                   prefix:
                     description: |-
