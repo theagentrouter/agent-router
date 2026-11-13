@@ -293,6 +293,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # TODO: remove the latest entry once Envoy Gateway v1.11.0 is released.
           - name: latest
             envoy_gateway_version: v0.0.0-latest
           - name: v1.10.0
