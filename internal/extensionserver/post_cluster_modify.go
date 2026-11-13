@@ -52,9 +52,10 @@ func (s *Server) PostClusterModify(_ context.Context, req *egextension.PostClust
 			return nil, fmt.Errorf("BUG: expected exactly one InferencePool per cluster but found %d", len(inferencePools))
 		}
 		pool := inferencePools[0]
-		// A rule with an InferencePool without an endpoint picker is rejected by PostRouteModify,
-		// so nothing routes to this cluster: leave it as Envoy Gateway generated it rather than
-		// wiring up EPP config that would panic on the nil reference.
+		// Routing to an InferencePool without an endpoint picker isn't supported: leave its cluster
+		// as Envoy Gateway generated it (without endpoints), so its share of the traffic fails,
+		// rather than wiring up EPP config that would panic on the nil reference. PostRouteModify
+		// leaves the pool out of the route metadata, so no endpoint picker runs for it.
 		if pool.Spec.EndpointPickerRef == nil {
 			return &egextension.PostClusterModifyResponse{Cluster: req.Cluster}, nil
 		}

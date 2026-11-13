@@ -151,14 +151,14 @@ A rule can also mix InferencePools with other backend kinds, such as a Service, 
 
 The following rules apply to any HTTPRoute rule that references an InferencePool:
 
-- Every referenced InferencePool must set `endpointPickerRef`. If one doesn't, all of the rule's requests return `500`.
+- Every referenced InferencePool must set `endpointPickerRef`. An InferencePool that doesn't is treated like an invalid backendRef: its share of the traffic returns `500` and the other backends keep their weights.
 - If every backendRef has `weight: 0`, the rule returns `500`. A `weight: 0` backendRef receives no traffic ([`BackendRef`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendref)), so this follows the [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httprouterule) rule that requests with no backend to go to get a `500`.
 - If a backendRef is invalid, for example because the InferencePool doesn't exist, its share of the traffic returns `500` and the other backends keep their weights, as the [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httprouterule) specifies.
 
 InferencePools without an `endpointPickerRef` may be supported in a future release.
 
 :::info
-Weighted routing across InferencePools requires an Envoy Gateway version that builds one cluster per custom backendRef ([envoyproxy/gateway#10270](https://github.com/envoyproxy/gateway/pull/10270)). With an older Envoy Gateway, a rule with more than one backendRef that is an InferencePool doesn't work.
+Weighted routing across InferencePools requires Envoy Gateway v1.11.0 or v0.0.0-latest, which includes [envoyproxy/gateway#10328](https://github.com/envoyproxy/gateway/pull/10328).
 :::
 
 ## Next Steps

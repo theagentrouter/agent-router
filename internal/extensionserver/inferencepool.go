@@ -90,11 +90,11 @@ func (s *Server) constructInferencePoolsFrom(extensionResources []*egextension.E
 
 // poolsWithoutEndpointPicker returns the namespace/name of each of pools that doesn't configure
 // spec.endpointPickerRef. The field is optional as of Gateway API Inference Extension v1.5.0, but
-// routing traffic without an endpoint picker isn't supported, so a rule referencing such a pool
-// is rejected (rejectInferencePoolRoute).
+// routing traffic without an endpoint picker isn't supported, so such a pool's share of the
+// traffic fails, and a rule where no pool has one is rejected (rejectInferencePoolRoute).
 //
 // TODO(inferencepool-no-epp): support InferencePools without an endpoint picker, e.g. by
-// load-balancing across the pool's selected Pods directly, instead of rejecting the rule.
+// load-balancing across the pool's selected Pods directly, instead of failing their traffic.
 func poolsWithoutEndpointPicker(pools []*gwaiev1.InferencePool) []string {
 	var missing []string
 	for _, pool := range pools {
@@ -103,6 +103,17 @@ func poolsWithoutEndpointPicker(pools []*gwaiev1.InferencePool) []string {
 		}
 	}
 	return missing
+}
+
+// poolsWithEndpointPicker returns the pools that configure spec.endpointPickerRef.
+func poolsWithEndpointPicker(pools []*gwaiev1.InferencePool) []*gwaiev1.InferencePool {
+	var withEPP []*gwaiev1.InferencePool
+	for _, pool := range pools {
+		if pool.Spec.EndpointPickerRef != nil {
+			withEPP = append(withEPP, pool)
+		}
+	}
+	return withEPP
 }
 
 // inferencePoolKey returns the namespace/name identity of an InferencePool.
@@ -557,7 +568,7 @@ func searchInferencePoolInFilterChain(pool *gwaiev1.InferencePool, chain []*http
 // site/docs/capabilities/inference/httproute-inferencepool.md's "Weighted Routing Across Multiple
 // InferencePools" section for the user-facing behavior). Envoy Gateway translates such a rule into
 // a WeightedClusters route action with one cluster per backendRef, carrying the backendRef weights,
-// and drops the zero-weight backendRefs (envoyproxy/gateway#10270). Its extension hooks see:
+// and drops the zero-weight backendRefs before calling the hooks (envoyproxy/gateway#10328). Its extension hooks see:
 //   - PostClusterModify, once per InferencePool cluster, with only that cluster's own pool, so each
 //     cluster is set up for its own pool (handleInferencePoolCluster). Clusters of other backend
 //     kinds, such as a Service, don't get the hook at all.

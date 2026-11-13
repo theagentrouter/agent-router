@@ -45,13 +45,22 @@ func (s *Server) PostRouteModify(_ context.Context, req *egextension.PostRouteMo
 			return nil, status.Errorf(codes.FailedPrecondition, "cannot configure InferencePool %s on non-forwarding route %q", strings.Join(names, ","), req.Route.Name)
 		}
 
-		// Routing to an InferencePool without an endpoint picker isn't supported, so reject the
-		// whole rule rather than wiring up EPP config that would panic on the nil reference.
+		// Routing to an InferencePool without an endpoint picker isn't supported. Leave such pools
+		// out of the route metadata, so only their own share of the traffic fails, as for an
+		// invalid backendRef: PostClusterModify leaves their cluster as Envoy Gateway generated it
+		// (without endpoints), and setInferencePoolClusterWeightFilters disables every endpoint
+		// picker of the route on it.
 		if missing := poolsWithoutEndpointPicker(inferencePools); len(missing) > 0 {
-			s.log.Info("rejecting route: InferencePool has no endpointPickerRef",
+			s.log.Info("InferencePool has no endpointPickerRef, its share of the traffic fails",
 				"route", req.Route.Name, "pools", missing)
-			rejectInferencePoolRoute(req.Route)
-			return &egextension.PostRouteModifyResponse{Route: req.Route}, nil
+			inferencePools = poolsWithEndpointPicker(inferencePools)
+			if len(inferencePools) == 0 {
+				// A single-backend rule has no other backend to serve its traffic: reject it.
+				if routeAction.GetWeightedClusters() == nil {
+					rejectInferencePoolRoute(req.Route)
+				}
+				return &egextension.PostRouteModifyResponse{Route: req.Route}, nil
+			}
 		}
 
 		// Disable auto host rewrite to prevent Envoy from overriding the host header

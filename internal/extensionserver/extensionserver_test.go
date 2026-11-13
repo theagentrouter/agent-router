@@ -2012,8 +2012,46 @@ func TestPostRouteModify(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 
-		// One pool without an endpoint picker rejects the whole rule.
-		require.Equal(t, uint32(500), route.GetDirectResponse().GetStatus())
+		// The pool without an endpoint picker is left out of the route metadata, so only its own
+		// share of the traffic fails, and the rule still routes to the other pool.
+		require.NotNil(t, route.GetRoute())
+		require.Equal(t, wrapperspb.Bool(false), route.GetRoute().GetAutoHostRewrite())
+		pools := getInferencePoolsByMetadata(route.Metadata)
+		require.Len(t, pools, 1)
+		require.Equal(t, "pool-b", pools[0].Name)
+	})
+
+	t.Run("weighted route with only an InferencePool without endpointPickerRef", func(t *testing.T) {
+		// For example [Service weight 90, InferencePool weight 10]: the Service keeps its share.
+		route := &routev3.Route{
+			Name: "test-route",
+			Action: &routev3.Route_Route{
+				Route: &routev3.RouteAction{
+					ClusterSpecifier: &routev3.RouteAction_WeightedClusters{
+						WeightedClusters: &routev3.WeightedCluster{
+							Clusters: []*routev3.WeightedCluster_ClusterWeight{
+								{Name: "service-cluster", Weight: wrapperspb.UInt32(90)},
+								{Name: "pool-cluster", Weight: wrapperspb.UInt32(10)},
+							},
+						},
+					},
+				},
+			},
+		}
+		req := &egextension.PostRouteModifyRequest{
+			Route: route,
+			PostRouteContext: &egextension.PostRouteExtensionContext{
+				ExtensionResources: []*egextension.ExtensionResource{
+					createInferencePoolExtensionResourceNoEPPRef("pool-no-epp-ref", "default"),
+				},
+			},
+		}
+		resp, err := s.PostRouteModify(context.Background(), req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+
+		require.NotNil(t, route.GetRoute().GetWeightedClusters())
+		require.Nil(t, route.GetDirectResponse())
 		require.Empty(t, getInferencePoolsByMetadata(route.Metadata))
 	})
 
@@ -2653,6 +2691,16 @@ func TestBuildClustersForInferencePoolEndpointPickers(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, result, 1)
 		require.Contains(t, result[0].Name, "endpointpicker")
+	})
+
+	t.Run("two clusters referencing the same pool", func(t *testing.T) {
+		// One pool used by two rules, or twice in weighted rules, yields several clusters with
+		// identical metadata: its endpoint picker cluster must only be built once.
+		other := proto.Clone(cluster).(*clusterv3.Cluster)
+		other.Name = "test-cluster-2"
+		result, err := buildClustersForInferencePoolEndpointPickers([]*clusterv3.Cluster{cluster, other})
+		require.NoError(t, err)
+		require.Len(t, result, 1)
 	})
 
 	t.Run("without InferencePool metadata", func(t *testing.T) {
