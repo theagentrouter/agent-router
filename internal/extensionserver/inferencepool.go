@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -42,6 +43,13 @@ const (
 	// internalMetadataInferencePoolKey is the key used to store the inference pool metadata.
 	// This is only used within the extension server for InferencePool cluster identification.
 	internalMetadataInferencePoolKey = "per_route_rule_inference_pool"
+	// internalMetadataNoEndpointPickerKey marks the cluster of an InferencePool without an
+	// endpoint picker, whose share of the traffic must fail as an invalid backendRef's does.
+	internalMetadataNoEndpointPickerKey = "inference_pool_without_endpoint_picker"
+
+	// invalidBackendClusterName is the cluster Envoy Gateway points the share of invalid
+	// backendRefs at. It doesn't exist, so Envoy answers with the route's ClusterNotFoundResponseCode.
+	invalidBackendClusterName = "invalid-backend-cluster"
 
 	// defaultEndpointPickerPort is the default port for Gateway API Inference Extension endpoint picker services.
 	// This port is commonly used by EPP (Endpoint Picker Protocol) services as defined in the
@@ -583,6 +591,81 @@ func searchInferencePoolInFilterChain(pool *gwaiev1.InferencePool, chain []*http
 // resolves a ClusterWeight's TypedPerFilterConfig as more specific than the Route's once it has
 // picked a weighted cluster. The ClusterWeight's own pool gets no entry, since ExtProcPerRoute's
 // "disabled" oneof is proto-constrained to only ever be true: there is no "force-enabled" override.
+
+// markClusterWithoutEndpointPicker marks cluster as the cluster of an InferencePool without an
+// endpoint picker, for failInferencePoolClustersWithoutEndpointPicker.
+func markClusterWithoutEndpointPicker(cluster *clusterv3.Cluster) {
+	if cluster.Metadata == nil {
+		cluster.Metadata = &corev3.Metadata{}
+	}
+	if cluster.Metadata.FilterMetadata == nil {
+		cluster.Metadata.FilterMetadata = make(map[string]*structpb.Struct)
+	}
+	m, ok := cluster.Metadata.FilterMetadata[internalapi.InternalEndpointMetadataNamespace]
+	if !ok || m == nil {
+		m = &structpb.Struct{}
+		cluster.Metadata.FilterMetadata[internalapi.InternalEndpointMetadataNamespace] = m
+	}
+	if m.Fields == nil {
+		m.Fields = make(map[string]*structpb.Value)
+	}
+	m.Fields[internalMetadataNoEndpointPickerKey] = structpb.NewBoolValue(true)
+}
+
+// isClusterWithoutEndpointPicker reports whether markClusterWithoutEndpointPicker marked cluster.
+func isClusterWithoutEndpointPicker(cluster *clusterv3.Cluster) bool {
+	m := cluster.GetMetadata().GetFilterMetadata()[internalapi.InternalEndpointMetadataNamespace]
+	return m.GetFields()[internalMetadataNoEndpointPickerKey].GetBoolValue()
+}
+
+// failInferencePoolClustersWithoutEndpointPicker makes the share of a weighted route that goes to
+// the cluster of an InferencePool without an endpoint picker fail as an invalid backendRef's does:
+// it moves the ClusterWeight's weight to Envoy Gateway's non-existent "invalid-backend-cluster", so
+// Envoy answers with the route's ClusterNotFoundResponseCode (500, or 503 when the rule also has a
+// backend without ready endpoints, since Envoy can't mix them) instead of the 503 of an endpointless
+// cluster. A route with no other backend was already rejected by PostRouteModify.
+func failInferencePoolClustersWithoutEndpointPicker(routeConfigs []*routev3.RouteConfiguration, clusters []*clusterv3.Cluster) {
+	noEPP := make(map[string]struct{})
+	for _, c := range clusters {
+		if isClusterWithoutEndpointPicker(c) {
+			noEPP[c.Name] = struct{}{}
+		}
+	}
+	if len(noEPP) == 0 {
+		return
+	}
+
+	for _, rc := range routeConfigs {
+		for _, vh := range rc.VirtualHosts {
+			for _, route := range vh.Routes {
+				wc := route.GetRoute().GetWeightedClusters()
+				if wc == nil {
+					continue
+				}
+				var invalid *routev3.WeightedCluster_ClusterWeight
+				for _, cw := range wc.Clusters {
+					if cw.Name == invalidBackendClusterName {
+						invalid = cw
+					}
+				}
+				kept := wc.Clusters[:0]
+				for _, cw := range wc.Clusters {
+					if _, ok := noEPP[cw.Name]; !ok {
+						kept = append(kept, cw)
+						continue
+					}
+					if invalid == nil {
+						invalid = &routev3.WeightedCluster_ClusterWeight{Name: invalidBackendClusterName, Weight: cw.Weight}
+						kept = append(kept, invalid)
+						continue
+					}
+					invalid.Weight = wrapperspb.UInt32(invalid.GetWeight().GetValue() + cw.GetWeight().GetValue())
+				}
+				wc.Clusters = kept
+			}
+		}
+	}
+}
 
 // setInferencePoolClusterWeightFilters disables, on every ClusterWeight of every route whose
 // metadata names InferencePools, the EPP ext_proc filter of each of those pools that the

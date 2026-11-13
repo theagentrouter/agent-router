@@ -1834,9 +1834,9 @@ func TestPostClusterModify(t *testing.T) {
 	})
 
 	t.Run("with InferencePool backend and no endpointPickerRef", func(t *testing.T) {
-		// Regression test: an InferencePool with endpointPickerRef unset must not panic,
-		// and the cluster should be left as Envoy Gateway generated it since we don't yet
-		// support routing traffic without an endpoint picker.
+		// Regression test: an InferencePool with endpointPickerRef unset must not panic. Routing
+		// without an endpoint picker isn't supported, so the cluster is only marked for
+		// failInferencePoolClustersWithoutEndpointPicker.
 		cluster := &clusterv3.Cluster{
 			Name:     "test-cluster",
 			LbPolicy: clusterv3.Cluster_ROUND_ROBIN,
@@ -1854,10 +1854,11 @@ func TestPostClusterModify(t *testing.T) {
 		require.NotNil(t, resp)
 		require.Equal(t, cluster, resp.Cluster)
 
-		// The cluster must be left unmodified: no ORIGINAL_DST rewrite, no EPP metadata.
+		// No ORIGINAL_DST rewrite, no EPP metadata, only the marker.
 		require.Nil(t, cluster.ClusterDiscoveryType)
 		require.Equal(t, clusterv3.Cluster_ROUND_ROBIN, cluster.LbPolicy)
-		require.Nil(t, cluster.Metadata)
+		require.Empty(t, getInferencePoolsByMetadata(cluster.Metadata))
+		require.True(t, isClusterWithoutEndpointPicker(cluster))
 	})
 
 	t.Run("with two InferencePool backends", func(t *testing.T) {
@@ -2920,6 +2921,67 @@ func requireNoExtProcOverride(t *testing.T, filterConfig map[string]*anypb.Any, 
 	t.Helper()
 	_, ok := filterConfig[filterName]
 	require.False(t, ok, "unexpected TypedPerFilterConfig entry for %s", filterName)
+}
+
+func TestFailInferencePoolClustersWithoutEndpointPicker(t *testing.T) {
+	const (
+		svcCluster = "httproute/default/route/rule/0/backend/0"
+		noEPPA     = "httproute/default/route/rule/0/backend/1"
+		noEPPB     = "httproute/default/route/rule/0/backend/2"
+	)
+	noEPPClusterA := &clusterv3.Cluster{Name: noEPPA}
+	markClusterWithoutEndpointPicker(noEPPClusterA)
+	noEPPClusterB := &clusterv3.Cluster{Name: noEPPB}
+	markClusterWithoutEndpointPicker(noEPPClusterB)
+	clusters := []*clusterv3.Cluster{{Name: svcCluster}, noEPPClusterA, noEPPClusterB}
+
+	// weighted builds a route as Envoy Gateway does for a weighted rule. Envoy Gateway sets
+	// ClusterNotFoundResponseCode to 500 on every weighted route, and that code is what makes
+	// moving a share to the non-existent invalid-backend-cluster answer with a 500 rather than
+	// Envoy's default 503. failInferencePoolClustersWithoutEndpointPicker relies on it and must
+	// leave it alone, which run checks.
+	weighted := func(cws ...*routev3.WeightedCluster_ClusterWeight) *routev3.Route {
+		return &routev3.Route{Action: &routev3.Route_Route{Route: &routev3.RouteAction{
+			ClusterNotFoundResponseCode: routev3.RouteAction_INTERNAL_SERVER_ERROR,
+			ClusterSpecifier: &routev3.RouteAction_WeightedClusters{
+				WeightedClusters: &routev3.WeightedCluster{Clusters: cws},
+			},
+		}}}
+	}
+	cw := func(name string, weight uint32) *routev3.WeightedCluster_ClusterWeight {
+		return &routev3.WeightedCluster_ClusterWeight{Name: name, Weight: wrapperspb.UInt32(weight)}
+	}
+	run := func(route *routev3.Route) map[string]uint32 {
+		failInferencePoolClustersWithoutEndpointPicker([]*routev3.RouteConfiguration{
+			{VirtualHosts: []*routev3.VirtualHost{{Routes: []*routev3.Route{route}}}},
+		}, clusters)
+		require.Equal(t, routev3.RouteAction_INTERNAL_SERVER_ERROR, route.GetRoute().ClusterNotFoundResponseCode)
+		got := make(map[string]uint32)
+		for _, c := range route.GetRoute().GetWeightedClusters().Clusters {
+			got[c.Name] = c.GetWeight().GetValue()
+		}
+		return got
+	}
+
+	t.Run("Service and pool without endpoint picker", func(t *testing.T) {
+		got := run(weighted(cw(svcCluster, 90), cw(noEPPA, 10)))
+		require.Equal(t, map[string]uint32{svcCluster: 90, invalidBackendClusterName: 10}, got)
+	})
+
+	t.Run("merged into the existing invalid-backend-cluster", func(t *testing.T) {
+		got := run(weighted(cw(invalidBackendClusterName, 5), cw(svcCluster, 85), cw(noEPPA, 10)))
+		require.Equal(t, map[string]uint32{svcCluster: 85, invalidBackendClusterName: 15}, got)
+	})
+
+	t.Run("two pools without endpoint picker", func(t *testing.T) {
+		got := run(weighted(cw(noEPPA, 30), cw(noEPPB, 70)))
+		require.Equal(t, map[string]uint32{invalidBackendClusterName: 100}, got)
+	})
+
+	t.Run("no pool without endpoint picker", func(t *testing.T) {
+		got := run(weighted(cw(svcCluster, 100)))
+		require.Equal(t, map[string]uint32{svcCluster: 100}, got)
+	})
 }
 
 func TestSetInferencePoolClusterWeightFilters(t *testing.T) {

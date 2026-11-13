@@ -132,6 +132,8 @@ func (s *Server) PostTranslateModify(ctx context.Context, req *egextension.PostT
 	// A rule weighted across several backendRefs, at least one of them an InferencePool, becomes a
 	// WeightedClusters route whose metadata names every pool of the rule. Make sure only the picked
 	// cluster's own endpoint picker runs. See setInferencePoolClusterWeightFilters.
+	// The share of an InferencePool without an endpoint picker fails as an invalid backendRef's.
+	failInferencePoolClustersWithoutEndpointPicker(req.Routes, req.Clusters)
 	setInferencePoolClusterWeightFilters(req.Routes, req.Clusters)
 
 	// Add external processor clusters for InferencePool backends.

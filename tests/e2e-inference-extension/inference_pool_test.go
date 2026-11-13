@@ -123,6 +123,70 @@ func TestInferencePoolIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		_ = e2elib.KubectlDeleteManifest(context.Background(), httpRouteManifest)
 	})
+
+	// Test an InferencePool without an endpointPickerRef: its share of a rule's traffic fails with
+	// a 500, as an invalid backendRef's does, while the rule's other backends keep their share.
+	const noEPPManifest = "testdata/inference-pool-without-epp.yaml"
+	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), noEPPManifest))
+	t.Cleanup(func() {
+		_ = e2elib.KubectlDeleteManifest(context.Background(), noEPPManifest)
+	})
+
+	t.Run("httproute_service_and_inference_pool_without_epp", func(t *testing.T) {
+		requireInferenceGatewayStatusSplit(t, egSelector, "service-and-no-epp-pool", true)
+	})
+
+	t.Run("httproute_inference_pools_with_and_without_epp", func(t *testing.T) {
+		requireInferenceGatewayStatusSplit(t, egSelector, "epp-pool-and-no-epp-pool", true)
+	})
+
+	t.Run("httproute_only_inference_pool_without_epp", func(t *testing.T) {
+		requireInferenceGatewayStatusSplit(t, egSelector, "only-no-epp-pool", false)
+	})
+}
+
+// requireInferenceGatewayStatusSplit sends requests matching the x-test-case rule of
+// testdata/inference-pool-without-epp.yaml until their statuses show the share of the InferencePool
+// without an endpoint picker failing with a 500. With wantOK, the rule's other backend must keep
+// its share, answering 200; otherwise every request must fail with a 500.
+func requireInferenceGatewayStatusSplit(t *testing.T, egSelector, testCase string, wantOK bool) {
+	const requestsPerAttempt = 20
+	require.Eventually(t, func() bool {
+		fwd := e2elib.RequireNewHTTPPortForwarder(t, inferenceGatewayNamespace, egSelector, e2elib.EnvoyGatewayDefaultServicePort)
+		defer fwd.Kill()
+
+		statuses := make(map[int]int)
+		for range requestsPerAttempt {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, fwd.Address()+"/v1/chat/completions",
+				strings.NewReader(`{"model":"meta-llama/Llama-3.1-8B-Instruct","messages":[{"role":"user","content":"Say this is a test"}]}`))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("x-test-case", testCase)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				cancel()
+				t.Logf("request failed: %v", err)
+				return false
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			cancel()
+			statuses[resp.StatusCode]++
+		}
+		t.Logf("%s: response statuses %v", testCase, statuses)
+
+		// Until the route is programmed, requests fall through to the catch-all rule with a 200.
+		if statuses[http.StatusInternalServerError] == 0 {
+			return false
+		}
+		if !wantOK {
+			return statuses[http.StatusInternalServerError] == requestsPerAttempt
+		}
+		// Weights 1:1, so 20 requests all landing on one side is a ~1e-6 chance.
+		return statuses[http.StatusOK] > 0 &&
+			statuses[http.StatusOK]+statuses[http.StatusInternalServerError] == requestsPerAttempt
+	}, 2*time.Minute, 5*time.Second, "unexpected response statuses for %s", testCase)
 }
 
 // testInferenceGatewayConnectivityByModel tests that the Gateway is accessible and returns a 200 status code.
