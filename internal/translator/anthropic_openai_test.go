@@ -18,6 +18,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
 func TestAnthropicToOpenAITranslator_RequestBody(t *testing.T) {
@@ -444,6 +445,83 @@ func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_UsageOnFinishReasonC
 			assert.Equal(t, "message_stop", events[5].eventType)
 		})
 	}
+}
+
+// OpenAI counts cached and cache-write tokens inside prompt_tokens and reasoning tokens
+// inside completion_tokens. The breakdown must be reported without changing the totals.
+func TestAnthropicToOpenAITranslator_ResponseBody_UsageBreakdown(t *testing.T) {
+	requireBreakdown := func(t *testing.T, tokenUsage metrics.TokenUsage) {
+		t.Helper()
+		cached, cachedSet := tokenUsage.CachedInputTokens()
+		require.True(t, cachedSet)
+		assert.Equal(t, uint32(900), cached)
+		cacheWrite, cacheWriteSet := tokenUsage.CacheCreationInputTokens()
+		require.True(t, cacheWriteSet)
+		assert.Equal(t, uint32(64), cacheWrite)
+		reasoning, reasoningSet := tokenUsage.ReasoningTokens()
+		require.True(t, reasoningSet)
+		assert.Equal(t, uint32(8), reasoning)
+
+		inputTokens, inputSet := tokenUsage.InputTokens()
+		require.True(t, inputSet)
+		assert.Equal(t, uint32(1000), inputTokens)
+		outputTokens, outputSet := tokenUsage.OutputTokens()
+		require.True(t, outputSet)
+		assert.Equal(t, uint32(20), outputTokens)
+		totalTokens, totalSet := tokenUsage.TotalTokens()
+		require.True(t, totalSet)
+		assert.Equal(t, uint32(1020), totalTokens)
+	}
+	const usage = `{"prompt_tokens":1000,"completion_tokens":20,"total_tokens":1020,` +
+		`"prompt_tokens_details":{"cached_tokens":900,"cache_write_tokens":64},` +
+		`"completion_tokens_details":{"reasoning_tokens":8}}`
+
+	t.Run("non-streaming", func(t *testing.T) {
+		translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "")
+		reqBody := &anthropic.MessagesRequest{
+			Model:     "claude-3-haiku",
+			MaxTokens: 100,
+			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
+		}
+		_, _, err := translator.RequestBody(nil, reqBody, false)
+		require.NoError(t, err)
+
+		body := `{"id":"chatcmpl-xyz","model":"gpt-4o","choices":[{"index":0,"finish_reason":"stop",` +
+			`"message":{"role":"assistant","content":"Hello!"}}],"usage":` + usage + `}`
+		_, _, tokenUsage, _, err := translator.ResponseBody(
+			map[string]string{"content-type": "application/json"},
+			strings.NewReader(body),
+			true,
+			nil,
+		)
+		require.NoError(t, err)
+		requireBreakdown(t, tokenUsage)
+	})
+
+	t.Run("streaming", func(t *testing.T) {
+		translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "")
+		reqBody := &anthropic.MessagesRequest{
+			Model:     "claude-3-haiku",
+			MaxTokens: 100,
+			Stream:    true,
+			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
+		}
+		_, _, err := translator.RequestBody(nil, reqBody, false)
+		require.NoError(t, err)
+
+		input := "data: {\"id\":\"chatcmpl-xyz\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello!\"}}],\"model\":\"gpt-4o\"}\n\n" +
+			"data: {\"id\":\"chatcmpl-xyz\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+			"data: {\"id\":\"chatcmpl-xyz\",\"choices\":[],\"usage\":" + usage + "}\n\n" +
+			"data: [DONE]\n\n"
+		_, _, tokenUsage, _, err := translator.ResponseBody(
+			map[string]string{"content-type": "text/event-stream"},
+			strings.NewReader(input),
+			true,
+			nil,
+		)
+		require.NoError(t, err)
+		requireBreakdown(t, tokenUsage)
+	})
 }
 
 func TestAnthropicToOpenAITranslator_ResponseBody_StreamingRequestModelFallback(t *testing.T) {

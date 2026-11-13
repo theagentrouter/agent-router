@@ -746,14 +746,15 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 		s.inputTokens = chunk.Usage.PromptTokens
 		s.outputTokens = chunk.Usage.CompletionTokens
 		// OpenAI's cached_tokens/cache_write_tokens are a breakdown within
-		// prompt_tokens, not additive like Anthropic's native cache fields, so we don't
-		// forward them here to avoid double-counting.
+		// prompt_tokens, not additive like Anthropic's native cache fields, so they are
+		// passed as zero here to avoid double-counting and reported separately below.
 		s.tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
 			int64(s.inputTokens),
 			int64(s.outputTokens),
 			ptr.To(int64(0)),
 			ptr.To(int64(0)),
 		)
+		setOpenAIUsageBreakdown(&s.tokenUsage, chunk.Usage)
 	}
 
 	if len(chunk.Choices) == 0 {
@@ -1096,6 +1097,19 @@ func (s *openAIStreamToAnthropicState) emitClosingEvents(out *[]byte) error {
 	appendAnthropicSSEEvent(out, "message_stop", data)
 
 	return nil
+}
+
+// setOpenAIUsageBreakdown reports the cached, cache-write and reasoning token counts of
+// an OpenAI usage object. OpenAI counts them inside prompt_tokens and completion_tokens,
+// so they are set as a breakdown and never added to the input or output totals.
+func setOpenAIUsageBreakdown(tokenUsage *metrics.TokenUsage, usage *openai.Usage) {
+	if details := usage.PromptTokensDetails; details != nil {
+		tokenUsage.SetCachedInputTokens(uint32(details.CachedTokens))                   //nolint:gosec
+		tokenUsage.SetCacheCreationInputTokens(uint32(details.CacheWriteTokensValue())) //nolint:gosec
+	}
+	if details := usage.CompletionTokensDetails; details != nil {
+		tokenUsage.SetReasoningTokens(uint32(details.ReasoningTokens)) //nolint:gosec
+	}
 }
 
 // appendAnthropicSSEEvent appends a formatted Anthropic SSE event to the output buffer.

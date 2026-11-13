@@ -121,12 +121,15 @@ func (a *anthropicToOpenAIV1ChatCompletionTranslator) responseBodyNonStreaming(b
 
 	responseModel = cmp.Or(openAIResp.Model, a.requestModel)
 
+	// The cache arguments stay nil: OpenAI already counts cached and cache-write tokens
+	// inside prompt_tokens, and the helper would add them to the input total again.
 	tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
 		int64(openAIResp.Usage.PromptTokens),
 		int64(openAIResp.Usage.CompletionTokens),
 		nil,
 		nil,
 	)
+	setOpenAIUsageBreakdown(&tokenUsage, &openAIResp.Usage)
 
 	anthropicResp := openAIResponseToAnthropic(openAIResp, responseModel)
 
