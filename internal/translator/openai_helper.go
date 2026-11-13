@@ -738,24 +738,31 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 		s.model = chunk.Model
 	}
 
-	// Usage-only chunk (emitted when stream_options.include_usage=true)
-	// One of the two ways to indicate stream end (other is endOfStream)
-	if len(chunk.Choices) == 0 && chunk.Usage != nil {
+	// Usage can arrive on any chunk: on a dedicated one with empty choices (emitted when
+	// stream_options.include_usage=true), or on the last content chunk next to
+	// finish_reason. The latest value replaces the previous one, so a backend that sends
+	// both is not counted twice.
+	if chunk.Usage != nil {
 		s.inputTokens = chunk.Usage.PromptTokens
 		s.outputTokens = chunk.Usage.CompletionTokens
 		// OpenAI's cached_tokens/cache_write_tokens are a breakdown within
-		// prompt_tokens, not additive like Anthropic's native cache fields, so we don't
-		// forward them here to avoid double-counting.
+		// prompt_tokens, not additive like Anthropic's native cache fields, so they are
+		// passed as zero here to avoid double-counting and reported separately below.
 		s.tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
 			int64(s.inputTokens),
 			int64(s.outputTokens),
 			ptr.To(int64(0)),
 			ptr.To(int64(0)),
 		)
-		return s.emitClosingEvents(out)
+		setOpenAIUsageBreakdown(&s.tokenUsage, chunk.Usage)
 	}
 
 	if len(chunk.Choices) == 0 {
+		// A usage-only chunk is one of the two ways to indicate stream end (other is
+		// endOfStream). A chunk that also has choices is translated below instead.
+		if chunk.Usage != nil {
+			return s.emitClosingEvents(out)
+		}
 		return nil
 	}
 
@@ -1090,6 +1097,19 @@ func (s *openAIStreamToAnthropicState) emitClosingEvents(out *[]byte) error {
 	appendAnthropicSSEEvent(out, "message_stop", data)
 
 	return nil
+}
+
+// setOpenAIUsageBreakdown reports the cached, cache-write and reasoning token counts of
+// an OpenAI usage object. OpenAI counts them inside prompt_tokens and completion_tokens,
+// so they are set as a breakdown and never added to the input or output totals.
+func setOpenAIUsageBreakdown(tokenUsage *metrics.TokenUsage, usage *openai.Usage) {
+	if details := usage.PromptTokensDetails; details != nil {
+		tokenUsage.SetCachedInputTokens(uint32(details.CachedTokens))                   //nolint:gosec
+		tokenUsage.SetCacheCreationInputTokens(uint32(details.CacheWriteTokensValue())) //nolint:gosec
+	}
+	if details := usage.CompletionTokensDetails; details != nil {
+		tokenUsage.SetReasoningTokens(uint32(details.ReasoningTokens)) //nolint:gosec
+	}
 }
 
 // appendAnthropicSSEEvent appends a formatted Anthropic SSE event to the output buffer.
