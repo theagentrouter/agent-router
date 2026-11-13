@@ -17,7 +17,6 @@
 #   -f ../../manifests/envoy-gateway-values.yaml \
 #   -f ../token_ratelimit/envoy-gateway-values-addon.yaml \
 #   -f envoy-gateway-values-addon.yaml
-
 config:
   envoyGateway:
     # GAIE conformance test required Envoy Gateway namespaced mode

@@ -7,7 +7,7 @@ package extensionserver
 
 import (
 	"context"
-	"fmt"
+	"strings"
 
 	egextension "github.com/envoyproxy/gateway/proto/extension"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
@@ -32,25 +32,35 @@ func (s *Server) PostRouteModify(_ context.Context, req *egextension.PostRouteMo
 	// Parse InferencePool resources from BackendExtensionResources.
 	inferencePools := s.constructInferencePoolsFrom(req.PostRouteContext.ExtensionResources)
 
-	// If we found an InferencePool, configure the route with the ext_proc per-route config.
+	// If we found InferencePools, configure the route with the ext_proc per-route config.
 	// InferencePool configuration only applies to forwarding routes (RouteAction).
 	// Non-forwarding routes (e.g. DirectResponse, Redirect) cannot route to an InferencePool.
 	if inferencePools != nil {
-		if len(inferencePools) != 1 {
-			return nil, fmt.Errorf("BUG: at most one inferencepool can be referenced per route rule but found %d", len(inferencePools))
-		}
-		inferencePool := inferencePools[0]
 		routeAction := req.Route.GetRoute()
 		if routeAction == nil {
-			return nil, status.Errorf(codes.FailedPrecondition, "cannot configure InferencePool %s/%s on non-forwarding route %q", inferencePool.Namespace, inferencePool.Name, req.Route.Name)
+			names := make([]string, len(inferencePools))
+			for i, pool := range inferencePools {
+				names[i] = inferencePoolKey(pool.Namespace, pool.Name)
+			}
+			return nil, status.Errorf(codes.FailedPrecondition, "cannot configure InferencePool %s on non-forwarding route %q", strings.Join(names, ","), req.Route.Name)
 		}
 
-		if inferencePool.Spec.EndpointPickerRef == nil {
-			// No endpoint picker configured for this InferencePool (spec.endpointPickerRef is
-			// optional as of Gateway API Inference Extension v1.5.0). We don't yet support
-			// routing traffic without one, so leave the route unmodified rather than wiring up
-			// EPP config that would panic on the nil reference.
-			return &egextension.PostRouteModifyResponse{Route: req.Route}, nil
+		// Routing to an InferencePool without an endpoint picker isn't supported. Leave such pools
+		// out of the route metadata, so no endpoint picker runs for them, and only their own share
+		// of the traffic fails as for an invalid backendRef (with a 500, or a 503 when the rule also
+		// has a backend without ready endpoints): PostClusterModify marks their cluster, and
+		// failInferencePoolClustersWithoutEndpointPicker moves its weight to invalid-backend cluster.
+		if missing := poolsWithoutEndpointPicker(inferencePools); len(missing) > 0 {
+			s.log.Info("InferencePool has no endpointPickerRef, its share of the traffic fails",
+				"route", req.Route.Name, "pools", missing)
+			inferencePools = poolsWithEndpointPicker(inferencePools)
+			if len(inferencePools) == 0 {
+				// A single-backend rule has no other backend to serve its traffic: reject it.
+				if routeAction.GetWeightedClusters() == nil {
+					rejectInferencePoolRoute(req.Route)
+				}
+				return &egextension.PostRouteModifyResponse{Route: req.Route}, nil
+			}
 		}
 
 		// Disable auto host rewrite to prevent Envoy from overriding the host header
@@ -63,7 +73,7 @@ func (s *Server) PostRouteModify(_ context.Context, req *egextension.PostRouteMo
 		if req.Route.TypedPerFilterConfig == nil {
 			req.Route.TypedPerFilterConfig = make(map[string]*anypb.Any)
 		}
-		buildEPPMetadataForRoute(req.Route, inferencePool)
+		buildEPPMetadataForRoute(req.Route, inferencePools)
 	}
 
 	return &egextension.PostRouteModifyResponse{Route: req.Route}, nil

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/mod/semver"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -48,6 +49,17 @@ const (
 // can be set to "true" to preserve the logs and the kind cluster even if the tests pass.
 var KeepCluster = func() bool {
 	v, _ := os.LookupEnv("TEST_KEEP_CLUSTER")
+	return v == "true"
+}()
+
+// By default, SetupAll creates the kind cluster and installs the Envoy Gateway, the AI Gateway, and
+// any other test dependencies from scratch. The TEST_SKIP_SETUP environment variable can be set to
+// "true" to skip all of that and reuse an already set up environment instead - for example, a kind
+// cluster left running from a previous run via TEST_KEEP_CLUSTER=true. This is useful when iterating
+// on the tests themselves, since it avoids paying the setup cost on every run. The reused cluster is
+// never deleted at the end of the run, so it can be reused again by the next one.
+var SkipSetup = func() bool {
+	v, _ := os.LookupEnv("TEST_SKIP_SETUP")
 	return v == "true"
 }()
 
@@ -99,6 +111,10 @@ func TestMain(m *testing.M, aigwOpts AIGatewayHelmOption, inferenceExtension, ne
 
 // SetupAll sets up the kind cluster, installs the Envoy Gateway, and installs the AI Gateway.
 func SetupAll(ctx context.Context, clusterName string, aigwOpts AIGatewayHelmOption, inferenceExtension, needPrometheus bool) error {
+	if SkipSetup {
+		fmt.Printf("Skipped to set up the test environment\n")
+		return nil
+	}
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithDeadline(ctx, time.Now().Add(5*time.Minute))
 	defer cancel()
@@ -353,7 +369,7 @@ func CleanupKindCluster(testsFailed bool, clusterName string) {
 		cmd.Stderr = os.Stderr
 		_ = cmd.Run()
 	}
-	if !testsFailed && !KeepCluster {
+	if !testsFailed && !KeepCluster && !SkipSetup {
 		cleanupLog("Destroying the kind cluster")
 		cmd := testsinternal.GoToolCmd("kind", "delete", "cluster", "--name", clusterName)
 		cmd.Stdout = os.Stdout
@@ -400,6 +416,21 @@ func EnvoyGatewayVersion() string {
 // EG release includes envoyproxy/gateway#9216, otherwise it will keep skipping on that release.
 func EnvoyGatewaySupportsLimitFromMetadata() bool {
 	return EnvoyGatewayVersion() == EnvoyGatewayLatestVersion
+}
+
+// envoyGatewayMultipleInferencePoolsPerRuleVersion is the first Envoy Gateway release that builds
+// one cluster per InferencePool backendRef of a route rule.
+const envoyGatewayMultipleInferencePoolsPerRuleVersion = "v1.11.0-rc.1"
+
+// EnvoyGatewaySupportsMultipleInferencePoolsPerRule reports whether the installed Envoy Gateway
+// builds one cluster per InferencePool backendRef of a route rule: the main build, or
+// v1.11.0-rc.1 and later. Older releases pass every InferencePool of the rule to a single
+// PostClusterModify call, which the extension server rejects, so EG skips publishing the whole
+// xDS update.
+func EnvoyGatewaySupportsMultipleInferencePoolsPerRule() bool {
+	v := EnvoyGatewayVersion()
+	return v == EnvoyGatewayLatestVersion ||
+		semver.Compare(v, envoyGatewayMultipleInferencePoolsPerRuleVersion) >= 0
 }
 
 // initEnvoyGateway initializes the Envoy Gateway in the kind cluster following the quickstart guide:
