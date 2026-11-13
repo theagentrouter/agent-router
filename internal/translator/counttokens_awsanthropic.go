@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -119,9 +120,17 @@ func (t *countTokensToAWSAnthropicTranslator) ResponseBody(_ map[string]string, 
 	return newHeaders, newBody, tokenUsage, "", nil
 }
 
-// ResponseError implements [AnthropicCountTokensTranslator.ResponseError].
-func (t *countTokensToAWSAnthropicTranslator) ResponseError(_ map[string]string, _ io.Reader) (
+// ResponseError implements [AnthropicCountTokensTranslator.ResponseError]. Non-JSON bodies are wrapped here because,
+// unlike the messages path, this translator has no embedded Anthropic translator to delegate them to.
+func (t *countTokensToAWSAnthropicTranslator) ResponseError(respHeaders map[string]string, body io.Reader) (
 	newHeaders []internalapi.Header, mutatedBody []byte, err error,
 ) {
-	return nil, nil, nil
+	if strings.Contains(respHeaders[contentTypeHeaderName], jsonContentType) {
+		return bedrockJSONErrorToAnthropic(respHeaders[statusHeaderName], body)
+	}
+	buf, err := io.ReadAll(body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read error body: %w", err)
+	}
+	return anthropicErrorResponse(respHeaders[statusHeaderName], string(buf))
 }

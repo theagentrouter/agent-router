@@ -860,11 +860,17 @@ func (a *anthropicToAWSBedrockTranslator) ResponseError(respHeaders map[string]s
 		}
 		errorMessage = string(buf)
 	}
+	return anthropicErrorResponse(statusCode, errorMessage)
+}
+
+// anthropicErrorResponse builds an Anthropic error envelope for an upstream error, with the error type derived
+// from the HTTP status, and the headers for the new body.
+func anthropicErrorResponse(statusCode, message string) (newHeaders []internalapi.Header, mutatedBody []byte, err error) {
 	anthropicError := anthropicschema.ErrorResponse{
 		Type: "error",
 		Error: anthropicschema.ErrorResponseMessage{
-			Type:    a.httpStatusToAnthropicErrorType(statusCode),
-			Message: errorMessage,
+			Type:    httpStatusToAnthropicErrorType(statusCode),
+			Message: message,
 		},
 	}
 	mutatedBody, err = json.Marshal(anthropicError)
@@ -878,7 +884,8 @@ func (a *anthropicToAWSBedrockTranslator) ResponseError(respHeaders map[string]s
 	return
 }
 
-func (a *anthropicToAWSBedrockTranslator) httpStatusToAnthropicErrorType(statusCode string) string {
+// httpStatusToAnthropicErrorType maps an upstream HTTP status code to the Anthropic error type.
+func httpStatusToAnthropicErrorType(statusCode string) string {
 	switch statusCode {
 	case "400":
 		return "invalid_request_error"
@@ -888,12 +895,16 @@ func (a *anthropicToAWSBedrockTranslator) httpStatusToAnthropicErrorType(statusC
 		return "permission_error"
 	case "404":
 		return "not_found_error"
+	case "413":
+		return "request_too_large"
 	case "429":
 		return "rate_limit_error"
 	case "500":
 		return "internal_server_error"
 	case "503":
 		return "service_unavailable_error"
+	case "529":
+		return "overloaded_error"
 	default:
 		return "internal_server_error"
 	}
