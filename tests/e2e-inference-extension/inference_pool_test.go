@@ -126,6 +126,8 @@ func TestInferencePoolIntegration(t *testing.T) {
 
 	// Test an InferencePool without an endpointPickerRef: its share of a rule's traffic fails with
 	// a 500, as an invalid backendRef's does, while the rule's other backends keep their share.
+	// Every other backend here has ready endpoints; otherwise Envoy would answer the failed share
+	// with the route-wide 503 instead.
 	noEPPCases := []struct {
 		name, testCase string
 		wantOK         bool

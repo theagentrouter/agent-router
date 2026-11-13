@@ -151,9 +151,9 @@ A rule can also mix InferencePools with other backend kinds, such as a Service, 
 
 The following rules apply to any HTTPRoute rule that references an InferencePool:
 
-- Every referenced InferencePool must set `endpointPickerRef`. An InferencePool that doesn't is treated like an invalid backendRef: its share of the traffic returns `500` and the other backends keep their weights.
+- Every referenced InferencePool must set `endpointPickerRef`. An InferencePool that doesn't is treated like an invalid backendRef: its share of the traffic fails and the other backends keep their weights. The failed share returns `500`, unless another backend of the same rule has no ready endpoints: Envoy can only return one status code for a route's missing backends, so the failed share then returns `503`.
 - If every backendRef has `weight: 0`, the rule returns `500`. A `weight: 0` backendRef receives no traffic ([`BackendRef`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendref)), so this follows the [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httprouterule) rule that requests with no backend to go to get a `500`.
-- If a backendRef is invalid, for example because the InferencePool doesn't exist, its share of the traffic returns `500` and the other backends keep their weights, as the [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httprouterule) specifies.
+- If a backendRef is invalid, for example because the InferencePool doesn't exist, its share of the traffic returns `500` and the other backends keep their weights, as the [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httprouterule) specifies. As above, the share returns `503` instead when another backend of the same rule has no ready endpoints.
 
 InferencePools without an `endpointPickerRef` may be supported in a future release.
 

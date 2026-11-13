@@ -47,9 +47,9 @@ func (s *Server) PostRouteModify(_ context.Context, req *egextension.PostRouteMo
 
 		// Routing to an InferencePool without an endpoint picker isn't supported. Leave such pools
 		// out of the route metadata, so no endpoint picker runs for them, and only their own share
-		// of the traffic fails with a 500, as for an invalid backendRef: PostClusterModify marks
-		// their cluster, and failInferencePoolClustersWithoutEndpointPicker moves its weight to
-		// invalid-backend cluster.
+		// of the traffic fails as for an invalid backendRef (with a 500, or a 503 when the rule also
+		// has a backend without ready endpoints): PostClusterModify marks their cluster, and
+		// failInferencePoolClustersWithoutEndpointPicker moves its weight to invalid-backend cluster.
 		if missing := poolsWithoutEndpointPicker(inferencePools); len(missing) > 0 {
 			s.log.Info("InferencePool has no endpointPickerRef, its share of the traffic fails",
 				"route", req.Route.Name, "pools", missing)
