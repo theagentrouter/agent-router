@@ -685,7 +685,7 @@ type streamToolCall struct {
 // pingWorthy is true when at least one complete block was consumed and none of them was
 // a valid protocol block, that is, only keepalive comments or undecodable data. Valid
 // blocks that produce no event (finish_reason-only chunks, [DONE]) and incomplete
-// buffered fragments never set it.
+// buffered fragments never set it, and neither does anything after the closing events.
 func (s *openAIStreamToAnthropicState) processBuffer(out *[]byte, endOfStream bool) (pingWorthy bool, err error) {
 	blocksProcessed, validBlocks := 0, 0
 	// Loop through all event blocks that are separated by a blank line (LF or CRLF).
@@ -721,7 +721,9 @@ func (s *openAIStreamToAnthropicState) processBuffer(out *[]byte, endOfStream bo
 		}
 		return false, nil
 	}
-	return blocksProcessed > 0 && validBlocks == 0, nil
+	// Once message_stop is out, nothing may follow it, so keepalives after the usage
+	// chunk and before [DONE] are suppressed rather than pinged.
+	return blocksProcessed > 0 && validBlocks == 0 && !s.closingEmitted, nil
 }
 
 // processEventBlock processes a single SSE event block (data between consecutive blank

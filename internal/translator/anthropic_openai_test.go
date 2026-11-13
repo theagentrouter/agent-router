@@ -1189,6 +1189,37 @@ func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_NoPingOnEventlessPro
 	}
 }
 
+// The usage chunk emits message_stop before [DONE] arrives. A keepalive delivered in a
+// later non-EOS call must not ping: no event may follow message_stop.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_NoPingAfterMessageStop(t *testing.T) {
+	translator := newStreamingAnthropicTranslator(t)
+
+	_, body, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(
+			`data: {"id":"chatcmpl-ms","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}],"model":"gpt-4o"}`+"\n\n"+
+				`data: {"id":"chatcmpl-ms","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-ms","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}`+"\n\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	events := parseSSEEventsFromBytes(body)
+	require.NotEmpty(t, events)
+	require.Equal(t, "message_stop", events[len(events)-1].eventType)
+
+	for _, input := range []string{": OPENROUTER PROCESSING\n\n", "data: {not-json\n\n"} {
+		_, body, _, _, err = translator.ResponseBody(
+			map[string]string{"content-type": "text/event-stream"},
+			strings.NewReader(input),
+			false,
+			nil,
+		)
+		require.NoError(t, err)
+		assert.Empty(t, body, "%q after message_stop must be suppressed, not pinged", input)
+	}
+}
+
 // A malformed chunk is skipped by processEventBlock; mid-stream the call must
 // still produce a ping rather than an empty body.
 func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_MalformedChunkEmitsPing(t *testing.T) {
