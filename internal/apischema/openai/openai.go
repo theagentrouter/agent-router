@@ -1719,6 +1719,10 @@ type ChatCompletionResponseChunkChoiceDelta struct {
 	// content) that cannot be represented in the plain-string reasoning_content,
 	// following the LiteLLM convention also used on the non-streaming Message.
 	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
+	// Reasoning is the plain-string reasoning delta that some OpenAI-compatible
+	// backends (e.g. OpenRouter) send as {"delta": {"reasoning": "..."}} instead of
+	// reasoning_content.
+	Reasoning *string `json:"reasoning,omitempty"`
 }
 
 // Error is described in the OpenAI API documentation

@@ -1056,3 +1056,255 @@ func TestAnthropicToOpenAITranslator_ResponseBody_StreamStateNilGuard(t *testing
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stream state not initialized")
 }
+
+// newStreamingAnthropicTranslator initialises a translator in streaming mode.
+func newStreamingAnthropicTranslator(t *testing.T) AnthropicMessagesTranslator {
+	t.Helper()
+	translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "claude-3-haiku")
+	reqBody := &anthropic.MessagesRequest{
+		Model:     "claude-3-haiku",
+		MaxTokens: 100,
+		Stream:    true,
+		Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hello"}}},
+	}
+	_, _, err := translator.RequestBody(nil, reqBody, false)
+	require.NoError(t, err)
+	return translator
+}
+
+// A mid-stream call that consumes only an SSE keepalive comment block must emit an
+// Anthropic ping instead of an empty body: an empty non-nil body suppresses the upstream
+// bytes entirely, and the client then receives nothing for as long as the backend only
+// sends keepalives.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_KeepaliveCommentEmitsPing(t *testing.T) {
+	translator := newStreamingAnthropicTranslator(t)
+
+	_, body, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(": OPENROUTER PROCESSING\n\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, body)
+
+	events := parseSSEEventsFromBytes(body)
+	require.Len(t, events, 1)
+	assert.Equal(t, "ping", events[0].eventType)
+	require.JSONEq(t, `{"type":"ping"}`, events[0].data)
+}
+
+// The endOfStream call is exempt from ping emission: processBuffer emits the
+// closing events there, so a trailing keepalive comment must not add a ping.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_NoPingAtEndOfStream(t *testing.T) {
+	translator := newStreamingAnthropicTranslator(t)
+
+	// A first call delivers real content so the closing events have a block to close.
+	_, _, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(`data: {"id":"chatcmpl-ka","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}],"model":"gpt-4o"}`+"\n\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+
+	_, body, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(": OPENROUTER PROCESSING\n\ndata: [DONE]\n\n"),
+		true,
+		nil,
+	)
+	require.NoError(t, err)
+
+	for _, e := range parseSSEEventsFromBytes(body) {
+		assert.NotEqual(t, "ping", e.eventType)
+	}
+}
+
+// A call that emits real Anthropic events must not add a ping, and a keepalive-only
+// call in between must — the mid-stream cadence a paced upstream produces.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_PingOnlyWhenSilent(t *testing.T) {
+	translator := newStreamingAnthropicTranslator(t)
+
+	// Keepalive-only call → ping.
+	_, body, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(": OPENROUTER PROCESSING\n\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	events := parseSSEEventsFromBytes(body)
+	require.Len(t, events, 1)
+	assert.Equal(t, "ping", events[0].eventType)
+
+	// Content call → normal events, no ping.
+	_, body, _, _, err = translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(`data: {"id":"chatcmpl-pw","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}],"model":"gpt-4o"}`+"\n\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	events = parseSSEEventsFromBytes(body)
+	require.NotEmpty(t, events)
+	for _, e := range events {
+		assert.NotEqual(t, "ping", e.eventType)
+	}
+}
+
+// Valid protocol blocks that produce no event (finish_reason-only chunk, [DONE]) and
+// incomplete buffered fragments are normal stream flow and must not ping.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_NoPingOnEventlessProtocolBlocks(t *testing.T) {
+	translator := newStreamingAnthropicTranslator(t)
+
+	// Open the message with a content call so the eventless blocks below arrive
+	// mid-stream (a fresh stream's first delta emits message_start).
+	_, _, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(`data: {"id":"chatcmpl-ne","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}],"model":"gpt-4o"}`+"\n\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name  string
+		input string
+	}{
+		{"finish_reason-only chunk", `data: {"id":"chatcmpl-ne","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n"},
+		{"done marker", "data: [DONE]\n\n"},
+		// Kept last: the unterminated line stays buffered and would merge into a
+		// subsequent call's first line.
+		{"partial fragment", `data: {"id":"chatcmpl-ne","choi`},
+	} {
+		_, body, _, _, err := translator.ResponseBody(
+			map[string]string{"content-type": "text/event-stream"},
+			strings.NewReader(tc.input),
+			false,
+			nil,
+		)
+		require.NoError(t, err, tc.name)
+		assert.Empty(t, body, "%s must suppress silently, not ping", tc.name)
+	}
+}
+
+// The usage chunk emits message_stop before [DONE] arrives. A keepalive delivered in a
+// later non-EOS call must not ping: no event may follow message_stop.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_NoPingAfterMessageStop(t *testing.T) {
+	translator := newStreamingAnthropicTranslator(t)
+
+	_, body, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(
+			`data: {"id":"chatcmpl-ms","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}],"model":"gpt-4o"}`+"\n\n"+
+				`data: {"id":"chatcmpl-ms","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-ms","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}`+"\n\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	events := parseSSEEventsFromBytes(body)
+	require.NotEmpty(t, events)
+	require.Equal(t, "message_stop", events[len(events)-1].eventType)
+
+	for _, input := range []string{": OPENROUTER PROCESSING\n\n", "data: {not-json\n\n"} {
+		_, body, _, _, err = translator.ResponseBody(
+			map[string]string{"content-type": "text/event-stream"},
+			strings.NewReader(input),
+			false,
+			nil,
+		)
+		require.NoError(t, err)
+		assert.Empty(t, body, "%q after message_stop must be suppressed, not pinged", input)
+	}
+}
+
+// A malformed chunk is skipped by processEventBlock; mid-stream the call must
+// still produce a ping rather than an empty body.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_MalformedChunkEmitsPing(t *testing.T) {
+	translator := newStreamingAnthropicTranslator(t)
+
+	_, body, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader("data: {not-json\n\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+
+	events := parseSSEEventsFromBytes(body)
+	require.Len(t, events, 1)
+	assert.Equal(t, "ping", events[0].eventType)
+}
+
+// A plain-string reasoning delta ({"delta":{"reasoning":"..."}}) must open a thinking
+// block and stream thinking_delta events, closed before the text block starts.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_ReasoningStringField(t *testing.T) {
+	translator := newStreamingAnthropicTranslator(t)
+
+	input := `data: {"id":"chatcmpl-rs","choices":[{"index":0,"delta":{"role":"assistant","reasoning":"thinking step 0..."}}],"model":"gpt-4o"}` + "\n\n" +
+		`data: {"id":"chatcmpl-rs","choices":[{"index":0,"delta":{"reasoning":"thinking step 1..."}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-rs","choices":[{"index":0,"delta":{"content":"Answer"}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-rs","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-rs","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	_, body, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(input),
+		true,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, body)
+
+	events := parseSSEEventsFromBytes(body)
+	var blockTypes []string
+	var thinkingDeltas int
+	for _, e := range events {
+		if e.eventType == "content_block_start" {
+			if bytes.Contains([]byte(e.data), []byte(`"thinking"`)) {
+				blockTypes = append(blockTypes, "thinking")
+			} else if bytes.Contains([]byte(e.data), []byte(`"text"`)) {
+				blockTypes = append(blockTypes, "text")
+			}
+		}
+		if e.eventType == "content_block_delta" && bytes.Contains([]byte(e.data), []byte(`"thinking_delta"`)) {
+			thinkingDeltas++
+		}
+	}
+	assert.Equal(t, []string{"thinking", "text"}, blockTypes)
+	assert.Equal(t, 2, thinkingDeltas)
+}
+
+// SSE permits CRLF line endings: CRLF-framed keepalive comments must still ping, and
+// CRLF-framed chunks must still translate rather than buffer until end-of-stream.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_CRLFFraming(t *testing.T) {
+	translator := newStreamingAnthropicTranslator(t)
+
+	_, body, _, _, err := translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(": OPENROUTER PROCESSING\r\n\r\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	events := parseSSEEventsFromBytes(body)
+	require.Len(t, events, 1)
+	assert.Equal(t, "ping", events[0].eventType)
+
+	_, body, _, _, err = translator.ResponseBody(
+		map[string]string{"content-type": "text/event-stream"},
+		strings.NewReader(`data: {"id":"chatcmpl-crlf","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}],"model":"gpt-4o"}`+"\r\n\r\n"),
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	events = parseSSEEventsFromBytes(body)
+	require.NotEmpty(t, events)
+	assert.Equal(t, "message_start", events[0].eventType)
+	for _, e := range events {
+		assert.NotEqual(t, "ping", e.eventType)
+	}
+}

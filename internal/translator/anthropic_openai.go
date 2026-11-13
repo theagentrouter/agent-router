@@ -170,8 +170,19 @@ func (a *anthropicToOpenAIV1ChatCompletionTranslator) responseBodyStreaming(body
 	// A non-nil empty body tells Envoy to replace the chunk with nothing, suppressing the
 	// raw upstream bytes instead of passing them through unchanged.
 	out := make([]byte, 0)
-	if err = a.streamState.processBuffer(&out, endOfStream); err != nil {
+	pingWorthy, err := a.streamState.processBuffer(&out, endOfStream)
+	if err != nil {
 		return nil, nil, tokenUsage, responseModel, err
+	}
+
+	// Upstream keepalives must not become downstream silence: idle timers on the client
+	// and on any proxy in between only reset on response bytes. When this call consumed
+	// nothing but SSE comment blocks or undecodable data, emit a ping event, which
+	// Anthropic streams may carry at any position, instead of an empty body.
+	if pingWorthy && len(out) == 0 {
+		if err = emitPing(&out); err != nil {
+			return nil, nil, tokenUsage, responseModel, err
+		}
 	}
 
 	// Update responseModel if updated in streamState or take requested model
