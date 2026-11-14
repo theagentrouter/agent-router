@@ -4832,3 +4832,41 @@ func TestGatewayController_warnUndeclaredMetadataNamespaces(t *testing.T) {
 	c.warnUndeclaredMetadataNamespaces(ec, []string{"declared.ns", "missing.ns", "other-missing.ns"}, "gw", "ns")
 	require.Empty(t, logged)
 }
+
+// TestInjectQuotaPolicyCostExpressions_InvalidCostExpression tests that a per-model quota with an invalid cost
+// expression gets no cost entry, since the extproc rejects a whole config that has an expression it cannot compile,
+// and that the other quotas of the same policy still get theirs, with the default expression when none is set.
+func TestInjectQuotaPolicyCostExpressions_InvalidCostExpression(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	controller := &GatewayController{
+		client:                  fakeClient,
+		logger:                  ctrl.Log,
+		referenceGrantValidator: newReferenceGrantValidator(fakeClient),
+	}
+	validModel, invalidModel, defaultModel := "model-a", "model-b", "model-c"
+	validExpression, invalidExpression := "input_tokens + output_tokens", "total_tokens +"
+	policy := &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "route-ns"},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+				Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "backend",
+			}},
+			PerModelQuotas: []aigv1a1.PerModelQuota{
+				{ModelName: &invalidModel, Quota: aigv1a1.QuotaDefinition{CostExpression: &invalidExpression}},
+				{ModelName: &validModel, Quota: aigv1a1.QuotaDefinition{CostExpression: &validExpression}},
+				{ModelName: &defaultModel},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), policy))
+
+	config := &filterapi.Config{
+		Backends: []filterapi.Backend{{AIServiceBackendName: "route-ns/backend"}},
+	}
+	controller.injectQuotaPolicyCostExpressions(t.Context(), config, make(map[string]struct{}), "route")
+	require.Len(t, config.LLMRequestCosts, 2)
+	require.Equal(t, validExpression, config.LLMRequestCosts[0].CEL)
+	require.Equal(t, validModel, config.LLMRequestCosts[0].Model)
+	require.Equal(t, "total_tokens", config.LLMRequestCosts[1].CEL)
+	require.Equal(t, defaultModel, config.LLMRequestCosts[1].Model)
+}

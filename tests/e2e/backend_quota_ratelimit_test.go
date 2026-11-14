@@ -141,6 +141,41 @@ func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
 			"quota-policy-hash annotation did not change after updating the QuotaPolicy")
 	})
 
+	// A cost expression that cannot be compiled must be reported in the status of the QuotaPolicy, and the
+	// policy must be accepted again once the expression is removed.
+	t.Run("invalid cost expression is reported in the status", func(t *testing.T) {
+		const policyName, policyNamespace = "envoy-ai-gateway-quota-ratelimit-policy", "default"
+		requireCondition := func(expectedType, expectedReason string) {
+			t.Helper()
+			require.Eventually(t, func() bool {
+				condType, reason := getQuotaPolicyCondition(t, policyNamespace, policyName)
+				if condType != expectedType || reason != expectedReason {
+					t.Logf("QuotaPolicy status type=%q reason=%q", condType, reason)
+					return false
+				}
+				return true
+			}, 60*time.Second, 500*time.Millisecond,
+				"expected QuotaPolicy %s/%s", expectedType, expectedReason)
+		}
+		requireCondition("Accepted", "ReconciliationSucceeded")
+
+		require.NoError(t, e2elib.Kubectl(t.Context(), "patch", "quotapolicy", policyName, "-n", policyNamespace,
+			"--type=json",
+			"-p", `[{"op":"add","path":"/spec/perModelQuotas/0/quota/costExpression","value":"total_tokens +"}]`,
+		).Run())
+		requireCondition("NotAccepted", "ReconciliationFailed")
+		message, err := exec.CommandContext(t.Context(), "kubectl", "get", "quotapolicy", policyName,
+			"-n", policyNamespace, "-o", "jsonpath={.status.conditions[0].message}").Output()
+		require.NoError(t, err)
+		require.Contains(t, string(message), `invalid costExpression for model "quota-test-model"`)
+
+		require.NoError(t, e2elib.Kubectl(t.Context(), "patch", "quotapolicy", policyName, "-n", policyNamespace,
+			"--type=json",
+			"-p", `[{"op":"remove","path":"/spec/perModelQuotas/0/quota/costExpression"}]`,
+		).Run())
+		requireCondition("Accepted", "ReconciliationSucceeded")
+	})
+
 	// Deleting the QuotaPolicy must re-stamp the generated HTTPRoute so the quota-policy-hash annotation
 	// is removed, proving the controller notified the AIGatewayRoute on delete (via the finalizer) and
 	// Envoy Gateway re-translated without the deleted policy. This runs last because it removes the only

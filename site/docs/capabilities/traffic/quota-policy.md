@@ -240,6 +240,16 @@ division truncates (`cached_input_tokens / 10u`); for an exact fractional weight
 floating point — for example `uint(double(cached_input_tokens) * 0.1)`.
 :::
 
+:::warning An invalid expression is reported in the status
+A policy with an invalid `costExpression` shows `NotAccepted` in `kubectl get quotapolicy`, and the
+condition message names the model and the CEL error. An expression is checked by compiling it and
+evaluating it once with every numeric variable set to zero and every string variable set to a
+placeholder. Until it is corrected, the quota of that model is not enforced as configured: its limit
+stays in place, but the invalid expression charges nothing and there is no fallback to the default
+cost, so requests count against the limit only if another cost applies to them, for example from a
+second QuotaPolicy with a quota for the same model. The other models of the policy are not affected.
+:::
+
 ### Bucket Mode
 
 The `mode` field on a per-model `quota` controls how the `defaultBucket` and matching `bucketRules`
