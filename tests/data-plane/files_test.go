@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/yaml"
 
@@ -35,6 +36,16 @@ const filesTestBackendName1 = "test-ns/files-backend/route/files-route/rule/0/re
 
 // filesTestModel is the routing model matched by the files test route.
 const filesTestModel = "files-test-model"
+
+// filesTestAPIKey is the API key configured on the files test backend. The test upstream asserts
+// that every Files and Batch API request it receives carries it, verifying backend auth injection.
+const filesTestAPIKey = "files-test-api-key"
+
+// setExpectedFilesAuthHeader asks the test upstream to require the backend's Authorization header.
+func setExpectedFilesAuthHeader(req *http.Request) {
+	req.Header.Set(testupstreamlib.ExpectedHeadersKey,
+		base64.StdEncoding.EncodeToString([]byte("Authorization:Bearer "+filesTestAPIKey)))
+}
 
 // newFilesTestCodec creates the id codec with the default test seed.
 func newFilesTestCodec() idcodec.Codec {
@@ -75,8 +86,10 @@ func filesTestConfig() string {
 		Version: version.Parse(),
 		Backends: []filterapi.Backend{
 			{
-				Name:   filesTestBackendName1,
-				Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
+				Name: filesTestBackendName1,
+				// "v1" is the OpenAI prefix the controller defaults to; it yields /v1/files and /v1/batches upstream.
+				Schema: openAISchema,
+				Auth:   &filterapi.BackendAuth{APIKey: &filterapi.APIKeyAuth{Key: filesTestAPIKey}},
 			},
 			// Existing backends so the main TestWithTestUpstream still works.
 			testUpstreamOpenAIBackend,
@@ -167,7 +180,7 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 			method:              http.MethodPost,
 			path:                "/v1/files",
 			expStatus:           http.StatusBadRequest,
-			expResponseContains: `"model"`,
+			expResponseContains: `'model'`,
 		},
 
 		// ---------------------------------------------------------------
@@ -192,7 +205,7 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 			method:              http.MethodGet,
 			path:                "/v1/files",
 			expStatus:           http.StatusBadRequest,
-			expResponseContains: `"model"`,
+			expResponseContains: `'model'`,
 		},
 
 		// ---------------------------------------------------------------
@@ -300,6 +313,7 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 			if reqContentType != "" {
 				req.Header.Set("Content-Type", reqContentType)
 			}
+			setExpectedFilesAuthHeader(req)
 			if tc.responseBody != "" {
 				req.Header.Set(testupstreamlib.ResponseBodyHeaderKey,
 					base64.StdEncoding.EncodeToString([]byte(tc.responseBody)))
@@ -314,7 +328,7 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 
 			var lastBody []byte
 			var lastStatus int
-			require.Eventually(t, func() bool {
+			assert.Eventually(&noopT{}, func() bool {
 				resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 				if doErr != nil {
 					return false
@@ -326,8 +340,8 @@ func TestFilesAPI_WithTestUpstream(t *testing.T) {
 				lastBody = buf.Bytes()
 				lastStatus = resp.StatusCode
 				return resp.StatusCode == tc.expStatus
-			}, eventuallyTimeout, eventuallyInterval,
-				"expected status %d, got %d, body: %s", tc.expStatus, lastStatus, lastBody)
+			}, eventuallyTimeout, eventuallyInterval)
+			require.Equal(t, tc.expStatus, lastStatus, "body: %s", lastBody)
 
 			if tc.expResponseContains != "" {
 				require.Contains(t, string(lastBody), tc.expResponseContains)
@@ -370,12 +384,14 @@ func TestFilesAPI_UploadResponseIDDecodes(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, addr+"/v1/files",
 		bytes.NewReader(body))
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	req.Header.Set("Content-Type", ct)
 	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey,
 		base64.StdEncoding.EncodeToString([]byte(upstreamResponse)))
 
 	var respBody []byte
-	require.Eventually(t, func() bool {
+	var lastStatus int
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -384,8 +400,10 @@ func TestFilesAPI_UploadResponseIDDecodes(t *testing.T) {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(resp.Body)
 		respBody = buf.Bytes()
+		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval, "upload did not return 200, last body: %s", respBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus, "last body: %s", respBody)
 
 	// The response body must contain a gateway-encoded id (not the native id).
 	respStr := string(respBody)
@@ -426,7 +444,7 @@ func TestFilesAPI_InvalidAfterCursor(t *testing.T) {
 			require.NoError(t, err)
 
 			var lastStatus int
-			require.Eventually(t, func() bool {
+			assert.Eventually(&noopT{}, func() bool {
 				resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 				if doErr != nil {
 					return false
@@ -434,8 +452,8 @@ func TestFilesAPI_InvalidAfterCursor(t *testing.T) {
 				defer resp.Body.Close()
 				lastStatus = resp.StatusCode
 				return resp.StatusCode == http.StatusBadRequest
-			}, eventuallyTimeout, eventuallyInterval,
-				"expected 400 for after=%s, got %d", badAfter, lastStatus)
+			}, eventuallyTimeout, eventuallyInterval)
+			require.Equal(t, http.StatusBadRequest, lastStatus)
 		})
 	}
 }
@@ -449,6 +467,7 @@ func TestFilesAPI_ListModelStrippedFromUpstream(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
 		addr+"/v1/files?model=files-test-model&limit=5", http.NoBody)
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	// Assert the upstream receives /v1/files?limit=5 (no model=).
 	req.Header.Set(testupstreamlib.ExpectedPathHeaderKey,
 		base64.StdEncoding.EncodeToString([]byte("/v1/files")))
@@ -458,7 +477,7 @@ func TestFilesAPI_ListModelStrippedFromUpstream(t *testing.T) {
 
 	var lastStatus int
 	var lastBody []byte
-	require.Eventually(t, func() bool {
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -469,8 +488,8 @@ func TestFilesAPI_ListModelStrippedFromUpstream(t *testing.T) {
 		lastBody = buf.Bytes()
 		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval,
-		"expected 200, got %d, body: %s", lastStatus, lastBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus, "body: %s", lastBody)
 
 	require.NotContains(t, string(lastBody), "model=", "model param must not appear in upstream body")
 }
@@ -489,6 +508,7 @@ func TestFilesAPI_RetrieveNativePath(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
 		addr+"/v1/files/"+gwID, http.NoBody)
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	// Assert upstream receives the native path, not the gateway id path.
 	req.Header.Set(testupstreamlib.ExpectedPathHeaderKey,
 		base64.StdEncoding.EncodeToString([]byte("/v1/files/"+nativeID)))
@@ -498,7 +518,7 @@ func TestFilesAPI_RetrieveNativePath(t *testing.T) {
 
 	var lastStatus int
 	var lastBody []byte
-	require.Eventually(t, func() bool {
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -509,8 +529,8 @@ func TestFilesAPI_RetrieveNativePath(t *testing.T) {
 		lastBody = buf.Bytes()
 		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval,
-		"expected 200, got %d, body: %s", lastStatus, lastBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus, "body: %s", lastBody)
 
 	// Response must contain a gateway id, not the native id.
 	require.NotContains(t, string(lastBody), nativeID,
@@ -534,6 +554,7 @@ func TestFilesAPI_UploadModelStrippedFromBody(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, addr+"/v1/files",
 		strings.NewReader(bodyStr))
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	req.Header.Set("Content-Type", ct)
 	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey,
 		base64.StdEncoding.EncodeToString([]byte(
@@ -543,7 +564,7 @@ func TestFilesAPI_UploadModelStrippedFromBody(t *testing.T) {
 	// but we verify the gateway does not 400 or 5xx (i.e., stripping succeeded).
 
 	var lastStatus int
-	require.Eventually(t, func() bool {
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -551,8 +572,8 @@ func TestFilesAPI_UploadModelStrippedFromBody(t *testing.T) {
 		defer resp.Body.Close()
 		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval,
-		"expected 200, got %d", lastStatus)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus)
 }
 
 // TestFilesAPI_UpstreamErrorPassThrough verifies that a non-2xx upstream response is returned to
@@ -565,13 +586,14 @@ func TestFilesAPI_UpstreamErrorPassThrough(t *testing.T) {
 	body, ct := buildUploadBody(t, filesTestModel)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, addr+"/v1/files", bytes.NewReader(body))
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	req.Header.Set("Content-Type", ct)
 	req.Header.Set(testupstreamlib.ResponseStatusKey, "400")
 	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(upstreamErr)))
 
 	var lastStatus int
 	var lastBody []byte
-	require.Eventually(t, func() bool {
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -582,7 +604,8 @@ func TestFilesAPI_UpstreamErrorPassThrough(t *testing.T) {
 		lastBody = buf.Bytes()
 		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusBadRequest
-	}, eventuallyTimeout, eventuallyInterval, "expected 400, got %d, body: %s", lastStatus, lastBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusBadRequest, lastStatus, "body: %s", lastBody)
 	require.JSONEq(t, upstreamErr, string(lastBody))
 }
 
@@ -598,11 +621,13 @@ func TestFilesAPI_StableIDs(t *testing.T) {
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, addr+"/v1/files/"+gwID, http.NoBody)
 	require.NoError(t, err)
+	setExpectedFilesAuthHeader(req)
 	req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString(
 		[]byte(fmt.Sprintf(`{"id":%q,"object":"file"}`, nativeID))))
 
 	var lastBody []byte
-	require.Eventually(t, func() bool {
+	var lastStatus int
+	assert.Eventually(&noopT{}, func() bool {
 		resp, doErr := http.DefaultClient.Do(req.Clone(t.Context()))
 		if doErr != nil {
 			return false
@@ -611,7 +636,9 @@ func TestFilesAPI_StableIDs(t *testing.T) {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(resp.Body)
 		lastBody = buf.Bytes()
+		lastStatus = resp.StatusCode
 		return resp.StatusCode == http.StatusOK
-	}, eventuallyTimeout, eventuallyInterval, "body: %s", lastBody)
+	}, eventuallyTimeout, eventuallyInterval)
+	require.Equal(t, http.StatusOK, lastStatus, "body: %s", lastBody)
 	require.Contains(t, string(lastBody), fmt.Sprintf(`"id":%q`, gwID))
 }

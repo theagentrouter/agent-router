@@ -687,6 +687,51 @@ curl "$GATEWAY_URL/v1/files?model=gpt-4o-mini&limit=20"
 
 See the [Files API](./files-api.md) guide for full usage, configuration, and caveats.
 
+### Batches
+
+**Endpoints:**
+
+- `POST /v1/batches` (create)
+- `GET /v1/batches` (list)
+- `GET /v1/batches/{batch_id}` (retrieve)
+- `POST /v1/batches/{batch_id}/cancel` (cancel)
+
+**Status:** ✅ Supported (OpenAI and GCP Vertex AI schemas)
+
+**Description:** Create and manage asynchronous batch jobs. A batch is routed to the backend that
+holds its input file; batch output and error files are downloadable via the Files API. On GCP
+Vertex AI, the input and output are Cloud Storage URIs instead.
+
+**Features:**
+
+- ✅ Backend-sticky routing via gateway-issued, encrypted batch ids
+- ✅ No `model` needed on create: the backend is taken from the gateway `input_file_id`
+  (a `gs://` input for GCP Vertex AI takes a `model` extension field instead)
+- ✅ List pagination (`?model=` on the first page; `after` cursors are gateway-issued ids)
+- ✅ Output and error file ids are gateway file ids, downloadable via `/v1/files/{id}/content`
+- ⚠️ Exactly **one backend per route rule** — rules with multiple `backendRefs` are rejected, so
+  provider fallback and load balancing are not supported for Batches
+- ❌ Token usage of batch work is not metered
+
+**Supported Providers:**
+
+- OpenAI
+- Any OpenAI-compatible provider that supports the Batch API
+- GCP Vertex AI (chat completions and embeddings batches, translated to batch prediction jobs)
+
+Other backend schemas are not supported and the request fails with an error.
+
+Batch ids use the same encryption seed as file ids; see the warning in [Files](#files).
+
+**Example:**
+
+```bash
+curl $GATEWAY_URL/v1/batches -H "Content-Type: application/json" \
+  -d '{"input_file_id":"file-<gateway-id>","endpoint":"/v1/chat/completions","completion_window":"24h"}'
+```
+
+See the [Batch API](./batch-api.md) guide for full usage and caveats.
+
 ## Provider-Endpoint Compatibility Table
 
 The following table summarizes which providers support which endpoints:
