@@ -28,17 +28,15 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |
+        description: |-
           QuotaPolicy specifies token quota configuration for inference services.
           Generates rate limit configuration and tracks quota usage.
-          Reject requests with 429 once all related quota to that request has been exceeded.
         properties:
           apiVersion:
             description: |-
               APIVersion defines the versioned schema of this representation of an object.
               Servers should convert recognized schemas to the latest internal value, and
               may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
             description: |-
@@ -46,7 +44,6 @@ spec:
               Servers may infer this from the endpoint the client submits requests to.
               Cannot be updated.
               In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
@@ -58,10 +55,6 @@ spec:
                 description: |-
                   PerModelQuotas specifies quota for different models served by the AIServiceBackend(s) where this
                   policy is attached.
-
-                  When multiple QuotaPolicies define the same Model for the same AIServiceBackend,
-                  the policy whose namespace/name is alphabetically first takes precedence.
-                  Keys are sorted to ensure deterministic snapshot generation.
                 items:
                   properties:
                     modelName:
@@ -76,31 +69,18 @@ spec:
                         for matching requests to quota buckets.
                       properties:
                         bucketRules:
-                          description: |-
-                            BucketRules are a list of client selectors and quotas. If a request
-                            matches multiple rules, each of their associated quotas get applied, so a
-                            single request might burn down the quota for multiple rules.
-
-                            Client selectors that match under the same model / service backend will be
-                            combined with the first limit taking precedence.
+                          description: BucketRules are a list of client selectors
+                            and quotas.
                           items:
                             properties:
                               clientSelectors:
                                 description: |-
                                   ClientSelectors holds the list of conditions to select
                                   specific clients using attributes from the traffic flow.
-                                  All individual select conditions must hold True for this rule
-                                  and its limit to be applied.
-                                  Currently, only header types are honored.
-
-                                  If no client selectors are specified, the rule applies to all traffic of
-                                  the targeted AIServiceBackend.
                                 items:
                                   description: |-
                                     RateLimitSelectCondition specifies the attributes within the traffic flow that can
                                     be used to select a subset of clients to be ratelimited.
-                                    All the individual conditions must hold True for the overall condition to hold True.
-                                    And, at least one of headers or methods or path or sourceCIDR or queryParams condition must be specified.
                                   properties:
                                     headers:
                                       description: |-
@@ -264,10 +244,9 @@ spec:
                                           - Distinct
                                           type: string
                                         value:
-                                          description: |-
-                                            Value is the IP CIDR that represents the range of Source IP Addresses of the client.
-                                            These could also be the intermediate addresses through which the request has flown through and is part of the  `X-Forwarded-For` header.
-                                            For example, `192.168.0.1/32`, `192.168.0.0/24`, `001:db8::/64`.
+                                          description: Value is the IP CIDR that represents
+                                            the range of Source IP Addresses of the
+                                            client.
                                           maxLength: 256
                                           minLength: 1
                                           type: string
@@ -287,8 +266,6 @@ spec:
                                   Quota value for given client selectors.
                                   This quota is applied for traffic flows when the selectors
                                   compute to True, causing the request to be counted towards the limit.
-                                  A response with 429 HTTP status code is sent back to the client when
-                                  the selected requests have exceeded the quota.
                                 properties:
                                   duration:
                                     description: 'Time window. Must be exactly one
@@ -308,9 +285,6 @@ spec:
                                     description: |-
                                       FromMetadata optionally overrides Limit and Duration for a request using
                                       a struct written to Envoy dynamic metadata by an earlier HTTP filter.
-
-                                      The value must contain requests_per_unit and unit, where unit is an
-                                      Envoy rate limit unit such as SECOND, MINUTE, HOUR, or DAY.
                                     properties:
                                       key:
                                         description: |-
@@ -344,13 +318,8 @@ spec:
                                 - limit
                                 type: object
                               shadowMode:
-                                description: |-
-                                  ShadowMode indicates whether this quota rule runs in shadow mode.
-                                  When enabled, all quota checks are performed (cache lookups,
-                                  counter updates, telemetry generation), but the outcome is never enforced.
-                                  If Quota.FromMetadata is set, it still selects the effective limit and
-                                  duration; ShadowMode only controls enforcement of that result.
-                                  The request always succeeds, even if the configured quota is exceeded.
+                                description: ShadowMode indicates whether this quota
+                                  rule runs in shadow mode.
                                 type: boolean
                             required:
                             - quota
@@ -360,9 +329,6 @@ spec:
                           description: |-
                             CostExpression specifies a CEL expression for computing the quota burndown of the LLM-related request.
                             If no expression is specified the "total_tokens" value is used.
-                            For example:
-
-                             "input_tokens + cached_input_tokens + output_tokens"
                           type: string
                         defaultBucket:
                           description: |-
@@ -386,9 +352,6 @@ spec:
                               description: |-
                                 FromMetadata optionally overrides Limit and Duration for a request using
                                 a struct written to Envoy dynamic metadata by an earlier HTTP filter.
-
-                                The value must contain requests_per_unit and unit, where unit is an
-                                Envoy rate limit unit such as SECOND, MINUTE, HOUR, or DAY.
                               properties:
                                 key:
                                   description: |-
@@ -423,11 +386,8 @@ spec:
                           type: object
                         mode:
                           default: Shared
-                          description: |-
-                            The "Mode" determines how quota is charged to the "DefaultBucket" and matching "BucketRules".
-                            In the "shared" mode the quota is charged to all matching "BucketRules" AND the "DefaultBucket"
-                            and request is allowed only if the quota is available in at least one matching buckets.
-                            Defaults to "Shared".
+                          description: The "Mode" determines how quota is charged
+                            to the "DefaultBucket" and matching "BucketRules".
                           enum:
                           - Shared
                           type: string
@@ -442,19 +402,10 @@ spec:
                 description: |-
                   Quota for all models served by AIServiceBackend(s). This value can be overridden for specific models using the "PerModelQuotas"
                   configuration.
-
-                  Currently, the rate limit configuration is properly set up, but the descriptor set is not being set in the Envoy Configuration
                 properties:
                   costExpression:
-                    description: |-
-                      ServiceQuota is not currently enforced by the extension server. This
-                      includes FromMetadata on Quota; it is accepted for API consistency with
-                      per-model quotas but has no effect until service-quota enforcement lands.
-                      CostExpression specifies a CEL expression for computing the quota burndown of the LLM-related request.
-                      If no expression is specified the "total_tokens" value is used.
-                      For example:
-
-                       "input_tokens + cached_input_tokens + output_tokens"
+                    description: ServiceQuota is not currently enforced by the extension
+                      server.
                     type: string
                   quota:
                     description: |-
@@ -479,9 +430,6 @@ spec:
                         description: |-
                           FromMetadata optionally overrides Limit and Duration for a request using
                           a struct written to Envoy dynamic metadata by an earlier HTTP filter.
-
-                          The value must contain requests_per_unit and unit, where unit is an
-                          Envoy rate limit unit such as SECOND, MINUTE, HOUR, or DAY.
                         properties:
                           key:
                             description: |-
@@ -522,18 +470,10 @@ spec:
                   TargetRefs are the AIServiceBackend resources this QuotaPolicy is being attached to.
 
                   The namespace of each target defaults to the QuotaPolicy's namespace when omitted.
-                  Cross-namespace references are supported by setting namespace explicitly. When the
-                  target namespace differs from the QuotaPolicy's namespace, a ReferenceGrant in the
-                  AIServiceBackend's namespace must authorize QuotaPolicy from the policy namespace to
-                  reference AIServiceBackend. Same-namespace references do not require a ReferenceGrant.
                 items:
                   description: |-
                     NamespacedPolicyTargetReference identifies an API object to apply a direct or
-                    inherited policy to, potentially in a different namespace. This should only
-                    be used as part of Policy resources that need to be able to target resources
-                    in different namespaces. For more information on how this policy attachment
-                    model works, and a sample Policy resource, refer to the policy attachment
-                    documentation for Gateway API.
+                    inherited policy to, potentially in a different namespace.
                   properties:
                     group:
                       description: Group is the group of the target resource.
@@ -554,9 +494,7 @@ spec:
                     namespace:
                       description: |-
                         Namespace is the namespace of the referent. When unspecified, the local
-                        namespace is inferred. Even when policy targets a resource in a different
-                        namespace, it MUST only apply to traffic originating from the same
-                        namespace as the policy.
+                        namespace is inferred.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
@@ -589,7 +527,7 @@ spec:
                     lastTransitionTime:
                       description: |-
                         lastTransitionTime is the last time the condition transitioned from one status to another.
-                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                        This should be when the underlying condition changed.
                       format: date-time
                       type: string
                     message:
@@ -601,18 +539,13 @@ spec:
                     observedGeneration:
                       description: |-
                         observedGeneration represents the .metadata.generation that the condition was set based upon.
-                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                        with respect to the current state of the instance.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
-                      description: |-
-                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-                        Producers of specific condition types may define expected values and meanings for this field,
-                        and whether the values are considered a guaranteed API.
-                        The value should be a CamelCase string.
-                        This field may not be empty.
+                      description: reason contains a programmatic identifier indicating
+                        the reason for the condition's last transition.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
