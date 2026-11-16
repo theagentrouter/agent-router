@@ -97,14 +97,26 @@ func TestInsertAIGatewayExtProcFilter(t *testing.T) {
 			expectedFilterCount: 4,
 		},
 		{
-			name: "insert before rbac filter",
+			name: "insert after rbac filter",
 			existingFilters: []*httpconnectionmanagerv3.HttpFilter{
 				{Name: "envoy.filters.http.fault"},
 				{Name: "envoy.filters.http.rbac"},
 				{Name: "envoy.filters.http.router"},
 			},
-			expectedPosition:    1,
+			expectedPosition:    2,
 			expectedFilterCount: 4,
+		},
+		{
+			name: "insert after last rbac filter",
+			existingFilters: []*httpconnectionmanagerv3.HttpFilter{
+				{Name: "envoy.filters.http.jwt_authn"},
+				{Name: "envoy.filters.http.rbac/security-policy-a"},
+				{Name: "envoy.filters.http.rbac/security-policy-b"},
+				{Name: "envoy.filters.http.ratelimit"},
+				{Name: "envoy.filters.http.router"},
+			},
+			expectedPosition:    3,
+			expectedFilterCount: 6,
 		},
 		{
 			name: "insert before local_ratelimit filter",
@@ -167,7 +179,7 @@ func TestInsertAIGatewayExtProcFilter(t *testing.T) {
 			expectedFilterCount: 4,
 		},
 		{
-			name: "insert with multiple filters requiring ordering",
+			name: "insert after rbac with multiple filters",
 			existingFilters: []*httpconnectionmanagerv3.HttpFilter{
 				{Name: "envoy.filters.http.fault"},
 				{Name: "envoy.filters.http.cors"},
@@ -175,14 +187,14 @@ func TestInsertAIGatewayExtProcFilter(t *testing.T) {
 				{Name: "envoy.filters.http.rbac"},
 				{Name: "envoy.filters.http.router"},
 			},
-			expectedPosition:    2,
+			expectedPosition:    4,
 			expectedFilterCount: 6,
 		},
 		{
 			// Mirrors the EKS setup where an api-key ext_proc and a buffer filter are added ahead of AI
-			// Gateway. The ext_proc at index 0 matches afterExtProcFilterPrefixes, but the buffer filter
-			// must still run first so its larger request buffer limit applies to AI Gateway's BUFFERED
-			// extproc. AI Gateway is inserted after the buffer filter (position 2).
+			// Gateway. The ext_proc at index 0 precedes RBAC, but the buffer filter must still run first
+			// so its larger request buffer limit applies to AI Gateway's BUFFERED extproc. AI Gateway
+			// is inserted after RBAC (position 4).
 			name: "insert after buffer when ext_proc precedes buffer",
 			existingFilters: []*httpconnectionmanagerv3.HttpFilter{
 				{Name: "envoy.filters.http.ext_proc.apikey"},
@@ -191,13 +203,12 @@ func TestInsertAIGatewayExtProcFilter(t *testing.T) {
 				{Name: "envoy.filters.http.rbac"},
 				{Name: "envoy.filters.http.router"},
 			},
-			expectedPosition:    2,
+			expectedPosition:    4,
 			expectedFilterCount: 6,
 		},
 		{
-			// When the buffer filter already precedes the first ext_proc filter, AI Gateway is inserted
-			// right after the buffer filter (position 1), preserving Envoy Gateway's buffer-before-extproc
-			// ordering.
+			// When the buffer filter already precedes the first ext_proc filter, AI Gateway remains
+			// after RBAC (position 3), preserving Envoy Gateway's buffer-before-extproc ordering.
 			name: "insert after buffer when buffer precedes ext_proc",
 			existingFilters: []*httpconnectionmanagerv3.HttpFilter{
 				{Name: "envoy.filters.http.buffer"},
@@ -205,20 +216,18 @@ func TestInsertAIGatewayExtProcFilter(t *testing.T) {
 				{Name: "envoy.filters.http.rbac"},
 				{Name: "envoy.filters.http.router"},
 			},
-			expectedPosition:    1,
+			expectedPosition:    3,
 			expectedFilterCount: 5,
 		},
 		{
-			// Regression guard: with no buffer filter present, insertion behavior is unchanged and AI
-			// Gateway lands ahead of the first ext_proc filter (position 0).
-			name: "no buffer filter leaves ext_proc insertion unchanged",
+			// Without RBAC, preserve the existing first-ext_proc placement.
+			name: "fallback to canonical insertion without rbac",
 			existingFilters: []*httpconnectionmanagerv3.HttpFilter{
 				{Name: "envoy.filters.http.ext_proc.apikey"},
-				{Name: "envoy.filters.http.rbac"},
 				{Name: "envoy.filters.http.router"},
 			},
 			expectedPosition:    0,
-			expectedFilterCount: 4,
+			expectedFilterCount: 3,
 		},
 	}
 

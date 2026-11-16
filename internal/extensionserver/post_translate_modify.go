@@ -1221,10 +1221,9 @@ func shouldAIGatewayExtProcBeInserted(filters []*httpconnectionmanagerv3.HttpFil
 }
 
 // insertAIGatewayExtProcFilter inserts the AI Gateway extproc filter into the HTTP connection manager.
-//
-// The order is mostly simple: make sure that the AI Gateway extproc filter is the first extproc filter in the
-// standard Envoy Gateway order. See:
-// https://github.com/envoyproxy/gateway/blob/f1e6dab770fabc70d175237380eedfc1f9b1a9e5/internal/xds/translator/httpfilters.go#L93
+// When RBAC is configured, the AI Gateway extproc must run after it because the extproc can return local
+// responses (for example, the model catalog) without continuing through later filters. Without RBAC, retain
+// the standard Envoy Gateway insertion point so existing unauthenticated deployments remain compatible.
 //
 // There is one exception: the HTTP buffer filter (envoy.filters.http.buffer). In Envoy Gateway's canonical
 // filter order the buffer filter is placed *before* the ext_proc filters, so a user who raises the request
@@ -1238,12 +1237,21 @@ func shouldAIGatewayExtProcBeInserted(filters []*httpconnectionmanagerv3.HttpFil
 // placed ahead of the buffer filter, e.g. api-key auth, still runs before it.
 func insertAIGatewayExtProcFilter(mgr *httpconnectionmanagerv3.HttpConnectionManager, filter *httpconnectionmanagerv3.HttpFilter) error {
 	insertIndex := -1
-outer:
-	for i, existingFilter := range mgr.HttpFilters { // TODO: Maybe searching backwards is faster, but not sure if it's worth the complexity.
-		for _, prefix := range afterExtProcFilterPrefixes {
-			if strings.HasPrefix(existingFilter.Name, prefix) {
-				insertIndex = i
-				break outer
+	for i, existingFilter := range mgr.HttpFilters {
+		if strings.HasPrefix(existingFilter.Name, egv1a1.EnvoyFilterRBAC.String()) {
+			insertIndex = i + 1
+		}
+	}
+
+	// A route may have multiple RBAC policies. Place AI Gateway after all of them.
+	if insertIndex == -1 {
+	outer:
+		for i, existingFilter := range mgr.HttpFilters {
+			for _, prefix := range afterExtProcFilterPrefixes {
+				if strings.HasPrefix(existingFilter.Name, prefix) {
+					insertIndex = i
+					break outer
+				}
 			}
 		}
 	}

@@ -33,6 +33,12 @@ type QuotaPolicy struct {
 
 // QuotaPolicySpec specifies rules for computing token based costs of requests.
 type QuotaPolicySpec struct {
+	// AggregateUserBudget charges all priced models and target backends to one
+	// authenticated user's UTC calendar-month balance. Only verified JWT metadata
+	// is used for identity and tier; headers supplied by clients are never trusted.
+	// Requires a rate-limit service with UTC calendar-month support.
+	// +optional
+	AggregateUserBudget *AggregateUserBudget `json:"aggregateUserBudget,omitempty"`
 	// TargetRefs are the AIServiceBackend resources this QuotaPolicy is being attached to.
 	//
 	// The namespace of each target defaults to the QuotaPolicy's namespace when omitted.
@@ -52,7 +58,7 @@ type QuotaPolicySpec struct {
 	// TODO: Add changes in the extension server to support ServiceQuota enforcement.
 	//
 	// +optional
-	ServiceQuota ServiceQuotaDefinition `json:"serviceQuota,omitempty"`
+	ServiceQuota ServiceQuotaDefinition `json:"serviceQuota,omitempty,omitzero"`
 	// PerModelQuotas specifies quota for different models served by the AIServiceBackend(s) where this
 	// policy is attached.
 	//
@@ -63,6 +69,26 @@ type QuotaPolicySpec struct {
 	// +kubebuilder:validation:MaxItems=128
 	// +optional
 	PerModelQuotas []PerModelQuota `json:"perModelQuotas,omitempty"`
+}
+
+// AggregateUserBudget defines a shared micro-dollar balance per JWT issuer/subject.
+// Its name must be identical across environments sharing the Redis balance.
+type AggregateUserBudget struct {
+	// Name identifies the shared balance independently of policy, backend and model.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	Name string `json:"name"`
+	// JWTProvider is the verified payload key in envoy.filters.http.jwt_authn metadata.
+	// +kubebuilder:validation:MinLength=1
+	JWTProvider string `json:"jwtProvider"`
+	// TierClaim is the scalar claim selecting the user's allowance.
+	// +kubebuilder:validation:MinLength=1
+	TierClaim string `json:"tierClaim"`
+	// TierLimits maps approved tier claim values to monthly micro-dollar allowances.
+	// Tier is deliberately not part of the balance key, so changing tier does not reset usage.
+	// +kubebuilder:validation:MinProperties=1
+	// +kubebuilder:validation:MaxProperties=16
+	TierLimits map[string]uint32 `json:"tierLimits"`
 }
 
 type ServiceQuotaDefinition struct {
@@ -120,7 +146,7 @@ type QuotaDefinition struct {
 	// using the "BucketRules" configuration.
 	//
 	// +optional
-	DefaultBucket QuotaValue `json:"defaultBucket"`
+	DefaultBucket QuotaValue `json:"defaultBucket,omitempty,omitzero"`
 	// BucketRules are a list of client selectors and quotas. If a request
 	// matches multiple rules, each of their associated quotas get applied, so a
 	// single request might burn down the quota for multiple rules.

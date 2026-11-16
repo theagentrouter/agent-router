@@ -109,7 +109,11 @@ func (s *Server) maybeInjectQuotaRateLimiting(
 	// Patch routes and track which route configs had quota backends enabled.
 	quotaEnabledRoutes := make(map[string]bool)
 	for _, routeConfig := range routes {
-		if s.patchRoutesWithQuotaRateLimits(ctx, routeConfig, quotaBackendPolicies) {
+		patched, err := s.patchRoutesWithQuotaRateLimits(ctx, routeConfig, quotaBackendPolicies)
+		if err != nil {
+			return nil, err
+		}
+		if patched {
 			quotaEnabledRoutes[routeConfig.Name] = true
 		}
 	}
@@ -125,7 +129,15 @@ func (s *Server) maybeInjectQuotaRateLimiting(
 		}
 		if hasQuotaRoute {
 			if err := s.injectQuotaRateLimitFilterIntoListener(ln, translator.QuotaDomain); err != nil {
-				s.log.Error(err, "failed to inject quota rate limit filter into listener", "listener", ln.Name)
+				return nil, fmt.Errorf("inject quota filter into %s: %w", ln.Name, err)
+			}
+			for _, policy := range quotaPolicies {
+				if policy.Spec.AggregateUserBudget != nil {
+					if err := s.injectAggregateBudgetGuard(ln); err != nil {
+						return nil, err
+					}
+					break
+				}
 			}
 		}
 	}
@@ -344,7 +356,7 @@ func (s *Server) patchRoutesWithQuotaRateLimits(
 	ctx context.Context,
 	routeConfig *routev3.RouteConfiguration,
 	quotaBackendPolicies map[string][]aigv1a1.QuotaPolicy,
-) bool {
+) (bool, error) {
 	patched := false
 	for _, vh := range routeConfig.VirtualHosts {
 		for _, route := range vh.Routes {
@@ -369,7 +381,7 @@ func (s *Server) patchRoutesWithQuotaRateLimits(
 			patched = true
 		}
 	}
-	return patched
+	return patched, nil
 }
 
 // routeHasQuotaBackend checks whether any backend referenced by the route has
@@ -594,6 +606,7 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 
 	for i := range policies {
 		policy := &policies[i]
+		aggregateAdded := false
 		for _, pmq := range policy.Spec.PerModelQuotas {
 			if pmq.ModelName == nil {
 				continue
@@ -623,6 +636,27 @@ func enableQuotaRateLimitOnRoute(_ logr.Logger, route *routev3.Route, policies [
 				if !matched {
 					continue
 				}
+			}
+			if budget := policy.Spec.AggregateUserBudget; budget != nil {
+				if !aggregateAdded {
+					if _, configured := route.TypedPerFilterConfig[aggregateBudgetFilterName]; configured {
+						return fmt.Errorf("a route cannot have multiple aggregate user budget policies")
+					}
+					if len(rateLimitActions) != 0 || len(streamDoneActions) != 0 {
+						return fmt.Errorf("aggregate user budgets cannot overlap another quota policy on a route")
+					}
+					if err := configureAggregateBudget(route, policy); err != nil {
+						return err
+					}
+					entries := aggregateBudgetEntries(budget)
+					rateLimitActions = append(rateLimitActions, entries[0])
+					streamDoneActions = append(streamDoneActions, entries[1])
+					aggregateAdded = true
+				}
+				continue
+			}
+			if _, aggregateConfigured := route.TypedPerFilterConfig[aggregateBudgetFilterName]; aggregateConfigured {
+				return fmt.Errorf("aggregate user budgets cannot overlap another quota policy on a route")
 			}
 
 			if len(pmq.Quota.BucketRules) == 0 && pmq.Quota.DefaultBucket.Limit > 0 {

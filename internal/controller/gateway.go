@@ -593,7 +593,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 			}
 			// Inject QuotaPolicy cost expressions as LLMRequestCost entries so ext_proc
 			// computes and stores them in metadata for the HitsAddend to read.
-			c.injectQuotaPolicyCostExpressions(ctx, ec, injectedQuotaCosts, routeName)
+			c.injectQuotaPolicyCostExpressions(ctx, aiGatewayRoute, ec, injectedQuotaCosts, routeName)
 
 			for _, fc := range dedup {
 				ec.LLMRequestCosts = append(ec.LLMRequestCosts, fc)
@@ -1076,20 +1076,37 @@ func (c *GatewayController) getBSPSecretRefData(ctx context.Context, bsp *aigv1b
 // dynamic metadata for the rate limit filter's HitsAddend to read.
 func (c *GatewayController) injectQuotaPolicyCostExpressions(
 	ctx context.Context,
+	route *aigv1b1.AIGatewayRoute,
 	ec *filterapi.Config,
 	injectedQuotaCosts map[string]struct{},
 	routeName string,
 ) {
-	// Collect backend names and model name overrides on this route.
 	routeBackends := make(map[string]bool)
-	routeModels := make(map[string]bool)
 	for i := range ec.Backends {
-		backend := &ec.Backends[i]
-		if backend.AIServiceBackendName != "" {
-			routeBackends[backend.AIServiceBackendName] = true
+		if name := ec.Backends[i].AIServiceBackendName; name != "" {
+			routeBackends[name] = true
 		}
-		if backend.ModelNameOverride != "" {
-			routeModels[backend.ModelNameOverride] = true
+	}
+
+	// Collect the models this route can serve. If any no-override backend sits
+	// behind a rule whose models cannot be enumerated (catch-all, regex, or
+	// missing model header), the model set is unbounded.
+	routeModels := make(map[string]bool)
+	routeModelsUnbounded := false
+	for _, rule := range route.Spec.Rules {
+		for _, br := range rule.BackendRefs {
+			if br.ModelNameOverride != "" {
+				routeModels[br.ModelNameOverride] = true
+				continue
+			}
+			headerModels, ok := exactModelHeaderValues(rule.Matches)
+			if !ok {
+				routeModelsUnbounded = true
+				continue
+			}
+			for _, m := range headerModels {
+				routeModels[m] = true
+			}
 		}
 	}
 
@@ -1150,7 +1167,7 @@ func (c *GatewayController) injectQuotaPolicyCostExpressions(
 				continue
 			}
 			// Skip this PerModelQuota if the model is not served by this route.
-			if len(routeModels) > 0 && !routeModels[*pmq.ModelName] {
+			if !routeModelsUnbounded && len(routeModels) > 0 && !routeModels[*pmq.ModelName] {
 				continue
 			}
 			expr := "total_tokens"
@@ -1183,6 +1200,28 @@ func (c *GatewayController) injectQuotaPolicyCostExpressions(
 			}
 		}
 	}
+}
+
+// exactModelHeaderValues returns the model names a rule's matches are limited to.
+// ok is false unless every match (matches are ORed) pins the model header with an exact value.
+func exactModelHeaderValues(matches []aigv1b1.AIGatewayRouteRuleMatch) (models []string, ok bool) {
+	if len(matches) == 0 {
+		return nil, false
+	}
+	for _, match := range matches {
+		pinned := false
+		for _, header := range match.Headers {
+			if strings.EqualFold(string(header.Name), internalapi.ModelNameHeaderKeyDefault) &&
+				(header.Type == nil || *header.Type == gwapiv1.HeaderMatchExact) {
+				models = append(models, header.Value)
+				pinned = true
+			}
+		}
+		if !pinned {
+			return nil, false
+		}
+	}
+	return models, true
 }
 
 // QuotaCostMetadataKey is the dynamic metadata key used to store a
