@@ -101,7 +101,8 @@ editorconfig:
 # Object (deepcopy) generation runs separately per package to output to correct dirs.
 # CRDs are generated without field descriptions (maxDescLen=0) to keep the CRD chart's Helm release under
 # the 1 MiB Secret limit; the embedded Envoy Gateway types make the full schemas too large.
-# TODO: restore descriptions once the CRDs are installed with `helm template | kubectl apply --server-side`.
+# TODO: move the CRDs into a subchart's templates/ (Helm doesn't store subcharts in the release) and restore
+# descriptions.
 .PHONY: apigen
 apigen: ## Generate CRDs for the API defined in the api directory.
 	@echo "apigen => ./api/v1alpha1/... (object)"
