@@ -326,6 +326,11 @@ func (runCtx *runCmdContext) writeEnvoyResourcesAndRunExtProc(ctx context.Contex
 		s := &secretList.Items[i]
 		runCtx.mustClearSetOwnerReferencesAndStatusAndWriteObj(&s.TypeMeta, s)
 	}
+	// Envoy Gateway also needs user-defined Secrets, such as API keys referenced by SecurityPolicy.
+	for _, s := range secrets {
+		runCtx.mustClearSetOwnerReferencesAndStatusAndWriteObj(&s.TypeMeta, s)
+	}
+
 	for i := range backendTrafficPolicies.Items {
 		btp := &backendTrafficPolicies.Items[i]
 		runCtx.mustClearSetOwnerReferencesAndStatusAndWriteObj(&btp.TypeMeta, btp)
