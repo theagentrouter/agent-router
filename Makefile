@@ -101,8 +101,6 @@ editorconfig:
 # Object (deepcopy) generation runs separately per package to output to correct dirs.
 # CRD field descriptions are cut to 200 characters (maxDescLen=200) to keep the CRD chart's Helm release under
 # the 1 MiB Secret limit; the embedded Envoy Gateway types make the full schemas too large.
-# TODO: move the CRDs into a subchart's templates/ (Helm doesn't store subcharts in the release) and restore
-# full descriptions.
 .PHONY: apigen
 apigen: ## Generate CRDs for the API defined in the api directory.
 	@echo "apigen => ./api/v1alpha1/... (object)"
