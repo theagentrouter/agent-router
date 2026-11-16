@@ -63,6 +63,42 @@ func TestDecisionsRecorder_RecordRequest(t *testing.T) {
 				attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
 			},
 		},
+		{
+			name:   "redacts images in question instructions",
+			body:   `{"model":"gpt-6-luna","input":"candidate","questions":[{"type":"predicate","name":"match","instructions":[{"type":"input_text","text":"same as reference?"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]}]}`,
+			config: &openinference.TraceConfig{HideInputImages: true},
+			expected: []attribute.KeyValue{
+				attribute.String(openinference.LLMSystem, openinference.LLMSystemOpenAI),
+				attribute.String(openinference.SpanKind, openinference.SpanKindLLM),
+				attribute.String(openinference.LLMModelName, "gpt-6-luna"),
+				attribute.String(openinference.InputValue, `{"model":"gpt-6-luna","input":"candidate","questions":[{"type":"predicate","name":"match","instructions":[{"type":"input_text","text":"same as reference?"},{"type":"input_image","image_url":"__REDACTED__"}]}]}`),
+				attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
+			},
+		},
+		{
+			name:   "redacts images in tool outputs",
+			body:   `{"model":"gpt-6-luna","input":[{"type":"function_call","call_id":"c1","name":"fetch_photo","arguments":"{}"},{"type":"function_call_output","call_id":"c1","output":[{"type":"input_image","image_url":"https://example.com/photo.jpg"}]},{"type":"custom_tool_call_output","call_id":"c2","output":[{"type":"input_text","text":"scan"},{"type":"input_image","image_url":"data:image/png;base64,c2Vuc2l0aXZl"}]},{"type":"function_call_output","call_id":"c3","output":"plain text"}],"questions":[]}`,
+			config: &openinference.TraceConfig{HideInputImages: true},
+			expected: []attribute.KeyValue{
+				attribute.String(openinference.LLMSystem, openinference.LLMSystemOpenAI),
+				attribute.String(openinference.SpanKind, openinference.SpanKindLLM),
+				attribute.String(openinference.LLMModelName, "gpt-6-luna"),
+				attribute.String(openinference.InputValue, `{"model":"gpt-6-luna","input":[{"type":"function_call","call_id":"c1","name":"fetch_photo","arguments":"{}"},{"type":"function_call_output","call_id":"c1","output":[{"type":"input_image","image_url":"__REDACTED__"}]},{"type":"custom_tool_call_output","call_id":"c2","output":[{"type":"input_text","text":"scan"},{"type":"input_image","image_url":"__REDACTED__"}]},{"type":"function_call_output","call_id":"c3","output":"plain text"}],"questions":[]}`),
+				attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
+			},
+		},
+		{
+			name:   "redacts only long base64 images in question instructions",
+			body:   `{"model":"gpt-6-luna","input":"candidate","questions":[{"type":"predicate","instructions":"plain text"},{"type":"predicate","instructions":[{"type":"input_image","image_url":"data:image/png;base64,c2Vuc2l0aXZl"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]}]}`,
+			config: &openinference.TraceConfig{Base64ImageMaxLength: 10},
+			expected: []attribute.KeyValue{
+				attribute.String(openinference.LLMSystem, openinference.LLMSystemOpenAI),
+				attribute.String(openinference.SpanKind, openinference.SpanKindLLM),
+				attribute.String(openinference.LLMModelName, "gpt-6-luna"),
+				attribute.String(openinference.InputValue, `{"model":"gpt-6-luna","input":"candidate","questions":[{"type":"predicate","instructions":"plain text"},{"type":"predicate","instructions":[{"type":"input_image","image_url":"__REDACTED__"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]}]}`),
+				attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
+			},
+		},
 	}
 
 	for _, tc := range tests {

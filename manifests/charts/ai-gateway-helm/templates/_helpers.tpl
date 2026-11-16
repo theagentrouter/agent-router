@@ -54,11 +54,23 @@ Name of the Secret that holds the Files/Batch API id encryption seed.
 
 {{/*
 Name of the Secret that holds the MCP session encryption fallback seed.
+Uses fallback.existingSecret when set.
 The fullname is truncated first so the suffix is always kept; otherwise a long fullname would truncate this
 to the same name as the primary seed Secret.
 */}}
 {{- define "ai-gateway-helm.controller.mcpFallbackSessionEncryptionSecretName" -}}
+{{- if .Values.controller.mcp.sessionEncryption.fallback.existingSecret }}
+{{- .Values.controller.mcp.sessionEncryption.fallback.existingSecret }}
+{{- else }}
 {{- printf "%s-mcp-session-encryption-fallback" (include "ai-gateway-helm.controller.fullname" . | trunc 31 | trimSuffix "-") }}
+{{- end }}
+{{- end }}
+
+{{/*
+Whether a fallback seed is configured, either inline or through an existing Secret.
+*/}}
+{{- define "ai-gateway-helm.controller.mcpFallbackSessionEncryptionEnabled" -}}
+{{- if or .Values.controller.mcp.sessionEncryption.fallback.seed .Values.controller.mcp.sessionEncryption.fallback.existingSecret }}true{{- end }}
 {{- end }}
 
 {{/*
