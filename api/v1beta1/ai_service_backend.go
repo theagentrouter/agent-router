@@ -47,6 +47,7 @@ type AIServiceBackendList struct {
 // AIServiceBackendSpec details the AIServiceBackend configuration.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.headerValueFilters) || self.schema.name == 'GCPAnthropic' || self.schema.name == 'AWSAnthropic'",message="headerValueFilters is only honored by GCPAnthropic and AWSAnthropic backends"
+// +kubebuilder:validation:XValidation:rule="!has(self.promptCaching) || self.schema.name == 'GCPAnthropic' || self.schema.name == 'AWSAnthropic'",message="promptCaching is only honored by GCPAnthropic and AWSAnthropic backends"
 type AIServiceBackendSpec struct {
 	// APISchema specifies the API schema of the output format of requests from
 	// Envoy that this AIServiceBackend can accept as incoming requests.
@@ -91,6 +92,46 @@ type AIServiceBackendSpec struct {
 	// +kubebuilder:validation:MaxItems=16
 	HeaderValueFilters []HTTPHeaderValueFilter `json:"headerValueFilters,omitempty"`
 
+	// PromptCaching configures how the gateway marks prompt cache breakpoints in requests sent to
+	// this backend.
+	//
+	// Only GCPAnthropic and AWSAnthropic backends honor this, and today only for requests in the
+	// OpenAI chat completions format. Setting it on a backend with any other schema is rejected.
+	// +optional
+	PromptCaching *PromptCaching `json:"promptCaching,omitempty"`
+
 	// TODO: maybe add backend-level LLMRequestCost configuration that overrides the AIGatewayRoute-level LLMRequestCost.
 	// 	That may be useful for the backend that has a different cost calculation logic.
 }
+
+// PromptCaching configures how the gateway marks prompt cache breakpoints in requests to a backend.
+type PromptCaching struct {
+	// CachePoints selects whether the gateway adds cache breakpoints to requests. Defaults to None.
+	//
+	// With None, requests are forwarded with only the breakpoints the client set.
+	//
+	// With Automatic, a request that has no `cache_control` on any tool, system prompt or message
+	// content gets an ephemeral breakpoint at the end of the tools, at the end of the system
+	// prompt and on the last content block of the last user turn, skipping any of the three the
+	// request does not have. That is at most three breakpoints, within the provider's limit of four.
+	// A request that already sets a breakpoint anywhere is forwarded unchanged.
+	//
+	// Cache writes are billed above the regular input token price, so Automatic pays off when
+	// requests repeat a long prefix, as multi-turn conversations and agent loops do.
+	//
+	// +optional
+	// +kubebuilder:default=None
+	CachePoints PromptCachePointsMode `json:"cachePoints,omitempty"`
+}
+
+// PromptCachePointsMode specifies whether the gateway adds prompt cache breakpoints to requests.
+//
+// +kubebuilder:validation:Enum=None;Automatic
+type PromptCachePointsMode string
+
+const (
+	// PromptCachePointsModeNone adds no breakpoints. Breakpoints set by the client are forwarded.
+	PromptCachePointsModeNone PromptCachePointsMode = "None"
+	// PromptCachePointsModeAutomatic adds breakpoints to requests that do not set any.
+	PromptCachePointsModeAutomatic PromptCachePointsMode = "Automatic"
+)

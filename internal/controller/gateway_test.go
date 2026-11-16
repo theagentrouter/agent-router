@@ -453,6 +453,7 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 					// Header name should be normalized to lowercase in the filter config.
 					{Name: "X-Foo", Value: "foo"},
 				}, Remove: []string{"x-Bar"}},
+				PromptCaching: &aigv1b1.PromptCaching{CachePoints: aigv1b1.PromptCachePointsModeAutomatic},
 			},
 		},
 		{
@@ -558,6 +559,7 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 		require.Equal(t, "x-foo", fc.Backends[0].HeaderMutation.Set[0].Name)
 		require.Equal(t, "foo", fc.Backends[0].HeaderMutation.Set[0].Value)
 		require.Equal(t, "x-bar", fc.Backends[0].HeaderMutation.Remove[0])
+		require.True(t, fc.Backends[0].AutomaticCachePoints)
 	}
 }
 
@@ -3540,6 +3542,23 @@ func Test_headerValueFiltersToFilterAPI(t *testing.T) {
 	} {
 		t.Run(strconv.Itoa(i)+"/"+tc.name, func(t *testing.T) {
 			require.Equal(t, tc.expected, headerValueFiltersToFilterAPI(tc.in))
+		})
+	}
+}
+
+func Test_automaticCachePoints(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		in       *aigv1b1.PromptCaching
+		expected bool
+	}{
+		{name: "nil", in: nil, expected: false},
+		{name: "empty mode", in: &aigv1b1.PromptCaching{}, expected: false},
+		{name: "none", in: &aigv1b1.PromptCaching{CachePoints: aigv1b1.PromptCachePointsModeNone}, expected: false},
+		{name: "automatic", in: &aigv1b1.PromptCaching{CachePoints: aigv1b1.PromptCachePointsModeAutomatic}, expected: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, automaticCachePoints(tc.in))
 		})
 	}
 }

@@ -226,6 +226,11 @@ func headerValueFiltersToFilterAPI(filters []aigv1b1.HTTPHeaderValueFilter) []fi
 	return ret
 }
 
+// automaticCachePoints reports whether the backend asks the gateway to add prompt cache breakpoints.
+func automaticCachePoints(p *aigv1b1.PromptCaching) bool {
+	return p != nil && p.CachePoints == aigv1b1.PromptCachePointsModeAutomatic
+}
+
 // bodyMutationToFilterAPI converts an aigv1b1.HTTPBodyMutation to filterapi.HTTPBodyMutation.
 func bodyMutationToFilterAPI(m *aigv1b1.HTTPBodyMutation) *filterapi.HTTPBodyMutation {
 	if m == nil {
@@ -557,6 +562,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 					b.Schema = schemaToFilterAPI(backendObj.Spec.APISchema)
 					b.HeaderValueFilters = headerValueFiltersToFilterAPI(backendObj.Spec.HeaderValueFilters)
+					b.AutomaticCachePoints = automaticCachePoints(backendObj.Spec.PromptCaching)
 				}
 
 				if bsp != nil {

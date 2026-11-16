@@ -238,6 +238,9 @@ type Backend struct {
 	// HeaderValueFilters filter individual values out of multi-valued request headers before sending
 	// the request to the backend. Optional.
 	HeaderValueFilters []HTTPHeaderValueFilter `json:"headerValueFilters,omitempty"`
+	// AutomaticCachePoints adds prompt cache breakpoints to requests that do not set any. It
+	// corresponds to PromptCaching.CachePoints set to Automatic in api/v1beta1. Optional.
+	AutomaticCachePoints bool `json:"automaticCachePoints,omitempty"`
 }
 
 // BackendAuth corresponds partially to BackendSecurityPolicy in api/v1alpha1/api.go.
