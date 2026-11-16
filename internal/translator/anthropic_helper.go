@@ -622,6 +622,10 @@ func getThinkingConfigParamUnion(tu *openai.ThinkingUnion) *anthropic.ThinkingCo
 			Type:    constant.Adaptive(tu.OfAdaptive.Type),
 			Display: anthropic.ThinkingConfigAdaptiveDisplay(tu.OfAdaptive.Display),
 		}
+	case tu.OfBetweenTools != nil:
+		result.OfBetweenTools = &anthropic.ThinkingConfigBetweenToolsParam{
+			Type: constant.BetweenTools(tu.OfBetweenTools.Type),
+		}
 	}
 
 	return result

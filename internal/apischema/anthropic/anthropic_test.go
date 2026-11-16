@@ -201,6 +201,11 @@ func TestMessageContent_MessagesStreamChunk(t *testing.T) {
 			jsonStr: ` {"type":"message_stop"}`,
 		},
 		{
+			name:    "ping",
+			exp:     MessagesStreamChunk{Type: "ping"},
+			jsonStr: `{"type":"ping"}`,
+		},
+		{
 			name:    "invalid event",
 			jsonStr: `abcdes`,
 			wantErr: true,
@@ -952,6 +957,11 @@ func TestThinking_UnmarshalJSON(t *testing.T) {
 			want:    Thinking{Adaptive: &ThinkingAdaptive{Type: "adaptive"}},
 		},
 		{
+			name:    "between_tools",
+			jsonStr: `{"type":"between_tools"}`,
+			want:    Thinking{BetweenTools: &ThinkingBetweenTools{Type: "between_tools"}},
+		},
+		{
 			name:    "enabled with display",
 			jsonStr: `{"type":"enabled","budget_tokens":2048,"display":"omitted"}`,
 			want:    Thinking{Enabled: &ThinkingEnabled{Type: "enabled", BudgetTokens: 2048, Display: "omitted"}},
@@ -1008,6 +1018,11 @@ func TestThinking_MarshalJSON(t *testing.T) {
 			name: "adaptive",
 			th:   Thinking{Adaptive: &ThinkingAdaptive{Type: "adaptive"}},
 			want: `{"type":"adaptive"}`,
+		},
+		{
+			name: "between_tools",
+			th:   Thinking{BetweenTools: &ThinkingBetweenTools{Type: "between_tools"}},
+			want: `{"type":"between_tools"}`,
 		},
 		{
 			name: "enabled with display",

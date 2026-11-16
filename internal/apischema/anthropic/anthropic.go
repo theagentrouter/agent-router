@@ -1285,9 +1285,10 @@ type (
 	// This is not to be confused with the thinking block that is part of the response message's contentblock
 	// https://platform.claude.com/docs/en/api/messages#body-thinking
 	Thinking struct {
-		Enabled  *ThinkingEnabled
-		Disabled *ThinkingDisabled
-		Adaptive *ThinkingAdaptive
+		Enabled      *ThinkingEnabled
+		Disabled     *ThinkingDisabled
+		Adaptive     *ThinkingAdaptive
+		BetweenTools *ThinkingBetweenTools
 	}
 
 	// ThinkingEnabled enables extended thinking with a token budget.
@@ -1310,13 +1311,21 @@ type (
 		Type    string `json:"type"`              // Always "adaptive".
 		Display string `json:"display,omitempty"` // "summarized" or "omitted".
 	}
+
+	// ThinkingBetweenTools turns off up-front thinking while keeping progress updates between tool calls.
+	// It takes no other field. Only Claude Sonnet 5.5 accepts it, at effort high or below.
+	// https://platform.claude.com/docs/en/build-with-claude/thinking
+	ThinkingBetweenTools struct {
+		Type string `json:"type"` // Always "between_tools".
+	}
 )
 
 // Thinking config type constants used by Thinking.
 const (
-	thinkingConfigTypeEnabled  = "enabled"
-	thinkingConfigTypeDisabled = "disabled"
-	thinkingConfigTypeAdaptive = "adaptive"
+	thinkingConfigTypeEnabled      = "enabled"
+	thinkingConfigTypeDisabled     = "disabled"
+	thinkingConfigTypeAdaptive     = "adaptive"
+	thinkingConfigTypeBetweenTools = "between_tools"
 )
 
 func (t *Thinking) UnmarshalJSON(data []byte) error {
@@ -1343,6 +1352,12 @@ func (t *Thinking) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("failed to unmarshal thinking adaptive: %w", err)
 		}
 		t.Adaptive = &thinking
+	case thinkingConfigTypeBetweenTools:
+		var thinking ThinkingBetweenTools
+		if err := json.Unmarshal(data, &thinking); err != nil {
+			return fmt.Errorf("failed to unmarshal thinking between_tools: %w", err)
+		}
+		t.BetweenTools = &thinking
 	default:
 		// Ignore unknown types for forward compatibility.
 		return nil
@@ -1359,6 +1374,9 @@ func (t *Thinking) MarshalJSON() ([]byte, error) {
 	}
 	if t.Adaptive != nil {
 		return json.Marshal(t.Adaptive)
+	}
+	if t.BetweenTools != nil {
+		return json.Marshal(t.BetweenTools)
 	}
 	return nil, fmt.Errorf("thinking config must have a defined type")
 }
@@ -1639,6 +1657,7 @@ const (
 	MessagesStreamChunkTypeContentBlockStart MessagesStreamChunkType = "content_block_start"
 	MessagesStreamChunkTypeContentBlockDelta MessagesStreamChunkType = "content_block_delta"
 	MessagesStreamChunkTypeContentBlockStop  MessagesStreamChunkType = "content_block_stop"
+	MessagesStreamChunkTypePing              MessagesStreamChunkType = "ping"
 )
 
 type (
@@ -1738,6 +1757,8 @@ func (m *MessagesStreamChunk) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("failed to unmarshal content block stop in stream event: %w", err)
 		}
 		m.ContentBlockStop = &contentBlockStop
+	case MessagesStreamChunkTypePing:
+		// Keepalive event with no payload, accepted so it is forwarded rather than treated as unknown.
 	default:
 		return fmt.Errorf("unknown stream event type: %s", typ)
 	}

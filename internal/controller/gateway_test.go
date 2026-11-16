@@ -133,6 +133,8 @@ func newTestGatewayController(c client.Client, kube kubernetes.Interface, logger
 		MCPSessionEncryptionIterations:         100,
 		MCPFallbackSessionEncryptionSeed:       "fallback",
 		MCPFallbackSessionEncryptionIterations: 200,
+		FileIDEncryptionSeed:                   "file-seed",
+		FileIDEncryptionIterations:             100,
 	}
 	return NewGatewayController(c, kube, logger, ns, standAlone, uuidFn, opts, extProcAsSideCar)
 }
@@ -1311,6 +1313,16 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 				},
 			},
 		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "openai-credentials", Namespace: namespace},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+				OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{
+					Organization: "org-123",
+					Project:      "proj_456",
+				},
+			},
+		},
 	} {
 		require.NoError(t, fakeClient.Create(t.Context(), bsp))
 	}
@@ -1338,6 +1350,10 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: rotators.GetBSPSecretName("gcp-wif"), Namespace: namespace},
 			StringData: map[string]string{rotators.GCPAccessTokenKey: "thisisgcpcredentials"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: rotators.GetBSPSecretName("openai-credentials"), Namespace: namespace},
+			StringData: map[string]string{rotators.OpenAIAccessTokenKey: "thisisopenaicredentials"},
 		},
 	} {
 		_, err := kube.CoreV1().Secrets(namespace).Create(t.Context(), s, metav1.CreateOptions{})
@@ -1400,6 +1416,16 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			bspName: "bsp-anthropic-apikey",
 			exp: &filterapi.BackendAuth{
 				AnthropicAPIKey: &filterapi.AnthropicAPIKeyAuth{Key: "thisisapikey"},
+			},
+		},
+		{
+			bspName: "openai-credentials",
+			exp: &filterapi.BackendAuth{
+				OpenAIAuth: &filterapi.OpenAIAuth{
+					AccessToken:  "thisisopenaicredentials",
+					Organization: "org-123",
+					Project:      "proj_456",
+				},
 			},
 		},
 	} {
@@ -1499,6 +1525,18 @@ func TestGatewayController_bspToFilterAPIBackendAuth_ErrorCases(t *testing.T) {
 				},
 			},
 			expectedError: "failed to get secret test-namespace/missing-aws-secret",
+		},
+		{
+			name:    "openai credentials with missing generated secret",
+			bspName: "openai-bsp",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: "openai-bsp", Namespace: namespace},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type:              aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+					OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{},
+				},
+			},
+			expectedError: "failed to get secret test-namespace/ai-eg-bsp-openai-bsp",
 		},
 	}
 
@@ -1725,6 +1763,19 @@ func TestResolveCredentialOverride(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, "x-aigw-gcp-access-token", result.DynamicMetadataKey)
+	})
+
+	t.Run("fromRequestHeaders default header for OpenAICredentials", func(t *testing.T) {
+		result, err := resolveCredentialOverride(
+			aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+			&aigv1b1.BackendSecurityPolicyCredentialOverride{
+				FromRequestHeaders: &aigv1b1.CredentialOverrideFromRequestHeaders{},
+			},
+			true,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "x-aigw-openai-access-token", result.HeaderName)
+		require.Equal(t, []string{"x-aigw-openai-access-token"}, result.InputHeadersToRemove)
 	})
 
 	t.Run("fromRequestHeaders for AWSCredentials derives three headers from a prefix", func(t *testing.T) {
@@ -2404,7 +2455,7 @@ func TestGatewayController_annotateGatewayPods(t *testing.T) {
 		require.Equal(t, "some-uuid", deployment.Spec.Template.Annotations[aigatewayUUIDAnnotationKey])
 
 		// Simulate new pod created after rollout with -mcpAddr present
-		pod.Spec.InitContainers[0].Args = []string{"-logLevel", logLevel, "-mcpAddr", ":9856", "-adminPort", "1064"}
+		pod.Spec.InitContainers[0].Args = []string{"-logLevel", logLevel, "-mcpAddr", internalapi.MCPProxyAddr, "-adminPort", "1064"}
 		pod, err = kube.CoreV1().Pods(egNamespace).Update(t.Context(), pod, metav1.UpdateOptions{})
 		require.NoError(t, err)
 
@@ -2750,10 +2801,34 @@ func TestGatewayController_checkPodHasSideCar(t *testing.T) {
 	t.Run("container mode: needMCP with -mcpAddr keeps sidecar", func(t *testing.T) {
 		c := newTestGatewayController(fakeClient, kube, ctrl.Log, egNamespace, image, logLevel, false, nil, false)
 		pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{
-			extProcContainer("-logLevel", logLevel, "-mcpAddr", ":808"),
+			extProcContainer("-logLevel", logLevel, "-mcpAddr", internalapi.MCPProxyAddr),
 		}}}
 		hasSideCar := c.checkPodHasSideCar(pod, true, c.image)
-		require.True(t, hasSideCar, "with -mcpAddr present the sidecar is up to date")
+		require.True(t, hasSideCar, "with the desired -mcpAddr the sidecar is up to date")
+	})
+
+	// Pods created before the MCP proxy was bound to loopback listen on every interface. They must
+	// be rolled, otherwise the proxy stays reachable from other pods until something else restarts them.
+	t.Run("container mode: needMCP with all-interfaces -mcpAddr triggers rollout", func(t *testing.T) {
+		c := newTestGatewayController(fakeClient, kube, ctrl.Log, egNamespace, image, logLevel, false, nil, false)
+		pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{
+			extProcContainer("-logLevel", logLevel, "-mcpAddr", ":9856"),
+		}}}
+		hasSideCar := c.checkPodHasSideCar(pod, true, c.image)
+		require.False(t, hasSideCar, "a non-loopback -mcpAddr must trigger rollout")
+	})
+
+	t.Run("sidecar mode: needMCP with all-interfaces -mcpAddr triggers rollout", func(t *testing.T) {
+		c := newTestGatewayController(fakeClient, kube, ctrl.Log, egNamespace, image, logLevel, false, nil, true)
+		pod := &corev1.Pod{Spec: corev1.PodSpec{InitContainers: []corev1.Container{
+			extProcContainer("-logLevel", logLevel, "-mcpAddr", ":9856"),
+		}}}
+		hasSideCar := c.checkPodHasSideCar(pod, true, c.image)
+		require.False(t, hasSideCar, "a non-loopback -mcpAddr must trigger rollout")
+
+		pod.Spec.InitContainers[0].Args = []string{"-logLevel", logLevel, "-mcpAddr", internalapi.MCPProxyAddr}
+		hasSideCar = c.checkPodHasSideCar(pod, true, c.image)
+		require.True(t, hasSideCar, "with the desired -mcpAddr the sidecar is up to date")
 	})
 
 	t.Run("container mode: logLevel mismatch triggers rollout", func(t *testing.T) {
@@ -3612,6 +3687,15 @@ func TestGatewayController_reconcileFilterMCPConfigSecret(t *testing.T) {
 	require.Equal(t, "mcp-uuid", cfg.UUID)
 	require.NotNil(t, cfg.MCPConfig)
 	require.Equal(t, "http://127.0.0.1:"+strconv.Itoa(internalapi.MCPBackendListenerPort), cfg.MCPConfig.BackendListenerAddr)
+	// The MCP session encryption config is delivered through the filter config Secrets.
+	require.Equal(t, &filterapi.MCPSessionEncryption{
+		Seed:               "seed",
+		Iterations:         100,
+		FallbackSeed:       "fallback",
+		FallbackIterations: 200,
+	}, cfg.MCPConfig.SessionEncryption)
+	// The file id encryption config is delivered through the filter config Secrets as well.
+	require.Equal(t, &filterapi.FileIDEncryption{Seed: "file-seed", Iterations: 100}, cfg.FileIDEncryption)
 }
 
 func TestGatewayController_writeFilterConfigBundleShards(t *testing.T) {
@@ -3989,6 +4073,72 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 		require.True(t, effective)
 		require.Len(t, mc.Routes, 1)
 		require.Equal(t, []string{"x-mcp-client-id"}, mc.Routes[0].ForwardHeaders)
+	})
+}
+
+func Test_mcpConfig_OAuth(t *testing.T) {
+	newRoute := func(sp *aigv1b1.MCPRouteSecurityPolicy) []aigv1b1.MCPRoute {
+		return []aigv1b1.MCPRoute{{
+			ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns"},
+			Spec: aigv1b1.MCPRouteSpec{
+				BackendRefs:    []aigv1b1.MCPRouteBackendRef{{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "b"}}},
+				SecurityPolicy: sp,
+			},
+		}}
+	}
+
+	t.Run("full metadata is propagated to the proxy", func(t *testing.T) {
+		mc, effective := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+			OAuth: &aigv1b1.MCPRouteOAuth{
+				Issuer: "https://auth.example.com",
+				ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+					ResourceName:                      ptr.To("My MCP Tools"),
+					ScopesSupported:                   []string{"read", "write"},
+					ResourceSigningAlgValuesSupported: []string{"RS256"},
+					ResourceDocumentation:             ptr.To("https://docs.example.com"),
+					ResourcePolicyURI:                 ptr.To("https://policy.example.com"),
+				},
+			},
+		}))
+		require.True(t, effective)
+		require.Equal(t, &filterapi.MCPRouteOAuthProtectedResourceMetadata{
+			Issuer:                            "https://auth.example.com",
+			ResourceName:                      "My MCP Tools",
+			ScopesSupported:                   []string{"read", "write"},
+			ResourceSigningAlgValuesSupported: []string{"RS256"},
+			ResourceDocumentation:             "https://docs.example.com",
+			ResourcePolicyURI:                 "https://policy.example.com",
+		}, mc.Routes[0].ProtectedResourceMetadata)
+		// Resource is left empty so the proxy derives it per request.
+		require.Empty(t, mc.Routes[0].ProtectedResourceMetadata.Resource)
+	})
+
+	t.Run("an explicitly configured resource is carried through as an override", func(t *testing.T) {
+		mc, _ := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+			OAuth: &aigv1b1.MCPRouteOAuth{
+				Issuer: "https://auth.example.com",
+				ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+					Resource: "https://api.example.com/mcp",
+				},
+			},
+		}))
+		require.Equal(t, "https://api.example.com/mcp", mc.Routes[0].ProtectedResourceMetadata.Resource)
+	})
+
+	t.Run("OAuth without authorization rules still serves metadata", func(t *testing.T) {
+		// The metadata document must be served whenever OAuth is configured, independently of
+		// whether the route also defines authorization rules.
+		mc, _ := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+			OAuth: &aigv1b1.MCPRouteOAuth{Issuer: "https://auth.example.com"},
+		}))
+		require.Nil(t, mc.Routes[0].Authorization)
+		require.NotNil(t, mc.Routes[0].ProtectedResourceMetadata)
+		require.Equal(t, "https://auth.example.com", mc.Routes[0].ProtectedResourceMetadata.Issuer)
+	})
+
+	t.Run("no OAuth configured", func(t *testing.T) {
+		mc, _ := mcpConfig(newRoute(nil))
+		require.Nil(t, mc.Routes[0].ProtectedResourceMetadata)
 	})
 }
 
