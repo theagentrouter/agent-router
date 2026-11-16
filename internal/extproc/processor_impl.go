@@ -994,8 +994,8 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 		out, _ := costs.OutputTokens()
 		total, _ := costs.TotalTokens()
 		reasoning, _ := costs.ReasoningTokens()
-		units, _ := costs.BillableUnits()
-		cost, err = llmcostcel.EvaluateProgramWithBillableUnits(
+		billableUnits, _ := costs.BillableUnits()
+		cost, err = llmcostcel.EvaluateProgram(
 			celProg,
 			requestHeaders[internalapi.ModelNameHeaderKeyDefault],
 			backendName,
@@ -1006,7 +1006,7 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 			out,
 			total,
 			reasoning,
-			units,
+			billableUnits,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("failed to evaluate CEL expression: %w", err)

@@ -62,7 +62,7 @@ func NewProgram(expr string) (prog cel.Program, err error) {
 	}
 
 	// Sanity check by evaluating the expression with some dummy values.
-	_, err = EvaluateProgram(prog, "dummy", "dummy", "dummy", 0, 0, 0, 0, 0, 0)
+	_, err = EvaluateProgram(prog, "dummy", "dummy", "dummy", 0, 0, 0, 0, 0, 0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to evaluate CEL expression: %w", err)
 	}
@@ -70,12 +70,7 @@ func NewProgram(expr string) (prog cel.Program, err error) {
 }
 
 // EvaluateProgram evaluates the given CEL program with the given variables.
-func EvaluateProgram(prog cel.Program, modelName, backend, routeName string, inputTokens, cachedInputTokens, cacheCreationInputTokens, outputTokens, totalTokens, reasoningTokens uint32) (uint64, error) {
-	return EvaluateProgramWithBillableUnits(prog, modelName, backend, routeName, inputTokens, cachedInputTokens, cacheCreationInputTokens, outputTokens, totalTokens, reasoningTokens, 0)
-}
-
-// EvaluateProgramWithBillableUnits is EvaluateProgram with the provider-reported billable units set.
-func EvaluateProgramWithBillableUnits(prog cel.Program, modelName, backend, routeName string, inputTokens, cachedInputTokens, cacheCreationInputTokens, outputTokens, totalTokens, reasoningTokens uint32, billableUnits float64) (uint64, error) {
+func EvaluateProgram(prog cel.Program, modelName, backend, routeName string, inputTokens, cachedInputTokens, cacheCreationInputTokens, outputTokens, totalTokens, reasoningTokens uint32, billableUnits float64) (uint64, error) {
 	out, _, err := prog.Eval(map[string]any{
 		celModelNameKey:                modelName,
 		celBackendKey:                  backend,

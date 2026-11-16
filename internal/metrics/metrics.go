@@ -137,7 +137,8 @@ func NewMetricsFactory(meter metric.Meter, requestHeaderLabelMapping map[string]
 	return &metricsImplFactory{metrics: newGenAI(meter), requestHeaderAttributeMapping: requestHeaderLabelMapping, operation: string(operation)}
 }
 
-// TokenUsage represents the token usage reported usually by the backend API in the response body.
+// TokenUsage represents the token usage reported usually by the backend API in the response body,
+// along with provider-reported billable units that are not tokens, such as fal's billable units.
 //
 // Fields are not exported to control the optionality of each field via the accompanying boolean flags.
 type TokenUsage struct {
@@ -266,7 +267,7 @@ func (u *TokenUsage) AddReasoningTokens(tokens uint32) {
 	u.reasoningTokens += tokens
 }
 
-// IsZero reports whether no token usage field has been set.
+// IsZero reports whether no usage field has been set.
 func (u *TokenUsage) IsZero() bool {
 	return !u.inputTokenSet && !u.outputTokenSet && !u.totalTokenSet &&
 		!u.cachedInputTokenSet && !u.cacheCreationInputTokenSet && !u.reasoningTokenSet && !u.billableUnitsSet

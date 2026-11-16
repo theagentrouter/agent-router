@@ -139,7 +139,7 @@ type LLMRequestCost struct {
 	//	* output_tokens: the number of output tokens. Type: unsigned integer.
 	//	* total_tokens: the total number of tokens. Type: unsigned integer.
 	//	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.
-	//	* billable_units: billing units the provider reports (fal: X-Fal-Billable-Units), or 0. Type: double.
+	//	* billable_units: billing units the provider reports, in the provider's own unit (fal: X-Fal-Billable-Units), or 0. Type: double. A cost expression must evaluate to an unsigned integer, so cast it, e.g. uint(billable_units), which truncates; the unit depends on the provider, so branch on backend.
 	//
 	// For example, the following expressions are valid:
 	//
@@ -148,6 +148,7 @@ type LLMRequestCost struct {
 	//	* "backend == 'bar.default' ?  (input_tokens - cached_input_tokens) + cached_input_tokens * 0.1 + cache_creation_input_tokens * 1.25 + output_tokens : total_tokens"
 	//	* "input_tokens + output_tokens + total_tokens"
 	//	* "input_tokens * output_tokens"
+	//	* "backend == 'fal.default' ? uint(billable_units * 1000000.0) : total_tokens"
 	//
 	// +optional
 	CEL *string `json:"cel,omitempty"`
