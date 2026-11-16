@@ -28,47 +28,98 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: |-
+          QuotaPolicy specifies token quota configuration for inference services.
+          Generates rate limit configuration and tracks quota usage.
         properties:
           apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
             type: string
           kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
             type: string
           metadata:
             type: object
           spec:
+            description: QuotaPolicySpec specifies rules for computing token based
+              costs of requests.
             properties:
               perModelQuotas:
+                description: |-
+                  PerModelQuotas specifies quota for different models served by the AIServiceBackend(s) where this
+                  policy is attached.
                 items:
                   properties:
                     modelName:
+                      description: |-
+                        Model name for which the quota is specified.
+                        This must match the ModelNameOverride set in the AIGatewayRoute's BackendRef
+                        for the quota policy to apply to that backend.
                       minLength: 1
                       type: string
                     quota:
+                      description: Expression for computing request cost and rules
+                        for matching requests to quota buckets.
                       properties:
                         bucketRules:
+                          description: BucketRules are a list of client selectors
+                            and quotas.
                           items:
                             properties:
                               clientSelectors:
+                                description: |-
+                                  ClientSelectors holds the list of conditions to select
+                                  specific clients using attributes from the traffic flow.
                                 items:
+                                  description: |-
+                                    RateLimitSelectCondition specifies the attributes within the traffic flow that can
+                                    be used to select a subset of clients to be ratelimited.
                                   properties:
                                     headers:
+                                      description: |-
+                                        Headers is a list of request headers to match. Multiple header values are ANDed together,
+                                        meaning, a request MUST match all the specified headers.
                                       items:
+                                        description: HeaderMatch defines the match
+                                          attributes within the HTTP Headers of the
+                                          request.
                                         properties:
                                           invert:
                                             default: false
+                                            description: |-
+                                              Invert specifies whether the value match result will be inverted.
+                                              Do not set this field when Type="Distinct", implying matching on any/all unique
+                                              values within the header.
                                             type: boolean
                                           name:
+                                            description: |-
+                                              Name of the HTTP header.
+                                              The header name is case-insensitive unless PreserveHeaderCase is set to true.
+                                              For example, "Foo" and "foo" are considered the same header.
                                             maxLength: 256
                                             minLength: 1
                                             type: string
                                           type:
                                             default: Exact
+                                            description: Type specifies how to match
+                                              against the value of the header.
                                             enum:
                                             - Exact
                                             - RegularExpression
                                             - Distinct
                                             type: string
                                           value:
+                                            description: |-
+                                              Value within the HTTP header.
+                                              Do not set this field when Type="Distinct", implying matching on any/all unique
+                                              values within the header.
                                             maxLength: 1024
                                             type: string
                                         required:
@@ -77,12 +128,21 @@ spec:
                                       maxItems: 128
                                       type: array
                                     methods:
+                                      description: |-
+                                        Methods is a list of request methods to match. Multiple method values are ORed together,
+                                        meaning, a request can match any one of the specified methods. If not specified, it matches all methods.
                                       items:
+                                        description: MethodMatch defines the matching
+                                          criteria for the HTTP method of a request.
                                         properties:
                                           invert:
                                             default: false
+                                            description: Invert specifies whether
+                                              the value match result will be inverted.
                                             type: boolean
                                           value:
+                                            description: Value specifies the HTTP
+                                              method.
                                             enum:
                                             - GET
                                             - HEAD
@@ -99,12 +159,19 @@ spec:
                                         type: object
                                       type: array
                                     path:
+                                      description: |-
+                                        Path is the request path to match.
+                                        Support Exact, PathPrefix and RegularExpression match types.
                                       properties:
                                         invert:
                                           default: false
+                                          description: Invert specifies whether the
+                                            value match result will be inverted.
                                           type: boolean
                                         type:
                                           default: PathPrefix
+                                          description: Type specifies how to match
+                                            against the value of the path.
                                           enum:
                                           - Exact
                                           - PathPrefix
@@ -112,29 +179,47 @@ spec:
                                           type: string
                                         value:
                                           default: /
+                                          description: Value specifies the HTTP path.
                                           maxLength: 1024
                                           type: string
                                       required:
                                       - value
                                       type: object
                                     queryParams:
+                                      description: |-
+                                        QueryParams is a list of query parameters to match. Multiple query parameter values are ANDed together,
+                                        meaning, a request MUST match all the specified query parameters.
                                       items:
+                                        description: QueryParamMatch defines the match
+                                          attributes within the query parameters of
+                                          the request.
                                         properties:
                                           invert:
                                             default: false
+                                            description: |-
+                                              Invert specifies whether the value match result will be inverted.
+                                              Do not set this field when Type="Distinct", implying matching on any/all unique
+                                              values within the query parameter.
                                             type: boolean
                                           name:
+                                            description: Name of the query parameter.
                                             maxLength: 256
                                             minLength: 1
                                             type: string
                                           type:
                                             default: Exact
+                                            description: Type specifies how to match
+                                              against the value of the query parameter.
                                             enum:
                                             - Exact
                                             - RegularExpression
                                             - Distinct
                                             type: string
                                           value:
+                                            description: |-
+                                              Value of the query parameter.
+                                              Do not set this field when Type="Distinct", implying matching on any/all unique
+                                              values within the query parameter.
                                             maxLength: 1024
                                             type: string
                                         required:
@@ -143,9 +228,14 @@ spec:
                                       maxItems: 16
                                       type: array
                                     sourceCIDR:
+                                      description: SourceCIDR is the client IP Address
+                                        range to match on.
                                       properties:
                                         invert:
                                           default: false
+                                          description: |-
+                                            Invert specifies whether the source range match result will be inverted.
+                                            When true, the rule matches when the client IP is not in the specified range(s).
                                           type: boolean
                                         type:
                                           default: Exact
@@ -154,6 +244,9 @@ spec:
                                           - Distinct
                                           type: string
                                         value:
+                                          description: Value is the IP CIDR that represents
+                                            the range of Source IP Addresses of the
+                                            client.
                                           maxLength: 256
                                           minLength: 1
                                           type: string
@@ -169,8 +262,16 @@ spec:
                                 maxItems: 8
                                 type: array
                               quota:
+                                description: |-
+                                  Quota value for given client selectors.
+                                  This quota is applied for traffic flows when the selectors
+                                  compute to True, causing the request to be counted towards the limit.
                                 properties:
                                   duration:
+                                    description: 'Time window. Must be exactly one
+                                      of: "1s" (1 second), "1m" (1 minute), "1h" (1
+                                      hour), "1d" (1 day), "1w" (1 week), "1mo" (1
+                                      month), or "1y" (1 year).'
                                     enum:
                                     - 1s
                                     - 1m
@@ -181,13 +282,22 @@ spec:
                                     - 1y
                                     type: string
                                   fromMetadata:
+                                    description: |-
+                                      FromMetadata optionally overrides Limit and Duration for a request using
+                                      a struct written to Envoy dynamic metadata by an earlier HTTP filter.
                                     properties:
                                       key:
+                                        description: |-
+                                          Key is the dynamic metadata field key within the namespace that
+                                          contains the Envoy rate limit override struct (requests_per_unit and unit).
                                         maxLength: 256
                                         minLength: 1
                                         pattern: ^[A-Za-z0-9._:-]+$
                                         type: string
                                       namespace:
+                                        description: |-
+                                          Namespace is the dynamic metadata namespace written by the producer
+                                          filter, for example "envoy.filters.http.ext_authz".
                                         maxLength: 256
                                         minLength: 1
                                         pattern: ^[A-Za-z0-9._:-]+$
@@ -197,22 +307,38 @@ spec:
                                     - namespace
                                     type: object
                                   limit:
+                                    description: |-
+                                      The limit alloted for a specified time window.
+
+                                      This is the static baseline used by the rate limit service when
+                                      FromMetadata is absent or cannot be resolved.
                                     type: integer
                                 required:
                                 - duration
                                 - limit
                                 type: object
                               shadowMode:
+                                description: ShadowMode indicates whether this quota
+                                  rule runs in shadow mode.
                                 type: boolean
                             required:
                             - quota
                             type: object
                           type: array
                         costExpression:
+                          description: |-
+                            CostExpression specifies a CEL expression for computing the quota burndown of the LLM-related request.
+                            If no expression is specified the "total_tokens" value is used.
                           type: string
                         defaultBucket:
+                          description: |-
+                            Quota applicable to all traffic. This value can be overridden for specific classes of requests
+                            using the "BucketRules" configuration.
                           properties:
                             duration:
+                              description: 'Time window. Must be exactly one of: "1s"
+                                (1 second), "1m" (1 minute), "1h" (1 hour), "1d" (1
+                                day), "1w" (1 week), "1mo" (1 month), or "1y" (1 year).'
                               enum:
                               - 1s
                               - 1m
@@ -223,13 +349,22 @@ spec:
                               - 1y
                               type: string
                             fromMetadata:
+                              description: |-
+                                FromMetadata optionally overrides Limit and Duration for a request using
+                                a struct written to Envoy dynamic metadata by an earlier HTTP filter.
                               properties:
                                 key:
+                                  description: |-
+                                    Key is the dynamic metadata field key within the namespace that
+                                    contains the Envoy rate limit override struct (requests_per_unit and unit).
                                   maxLength: 256
                                   minLength: 1
                                   pattern: ^[A-Za-z0-9._:-]+$
                                   type: string
                                 namespace:
+                                  description: |-
+                                    Namespace is the dynamic metadata namespace written by the producer
+                                    filter, for example "envoy.filters.http.ext_authz".
                                   maxLength: 256
                                   minLength: 1
                                   pattern: ^[A-Za-z0-9._:-]+$
@@ -239,6 +374,11 @@ spec:
                               - namespace
                               type: object
                             limit:
+                              description: |-
+                                The limit alloted for a specified time window.
+
+                                This is the static baseline used by the rate limit service when
+                                FromMetadata is absent or cannot be resolved.
                               type: integer
                           required:
                           - duration
@@ -246,6 +386,8 @@ spec:
                           type: object
                         mode:
                           default: Shared
+                          description: The "Mode" determines how quota is charged
+                            to the "DefaultBucket" and matching "BucketRules".
                           enum:
                           - Shared
                           type: string
@@ -257,12 +399,24 @@ spec:
                 maxItems: 128
                 type: array
               serviceQuota:
+                description: |-
+                  Quota for all models served by AIServiceBackend(s). This value can be overridden for specific models using the "PerModelQuotas"
+                  configuration.
                 properties:
                   costExpression:
+                    description: ServiceQuota is not currently enforced by the extension
+                      server.
                     type: string
                   quota:
+                    description: |-
+                      Quota value applicable to all requests.
+                      A response with 429 HTTP status code is sent back to the client when
+                      the selected requests have exceeded the quota.
                     properties:
                       duration:
+                        description: 'Time window. Must be exactly one of: "1s" (1
+                          second), "1m" (1 minute), "1h" (1 hour), "1d" (1 day), "1w"
+                          (1 week), "1mo" (1 month), or "1y" (1 year).'
                         enum:
                         - 1s
                         - 1m
@@ -273,13 +427,22 @@ spec:
                         - 1y
                         type: string
                       fromMetadata:
+                        description: |-
+                          FromMetadata optionally overrides Limit and Duration for a request using
+                          a struct written to Envoy dynamic metadata by an earlier HTTP filter.
                         properties:
                           key:
+                            description: |-
+                              Key is the dynamic metadata field key within the namespace that
+                              contains the Envoy rate limit override struct (requests_per_unit and unit).
                             maxLength: 256
                             minLength: 1
                             pattern: ^[A-Za-z0-9._:-]+$
                             type: string
                           namespace:
+                            description: |-
+                              Namespace is the dynamic metadata namespace written by the producer
+                              filter, for example "envoy.filters.http.ext_authz".
                             maxLength: 256
                             minLength: 1
                             pattern: ^[A-Za-z0-9._:-]+$
@@ -289,6 +452,11 @@ spec:
                         - namespace
                         type: object
                       limit:
+                        description: |-
+                          The limit alloted for a specified time window.
+
+                          This is the static baseline used by the rate limit service when
+                          FromMetadata is absent or cannot be resolved.
                         type: integer
                     required:
                     - duration
@@ -298,22 +466,35 @@ spec:
                 - quota
                 type: object
               targetRefs:
+                description: |-
+                  TargetRefs are the AIServiceBackend resources this QuotaPolicy is being attached to.
+
+                  The namespace of each target defaults to the QuotaPolicy's namespace when omitted.
                 items:
+                  description: |-
+                    NamespacedPolicyTargetReference identifies an API object to apply a direct or
+                    inherited policy to, potentially in a different namespace.
                   properties:
                     group:
+                      description: Group is the group of the target resource.
                       maxLength: 253
                       pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                       type: string
                     kind:
+                      description: Kind is kind of the target resource.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
                       type: string
                     name:
+                      description: Name is the name of the target resource.
                       maxLength: 253
                       minLength: 1
                       type: string
                     namespace:
+                      description: |-
+                        Namespace is the namespace of the referent. When unspecified, the local
+                        namespace is inferred.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
@@ -331,32 +512,53 @@ spec:
                     == 'AIServiceBackend')
             type: object
           status:
+            description: Status defines the status details of the QuotaPolicy.
             properties:
               conditions:
+                description: |-
+                  Conditions is the list of conditions by the reconciliation result.
+                  Currently, at most one condition is set.
+
+                  Known .status.conditions.type are: "Accepted", "NotAccepted".
                 items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
                   properties:
                     lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.
                       format: date-time
                       type: string
                     message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
                       maxLength: 32768
                       type: string
                     observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
+                      description: reason contains a programmatic identifier indicating
+                        the reason for the condition's last transition.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
                       type: string
                     status:
+                      description: status of the condition, one of True, False, Unknown.
                       enum:
                       - "True"
                       - "False"
                       - Unknown
                       type: string
                     type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string

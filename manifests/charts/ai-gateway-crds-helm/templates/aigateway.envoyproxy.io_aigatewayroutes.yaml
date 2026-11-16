@@ -29,17 +29,38 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: AIGatewayRoute combines multiple AIServiceBackends and attaching
+          them to Gateway(s) resources.
         properties:
           apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
             type: string
           kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
             type: string
           metadata:
             type: object
           spec:
+            description: Spec defines the details of the AIGatewayRoute.
             properties:
               hostnames:
+                description: |-
+                  Hostnames is a list of hostnames matched against the HTTP Host header to select an AIGatewayRoute
+                  used to process the request.
                 items:
+                  description: |-
+                    Hostname is the fully qualified domain name of a network host. This matches
+                    the RFC 1123 definition of a hostname with 2 notable exceptions:
+
+                     1. IPs are not allowed.
+                     2.
                   maxLength: 253
                   minLength: 1
                   pattern: ^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
@@ -47,13 +68,25 @@ spec:
                 maxItems: 16
                 type: array
               llmRequestCosts:
+                description: LLMRequestCosts specifies how to capture the cost of
+                  the LLM-related request, notably the token usage.
                 items:
+                  description: LLMRequestCost configures each request cost.
                   properties:
                     cel:
+                      description: |-
+                        CEL is the CEL expression to calculate the cost of the request.
+                        The CEL expression must return a signed or unsigned integer. If the
+                        return value is negative, it will be error.
                       type: string
                     metadataKey:
+                      description: MetadataKey is the key of the metadata to store
+                        this cost of the request.
                       type: string
                     type:
+                      description: |-
+                        Type specifies the type of the request cost. The default is "OutputToken",
+                        and it uses "output token" as the cost.
                       enum:
                       - OutputToken
                       - InputToken
@@ -70,34 +103,62 @@ spec:
                 maxItems: 36
                 type: array
               parentRefs:
+                description: |-
+                  ParentRefs are the names of the Gateway resources this AIGatewayRoute is being attached to.
+                  Currently, each reference's Kind must be Gateway.
                 items:
+                  description: |-
+                    ParentReference identifies an API object (usually a Gateway) that can be considered
+                    a parent of this resource (usually a route).
                   properties:
                     group:
                       default: gateway.networking.k8s.io
+                      description: |-
+                        Group is the group of the referent.
+                        When unspecified, "gateway.networking.k8s.io" is inferred.
                       maxLength: 253
                       pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                       type: string
                     kind:
                       default: Gateway
+                      description: Kind is kind of the referent.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
                       type: string
                     name:
+                      description: |-
+                        Name is the name of the referent.
+
+                        Support: Core
                       maxLength: 253
                       minLength: 1
                       type: string
                     namespace:
+                      description: |-
+                        Namespace is the namespace of the referent. When unspecified, this refers
+                        to the local namespace of the Route.
+
+                        Note that there are specific rules for ParentRefs which cross namespace
+                        boundaries.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     port:
+                      description: |-
+                        Port is the network port this Route targets. It can be interpreted
+                        differently based on the type of parent resource.
                       format: int32
                       maximum: 65535
                       minimum: 1
                       type: integer
                     sectionName:
+                      description: |-
+                        SectionName is the name of a section within the target resource. In the
+                        following resources, SectionName is interpreted as the following:
+
+                        * Gateway: Listener name.
                       maxLength: 253
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
@@ -111,26 +172,54 @@ spec:
                 - message: only Gateway is supported
                   rule: self.all(match, match.kind == 'Gateway')
               rules:
+                description: |-
+                  Rules is the list of AIGatewayRouteRule that this AIGatewayRoute will match the traffic to.
+                  Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.
                 items:
+                  description: AIGatewayRouteRule is a rule that defines the routing
+                    behavior of the AIGatewayRoute.
                   properties:
                     backendRefs:
+                      description: |-
+                        BackendRefs is the list of backends that this rule will route the traffic to.
+                        Each backend can have a weight that determines the traffic distribution.
                       items:
+                        description: |-
+                          AIGatewayRouteRuleBackendRef is a reference to a backend with a weight.
+                          It can reference either an AIServiceBackend or an InferencePool resource.
                         properties:
                           bodyMutation:
+                            description: |-
+                              BodyMutation defines the request body mutation to be applied to this backend.
+                              This allows modification of JSON fields in the request body before sending to the backend.
                             properties:
                               remove:
+                                description: |-
+                                  Remove the given JSON field(s) from the HTTP request body before sending to the backend.
+                                  The value of Remove is a list of top-level field names to remove.
                                 items:
                                   type: string
                                 maxItems: 16
                                 type: array
                                 x-kubernetes-list-type: set
                               set:
+                                description: |-
+                                  Set overwrites/adds the request body with the given JSON field (name, value)
+                                  before sending to the backend. Only top-level fields are currently supported.
                                 items:
+                                  description: HTTPBodyField represents a JSON field
+                                    name and value for body mutation
                                   properties:
                                     path:
+                                      description: |-
+                                        Path is the top-level field name to set in the request body.
+                                        Examples: "service_tier", "max_tokens", "temperature"
                                       minLength: 1
                                       type: string
                                     value:
+                                      description: |-
+                                        Value is the JSON value to set at the specified field. This can be any valid JSON value:
+                                        string, number, boolean, object, array, or null.
                                       type: string
                                   required:
                                   - path
@@ -143,26 +232,53 @@ spec:
                                 x-kubernetes-list-type: map
                             type: object
                           group:
+                            description: |-
+                              Group is the group of the backend resource.
+                              When not specified, defaults to aigateway.envoyproxy.io (AIServiceBackend).
+                              Currently, only "inference.networking.k8s.
                             maxLength: 253
                             pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                             type: string
                           headerMutation:
+                            description: HeaderMutation defines the request header
+                              mutation to be applied to this backend.
                             properties:
                               remove:
+                                description: |-
+                                  Remove the given header(s) from the HTTP request before the action. The
+                                  value of Remove is a list of HTTP header names. Note that the header
+                                  names are case-insensitive (see
+                                  https://datatracker.ietf.
                                 items:
                                   type: string
                                 maxItems: 16
                                 type: array
                                 x-kubernetes-list-type: set
                               set:
+                                description: |-
+                                  Set overwrites/adds the request with the given header (name, value)
+                                  before the action.
+
+                                  Input:
+                                    GET /foo HTTP/1.
                                 items:
+                                  description: HTTPHeader represents an HTTP Header
+                                    name and value as defined by RFC 7230.
                                   properties:
                                     name:
+                                      description: |-
+                                        Name is the name of the HTTP Header to be matched. Name matching MUST be
+                                        case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                                       maxLength: 256
                                       minLength: 1
                                       pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                       type: string
                                     value:
+                                      description: |-
+                                        Value is the value of HTTP Header to be matched.
+                                        <gateway:experimental:description>
+                                        Must consist of printable US-ASCII characters, optionally separated
+                                        by single tabs or spaces. See: https://tools.
                                       maxLength: 4096
                                       minLength: 1
                                       type: string
@@ -177,26 +293,46 @@ spec:
                                 x-kubernetes-list-type: map
                             type: object
                           kind:
+                            description: |-
+                              Kind is the kind of the backend resource.
+                              When not specified, defaults to AIServiceBackend.
+                              Currently, only "InferencePool" is supported when Group is specified.
                             maxLength: 63
                             pattern: ^$|^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
                             type: string
                           modelNameOverride:
+                            description: |-
+                              Name of the model in the backend. If provided this will override the name provided in the request.
+                              This field is ignored when referencing InferencePool resources.
                             type: string
                           name:
+                            description: |-
+                              Name is the name of the backend resource.
+                              When Group and Kind are not specified, this refers to an AIServiceBackend.
                             minLength: 1
                             type: string
                           namespace:
+                            description: |-
+                              Namespace is the namespace of the backend resource.
+                              When unspecified (or empty string), this refers to the local namespace of the AIGatewayRoute.
                             maxLength: 63
                             minLength: 1
                             pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                             type: string
                           priority:
                             default: 0
+                            description: |-
+                              Priority is the priority of the backend. This sets the priority on the underlying endpoints.
+                              See: https://www.envoyproxy.
                             format: int32
                             minimum: 0
                             type: integer
                           weight:
                             default: 1
+                            description: |-
+                              Weight is the weight of the backend. This is exactly the same as the weight in
+                              the BackendRef in the Gateway API. See for the details:
+                              https://gateway-api.sigs.k8s.io/reference/spec/#gateway.
                             format: int32
                             minimum: 0
                             type: integer
@@ -214,25 +350,48 @@ spec:
                       maxItems: 128
                       type: array
                     excludeFromModelsEndpoint:
+                      description: |-
+                        ExcludeFromModelsEndpoint prevents models matched by this rule from being returned by the
+                        OpenAI-compatible "/models" endpoint.
                       type: boolean
                     matches:
+                      description: |-
+                        Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.
+                        This is a subset of the HTTPRouteMatch in the Gateway API. See for the details:
+                        https://gateway-api.sigs.k8s.
                       items:
                         properties:
                           headers:
+                            description: |-
+                              Headers specifies HTTP request header matchers. See HeaderMatch in the Gateway API for the details:
+                              https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPHeaderMatch
                             items:
+                              description: |-
+                                HTTPHeaderMatch describes how to select a HTTP route by matching HTTP request
+                                headers.
                               properties:
                                 name:
+                                  description: |-
+                                    Name is the name of the HTTP Header to be matched. Name matching MUST be
+                                    case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                                   maxLength: 256
                                   minLength: 1
                                   pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                   type: string
                                 type:
                                   default: Exact
+                                  description: Type specifies how to match against
+                                    the value of the header.
                                   enum:
                                   - Exact
                                   - RegularExpression
                                   type: string
                                 value:
+                                  description: |-
+                                    Value is the value of HTTP Header to be matched.
+                                    <gateway:experimental:description>
+                                    Must consist of printable US-ASCII characters, optionally separated
+                                    by single tabs or spaces. See: https://tools.
                                   maxLength: 4096
                                   minLength: 1
                                   type: string
@@ -249,25 +408,47 @@ spec:
                       maxItems: 128
                       type: array
                     modelsCreatedAt:
+                      description: |-
+                        ModelsCreatedAt represents the creation timestamp of the running models serving by the backends,
+                        which will be exported as the field of "Created" in openai-compatible API "/models".
                       format: date-time
                       type: string
                     modelsOwnedBy:
                       default: Envoy AI Gateway
+                      description: |-
+                        ModelsOwnedBy represents the owner of the running models serving by the backends,
+                        which will be exported as the field of "OwnedBy" in openai-compatible API "/models".
                       type: string
                     name:
+                      description: |-
+                        Name is the name of the route rule. This name must be unique within the route.
+                        When specified, it is copied to the generated HTTPRoute rule name.
                       maxLength: 253
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                       type: string
                     streamIdleTimeout:
+                      description: StreamIdleTimeout is the maximum time Envoy will
+                        wait without receiving any bytes from the upstream.
                       pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
                       type: string
                     timeouts:
+                      description: |-
+                        Timeouts defines the timeouts that can be configured for an HTTP request.
+
+                        If this field is not set, or the timeout.
                       properties:
                         backendRequest:
+                          description: |-
+                            BackendRequest specifies a timeout for an individual request from the gateway
+                            to a backend.
                           pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
                           type: string
                         request:
+                          description: |-
+                            Request specifies the maximum duration for a gateway to respond to an HTTP request.
+                            If the gateway has not been able to respond before this deadline is met, the gateway
+                            MUST return a timeout error.
                           pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
                           type: string
                       type: object
@@ -300,32 +481,53 @@ spec:
             - rules
             type: object
           status:
+            description: Status defines the status details of the AIGatewayRoute.
             properties:
               conditions:
+                description: |-
+                  Conditions is the list of conditions by the reconciliation result.
+                  Currently, at most one condition is set.
+
+                  Known .status.conditions.type are: "Accepted", "NotAccepted".
                 items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
                   properties:
                     lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.
                       format: date-time
                       type: string
                     message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
                       maxLength: 32768
                       type: string
                     observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
+                      description: reason contains a programmatic identifier indicating
+                        the reason for the condition's last transition.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
                       type: string
                     status:
+                      description: status of the condition, one of True, False, Unknown.
                       enum:
                       - "True"
                       - "False"
                       - Unknown
                       type: string
                     type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string
@@ -350,17 +552,38 @@ spec:
     name: v1beta1
     schema:
       openAPIV3Schema:
+        description: AIGatewayRoute combines multiple AIServiceBackends and attaching
+          them to Gateway(s) resources.
         properties:
           apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
             type: string
           kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
             type: string
           metadata:
             type: object
           spec:
+            description: Spec defines the details of the AIGatewayRoute.
             properties:
               hostnames:
+                description: |-
+                  Hostnames is a list of hostnames matched against the HTTP Host header to select an AIGatewayRoute
+                  used to process the request.
                 items:
+                  description: |-
+                    Hostname is the fully qualified domain name of a network host. This matches
+                    the RFC 1123 definition of a hostname with 2 notable exceptions:
+
+                     1. IPs are not allowed.
+                     2.
                   maxLength: 253
                   minLength: 1
                   pattern: ^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
@@ -368,13 +591,25 @@ spec:
                 maxItems: 16
                 type: array
               llmRequestCosts:
+                description: LLMRequestCosts specifies how to capture the cost of
+                  the LLM-related request, notably the token usage.
                 items:
+                  description: LLMRequestCost configures each request cost.
                   properties:
                     cel:
+                      description: |-
+                        CEL is the CEL expression to calculate the cost of the request.
+                        The CEL expression must return a signed or unsigned integer. If the
+                        return value is negative, it will be error.
                       type: string
                     metadataKey:
+                      description: MetadataKey is the key of the metadata to store
+                        this cost of the request.
                       type: string
                     type:
+                      description: |-
+                        Type specifies the type of the request cost. The default is "OutputToken",
+                        and it uses "output token" as the cost.
                       enum:
                       - OutputToken
                       - InputToken
@@ -391,34 +626,62 @@ spec:
                 maxItems: 36
                 type: array
               parentRefs:
+                description: |-
+                  ParentRefs are the names of the Gateway resources this AIGatewayRoute is being attached to.
+                  Currently, each reference's Kind must be Gateway.
                 items:
+                  description: |-
+                    ParentReference identifies an API object (usually a Gateway) that can be considered
+                    a parent of this resource (usually a route).
                   properties:
                     group:
                       default: gateway.networking.k8s.io
+                      description: |-
+                        Group is the group of the referent.
+                        When unspecified, "gateway.networking.k8s.io" is inferred.
                       maxLength: 253
                       pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                       type: string
                     kind:
                       default: Gateway
+                      description: Kind is kind of the referent.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
                       type: string
                     name:
+                      description: |-
+                        Name is the name of the referent.
+
+                        Support: Core
                       maxLength: 253
                       minLength: 1
                       type: string
                     namespace:
+                      description: |-
+                        Namespace is the namespace of the referent. When unspecified, this refers
+                        to the local namespace of the Route.
+
+                        Note that there are specific rules for ParentRefs which cross namespace
+                        boundaries.
                       maxLength: 63
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     port:
+                      description: |-
+                        Port is the network port this Route targets. It can be interpreted
+                        differently based on the type of parent resource.
                       format: int32
                       maximum: 65535
                       minimum: 1
                       type: integer
                     sectionName:
+                      description: |-
+                        SectionName is the name of a section within the target resource. In the
+                        following resources, SectionName is interpreted as the following:
+
+                        * Gateway: Listener name.
                       maxLength: 253
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
@@ -432,26 +695,54 @@ spec:
                 - message: only Gateway is supported
                   rule: self.all(match, match.kind == 'Gateway')
               rules:
+                description: |-
+                  Rules is the list of AIGatewayRouteRule that this AIGatewayRoute will match the traffic to.
+                  Each rule is a subset of the HTTPRoute in the Gateway API (https://gateway-api.sigs.k8s.
                 items:
+                  description: AIGatewayRouteRule is a rule that defines the routing
+                    behavior of the AIGatewayRoute.
                   properties:
                     backendRefs:
+                      description: |-
+                        BackendRefs is the list of backends that this rule will route the traffic to.
+                        Each backend can have a weight that determines the traffic distribution.
                       items:
+                        description: |-
+                          AIGatewayRouteRuleBackendRef is a reference to a backend with a weight.
+                          It can reference either an AIServiceBackend or an InferencePool resource.
                         properties:
                           bodyMutation:
+                            description: |-
+                              BodyMutation defines the request body mutation to be applied to this backend.
+                              This allows modification of JSON fields in the request body before sending to the backend.
                             properties:
                               remove:
+                                description: |-
+                                  Remove the given JSON field(s) from the HTTP request body before sending to the backend.
+                                  The value of Remove is a list of top-level field names to remove.
                                 items:
                                   type: string
                                 maxItems: 16
                                 type: array
                                 x-kubernetes-list-type: set
                               set:
+                                description: |-
+                                  Set overwrites/adds the request body with the given JSON field (name, value)
+                                  before sending to the backend. Only top-level fields are currently supported.
                                 items:
+                                  description: HTTPBodyField represents a JSON field
+                                    name and value for body mutation
                                   properties:
                                     path:
+                                      description: |-
+                                        Path is the top-level field name to set in the request body.
+                                        Examples: "service_tier", "max_tokens", "temperature"
                                       minLength: 1
                                       type: string
                                     value:
+                                      description: |-
+                                        Value is the JSON value to set at the specified field. This can be any valid JSON value:
+                                        string, number, boolean, object, array, or null.
                                       type: string
                                   required:
                                   - path
@@ -464,26 +755,53 @@ spec:
                                 x-kubernetes-list-type: map
                             type: object
                           group:
+                            description: |-
+                              Group is the group of the backend resource.
+                              When not specified, defaults to aigateway.envoyproxy.io (AIServiceBackend).
+                              Currently, only "inference.networking.k8s.
                             maxLength: 253
                             pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                             type: string
                           headerMutation:
+                            description: HeaderMutation defines the request header
+                              mutation to be applied to this backend.
                             properties:
                               remove:
+                                description: |-
+                                  Remove the given header(s) from the HTTP request before the action. The
+                                  value of Remove is a list of HTTP header names. Note that the header
+                                  names are case-insensitive (see
+                                  https://datatracker.ietf.
                                 items:
                                   type: string
                                 maxItems: 16
                                 type: array
                                 x-kubernetes-list-type: set
                               set:
+                                description: |-
+                                  Set overwrites/adds the request with the given header (name, value)
+                                  before the action.
+
+                                  Input:
+                                    GET /foo HTTP/1.
                                 items:
+                                  description: HTTPHeader represents an HTTP Header
+                                    name and value as defined by RFC 7230.
                                   properties:
                                     name:
+                                      description: |-
+                                        Name is the name of the HTTP Header to be matched. Name matching MUST be
+                                        case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                                       maxLength: 256
                                       minLength: 1
                                       pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                       type: string
                                     value:
+                                      description: |-
+                                        Value is the value of HTTP Header to be matched.
+                                        <gateway:experimental:description>
+                                        Must consist of printable US-ASCII characters, optionally separated
+                                        by single tabs or spaces. See: https://tools.
                                       maxLength: 4096
                                       minLength: 1
                                       type: string
@@ -498,26 +816,46 @@ spec:
                                 x-kubernetes-list-type: map
                             type: object
                           kind:
+                            description: |-
+                              Kind is the kind of the backend resource.
+                              When not specified, defaults to AIServiceBackend.
+                              Currently, only "InferencePool" is supported when Group is specified.
                             maxLength: 63
                             pattern: ^$|^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
                             type: string
                           modelNameOverride:
+                            description: |-
+                              Name of the model in the backend. If provided this will override the name provided in the request.
+                              This field is ignored when referencing InferencePool resources.
                             type: string
                           name:
+                            description: |-
+                              Name is the name of the backend resource.
+                              When Group and Kind are not specified, this refers to an AIServiceBackend.
                             minLength: 1
                             type: string
                           namespace:
+                            description: |-
+                              Namespace is the namespace of the backend resource.
+                              When unspecified (or empty string), this refers to the local namespace of the AIGatewayRoute.
                             maxLength: 63
                             minLength: 1
                             pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                             type: string
                           priority:
                             default: 0
+                            description: |-
+                              Priority is the priority of the backend. This sets the priority on the underlying endpoints.
+                              See: https://www.envoyproxy.
                             format: int32
                             minimum: 0
                             type: integer
                           weight:
                             default: 1
+                            description: |-
+                              Weight is the weight of the backend. This is exactly the same as the weight in
+                              the BackendRef in the Gateway API. See for the details:
+                              https://gateway-api.sigs.k8s.io/reference/spec/#gateway.
                             format: int32
                             minimum: 0
                             type: integer
@@ -535,25 +873,48 @@ spec:
                       maxItems: 128
                       type: array
                     excludeFromModelsEndpoint:
+                      description: |-
+                        ExcludeFromModelsEndpoint prevents models matched by this rule from being returned by the
+                        OpenAI-compatible "/models" endpoint.
                       type: boolean
                     matches:
+                      description: |-
+                        Matches is the list of AIGatewayRouteMatch that this rule will match the traffic to.
+                        This is a subset of the HTTPRouteMatch in the Gateway API. See for the details:
+                        https://gateway-api.sigs.k8s.
                       items:
                         properties:
                           headers:
+                            description: |-
+                              Headers specifies HTTP request header matchers. See HeaderMatch in the Gateway API for the details:
+                              https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPHeaderMatch
                             items:
+                              description: |-
+                                HTTPHeaderMatch describes how to select a HTTP route by matching HTTP request
+                                headers.
                               properties:
                                 name:
+                                  description: |-
+                                    Name is the name of the HTTP Header to be matched. Name matching MUST be
+                                    case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
                                   maxLength: 256
                                   minLength: 1
                                   pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
                                   type: string
                                 type:
                                   default: Exact
+                                  description: Type specifies how to match against
+                                    the value of the header.
                                   enum:
                                   - Exact
                                   - RegularExpression
                                   type: string
                                 value:
+                                  description: |-
+                                    Value is the value of HTTP Header to be matched.
+                                    <gateway:experimental:description>
+                                    Must consist of printable US-ASCII characters, optionally separated
+                                    by single tabs or spaces. See: https://tools.
                                   maxLength: 4096
                                   minLength: 1
                                   type: string
@@ -570,25 +931,47 @@ spec:
                       maxItems: 128
                       type: array
                     modelsCreatedAt:
+                      description: |-
+                        ModelsCreatedAt represents the creation timestamp of the running models serving by the backends,
+                        which will be exported as the field of "Created" in openai-compatible API "/models".
                       format: date-time
                       type: string
                     modelsOwnedBy:
                       default: Envoy AI Gateway
+                      description: |-
+                        ModelsOwnedBy represents the owner of the running models serving by the backends,
+                        which will be exported as the field of "OwnedBy" in openai-compatible API "/models".
                       type: string
                     name:
+                      description: |-
+                        Name is the name of the route rule. This name must be unique within the route.
+                        When specified, it is copied to the generated HTTPRoute rule name.
                       maxLength: 253
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                       type: string
                     streamIdleTimeout:
+                      description: StreamIdleTimeout is the maximum time Envoy will
+                        wait without receiving any bytes from the upstream.
                       pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
                       type: string
                     timeouts:
+                      description: |-
+                        Timeouts defines the timeouts that can be configured for an HTTP request.
+
+                        If this field is not set, or the timeout.
                       properties:
                         backendRequest:
+                          description: |-
+                            BackendRequest specifies a timeout for an individual request from the gateway
+                            to a backend.
                           pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
                           type: string
                         request:
+                          description: |-
+                            Request specifies the maximum duration for a gateway to respond to an HTTP request.
+                            If the gateway has not been able to respond before this deadline is met, the gateway
+                            MUST return a timeout error.
                           pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
                           type: string
                       type: object
@@ -621,32 +1004,53 @@ spec:
             - rules
             type: object
           status:
+            description: Status defines the status details of the AIGatewayRoute.
             properties:
               conditions:
+                description: |-
+                  Conditions is the list of conditions by the reconciliation result.
+                  Currently, at most one condition is set.
+
+                  Known .status.conditions.type are: "Accepted", "NotAccepted".
                 items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
                   properties:
                     lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.
                       format: date-time
                       type: string
                     message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
                       maxLength: 32768
                       type: string
                     observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
+                      description: reason contains a programmatic identifier indicating
+                        the reason for the condition's last transition.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
                       type: string
                     status:
+                      description: status of the condition, one of True, False, Unknown.
                       enum:
                       - "True"
                       - "False"
                       - Unknown
                       type: string
                     type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
                       type: string
