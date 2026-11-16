@@ -90,6 +90,13 @@ func NewMCPProxy(l *slog.Logger, mcpMetrics metrics.MCPMetrics, tracer tracingap
 				requestHeaders: r.Header,
 				originalPath:   originalPathForRequest(r),
 			}
+			// The OAuth Protected Resource Metadata document is served from here rather than
+			// as a static direct response so that the resource identifier it advertises can be
+			// derived from the scheme, authority and path the client actually used.
+			if isProtectedResourceMetadataRequest(externalPath(r)) {
+				proxy.serveOAuthProtectedResourceMetadata(w, r)
+				return
+			}
 			switch r.Method {
 			case http.MethodGet:
 				proxy.serveGET(w, r)

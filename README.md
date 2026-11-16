@@ -52,7 +52,7 @@ Then point any OpenAI-compatible client at `http://localhost:1975/v1`. See the [
 
 When using Agent Router, we refer to a two-tier gateway pattern. **The Tier One Gateway** functions as a centralized entry point, and the **Tier Two Gateway** handles ingress traffic to a self-hosted model serving cluster.
 
-- The **Tier One Gateway** handles authentication, top-level routing, and global rate limiting
+- The **Tier One Gateway** handles authentication, top-level routing, and global rate limiting.
 - The **Tier Two Gateway** provides fine-grained control over self-hosted model access, with endpoint picker support for LLM inference optimization.
 
 ![](site/blog/images/aigw-ref.drawio.png)
