@@ -120,6 +120,139 @@ func TestOpenAIMessagesToGeminiContents(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "skips empty assistant messages and merges consecutive assistant turns",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "Hello"},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: ""},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: "Part 1"},
+						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+							{
+								ID:   ptr.To("call_1"),
+								Type: openai.ChatCompletionMessageToolCallTypeFunction,
+								Function: openai.ChatCompletionMessageToolCallFunctionParam{
+									Name:      "tool_a",
+									Arguments: `{"k":"v1"}`,
+								},
+							},
+						},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: "Part 2"},
+						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+							{
+								ID:   ptr.To("call_2"),
+								Type: openai.ChatCompletionMessageToolCallTypeFunction,
+								Function: openai.ChatCompletionMessageToolCallFunctionParam{
+									Name:      "tool_b",
+									Arguments: `{"k":"v2"}`,
+								},
+							},
+						},
+					},
+				},
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "Thanks"},
+					},
+				},
+			},
+			expectedContents: []genai.Content{
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "Hello"}},
+				},
+				{
+					Role: genai.RoleModel,
+					Parts: []*genai.Part{
+						{
+							FunctionCall: &genai.FunctionCall{
+								Name: "tool_a",
+								Args: map[string]any{"k": "v1"},
+							},
+							ThoughtSignature: dummyThoughtSignature,
+						},
+						{Text: "Part 1"},
+						{
+							FunctionCall: &genai.FunctionCall{
+								Name: "tool_b",
+								Args: map[string]any{"k": "v2"},
+							},
+						},
+						{Text: "Part 2"},
+					},
+				},
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "Thanks"}},
+				},
+			},
+		},
+		{
+			name: "mid-conversation system message is kept in chronological user turn while leading system stays in SystemInstruction",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{
+					OfSystem: &openai.ChatCompletionSystemMessageParam{
+						Role:    openai.ChatMessageRoleSystem,
+						Content: openai.ContentUnion{Value: "Initial system prompt"},
+					},
+				},
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "Run diagnostics"},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: "Done."},
+					},
+				},
+				{
+					OfSystem: &openai.ChatCompletionSystemMessageParam{
+						Role:    openai.ChatMessageRoleSystem,
+						Content: openai.ContentUnion{Value: "<system-reminder>New skills are available.</system-reminder>"},
+					},
+				},
+			},
+			expectedContents: []genai.Content{
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "Run diagnostics"}},
+				},
+				{
+					Role:  genai.RoleModel,
+					Parts: []*genai.Part{{Text: "Done."}},
+				},
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "<system-reminder>New skills are available.</system-reminder>"}},
+				},
+			},
+			expectedSystemInstruction: &genai.Content{
+				Parts: []*genai.Part{
+					{Text: "Initial system prompt"},
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -1616,6 +1749,32 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 			},
 			expectedResponseMode: responseModeNone,
 			requestModel:         "gemini-3-pro",
+		},
+		{
+			name: "reasoning effort medium on Gemini 4 maps to ThinkingLevelMedium",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortMedium,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelMedium,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "gemini-4-carbon",
+		},
+		{
+			name: "reasoning effort low on Gemini 4 maps to ThinkingLevelLow",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortLow,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelLow,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "gemini-4-hydrogen",
 		},
 		{
 			name: "reasoning effort unsupported value",
