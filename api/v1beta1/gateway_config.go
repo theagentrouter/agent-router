@@ -80,14 +80,46 @@ type GatewayConfigSpec struct {
 	// +listType=map
 	// +listMapKey=metadataKey
 	GlobalLLMRequestCosts []LLMRequestCost `json:"globalLLMRequestCosts,omitempty"`
+
+	// ForwardProxy routes all upstream AI/LLM traffic from Gateways referencing this
+	// GatewayConfig through an HTTP CONNECT forward proxy. This is intended for data planes
+	// in locked-down networks where direct egress to providers is not permitted and all
+	// outbound traffic must traverse a proxy.
+	//
+	// +optional
+	ForwardProxy *GatewayConfigForwardProxy `json:"forwardProxy,omitempty"`
 }
 
-// GatewayConfigExtProc holds runtime-specific configuration for the external processor.
+// GatewayConfigExtProc holds configuration for the external processor.
 type GatewayConfigExtProc struct {
 	// Kubernetes defines the configuration for running the external processor as a Kubernetes container.
 	//
 	// +optional
 	Kubernetes *egv1a1.KubernetesContainerSpec `json:"kubernetes,omitempty"`
+
+	// MetadataForwardingNamespaces lists the untyped dynamic metadata namespaces Envoy forwards
+	// to the external processor for this Gateway's AI traffic. A BackendSecurityPolicy using
+	// credentialOverride.fromDynamicMetadata receives metadata only from a namespace listed here.
+	//
+	// Under Envoy Gateway's mergeGateways, every Gateway in the class shares one Envoy, so a
+	// namespace any one of them declares is forwarded for all of their AI traffic.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=256
+	// +kubebuilder:validation:XValidation:rule="self.all(n, n.matches('^[A-Za-z0-9._/-]+$'))",message="metadata namespaces may only contain letters, digits, '.', '_', '/' and '-'"
+	MetadataForwardingNamespaces []string `json:"metadataForwardingNamespaces,omitempty"`
+}
+
+// GatewayConfigForwardProxy configures an HTTP CONNECT forward proxy for upstream egress.
+type GatewayConfigForwardProxy struct {
+	// Address is the "host:port" of the HTTP CONNECT proxy. The host may be a hostname or an
+	// IP address; the port is required. Upstream connections are tunnelled through this proxy
+	// via Envoy's http_11_proxy transport socket, preserving the upstream TLS session.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Address string `json:"address"`
 }
 
 // GatewayConfigStatus defines the observed state of GatewayConfig.

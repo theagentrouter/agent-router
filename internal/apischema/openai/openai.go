@@ -13,6 +13,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/textproto"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -929,9 +933,10 @@ type WebSearchLocation struct {
 
 // ThinkingConfig contains thinking config for reasoning models
 type ThinkingUnion struct {
-	OfEnabled  *ThinkingEnabled  `json:",omitzero,inline"`
-	OfDisabled *ThinkingDisabled `json:",omitzero,inline"`
-	OfAdaptive *ThinkingAdaptive `json:",omitzero,inline"`
+	OfEnabled      *ThinkingEnabled      `json:",omitzero,inline"`
+	OfDisabled     *ThinkingDisabled     `json:",omitzero,inline"`
+	OfAdaptive     *ThinkingAdaptive     `json:",omitzero,inline"`
+	OfBetweenTools *ThinkingBetweenTools `json:",omitzero,inline"`
 }
 
 type ThinkingEnabled struct {
@@ -950,14 +955,21 @@ type ThinkingEnabled struct {
 }
 
 type ThinkingDisabled struct {
-	Type string `json:"type,"`
+	Type string `json:"type"`
 }
 
 type ThinkingAdaptive struct {
-	Type string `json:"type,"`
+	Type string `json:"type"`
 
 	// Optional. Controls how thinking content appears in the response ("summarized" or "omitted").
 	Display string `json:"display,omitempty"`
+}
+
+// ThinkingBetweenTools turns off up-front thinking while keeping progress updates between tool calls.
+// It takes no other field. Only Claude Sonnet 5.5 accepts it, at effort high or below.
+// https://platform.claude.com/docs/en/build-with-claude/thinking
+type ThinkingBetweenTools struct {
+	Type string `json:"type"`
 }
 
 // MarshalJSON implements the json.Marshaler interface for ThinkingUnion.
@@ -970,6 +982,9 @@ func (t *ThinkingUnion) MarshalJSON() ([]byte, error) {
 	}
 	if t.OfAdaptive != nil {
 		return json.Marshal(t.OfAdaptive)
+	}
+	if t.OfBetweenTools != nil {
+		return json.Marshal(t.OfBetweenTools)
 	}
 	// If both are nil, return an empty object or an error, depending on your desired behavior.
 	return []byte(`{}`), nil
@@ -1005,6 +1020,12 @@ func (t *ThinkingUnion) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		t.OfAdaptive = &adaptive
+	case "between_tools":
+		var betweenTools ThinkingBetweenTools
+		if err := json.Unmarshal(data, &betweenTools); err != nil {
+			return err
+		}
+		t.OfBetweenTools = &betweenTools
 	default:
 		return fmt.Errorf("invalid thinking union type: %s", typeVal)
 	}
@@ -1208,8 +1229,33 @@ type ChatCompletionRequest struct {
 	// GuidedJSON: The output will follow the JSON schema.
 	GuidedJSON json.RawMessage `json:"guided_json,omitzero"`
 
+	// StructuredOutputs is the vLLM v0.12.0+ replacement for the deprecated top-level
+	// guided_json/guided_regex/guided_choice fields. It is passed through unchanged to
+	// vLLM backends and translated to the equivalent Gemini response schema on the GCP path.
+	StructuredOutputs *StructuredOutputs `json:"structured_outputs,omitzero"`
+
 	// Thinking: The thinking config for reasoning models
 	Thinking *ThinkingUnion `json:"thinking,omitzero"`
+}
+
+// StructuredOutputs mirrors vLLM's StructuredOutputsParams (v0.12.0+). Only JSON, Regex,
+// and Choice are translatable to GCP/Gemini; Grammar, StructuralTag, and WhitespacePattern
+// have no Gemini equivalent and are rejected on that path.
+//
+// Following vLLM convention: https://github.com/vllm-project/vllm/blob/v0.12.0/vllm/sampling_params.py#L33
+type StructuredOutputs struct {
+	// JSON: The output will follow the JSON schema.
+	JSON json.RawMessage `json:"json,omitzero"`
+	// Regex: The output will follow the regex pattern.
+	Regex string `json:"regex,omitzero"`
+	// Choice: The output will be exactly one of the choices.
+	Choice []string `json:"choice,omitzero"`
+	// Grammar: The output will follow the given grammar (vLLM/SGLang only).
+	Grammar string `json:"grammar,omitzero"`
+	// StructuralTag: Structural tag constraint (vLLM/SGLang only).
+	StructuralTag json.RawMessage `json:"structural_tag,omitzero"`
+	// WhitespacePattern: Whitespace pattern for JSON outputs (vLLM only).
+	WhitespacePattern string `json:"whitespace_pattern,omitzero"`
 }
 
 type StreamOptions struct {
@@ -1227,6 +1273,7 @@ const (
 	ToolTypeImageGeneration     ToolType = "image_generation"
 	ToolTypeEnterpriseWebSearch ToolType = "enterprise_search"
 	ToolTypeGoogleSearch        ToolType = "google_search"
+	ToolTypeAnthropicWebSearch  ToolType = "web_search_20260209"
 )
 
 // GCPGoogleSearchConfig contains GCP-specific configuration for Google Search grounding.
@@ -1245,6 +1292,7 @@ type GCPTimeRangeFilter struct {
 
 type Tool struct {
 	Type         ToolType               `json:"type"`
+	Name         string                 `json:"name,omitempty"`
 	Function     *FunctionDefinition    `json:"function,omitempty"`
 	GoogleSearch *GCPGoogleSearchConfig `json:"google_search,omitempty"` //nolint:tagliatelle
 }
@@ -1312,6 +1360,12 @@ type FunctionDefinition struct {
 	// Description is a description of what the function does, used by the model to choose when and how to call the function.
 	Description string `json:"description,omitempty"`
 	Strict      bool   `json:"strict,omitempty"`
+	// EagerInputStreaming streams this tool's input as the model generates it, instead of
+	// buffering and validating each parameter value before sending it. A pointer because
+	// Anthropic reads three states: true enables it, null defaults to buffering, and false
+	// keeps buffering even when the legacy fine-grained-tool-streaming beta is active, which
+	// otherwise turns unset tools on.
+	EagerInputStreaming *bool `json:"eager_input_streaming,omitempty"` //nolint:tagliatelle //follow anthropic api
 	// Parameters is an object describing the function.
 	// You can pass json.RawMessage to describe the schema,
 	// or you can pass in a struct which serializes to the proper JSON schema.
@@ -1571,7 +1625,25 @@ type PromptTokensDetails struct {
 	// Cached tokens present in the prompt.
 	CachedTokens int `json:"cached_tokens,omitzero"`
 	// Tokens written to the cache.
+	CacheWriteTokens int `json:"cache_write_tokens,omitzero"`
+	// Deprecated: use CacheWriteTokens. This field will be removed in v1.3.0.
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitzero"`
+}
+
+// CacheWriteTokensValue returns the greatest cache-write token value reported
+// under either the OpenAI or legacy AI Gateway field.
+func (p *PromptTokensDetails) CacheWriteTokensValue() int {
+	return max(p.CacheWriteTokens, p.CacheCreationTokens)
+}
+
+// MarshalJSON emits both cache-write field names with the same value for
+// backwards compatibility. Zero values retain the struct's omission behavior.
+func (p PromptTokensDetails) MarshalJSON() ([]byte, error) {
+	cacheWriteTokens := p.CacheWriteTokensValue()
+	p.CacheWriteTokens = cacheWriteTokens
+	p.CacheCreationTokens = cacheWriteTokens
+	type promptTokensDetails PromptTokensDetails
+	return json.Marshal(promptTokensDetails(p))
 }
 
 // ChatCompletionResponseChunk is described in the OpenAI API documentation:
@@ -1637,11 +1709,16 @@ type ChatCompletionChunkChoiceDeltaToolCall struct {
 // ChatCompletionResponseChunkChoiceDelta is described in the OpenAI API documentation:
 // https://platform.openai.com/docs/api-reference/chat/streaming#chat/streaming-choices
 type ChatCompletionResponseChunkChoiceDelta struct {
-	Content          *string                                  `json:"content,omitempty"`
-	Role             string                                   `json:"role,omitempty"`
-	ToolCalls        []ChatCompletionChunkChoiceDeltaToolCall `json:"tool_calls,omitempty"`
-	Annotations      *[]Annotation                            `json:"annotations,omitempty"`
-	ReasoningContent *StreamReasoningContent                  `json:"reasoning_content,omitempty"`
+	Content     *string                                  `json:"content,omitempty"`
+	Role        string                                   `json:"role,omitempty"`
+	ToolCalls   []ChatCompletionChunkChoiceDeltaToolCall `json:"tool_calls,omitempty"`
+	Annotations *[]Annotation                            `json:"annotations,omitempty"`
+	// ReasoningContent serializes as a plain string; see StreamReasoningContent.
+	ReasoningContent *StreamReasoningContent `json:"reasoning_content,omitempty"`
+	// ThinkingBlocks carries provider-specific reasoning metadata (signatures, redacted
+	// content) that cannot be represented in the plain-string reasoning_content,
+	// following the LiteLLM convention also used on the non-streaming Message.
+	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
 }
 
 // Error is described in the OpenAI API documentation
@@ -2062,10 +2139,46 @@ type ReasoningContent struct {
 	ReasoningContent *awsbedrock.ReasoningContentBlock `json:"reasoningContent,omitzero"`
 }
 
+// StreamReasoningContent carries reasoning deltas on streaming chunks. On the wire,
+// `delta.reasoning_content` is a plain string (the convention established by DeepSeek and
+// followed by vLLM, LiteLLM, etc.) holding only Text; provider-specific metadata
+// (Signature, RedactedContent) is carried separately in `delta.thinking_blocks`,
+// mirroring the non-streaming Message shape.
 type StreamReasoningContent struct {
-	Text            string `json:"text,omitzero"`
-	Signature       string `json:"signature,omitzero"`
-	RedactedContent []byte `json:"redactedContent,omitzero"`
+	Text            string
+	Signature       string
+	RedactedContent []byte
+}
+
+// MarshalJSON emits the reasoning delta as a plain JSON string. Signature and
+// RedactedContent are intentionally not serialized here — translators surface them via
+// ChatCompletionResponseChunkChoiceDelta.ThinkingBlocks so that clients validating the
+// de-facto `reasoning_content: string` convention do not reject the chunk.
+func (s StreamReasoningContent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.Text)
+}
+
+// UnmarshalJSON accepts both the plain-string form emitted by OpenAI-compatible backends
+// (vLLM, DeepSeek, ...) and the legacy object form ({"text":...,"signature":...})
+// emitted by ai-gateway <= v1.0.0.
+func (s *StreamReasoningContent) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		s.Text = text
+		return nil
+	}
+	var legacy struct {
+		Text            string `json:"text,omitzero"`
+		Signature       string `json:"signature,omitzero"`
+		RedactedContent []byte `json:"redactedContent,omitzero"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return fmt.Errorf("cannot unmarshal reasoning_content as string or object: %w", err)
+	}
+	s.Text = legacy.Text
+	s.Signature = legacy.Signature
+	s.RedactedContent = legacy.RedactedContent
+	return nil
 }
 
 // CompletionRequest represents a request to the legacy /completions endpoint.
@@ -2850,6 +2963,10 @@ type ResponseToolUnion struct {
 	OfApplyPatch       *ApplyPatchToolParam
 	OfNamespace        *NamespaceToolParam
 	OfToolSearch       *ToolSearchToolParam
+	// OfUnknown holds the raw JSON of a tool whose "type" is not one of the above. The Responses
+	// body is forwarded to the upstream as received, so an unrecognized tool is preserved rather
+	// than failing the whole request.
+	OfUnknown json.RawMessage
 }
 
 func (t ResponseToolUnion) MarshalJSON() ([]byte, error) { // nolint:gocritic
@@ -2882,6 +2999,8 @@ func (t ResponseToolUnion) MarshalJSON() ([]byte, error) { // nolint:gocritic
 		return json.Marshal(t.OfNamespace)
 	case t.OfToolSearch != nil:
 		return json.Marshal(t.OfToolSearch)
+	case t.OfUnknown != nil:
+		return t.OfUnknown, nil
 	default:
 		return nil, errors.New("no tool to marshal in ToolUnionParam")
 	}
@@ -2975,7 +3094,9 @@ func (t *ResponseToolUnion) UnmarshalJSON(data []byte) error {
 		}
 		t.OfToolSearch = &ts
 	default:
-		return fmt.Errorf("unknown tool type %s", typ.String())
+		// Copy: json.RawMessage is sonic's NoCopyRawMessage, so retaining data would alias the
+		// caller's buffer.
+		t.OfUnknown = append(json.RawMessage(nil), data...)
 	}
 	return nil
 }
@@ -3903,6 +4024,8 @@ type ResponseInputItemUnionParam struct {
 	OfWebSearchCall        *ResponseFunctionWebSearch
 	OfFunctionCall         *ResponseFunctionToolCall
 	OfFunctionCallOutput   *ResponseInputItemFunctionCallOutputParam
+	OfToolSearchCall       *ResponseToolSearchCall
+	OfToolSearchOutput     *ResponseToolSearchOutput
 	OfReasoning            *ResponseReasoningItem
 	OfCompaction           *ResponseCompactionItemParam
 	OfImageGenerationCall  *ResponseInputItemImageGenerationCallParam
@@ -3919,7 +4042,13 @@ type ResponseInputItemUnionParam struct {
 	OfMcpCall              *ResponseMcpCall
 	OfCustomToolCallOutput *ResponseCustomToolCallOutputParam
 	OfCustomToolCall       *ResponseCustomToolCall
+	OfCompactionTrigger    *ResponseInputItemCompactionTriggerParam
 	OfItemReference        *ResponseInputItemItemReferenceParam
+	// Codex-emitted item types whose schema is not yet part of the public Responses API.
+	// Preserve their raw JSON so OpenAI-compatible backends can handle them unchanged.
+	OfAgentMessage    *json.RawMessage
+	OfAgentReasoning  *json.RawMessage
+	OfAdditionalTools *ResponseInputItemAdditionalToolsParam
 }
 
 func (r ResponseInputItemUnionParam) MarshalJSON() ([]byte, error) { // nolint:gocritic
@@ -3942,6 +4071,10 @@ func (r ResponseInputItemUnionParam) MarshalJSON() ([]byte, error) { // nolint:g
 		return json.Marshal(r.OfFunctionCall)
 	case r.OfFunctionCallOutput != nil:
 		return json.Marshal(r.OfFunctionCallOutput)
+	case r.OfToolSearchCall != nil:
+		return json.Marshal(r.OfToolSearchCall)
+	case r.OfToolSearchOutput != nil:
+		return json.Marshal(r.OfToolSearchOutput)
 	case r.OfReasoning != nil:
 		return json.Marshal(r.OfReasoning)
 	case r.OfCompaction != nil:
@@ -3974,8 +4107,16 @@ func (r ResponseInputItemUnionParam) MarshalJSON() ([]byte, error) { // nolint:g
 		return json.Marshal(r.OfCustomToolCallOutput)
 	case r.OfCustomToolCall != nil:
 		return json.Marshal(r.OfCustomToolCall)
+	case r.OfCompactionTrigger != nil:
+		return json.Marshal(r.OfCompactionTrigger)
 	case r.OfItemReference != nil:
 		return json.Marshal(r.OfItemReference)
+	case r.OfAgentMessage != nil:
+		return json.Marshal(r.OfAgentMessage)
+	case r.OfAgentReasoning != nil:
+		return json.Marshal(r.OfAgentReasoning)
+	case r.OfAdditionalTools != nil:
+		return json.Marshal(r.OfAdditionalTools)
 	default:
 		return nil, errors.New("no input item to marshal")
 	}
@@ -4074,6 +4215,18 @@ func (r *ResponseInputItemUnionParam) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		r.OfFunctionCallOutput = &fco
+	case "tool_search_call":
+		var tsc ResponseToolSearchCall
+		if err := json.Unmarshal(data, &tsc); err != nil {
+			return err
+		}
+		r.OfToolSearchCall = &tsc
+	case "tool_search_output":
+		var tso ResponseToolSearchOutput
+		if err := json.Unmarshal(data, &tso); err != nil {
+			return err
+		}
+		r.OfToolSearchOutput = &tso
 	case "reasoning":
 		var ri ResponseReasoningItem
 		if err := json.Unmarshal(data, &ri); err != nil {
@@ -4170,12 +4323,30 @@ func (r *ResponseInputItemUnionParam) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		r.OfCustomToolCall = &ctc
+	case "compaction_trigger":
+		var ct ResponseInputItemCompactionTriggerParam
+		if err := json.Unmarshal(data, &ct); err != nil {
+			return err
+		}
+		r.OfCompactionTrigger = &ct
 	case "item_reference":
 		var ir ResponseInputItemItemReferenceParam
 		if err := json.Unmarshal(data, &ir); err != nil {
 			return err
 		}
 		r.OfItemReference = &ir
+	case "agent_message":
+		raw := json.RawMessage(append([]byte(nil), data...))
+		r.OfAgentMessage = &raw
+	case "agent_reasoning":
+		raw := json.RawMessage(append([]byte(nil), data...))
+		r.OfAgentReasoning = &raw
+	case "additional_tools":
+		var at ResponseInputItemAdditionalToolsParam
+		if err := json.Unmarshal(data, &at); err != nil {
+			return err
+		}
+		r.OfAdditionalTools = &at
 	// Add other cases here for different input item types as needed.
 	default:
 		return errors.New("cannot unmarshal unknown input type: " + typ.String())
@@ -4945,6 +5116,30 @@ type ResponseInputItemComputerCallOutputParam struct {
 	Type string `json:"type"`
 }
 
+// The output of a computer tool call returned as a Responses output item.
+//
+// The properties CallID, Output, Status, Type are required.
+type ResponseComputerToolCallOutputItem struct {
+	// The ID of the computer tool call that produced the output.
+	CallID string `json:"call_id"`
+	// A computer screenshot image used with the computer use tool.
+	Output ResponseComputerToolCallOutputScreenshotParam `json:"output,omitzero"`
+	// The unique ID of the computer call tool output.
+	ID string `json:"id,omitzero"`
+	// The safety checks reported by the API that have been acknowledged by the
+	// developer.
+	AcknowledgedSafetyChecks []ResponseInputItemComputerCallOutputAcknowledgedSafetyCheckParam `json:"acknowledged_safety_checks,omitzero"`
+	// The status of the item. One of `completed`, `incomplete`, `failed`, or
+	// `in_progress`.
+	//
+	// Any of "completed", "incomplete", "failed", "in_progress".
+	Status string `json:"status,omitzero"`
+	// The type of the computer tool call output. Always `computer_call_output`.
+	Type string `json:"type"`
+	// The identifier of the actor that created the item.
+	CreatedBy string `json:"created_by,omitzero"`
+}
+
 // A computer screenshot image used with the computer use tool.
 //
 // The property Type is required.
@@ -5093,6 +5288,8 @@ type ResponseFunctionToolCall struct {
 	CallID string `json:"call_id"`
 	// The name of the function to run.
 	Name string `json:"name"`
+	// The namespace containing the function, when the call targets a namespaced tool.
+	Namespace string `json:"namespace,omitzero"`
 	// The unique ID of the function tool call.
 	ID string `json:"id,omitzero"`
 	// The status of the item. One of `in_progress`, `completed`, or `incomplete`.
@@ -5101,6 +5298,70 @@ type ResponseFunctionToolCall struct {
 	// Any of "in_progress", "completed", "incomplete".
 	Status string `json:"status,omitzero"`
 	// The type of the function tool call. Always `function_call`.
+	Type string `json:"type"`
+}
+
+// A tool search call generated by the model.
+//
+// The properties Arguments, CallID, Execution, Status, Type are required.
+type ResponseToolSearchCall struct {
+	// The unique ID of the tool search call item.
+	ID string `json:"id,omitzero"`
+	// Arguments used for the tool search call.
+	Arguments any `json:"arguments,omitzero"`
+	// The unique ID of the tool search call generated by the model. Server-executed
+	// tool searches can return null for this field.
+	CallID *string `json:"call_id"`
+	// Whether tool search was executed by the server or by the client.
+	//
+	// Any of "server", "client".
+	Execution string `json:"execution,omitzero"`
+	// The status of the tool search call item that was recorded.
+	//
+	// Any of "in_progress", "completed", "incomplete".
+	Status string `json:"status,omitzero"`
+	// The type of the item. Always `tool_search_call`.
+	Type string `json:"type"`
+	// The identifier of the actor that created the item.
+	CreatedBy string `json:"created_by,omitzero"`
+}
+
+// The loaded tools returned by a tool search call.
+//
+// The properties Tools, Type are required.
+type ResponseToolSearchOutput struct {
+	// The unique ID of the tool search output item.
+	ID string `json:"id,omitzero"`
+	// The unique ID of the tool search call generated by the model. Server-executed
+	// tool searches can return null for this field.
+	CallID *string `json:"call_id"`
+	// Whether tool search was executed by the server or by the client.
+	//
+	// Any of "server", "client".
+	Execution string `json:"execution,omitzero"`
+	// The status of the tool search output.
+	//
+	// Any of "in_progress", "completed", "incomplete".
+	Status string `json:"status,omitzero"`
+	// The loaded tool definitions returned by tool search.
+	Tools []ResponseToolUnion `json:"tools,omitzero"`
+	// The type of the item. Always `tool_search_output`.
+	Type string `json:"type"`
+	// The identifier of the actor that created the item.
+	CreatedBy string `json:"created_by,omitzero"`
+}
+
+// Additional tool definitions made available as a Responses item.
+//
+// The properties Role, Tools, Type are required.
+type ResponseAdditionalTools struct {
+	// The unique ID of the additional tools item.
+	ID string `json:"id,omitzero"`
+	// The role that provided the additional tools.
+	Role string `json:"role,omitzero"`
+	// The additional tool definitions made available at this item.
+	Tools []ResponseToolUnion `json:"tools,omitzero"`
+	// The type of the item. Always `additional_tools`.
 	Type string `json:"type"`
 }
 
@@ -5833,6 +6094,27 @@ type ResponseCustomToolCallOutputParam struct {
 	Type string `json:"type"`
 }
 
+// The output of a custom tool call returned as a Responses output item.
+//
+// The properties CallID, Output, Type are required.
+type ResponseCustomToolCallOutputItem struct {
+	// The call ID, used to map this custom tool call output to a custom tool call.
+	CallID string `json:"call_id"`
+	// The output from the custom tool call generated by your code. Can be a string or
+	// a list of output content.
+	Output ResponseCustomToolCallOutputOutputUnionParam `json:"output,omitzero"`
+	// The unique ID of the custom tool call output item.
+	ID string `json:"id,omitzero"`
+	// The status of the item. One of `in_progress`, `completed`, or `incomplete`.
+	//
+	// Any of "in_progress", "completed", "incomplete".
+	Status string `json:"status,omitzero"`
+	// The identifier of the actor that created the item.
+	CreatedBy string `json:"created_by,omitzero"`
+	// The type of the custom tool call output. Always `custom_tool_call_output`.
+	Type string `json:"type"`
+}
+
 // ResponseCustomToolCallOutputOutputUnionParam is a union type for different custom tool call output parameters.
 // Only one field can be non-zero.
 type ResponseCustomToolCallOutputOutputUnionParam struct {
@@ -5933,6 +6215,24 @@ type ResponseCustomToolCall struct {
 	Type string `json:"type"`
 }
 
+// A list of additional tools made available to the model at a given point in the
+// conversation.
+//
+// The properties ID, Role, Tools are required.
+type ResponseInputItemAdditionalToolsParam struct {
+	// The unique ID of the additional tools item.
+	ID string `json:"id"`
+	// The role that provided the additional tools.
+	//
+	// Any of "unknown", "user", "assistant", "system", "critic", "discriminator",
+	// "developer", "tool".
+	Role string `json:"role"`
+	// The additional tool definitions made available at this item.
+	Tools []ResponseToolUnion `json:"tools"`
+	// The type of the item. Always `additional_tools`.
+	Type string `json:"type"`
+}
+
 // An internal identifier for an item to reference.
 //
 // The property ID is required.
@@ -5941,6 +6241,12 @@ type ResponseInputItemItemReferenceParam struct {
 	ID string `json:"id"`
 	// The type of item to reference. Always `item_reference`.
 	Type string `json:"type,omitzero"`
+}
+
+// Compacts the current context. Must be the final input item.
+type ResponseInputItemCompactionTriggerParam struct {
+	// The type of the item. Always `compaction_trigger`.
+	Type string `json:"type"`
 }
 
 // ResponseToolChoiceUnion is a union type for tool choice configuration in Responses API.
@@ -6386,9 +6692,13 @@ type ResponseOutputItemUnion struct {
 	OfOutputMessage        *ResponseOutputMessage
 	OfFileSearchCall       *ResponseFileSearchToolCall
 	OfComputerCall         *ResponseComputerToolCall
+	OfComputerCallOutput   *ResponseComputerToolCallOutputItem
 	OfFunctionCall         *ResponseFunctionToolCall
 	OfFunctionCallOutput   *ResponseFunctionCallOutput
 	OfWebSearchCall        *ResponseFunctionWebSearch
+	OfToolSearchCall       *ResponseToolSearchCall
+	OfToolSearchOutput     *ResponseToolSearchOutput
+	OfAdditionalTools      *ResponseAdditionalTools
 	OfReasoning            *ResponseReasoningItem
 	OfCompaction           *ResponseCompactionItem
 	OfImageGenerationCall  *ResponseOutputItemImageGenerationCall
@@ -6401,7 +6711,9 @@ type ResponseOutputItemUnion struct {
 	OfMcpCall              *ResponseMcpCall
 	OfMcpListTools         *ResponseMcpListTools
 	OfMcpApprovalRequest   *ResponseMcpApprovalRequest
+	OfMcpApprovalResponse  *ResponseInputItemMcpApprovalResponseParam
 	OfCustomToolCall       *ResponseCustomToolCall
+	OfCustomToolCallOutput *ResponseCustomToolCallOutputItem
 }
 
 func (r ResponseOutputItemUnion) MarshalJSON() ([]byte, error) { // nolint:gocritic
@@ -6412,12 +6724,20 @@ func (r ResponseOutputItemUnion) MarshalJSON() ([]byte, error) { // nolint:gocri
 		return json.Marshal(r.OfFileSearchCall)
 	case r.OfComputerCall != nil:
 		return json.Marshal(r.OfComputerCall)
+	case r.OfComputerCallOutput != nil:
+		return json.Marshal(r.OfComputerCallOutput)
 	case r.OfFunctionCall != nil:
 		return json.Marshal(r.OfFunctionCall)
 	case r.OfFunctionCallOutput != nil:
 		return json.Marshal(r.OfFunctionCallOutput)
 	case r.OfWebSearchCall != nil:
 		return json.Marshal(r.OfWebSearchCall)
+	case r.OfToolSearchCall != nil:
+		return json.Marshal(r.OfToolSearchCall)
+	case r.OfToolSearchOutput != nil:
+		return json.Marshal(r.OfToolSearchOutput)
+	case r.OfAdditionalTools != nil:
+		return json.Marshal(r.OfAdditionalTools)
 	case r.OfReasoning != nil:
 		return json.Marshal(r.OfReasoning)
 	case r.OfCompaction != nil:
@@ -6442,8 +6762,12 @@ func (r ResponseOutputItemUnion) MarshalJSON() ([]byte, error) { // nolint:gocri
 		return json.Marshal(r.OfMcpListTools)
 	case r.OfMcpApprovalRequest != nil:
 		return json.Marshal(r.OfMcpApprovalRequest)
+	case r.OfMcpApprovalResponse != nil:
+		return json.Marshal(r.OfMcpApprovalResponse)
 	case r.OfCustomToolCall != nil:
 		return json.Marshal(r.OfCustomToolCall)
+	case r.OfCustomToolCallOutput != nil:
+		return json.Marshal(r.OfCustomToolCallOutput)
 	default:
 		return nil, errors.New("no output item to marshal")
 	}
@@ -6488,12 +6812,36 @@ func (r *ResponseOutputItemUnion) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		r.OfComputerCall = &c
+	case "computer_call_output":
+		var c ResponseComputerToolCallOutputItem
+		if err := json.Unmarshal(data, &c); err != nil {
+			return err
+		}
+		r.OfComputerCallOutput = &c
 	case "reasoning":
 		var rr ResponseReasoningItem
 		if err := json.Unmarshal(data, &rr); err != nil {
 			return err
 		}
 		r.OfReasoning = &rr
+	case "tool_search_call":
+		var t ResponseToolSearchCall
+		if err := json.Unmarshal(data, &t); err != nil {
+			return err
+		}
+		r.OfToolSearchCall = &t
+	case "tool_search_output":
+		var t ResponseToolSearchOutput
+		if err := json.Unmarshal(data, &t); err != nil {
+			return err
+		}
+		r.OfToolSearchOutput = &t
+	case "additional_tools":
+		var a ResponseAdditionalTools
+		if err := json.Unmarshal(data, &a); err != nil {
+			return err
+		}
+		r.OfAdditionalTools = &a
 	case "compaction":
 		var c ResponseCompactionItem
 		if err := json.Unmarshal(data, &c); err != nil {
@@ -6560,12 +6908,24 @@ func (r *ResponseOutputItemUnion) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		r.OfMcpApprovalRequest = &m
+	case "mcp_approval_response":
+		var m ResponseInputItemMcpApprovalResponseParam
+		if err := json.Unmarshal(data, &m); err != nil {
+			return err
+		}
+		r.OfMcpApprovalResponse = &m
 	case "custom_tool_call":
 		var c ResponseCustomToolCall
 		if err := json.Unmarshal(data, &c); err != nil {
 			return err
 		}
 		r.OfCustomToolCall = &c
+	case "custom_tool_call_output":
+		var c ResponseCustomToolCallOutputItem
+		if err := json.Unmarshal(data, &c); err != nil {
+			return err
+		}
+		r.OfCustomToolCallOutput = &c
 	default:
 		return fmt.Errorf("unknown type field value '%s' for response output item union", typ.String())
 	}
@@ -6989,7 +7349,25 @@ type ResponseUsageInputTokensDetails struct {
 	CachedTokens int64 `json:"cached_tokens"`
 
 	// The number of tokens that were written to the cache.
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
+	// Deprecated: use CacheWriteTokens. This field will be removed in v1.3.0.
 	CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+}
+
+// CacheWriteTokensValue returns the greatest cache-write token value reported
+// under either the OpenAI or legacy AI Gateway field.
+func (r *ResponseUsageInputTokensDetails) CacheWriteTokensValue() int64 {
+	return max(r.CacheWriteTokens, r.CacheCreationTokens)
+}
+
+// MarshalJSON emits both cache-write field names with the same value for
+// backwards compatibility.
+func (r ResponseUsageInputTokensDetails) MarshalJSON() ([]byte, error) {
+	cacheWriteTokens := r.CacheWriteTokensValue()
+	r.CacheWriteTokens = cacheWriteTokens
+	r.CacheCreationTokens = cacheWriteTokens
+	type responseUsageInputTokensDetails ResponseUsageInputTokensDetails
+	return json.Marshal(responseUsageInputTokensDetails(r))
 }
 
 // A detailed breakdown of the output tokens.
@@ -7003,7 +7381,9 @@ type ResponseTokensDetails struct {
 	// CachedTokens: Number of cached tokens.
 	CachedTokens int `json:"cached_tokens,omitempty"` //nolint:tagliatelle //follow openai api
 
-	// CacheCreationTokens: number of tokens that were written to the cache.
+	// CacheWriteTokens: number of tokens that were written to the cache.
+	CacheWriteTokens int64 `json:"cache_write_tokens"` //nolint:tagliatelle
+	// Deprecated: use CacheWriteTokens. This field will be removed in v1.3.0.
 	CacheCreationTokens int64 `json:"cache_creation_input_tokens"` //nolint:tagliatelle
 
 	// ReasoningTokens: Number of reasoning tokens (for reasoning models).
@@ -7011,6 +7391,22 @@ type ResponseTokensDetails struct {
 
 	// AudioTokens: Number of audio tokens.
 	AudioTokens int `json:"audio_tokens,omitempty"` //nolint:tagliatelle //follow openai api
+}
+
+// CacheWriteTokensValue returns the greatest cache-write token value reported
+// under either the OpenAI or legacy AI Gateway field.
+func (r *ResponseTokensDetails) CacheWriteTokensValue() int64 {
+	return max(r.CacheWriteTokens, r.CacheCreationTokens)
+}
+
+// MarshalJSON emits both cache-write field names with the same value for
+// backwards compatibility.
+func (r ResponseTokensDetails) MarshalJSON() ([]byte, error) {
+	cacheWriteTokens := r.CacheWriteTokensValue()
+	r.CacheWriteTokens = cacheWriteTokens
+	r.CacheCreationTokens = cacheWriteTokens
+	type responseTokensDetails ResponseTokensDetails
+	return json.Marshal(responseTokensDetails(r))
 }
 
 // An error object returned when the model fails to generate a Response.
@@ -8789,4 +9185,277 @@ const (
 // TranslationResponse represents the JSON response from /v1/audio/translations.
 type TranslationResponse struct {
 	Text string `json:"text"`
+}
+
+// ResponsesInputTokensResponse represents the response from /v1/responses/input_tokens.
+type ResponsesInputTokensResponse struct {
+	// Object is the object type, which is always "response.input_tokens".
+	Object      string `json:"object"`
+	InputTokens int64  `json:"input_tokens"`
+}
+
+// File API
+
+type FileNewParams struct {
+	// The File object (not file name) to be uploaded.
+	File io.Reader `json:"file,omitzero"`
+	// The intended purpose of the uploaded file. One of:
+	//
+	// - `assistants`: Used in the Assistants API
+	// - `batch`: Used in the Batch API
+	// - `fine-tune`: Used for fine-tuning
+	// - `vision`: Images used for vision fine-tuning
+	// - `user_data`: Flexible file type for any purpose
+	// - `evals`: Used for eval data sets
+	//
+	// Any of "assistants", "batch", "fine-tune", "vision", "user_data", "evals".
+	Purpose FilePurpose `json:"purpose,omitzero"`
+	// The expiration policy for a file.
+	ExpiresAfter FileNewParamsExpiresAfter `json:"expires_after,omitzero"`
+	// Used for providing extra parameters that are not part of the standard OpenAI Files API.
+	ExtraBody map[string]any `json:"extra_body,omitzero"`
+}
+
+const fileNewParamsMultipartFieldMaxBytes int64 = 1 << 20 // 1 MiB
+
+func readMultipartFieldWithLimit(part *multipart.Part, fieldName string, maxBytes int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(part, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > maxBytes {
+		return nil, fmt.Errorf("multipart field %q exceeds maximum allowed size of %d bytes", fieldName, maxBytes)
+	}
+	return b, nil
+}
+
+func (f *FileNewParams) UnmarshalMultipart(data []byte, boundary string) error {
+	reader := multipart.NewReader(bytes.NewReader(data), boundary)
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		switch part.FormName() {
+		case "file":
+			f.File = part
+		case "purpose":
+			purpose, err := readMultipartFieldWithLimit(part, "purpose", fileNewParamsMultipartFieldMaxBytes)
+			if err != nil {
+				return err
+			}
+			f.Purpose = FilePurpose(purpose)
+		case "expires_after.anchor":
+			anchor, err := readMultipartFieldWithLimit(part, "expires_after.anchor", fileNewParamsMultipartFieldMaxBytes)
+			if err != nil {
+				return err
+			}
+			f.ExpiresAfter.Anchor = CreatedAt(anchor)
+		case "expires_after.seconds":
+			seconds, err := readMultipartFieldWithLimit(part, "expires_after.seconds", fileNewParamsMultipartFieldMaxBytes)
+			if err != nil {
+				return err
+			}
+			secondsParsed, err := strconv.ParseInt(string(seconds), 10, 64)
+			if err != nil {
+				return err
+			}
+			f.ExpiresAfter.Seconds = secondsParsed
+		default:
+			// handles any non standard extra parameters.
+			fieldName := part.FormName()
+			extraBodyBytes, err := readMultipartFieldWithLimit(part, fieldName, fileNewParamsMultipartFieldMaxBytes)
+			if err != nil {
+				return err
+			}
+			extraBodyVal := any(extraBodyBytes)
+			if f.ExtraBody == nil {
+				f.ExtraBody = map[string]any{fieldName: extraBodyVal}
+			} else {
+				f.ExtraBody[fieldName] = extraBodyVal
+			}
+		}
+	}
+	return nil
+}
+
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+
+func escapeQuotes(s string) string {
+	return quoteEscaper.Replace(s)
+}
+
+func (f FileNewParams) MarshalMultipart() ([]byte, string, error) {
+	buf := &bytes.Buffer{}
+	writer := multipart.NewWriter(buf)
+
+	if f.File == nil {
+		return nil, "", fmt.Errorf("file is required")
+	}
+	filename := "anonymous_file"
+	contentType := "application/octet-stream"
+	if named, ok := f.File.(interface{ Filename() string }); ok {
+		filename = named.Filename()
+	} else if named, ok := f.File.(interface{ Name() string }); ok {
+		filename = path.Base(named.Name())
+	}
+	if typed, ok := f.File.(interface{ ContentType() string }); ok {
+		contentType = typed.ContentType()
+	}
+
+	// Below is taken almost 1-for-1 from [multipart.CreateFormFile]
+	key := "file"
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeQuotes(key), escapeQuotes(filename)))
+	h.Set("Content-Type", contentType)
+	part, err := writer.CreatePart(h)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if _, err := io.Copy(part, f.File); err != nil {
+		return nil, "", err
+	}
+
+	if f.Purpose == "" {
+		return nil, "", fmt.Errorf("purpose is required")
+	}
+
+	if err := writer.WriteField("purpose", string(f.Purpose)); err != nil {
+		return nil, "", err
+	}
+
+	if f.ExpiresAfter.Anchor != "" {
+		if err := writer.WriteField("expires_after.anchor", string(f.ExpiresAfter.Anchor)); err != nil {
+			return nil, "", err
+		}
+	}
+
+	if f.ExpiresAfter.Seconds != 0 {
+		if err := writer.WriteField("expires_after.seconds", strconv.FormatInt(f.ExpiresAfter.Seconds, 10)); err != nil {
+			return nil, "", err
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+
+	return buf.Bytes(), writer.FormDataContentType(), nil
+}
+
+// The intended purpose of the uploaded file. One of:
+//
+// - `assistants`: Used in the Assistants API
+// - `batch`: Used in the Batch API
+// - `fine-tune`: Used for fine-tuning
+// - `vision`: Images used for vision fine-tuning
+// - `user_data`: Flexible file type for any purpose
+// - `evals`: Used for eval data sets
+type FilePurpose string
+
+const (
+	FilePurposeAssistants FilePurpose = "assistants"
+	FilePurposeBatch      FilePurpose = "batch"
+	FilePurposeFineTune   FilePurpose = "fine-tune"
+	FilePurposeVision     FilePurpose = "vision"
+	FilePurposeUserData   FilePurpose = "user_data"
+	FilePurposeEvals      FilePurpose = "evals"
+)
+
+type CreatedAt string
+
+// The expiration policy for a file.
+// The properties Anchor, Seconds are required.
+type FileNewParamsExpiresAfter struct {
+	// The number of seconds after the anchor time that the file will expire.
+	Seconds int64 `json:"seconds"`
+	// Anchor timestamp after which the expiration policy applies. Supported anchors:
+	// `created_at`.
+	Anchor CreatedAt `json:"anchor"`
+}
+
+// The `File` object represents a document that has been uploaded to upstream.
+type FileObject struct {
+	// The file identifier, which can be referenced in the API endpoints.
+	ID string `json:"id"`
+	// The size of the file, in bytes.
+	Bytes int64 `json:"bytes"`
+	// The Unix timestamp (in seconds) for when the file was created.
+	CreatedAt JSONUNIXTime `json:"created_at"`
+	// The name of the file.
+	Filename string `json:"filename"`
+	// The object type, which is always `file`.
+	Object string `json:"object"`
+	// The intended purpose of the file. Supported values are `assistants`,
+	// `assistants_output`, `batch`, `batch_output`, `fine-tune`, `fine-tune-results`,
+	// `vision`, and `user_data`.
+	//
+	// Any of "assistants", "assistants_output", "batch", "batch_output", "fine-tune",
+	// "fine-tune-results", "vision", "user_data".
+	Purpose FileObjectPurpose `json:"purpose"`
+	// Deprecated. The current status of the file, which can be either `uploaded`,
+	// `processed`, or `error`.
+	//
+	// Any of "uploaded", "processed", "error".
+	//
+	// Deprecated: deprecated
+	Status FileObjectStatus `json:"status"`
+	// The Unix timestamp (in seconds) for when the file will expire.
+	ExpiresAt JSONUNIXTime `json:"expires_at,omitzero"`
+	// Deprecated.
+	//
+	// Deprecated: deprecated
+	StatusDetails string `json:"status_details"`
+}
+
+// The intended purpose of the file. Supported values are `assistants`,
+// `assistants_output`, `batch`, `batch_output`, `fine-tune`, `fine-tune-results`,
+// `vision`, and `user_data`.
+type FileObjectPurpose string
+
+const (
+	FileObjectPurposeAssistants       FileObjectPurpose = "assistants"
+	FileObjectPurposeAssistantsOutput FileObjectPurpose = "assistants_output"
+	FileObjectPurposeBatch            FileObjectPurpose = "batch"
+	FileObjectPurposeBatchOutput      FileObjectPurpose = "batch_output"
+	FileObjectPurposeFineTune         FileObjectPurpose = "fine-tune"
+	FileObjectPurposeFineTuneResults  FileObjectPurpose = "fine-tune-results"
+	FileObjectPurposeVision           FileObjectPurpose = "vision"
+	FileObjectPurposeUserData         FileObjectPurpose = "user_data"
+)
+
+// Deprecated. The current status of the file, which can be either `uploaded`,
+// `processed`, or `error`.
+type FileObjectStatus string
+
+const (
+	FileObjectStatusUploaded  FileObjectStatus = "uploaded"
+	FileObjectStatusProcessed FileObjectStatus = "processed"
+	FileObjectStatusError     FileObjectStatus = "error"
+)
+
+// FileListResponse is the paginated list response returned by GET /v1/files.
+type FileListResponse struct {
+	// Data is the list of file objects on this page.
+	Data []FileObject `json:"data"`
+	// Object is always "list".
+	Object string `json:"object"`
+	// HasMore indicates whether there are additional pages.
+	HasMore bool `json:"has_more"`
+	// FirstID is the id of the first file in this page, used for cursor-based pagination.
+	FirstID string `json:"first_id,omitempty"`
+	// LastID is the id of the last file in this page, used as the cursor for the next page.
+	LastID string `json:"last_id,omitempty"`
+}
+
+// The `FileDeleted` object represents the response from the API when a file is deleted.
+type FileDeleted struct {
+	ID      string `json:"id"`
+	Deleted bool   `json:"deleted"`
+	Object  string `json:"object"`
 }

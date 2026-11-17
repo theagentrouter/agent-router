@@ -81,6 +81,8 @@ type runCmdContext struct {
 	fakeClientSet *fake.Clientset
 	// mcpSessionEncryptionIterations is the number of iterations for MCP session encryption key derivation.
 	mcpSessionEncryptionIterations int
+	// fileIDEncryptionIterations is the number of iterations for Files/Batch API id encryption key derivation.
+	fileIDEncryptionIterations int
 }
 
 // run starts the AI Gateway locally for a given configuration.
@@ -148,6 +150,7 @@ func run(ctx context.Context, c *cmdRun, o *runOpts, stdout, stderr io.Writer) e
 		adminPort:                      c.AdminPort,
 		extProcLauncher:                o.extProcLauncher,
 		mcpSessionEncryptionIterations: c.MCPSessionEncryptionIterations,
+		fileIDEncryptionIterations:     c.FileIDEncryptionIterations,
 	}
 	// If any of the configured MCP servers is using stdio, set up the streamable HTTP proxies for them
 	if err = proxyStdioMCPServers(ctx, debugLogger, c.mcpConfig); err != nil {
@@ -278,7 +281,7 @@ func recreateDir(path string) error {
 // writeEnvoyResourcesAndRunExtProc reads all resources from the given string, writes them to the output file, and runs
 // external processes for EnvoyExtensionPolicy resources.
 func (runCtx *runCmdContext) writeEnvoyResourcesAndRunExtProc(ctx context.Context, original string) (client.Client, <-chan error, int, error) {
-	aigwRoutes, mcpRoutes, aigwBackends, backendSecurityPolicies, backendTLSPolicies, gateways, secrets, _, err := collectObjects(original, runCtx.envoyGatewayResourcesOut, runCtx.stderrLogger)
+	aigwRoutes, mcpRoutes, aigwBackends, backendSecurityPolicies, backendTLSPolicies, referenceGrants, gateways, secrets, _, err := collectObjects(original, runCtx.envoyGatewayResourcesOut, runCtx.stderrLogger)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("error collecting: %w", err)
 	}
@@ -301,7 +304,7 @@ func (runCtx *runCmdContext) writeEnvoyResourcesAndRunExtProc(ctx context.Contex
 	}
 
 	var secretList *corev1.SecretList
-	fakeClient, _fakeClientSet, httpRoutes, eps, httpRouteFilters, backends, secretList, backendTrafficPolicies, securityPolicies, err := translateCustomResourceObjects(ctx, aigwRoutes, mcpRoutes, aigwBackends, backendSecurityPolicies, backendTLSPolicies, gateways, secrets, runCtx.stderrLogger)
+	fakeClient, _fakeClientSet, httpRoutes, eps, httpRouteFilters, backends, secretList, backendTrafficPolicies, securityPolicies, err := translateCustomResourceObjects(ctx, aigwRoutes, mcpRoutes, aigwBackends, backendSecurityPolicies, backendTLSPolicies, referenceGrants, gateways, secrets, runCtx.stderrLogger)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("error translating: %w", err)
 	}
@@ -378,26 +381,47 @@ func (runCtx *runCmdContext) writeEnvoyResourcesAndRunExtProc(ctx context.Contex
 	return fakeClient, done, runCtx.tryFindEnvoyListenerPort(gw), nil
 }
 
+const (
+	// fileIDEncryptionSeedEnvVar sets the Files/Batch API id encryption seed for `aigw run`.
+	fileIDEncryptionSeedEnvVar = "AIGW_FILE_ID_ENCRYPTION_SEED"
+	// mcpSessionEncryptionSeedEnvVar sets the MCP session encryption seed for `aigw run`.
+	mcpSessionEncryptionSeedEnvVar = "AIGW_MCP_SESSION_ENCRYPTION_SEED"
+)
+
+// setEncryptionSeeds puts the encryption seeds from the environment into the filter config. They are
+// delivered through the config bundle rather than as extproc arguments, so they never appear on a
+// process command line. When unset, the extproc falls back to its default seeds.
+func (runCtx *runCmdContext) setEncryptionSeeds(filterCfg *filterapi.Config) {
+	if seed := os.Getenv(fileIDEncryptionSeedEnvVar); seed != "" {
+		filterCfg.FileIDEncryption = &filterapi.FileIDEncryption{Seed: seed, Iterations: runCtx.fileIDEncryptionIterations}
+	}
+	if seed := os.Getenv(mcpSessionEncryptionSeedEnvVar); seed != "" && filterCfg.MCPConfig != nil {
+		filterCfg.MCPConfig.SessionEncryption = &filterapi.MCPSessionEncryption{
+			Seed:       seed,
+			Iterations: runCtx.mcpSessionEncryptionIterations,
+		}
+	}
+}
+
 // mustStartExtProc starts the external process with the given working directory, port, and filter configuration.
 func (runCtx *runCmdContext) mustStartExtProc(
 	ctx context.Context,
 	filterCfg *filterapi.Config,
 ) <-chan error {
+	runCtx.setEncryptionSeeds(filterCfg)
 	marshaled, err := yaml.Marshal(filterCfg)
 	if err != nil {
 		panic(fmt.Sprintf("BUG: failed to marshal filter config: %v", err))
 	}
-	configPath := filepath.Join(runCtx.tmpdir, "extproc-config.yaml")
-	_ = os.Remove(configPath)
-	err = os.WriteFile(configPath, marshaled, 0o600)
-	if err != nil {
-		panic(fmt.Sprintf("BUG: failed to write extension proc config: %v", err))
+	configBundlePath := filepath.Join(runCtx.tmpdir, "extproc-config-bundle")
+	if err = writeExtProcConfigBundle(configBundlePath, marshaled); err != nil {
+		panic(fmt.Sprintf("BUG: failed to write extension proc config bundle: %v", err))
 	}
 	args := []string{
-		"--configPath", configPath,
+		"--configBundlePath", configBundlePath,
 		"--extProcAddr", fmt.Sprintf("unix://%s", runCtx.udsPath),
 		"--adminPort", fmt.Sprintf("%d", runCtx.adminPort),
-		"--mcpAddr", ":" + strconv.Itoa(internalapi.MCPProxyPort),
+		"--mcpAddr", internalapi.MCPProxyAddr,
 		"--mcpSessionEncryptionIterations", strconv.Itoa(runCtx.mcpSessionEncryptionIterations),
 	}
 	if runCtx.isDebug {
@@ -428,6 +452,29 @@ func (runCtx *runCmdContext) mustStartExtProc(
 		close(done)
 	}()
 	return done
+}
+
+func writeExtProcConfigBundle(bundlePath string, raw []byte) error {
+	part := filterapi.ConfigBundlePart{
+		Name:      "extproc-config",
+		Path:      filterapi.ConfigBundlePartPath(0),
+		SizeBytes: len(raw),
+	}
+	partPath := filepath.Join(bundlePath, filepath.FromSlash(part.Path))
+	if err := os.MkdirAll(filepath.Dir(partPath), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(partPath, raw, 0o600); err != nil {
+		return err
+	}
+	indexRaw, err := filterapi.MarshalConfigBundleIndex(&filterapi.ConfigBundleIndex{
+		Checksum: filterapi.ConfigBundleChecksum(raw),
+		Parts:    []filterapi.ConfigBundlePart{part},
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(bundlePath, filterapi.ConfigBundleIndexFileName), indexRaw, 0o600)
 }
 
 func envOptional(name string) *string {

@@ -6,8 +6,7 @@
 package openinference
 
 import (
-	"os"
-	"strconv"
+	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingenv"
 )
 
 // Environment variable names for trace configuration following Python OpenInference conventions.
@@ -156,44 +155,18 @@ func (c *TraceConfig) CapturesMessages() bool {
 // See: https://github.com/Arize-ai/openinference/blob/main/spec/embedding_spans.md
 func NewTraceConfigFromEnv() *TraceConfig {
 	return &TraceConfig{
-		HideLLMInvocationParameters: getBoolEnv(EnvHideLLMInvocationParameters, defaultHideLLMInvocationParameters),
-		HideInputs:                  getBoolEnv(EnvHideInputs, defaultHideInputs),
-		HideOutputs:                 getBoolEnv(EnvHideOutputs, defaultHideOutputs),
-		HideInputMessages:           getBoolEnv(EnvHideInputMessages, defaultHideInputMessages),
-		HideOutputMessages:          getBoolEnv(EnvHideOutputMessages, defaultHideOutputMessages),
-		HideInputImages:             getBoolEnv(EnvHideInputImages, defaultHideInputImages),
-		HideInputText:               getBoolEnv(EnvHideInputText, defaultHideInputText),
-		HideOutputText:              getBoolEnv(EnvHideOutputText, defaultHideOutputText),
-		HideEmbeddingsVectors:       getBoolEnv(EnvHideEmbeddingsVectors, defaultHideEmbeddingsVectors),
-		HideEmbeddingsText:          getBoolEnv(EnvHideEmbeddingsText, defaultHideEmbeddingsText),
-		Base64ImageMaxLength:        getIntEnv(EnvBase64ImageMaxLength, defaultBase64ImageMaxLength),
-		HidePrompts:                 getBoolEnv(EnvHidePrompts, defaultHidePrompts),
-		HideChoices:                 getBoolEnv(EnvHideChoices, defaultHideChoices),
+		HideLLMInvocationParameters: tracingenv.GetBoolEnv(EnvHideLLMInvocationParameters, defaultHideLLMInvocationParameters),
+		HideInputs:                  tracingenv.GetBoolEnv(EnvHideInputs, defaultHideInputs),
+		HideOutputs:                 tracingenv.GetBoolEnv(EnvHideOutputs, defaultHideOutputs),
+		HideInputMessages:           tracingenv.GetBoolEnv(EnvHideInputMessages, defaultHideInputMessages),
+		HideOutputMessages:          tracingenv.GetBoolEnv(EnvHideOutputMessages, defaultHideOutputMessages),
+		HideInputImages:             tracingenv.GetBoolEnv(EnvHideInputImages, defaultHideInputImages),
+		HideInputText:               tracingenv.GetBoolEnv(EnvHideInputText, defaultHideInputText),
+		HideOutputText:              tracingenv.GetBoolEnv(EnvHideOutputText, defaultHideOutputText),
+		HideEmbeddingsVectors:       tracingenv.GetBoolEnv(EnvHideEmbeddingsVectors, defaultHideEmbeddingsVectors),
+		HideEmbeddingsText:          tracingenv.GetBoolEnv(EnvHideEmbeddingsText, defaultHideEmbeddingsText),
+		Base64ImageMaxLength:        tracingenv.GetIntEnv(EnvBase64ImageMaxLength, defaultBase64ImageMaxLength),
+		HidePrompts:                 tracingenv.GetBoolEnv(EnvHidePrompts, defaultHidePrompts),
+		HideChoices:                 tracingenv.GetBoolEnv(EnvHideChoices, defaultHideChoices),
 	}
-}
-
-// getEnv reads a value from an environment variable and parses it using the provided parser.
-// Returns defaultValue if the variable is not set or cannot be parsed.
-func getEnv[T any](key string, defaultValue T, parse func(string) (T, error)) T {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	parsed, err := parse(value)
-	if err != nil {
-		return defaultValue
-	}
-	return parsed
-}
-
-// getBoolEnv reads a boolean value from an environment variable.
-// Returns defaultValue if the variable is not set or cannot be parsed.
-func getBoolEnv(key string, defaultValue bool) bool {
-	return getEnv(key, defaultValue, strconv.ParseBool)
-}
-
-// getIntEnv reads an integer value from an environment variable.
-// Returns defaultValue if the variable is not set or cannot be parsed.
-func getIntEnv(key string, defaultValue int) int {
-	return getEnv(key, defaultValue, strconv.Atoi)
 }

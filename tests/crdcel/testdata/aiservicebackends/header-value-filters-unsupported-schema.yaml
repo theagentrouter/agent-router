@@ -1,0 +1,24 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: cat-backend
+  namespace: default
+spec:
+  schema:
+    # headerValueFilters is only honored by GCPAnthropic and AWSAnthropic backends, so this is
+    # invalid even though "Anthropic" is itself a supported schema.
+    name: Anthropic
+  backendRef:
+    name: dog-service
+    kind: Backend
+    group: gateway.envoyproxy.io
+    port: 80
+  headerValueFilters:
+    - name: anthropic-beta
+      mode: Denylist
+      values: ["thinking-token-count-2026-05-13"]

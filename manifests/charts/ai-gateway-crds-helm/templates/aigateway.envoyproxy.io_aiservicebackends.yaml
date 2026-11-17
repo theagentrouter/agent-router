@@ -32,19 +32,12 @@ spec:
         description: |-
           AIServiceBackend is a resource that represents a single backend for AIGatewayRoute.
           A backend is a service that handles traffic with a concrete API specification.
-
-          A AIServiceBackend is "attached" to a Backend which is either a k8s Service or a Backend resource of the Envoy Gateway.
-
-          When a backend with an attached AIServiceBackend is used as a routing target in the AIGatewayRoute (more precisely, the
-          HTTPRouteSpec defined in the AIGatewayRoute), the ai-gateway will generate the necessary configuration to do
-          the backend specific logic in the final HTTPRoute.
         properties:
           apiVersion:
             description: |-
               APIVersion defines the versioned schema of this representation of an object.
               Servers should convert recognized schemas to the latest internal value, and
               may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
             description: |-
@@ -52,7 +45,6 @@ spec:
               Servers may infer this from the endpoint the client submits requests to.
               Cannot be updated.
               In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
@@ -63,10 +55,7 @@ spec:
                 description: |-
                   BackendRef is the reference to the Backend resource that this AIServiceBackend corresponds to.
 
-                  A backend must be a Backend resource of Envoy Gateway. Note that k8s Service will be supported
-                  as a backend in the future. See https://github.com/envoyproxy/ai-gateway/issues/902 for more details.
-
-                  This is required to be set.
+                  A backend must be a Backend resource of Envoy Gateway.
                 properties:
                   group:
                     default: ""
@@ -83,16 +72,6 @@ spec:
                       "Service".
 
                       Defaults to "Service" when not specified.
-
-                      ExternalName services can refer to CNAME DNS records that may live
-                      outside of the cluster and as such are difficult to reason about in
-                      terms of conformance. They also may not be safe to forward to (see
-                      CVE-2021-25740 for more information). Implementations SHOULD NOT
-                      support ExternalName Services.
-
-                      Support: Core (Services with a type other than ExternalName)
-
-                      Support: Implementation-specific (Services with type ExternalName)
                     maxLength: 63
                     minLength: 1
                     pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
@@ -106,13 +85,6 @@ spec:
                     description: |-
                       Namespace is the namespace of the backend. When unspecified, the local
                       namespace is inferred.
-
-                      Note that when a namespace different than the local namespace is specified,
-                      a ReferenceGrant object is required in the referent namespace to allow that
-                      namespace's owner to accept the reference. See the ReferenceGrant
-                      documentation for details.
-
-                      Support: Core
                     maxLength: 63
                     minLength: 1
                     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
@@ -120,10 +92,7 @@ spec:
                   port:
                     description: |-
                       Port specifies the destination port number to use for this resource.
-                      Port is required when the referent is a Kubernetes Service. In this
-                      case, the port number is the service port number, not the target port.
-                      For other resources, destination port might be derived from the referent
-                      resource or this field.
+                      Port is required when the referent is a Kubernetes Service.
                     format: int32
                     maximum: 65535
                     minimum: 1
@@ -149,21 +118,6 @@ spec:
                     description: |-
                       Remove the given JSON field(s) from the HTTP request body before sending to the backend.
                       The value of Remove is a list of top-level field names to remove.
-
-                      Input:
-                        {
-                          "model": "gpt-4",
-                          "service_tier": "default",
-                          "internal_flag": true
-                        }
-
-                      Config:
-                        remove: ["service_tier", "internal_flag"]
-
-                      Output:
-                        {
-                          "model": "gpt-4"
-                        }
                     items:
                       type: string
                     maxItems: 16
@@ -173,23 +127,6 @@ spec:
                     description: |-
                       Set overwrites/adds the request body with the given JSON field (name, value)
                       before sending to the backend. Only top-level fields are currently supported.
-
-                      Input:
-                        {
-                          "model": "gpt-4",
-                          "service_tier": "default"
-                        }
-
-                      Config:
-                        set:
-                        - path: "service_tier"
-                          value: "scale"
-
-                      Output:
-                        {
-                          "model": "gpt-4",
-                          "service_tier": "scale"
-                        }
                     items:
                       description: HTTPBodyField represents a JSON field name and
                         value for body mutation
@@ -204,15 +141,6 @@ spec:
                           description: |-
                             Value is the JSON value to set at the specified field. This can be any valid JSON value:
                             string, number, boolean, object, array, or null.
-                            The value will be parsed as JSON and inserted at the specified field.
-
-                            Examples:
-                              - "\"scale\"" (string)
-                              - "42" (number)
-                              - "true" (boolean)
-                              - "{\"key\": \"value\"}" (object)
-                              - "[1, 2, 3]" (array)
-                              - "null" (null)
                           type: string
                       required:
                       - path
@@ -234,20 +162,7 @@ spec:
                       Remove the given header(s) from the HTTP request before the action. The
                       value of Remove is a list of HTTP header names. Note that the header
                       names are case-insensitive (see
-                      https://datatracker.ietf.org/doc/html/rfc2616#section-4.2).
-
-                      Input:
-                        GET /foo HTTP/1.1
-                        my-header1: foo
-                        my-header2: bar
-                        my-header3: baz
-
-                      Config:
-                        remove: ["my-header1", "my-header3"]
-
-                      Output:
-                        GET /foo HTTP/1.1
-                        my-header2: bar
+                      https://datatracker.ietf.
                     items:
                       type: string
                     maxItems: 16
@@ -259,17 +174,7 @@ spec:
                       before the action.
 
                       Input:
-                        GET /foo HTTP/1.1
-                        my-header: foo
-
-                      Config:
-                        set:
-                        - name: "my-header"
-                          value: "bar"
-
-                      Output:
-                        GET /foo HTTP/1.1
-                        my-header: bar
+                        GET /foo HTTP/1.
                     items:
                       description: HTTPHeader represents an HTTP Header name and value
                         as defined by RFC 7230.
@@ -278,12 +183,6 @@ spec:
                           description: |-
                             Name is the name of the HTTP Header to be matched. Name matching MUST be
                             case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
-
-                            If multiple entries specify equivalent header names, the first entry with
-                            an equivalent name MUST be considered for a match. Subsequent entries
-                            with an equivalent header name MUST be ignored. Due to the
-                            case-insensitivity of header names, "foo" and "Foo" are considered
-                            equivalent.
                           maxLength: 256
                           minLength: 1
                           pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
@@ -293,10 +192,7 @@ spec:
                             Value is the value of HTTP Header to be matched.
                             <gateway:experimental:description>
                             Must consist of printable US-ASCII characters, optionally separated
-                            by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
-                            </gateway:experimental:description>
-
-                            <gateway:experimental:validation:Pattern=`^[!-~]+([\t ]?[!-~]+)*$`>
+                            by single tabs or spaces. See: https://tools.
                           maxLength: 4096
                           minLength: 1
                           type: string
@@ -314,10 +210,6 @@ spec:
                 description: |-
                   APISchema specifies the API schema of the output format of requests from
                   Envoy that this AIServiceBackend can accept as incoming requests.
-                  Based on this schema, the ai-gateway will perform the necessary transformation for
-                  the pair of AIGatewayRouteSpec.APISchema and AIServiceBackendSpec.APISchema.
-
-                  This is required to be set.
                 properties:
                   name:
                     description: Name is the name of the API schema of the AIGatewayRoute
@@ -331,34 +223,21 @@ spec:
                     - GCPAnthropic
                     - Anthropic
                     - AWSAnthropic
+                    - AWSOpenAI
+                    - TypeSafe
                     type: string
                   prefix:
                     description: |-
                       Prefix is the prefix for the API.
 
                       When the name is set to "OpenAI", "chat completions" API endpoint will be "${this_field}/chat/completions".
-                      When the name is set to "Anthropic", the "messages" API endpoint will be "${this_field}/messages".
-                      It can be with or without a leading slash ("/").
-                      This field is ignored for AWSAnthropic and GCPAnthropic.
-
-                      This is especially useful when routing to a backend that has an OpenAI or Anthropic compatible API but has a different
-                      prefix. For example, Gemini OpenAI compatible API (https://ai.google.dev/gemini-api/docs/openai) uses
-                      "/v1beta/openai" prefix. Another example is that Cohere AI (https://docs.cohere.com/v2/docs/compatibility-api)
-                      uses "/compatibility/v1" prefix. On the other hand, DeepSeek (https://api-docs.deepseek.com/) doesn't
-                      use prefix, so you can leave this field unset.
-
-                      See https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/supported-providers for details.
                     type: string
                   version:
                     description: |-
                       Version is the version of the API schema.
 
                       When the name is set to AzureOpenAI, this version maps to "API Version" in the
-                      Azure OpenAI API documentation (https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#rest-api-versioning).
-                      This field is ignored for OpenAI, AWSBedrock, GCPVertexAI, and Anthropic.
-                      For OpenAI and Anthropic, use prefix to configure custom request paths.
-
-                      See https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/supported-providers for details.
+                      Azure OpenAI API documentation (https://learn.microsoft.
                     type: string
                 required:
                 - name
@@ -383,7 +262,7 @@ spec:
                     lastTransitionTime:
                       description: |-
                         lastTransitionTime is the last time the condition transitioned from one status to another.
-                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                        This should be when the underlying condition changed.
                       format: date-time
                       type: string
                     message:
@@ -395,18 +274,13 @@ spec:
                     observedGeneration:
                       description: |-
                         observedGeneration represents the .metadata.generation that the condition was set based upon.
-                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                        with respect to the current state of the instance.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
-                      description: |-
-                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-                        Producers of specific condition types may define expected values and meanings for this field,
-                        and whether the values are considered a guaranteed API.
-                        The value should be a CamelCase string.
-                        This field may not be empty.
+                      description: reason contains a programmatic identifier indicating
+                        the reason for the condition's last transition.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
@@ -447,19 +321,12 @@ spec:
         description: |-
           AIServiceBackend is a resource that represents a single backend for AIGatewayRoute.
           A backend is a service that handles traffic with a concrete API specification.
-
-          A AIServiceBackend is "attached" to a Backend which is either a k8s Service or a Backend resource of the Envoy Gateway.
-
-          When a backend with an attached AIServiceBackend is used as a routing target in the AIGatewayRoute (more precisely, the
-          HTTPRouteSpec defined in the AIGatewayRoute), the ai-gateway will generate the necessary configuration to do
-          the backend specific logic in the final HTTPRoute.
         properties:
           apiVersion:
             description: |-
               APIVersion defines the versioned schema of this representation of an object.
               Servers should convert recognized schemas to the latest internal value, and
               may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
             description: |-
@@ -467,7 +334,6 @@ spec:
               Servers may infer this from the endpoint the client submits requests to.
               Cannot be updated.
               In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
@@ -478,10 +344,7 @@ spec:
                 description: |-
                   BackendRef is the reference to the Backend resource that this AIServiceBackend corresponds to.
 
-                  A backend must be a Backend resource of Envoy Gateway. Note that k8s Service will be supported
-                  as a backend in the future. See https://github.com/envoyproxy/ai-gateway/issues/902 for more details.
-
-                  This is required to be set.
+                  A backend must be a Backend resource of Envoy Gateway.
                 properties:
                   group:
                     default: ""
@@ -498,16 +361,6 @@ spec:
                       "Service".
 
                       Defaults to "Service" when not specified.
-
-                      ExternalName services can refer to CNAME DNS records that may live
-                      outside of the cluster and as such are difficult to reason about in
-                      terms of conformance. They also may not be safe to forward to (see
-                      CVE-2021-25740 for more information). Implementations SHOULD NOT
-                      support ExternalName Services.
-
-                      Support: Core (Services with a type other than ExternalName)
-
-                      Support: Implementation-specific (Services with type ExternalName)
                     maxLength: 63
                     minLength: 1
                     pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
@@ -521,13 +374,6 @@ spec:
                     description: |-
                       Namespace is the namespace of the backend. When unspecified, the local
                       namespace is inferred.
-
-                      Note that when a namespace different than the local namespace is specified,
-                      a ReferenceGrant object is required in the referent namespace to allow that
-                      namespace's owner to accept the reference. See the ReferenceGrant
-                      documentation for details.
-
-                      Support: Core
                     maxLength: 63
                     minLength: 1
                     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
@@ -535,10 +381,7 @@ spec:
                   port:
                     description: |-
                       Port specifies the destination port number to use for this resource.
-                      Port is required when the referent is a Kubernetes Service. In this
-                      case, the port number is the service port number, not the target port.
-                      For other resources, destination port might be derived from the referent
-                      resource or this field.
+                      Port is required when the referent is a Kubernetes Service.
                     format: int32
                     maximum: 65535
                     minimum: 1
@@ -564,21 +407,6 @@ spec:
                     description: |-
                       Remove the given JSON field(s) from the HTTP request body before sending to the backend.
                       The value of Remove is a list of top-level field names to remove.
-
-                      Input:
-                        {
-                          "model": "gpt-4",
-                          "service_tier": "default",
-                          "internal_flag": true
-                        }
-
-                      Config:
-                        remove: ["service_tier", "internal_flag"]
-
-                      Output:
-                        {
-                          "model": "gpt-4"
-                        }
                     items:
                       type: string
                     maxItems: 16
@@ -588,23 +416,6 @@ spec:
                     description: |-
                       Set overwrites/adds the request body with the given JSON field (name, value)
                       before sending to the backend. Only top-level fields are currently supported.
-
-                      Input:
-                        {
-                          "model": "gpt-4",
-                          "service_tier": "default"
-                        }
-
-                      Config:
-                        set:
-                        - path: "service_tier"
-                          value: "scale"
-
-                      Output:
-                        {
-                          "model": "gpt-4",
-                          "service_tier": "scale"
-                        }
                     items:
                       description: HTTPBodyField represents a JSON field name and
                         value for body mutation
@@ -619,15 +430,6 @@ spec:
                           description: |-
                             Value is the JSON value to set at the specified field. This can be any valid JSON value:
                             string, number, boolean, object, array, or null.
-                            The value will be parsed as JSON and inserted at the specified field.
-
-                            Examples:
-                              - "\"scale\"" (string)
-                              - "42" (number)
-                              - "true" (boolean)
-                              - "{\"key\": \"value\"}" (object)
-                              - "[1, 2, 3]" (array)
-                              - "null" (null)
                           type: string
                       required:
                       - path
@@ -649,20 +451,7 @@ spec:
                       Remove the given header(s) from the HTTP request before the action. The
                       value of Remove is a list of HTTP header names. Note that the header
                       names are case-insensitive (see
-                      https://datatracker.ietf.org/doc/html/rfc2616#section-4.2).
-
-                      Input:
-                        GET /foo HTTP/1.1
-                        my-header1: foo
-                        my-header2: bar
-                        my-header3: baz
-
-                      Config:
-                        remove: ["my-header1", "my-header3"]
-
-                      Output:
-                        GET /foo HTTP/1.1
-                        my-header2: bar
+                      https://datatracker.ietf.
                     items:
                       type: string
                     maxItems: 16
@@ -674,17 +463,7 @@ spec:
                       before the action.
 
                       Input:
-                        GET /foo HTTP/1.1
-                        my-header: foo
-
-                      Config:
-                        set:
-                        - name: "my-header"
-                          value: "bar"
-
-                      Output:
-                        GET /foo HTTP/1.1
-                        my-header: bar
+                        GET /foo HTTP/1.
                     items:
                       description: HTTPHeader represents an HTTP Header name and value
                         as defined by RFC 7230.
@@ -693,12 +472,6 @@ spec:
                           description: |-
                             Name is the name of the HTTP Header to be matched. Name matching MUST be
                             case-insensitive. (See https://tools.ietf.org/html/rfc7230#section-3.2).
-
-                            If multiple entries specify equivalent header names, the first entry with
-                            an equivalent name MUST be considered for a match. Subsequent entries
-                            with an equivalent header name MUST be ignored. Due to the
-                            case-insensitivity of header names, "foo" and "Foo" are considered
-                            equivalent.
                           maxLength: 256
                           minLength: 1
                           pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
@@ -708,10 +481,7 @@ spec:
                             Value is the value of HTTP Header to be matched.
                             <gateway:experimental:description>
                             Must consist of printable US-ASCII characters, optionally separated
-                            by single tabs or spaces. See: https://tools.ietf.org/html/rfc7230#section-3.2
-                            </gateway:experimental:description>
-
-                            <gateway:experimental:validation:Pattern=`^[!-~]+([\t ]?[!-~]+)*$`>
+                            by single tabs or spaces. See: https://tools.
                           maxLength: 4096
                           minLength: 1
                           type: string
@@ -725,14 +495,53 @@ spec:
                     - name
                     x-kubernetes-list-type: map
                 type: object
+              headerValueFilters:
+                description: |-
+                  HeaderValueFilters filter individual values out of multi-valued request headers before sending
+                  the request to this backend, so that one value an upstream provider does not accept does not
+                  fail the...
+                items:
+                  description: |-
+                    HTTPHeaderValueFilter filters individual values out of a multi-valued request header before the
+                    request is forwarded to this backend.
+                  properties:
+                    mode:
+                      default: Denylist
+                      description: Mode selects the filtering semantics. Defaults
+                        to Denylist.
+                      enum:
+                      - Denylist
+                      - Allowlist
+                      type: string
+                    name:
+                      description: |-
+                        Name is the name of the header whose values are filtered. Header names are
+                        case-insensitive (see https://datatracker.ietf.org/doc/html/rfc2616#section-4.2).
+                      maxLength: 256
+                      minLength: 1
+                      pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                      type: string
+                    values:
+                      description: |-
+                        Values is the list of header values to drop (Denylist) or keep (Allowlist).
+                        An empty list leaves the header unchanged.
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - name
+                  type: object
+                maxItems: 16
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               schema:
                 description: |-
                   APISchema specifies the API schema of the output format of requests from
                   Envoy that this AIServiceBackend can accept as incoming requests.
-                  Based on this schema, the ai-gateway will perform the necessary transformation for
-                  the pair of AIGatewayRouteSpec.APISchema and AIServiceBackendSpec.APISchema.
-
-                  This is required to be set.
                 properties:
                   name:
                     description: Name is the name of the API schema of the AIGatewayRoute
@@ -746,34 +555,21 @@ spec:
                     - GCPAnthropic
                     - Anthropic
                     - AWSAnthropic
+                    - AWSOpenAI
+                    - TypeSafe
                     type: string
                   prefix:
                     description: |-
                       Prefix is the prefix for the API.
 
                       When the name is set to "OpenAI", "chat completions" API endpoint will be "${this_field}/chat/completions".
-                      When the name is set to "Anthropic", the "messages" API endpoint will be "${this_field}/messages".
-                      It can be with or without a leading slash ("/").
-                      This field is ignored for AWSAnthropic and GCPAnthropic.
-
-                      This is especially useful when routing to a backend that has an OpenAI or Anthropic compatible API but has a different
-                      prefix. For example, Gemini OpenAI compatible API (https://ai.google.dev/gemini-api/docs/openai) uses
-                      "/v1beta/openai" prefix. Another example is that Cohere AI (https://docs.cohere.com/v2/docs/compatibility-api)
-                      uses "/compatibility/v1" prefix. On the other hand, DeepSeek (https://api-docs.deepseek.com/) doesn't
-                      use prefix, so you can leave this field unset.
-
-                      See https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/supported-providers for details.
                     type: string
                   version:
                     description: |-
                       Version is the version of the API schema.
 
                       When the name is set to AzureOpenAI, this version maps to "API Version" in the
-                      Azure OpenAI API documentation (https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#rest-api-versioning).
-                      This field is ignored for OpenAI, AWSBedrock, GCPVertexAI, and Anthropic.
-                      For OpenAI and Anthropic, use prefix to configure custom request paths.
-
-                      See https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/supported-providers for details.
+                      Azure OpenAI API documentation (https://learn.microsoft.
                     type: string
                 required:
                 - name
@@ -782,6 +578,11 @@ spec:
             - backendRef
             - schema
             type: object
+            x-kubernetes-validations:
+            - message: headerValueFilters is only honored by GCPAnthropic and AWSAnthropic
+                backends
+              rule: '!has(self.headerValueFilters) || self.schema.name == ''GCPAnthropic''
+                || self.schema.name == ''AWSAnthropic'''
           status:
             description: Status defines the status details of the AIServiceBackend.
             properties:
@@ -798,7 +599,7 @@ spec:
                     lastTransitionTime:
                       description: |-
                         lastTransitionTime is the last time the condition transitioned from one status to another.
-                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                        This should be when the underlying condition changed.
                       format: date-time
                       type: string
                     message:
@@ -810,18 +611,13 @@ spec:
                     observedGeneration:
                       description: |-
                         observedGeneration represents the .metadata.generation that the condition was set based upon.
-                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                        with respect to the current state of the instance.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
-                      description: |-
-                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-                        Producers of specific condition types may define expected values and meanings for this field,
-                        and whether the values are considered a guaranteed API.
-                        The value should be a CamelCase string.
-                        This field may not be empty.
+                      description: reason contains a programmatic identifier indicating
+                        the reason for the condition's last transition.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$

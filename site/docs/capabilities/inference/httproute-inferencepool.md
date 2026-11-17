@@ -4,8 +4,7 @@ title: HTTPRoute + InferencePool Guide
 sidebar_position: 2
 ---
 
-import CodeBlock from '@theme/CodeBlock';
-import vars from '../../\_vars.json';
+import Setup from './\_setup.mdx';
 
 # HTTPRoute + InferencePool Guide
 
@@ -13,71 +12,9 @@ This guide shows how to use InferencePool with the standard Gateway API HTTPRout
 
 ![](/img/inference-httproute.svg)
 
-## Prerequisites
+<Setup />
 
-Before starting, ensure you have:
-
-1. **Kubernetes cluster** with Gateway API support
-2. **Envoy Gateway** installed and configured
-
-## Step 1: Install Gateway API Inference Extension
-
-Install the Gateway API Inference Extension CRDs and controller:
-
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/v1.0.1/manifests.yaml
-```
-
-After installing InferencePool CRD, enable InferencePool support in Envoy Gateway, restart the deployment, and wait for it to be ready:
-
-<CodeBlock language="shell">
-{`kubectl apply -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/inference-pool/config.yaml
-
-kubectl rollout restart -n envoy-gateway-system deployment/envoy-gateway
-
-kubectl wait --timeout=2m -n envoy-gateway-system deployment/envoy-gateway --for=condition=Available`}
-</CodeBlock>
-
-## Step 2: Ensure Envoy Gateway is configured for InferencePool
-
-See [Envoy Gateway Installation Guide](../../getting-started/prerequisites.md#additional-features-rate-limiting-inferencepool-etc)
-
-## Step 3: Deploy Inference Backend
-
-Deploy a sample inference backend that will serve as your inference endpoints:
-
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/raw/v1.0.1/config/manifests/vllm/sim-deployment.yaml
-```
-
-This creates a simulated vLLM deployment with multiple replicas that can handle inference requests.
-
-> **Note**: This deployment creates the `vllm-llama3-8b-instruct` InferencePool and related resources that are referenced in the HTTPRoute configuration below.
-
-## Step 4: Create InferenceObjective
-
-Create an InferenceObjective resource to define the model configuration:
-
-```bash
-kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/gateway-api-inference-extension/refs/tags/v1.0.1/config/manifests/inferenceobjective.yaml
-```
-
-## Step 5: Create InferencePool Resources
-
-Deploy the InferencePool and related resources:
-
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/raw/v1.0.1/config/manifests/inferencepool-resources.yaml
-```
-
-This creates:
-
-- InferencePool resource defining the endpoint selection criteria
-- Endpoint Picker Provider (EPP) deployment for intelligent routing with advanced scheduling plugins
-- Associated services and configurations
-- RBAC permissions for accessing InferencePool and Pod resources
-
-## Step 6: Configure Gateway and HTTPRoute
+## Step 4: Configure Gateway and HTTPRoute
 
 Create a Gateway and HTTPRoute that uses the InferencePool:
 
@@ -119,7 +56,6 @@ spec:
           kind: InferencePool
           name: vllm-llama3-8b-instruct
           namespace: default
-          port: 8080
           weight: 1
       matches:
         - path:
@@ -130,7 +66,7 @@ spec:
 EOF
 ```
 
-## Step 7: Test the Configuration
+## Step 5: Test the Configuration
 
 Once deployed, you can test the inference routing:
 
@@ -164,6 +100,70 @@ curl -X POST "http://${GATEWAY_IP}/v1/chat/completions" \
 4. **Endpoint Selection**: Endpoint Picker Provider (EPP) selects the optimal endpoint
 5. **Request Forwarding**: Request is forwarded to the selected inference backend
 6. **Response Return**: Response is returned to the client
+
+## Weighted Routing Across Multiple InferencePools
+
+A single HTTPRoute rule can list more than one `InferencePool` backendRef. Agent Router splits traffic across the referenced pools according to each backendRef's `weight`, using the same weight semantics defined by the [Gateway API `BackendRef`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendref) (default `1`; a `weight: 0` backendRef receives no traffic).
+
+This is useful for canary rollouts of a new model version, splitting load across pools running different accelerators, or gradually shifting traffic from one InferencePool to another.
+
+For example, to send roughly 70% of traffic to `primary-inference-pool` and 30% to `secondary-inference-pool`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: inference-pool-weighted
+  namespace: default
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: inference-pool-with-httproute
+      namespace: default
+  rules:
+    - backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: primary-inference-pool
+          namespace: default
+          port: 8080
+          weight: 70
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: secondary-inference-pool
+          namespace: default
+          port: 8080
+          weight: 30
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+```
+
+Each InferencePool keeps its own Endpoint Picker Provider (EPP), so a request assigned to `secondary-inference-pool` is only ever scored and forwarded by that pool's EPP — the pools remain fully independent of one another. Weights can be changed at any time by updating the HTTPRoute; there's no need to touch the InferencePool resources themselves.
+
+:::info
+This weighted, multi-pool split is currently only available through HTTPRoute. [AIGatewayRoute](./aigatewayroute-inferencepool.md) rules still allow only one InferencePool backend each.
+:::
+
+A rule can also mix InferencePools with other backend kinds, such as a Service, for example to move traffic from a Service to an InferencePool gradually. Requests sent to the Service don't go through any endpoint picker.
+
+The following rules apply to any HTTPRoute rule that references an InferencePool:
+
+- Every referenced InferencePool must set `endpointPickerRef`. An InferencePool that doesn't is treated like an invalid backendRef: its share of the traffic fails and the other backends keep their weights. The failed share returns `500`, unless another backend of the same rule has no ready endpoints: Envoy can only return one status code for a route's missing backends, so the failed share then returns `503`.
+- If every backendRef has `weight: 0`, the rule returns `500`. A `weight: 0` backendRef receives no traffic ([`BackendRef`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#backendref)), so this follows the [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httprouterule) rule that requests with no backend to go to get a `500`.
+- If a backendRef is invalid, for example because the InferencePool doesn't exist, its share of the traffic returns `500` and the other backends keep their weights, as the [`HTTPRouteRule`](https://gateway-api.sigs.k8s.io/reference/api-spec/main/spec/#httprouterule) specifies. As above, the share returns `503` instead when another backend of the same rule has no ready endpoints.
+
+InferencePools without an `endpointPickerRef` may be supported in a future release.
+
+:::info
+Weighted routing across InferencePools requires Envoy Gateway v1.11.0 or later, which includes [envoyproxy/gateway#10328](https://github.com/envoyproxy/gateway/pull/10328).
+:::
+
+:::warning
+On an older Envoy Gateway, an HTTPRoute rule that references more than one InferencePool isn't split: every request it matches returns `500`. Other rules and routes on the Gateway aren't affected.
+:::
 
 ## Next Steps
 

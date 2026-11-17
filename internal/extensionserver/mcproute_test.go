@@ -15,6 +15,7 @@ import (
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	htomv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_to_metadata/v3"
 	httpconnectionmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/go-logr/logr/testr"
@@ -191,50 +192,96 @@ func TestServer_createRoutesForBackendListener(t *testing.T) {
 }
 
 func TestServer_modifyMCPGatewayGeneratedCluster(t *testing.T) {
-	tests := []struct {
-		name             string
-		clusters         []*clusterv3.Cluster
-		expectedClusters []*clusterv3.Cluster
-	}{
-		{
-			name: "modifies MCP cluster",
-			clusters: []*clusterv3.Cluster{
-				{Name: "normal-cluster"},
-				{Name: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"},
-			},
-			expectedClusters: []*clusterv3.Cluster{
-				{Name: "normal-cluster"},
-				{
-					Name:                 internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0",
-					ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC},
-					ConnectTimeout:       &durationpb.Duration{Seconds: 10},
-					LoadAssignment: &endpointv3.ClusterLoadAssignment{
-						ClusterName: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0",
-						Endpoints: []*endpointv3.LocalityLbEndpoints{
-							{
-								LbEndpoints: []*endpointv3.LbEndpoint{
-									{
-										HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
-											Endpoint: &endpointv3.Endpoint{
-												Address: &corev3.Address{
-													Address: &corev3.Address_SocketAddress{
-														SocketAddress: &corev3.SocketAddress{
-															Address: "127.0.0.1",
-															PortSpecifier: &corev3.SocketAddress_PortValue{
-																PortValue: internalapi.MCPProxyPort,
-															},
-														},
-													},
-												},
+	// Envoy Gateway translates the MCP proxy Backend into an EDS cluster, so these carry no
+	// inline LoadAssignment — the name is all the rewrite has to go on.
+	rewritten := func(name string) *clusterv3.Cluster {
+		return &clusterv3.Cluster{
+			Name:                 name,
+			ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC},
+			ConnectTimeout:       &durationpb.Duration{Seconds: 10},
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{
+				ClusterName: name,
+				Endpoints: []*endpointv3.LocalityLbEndpoints{{
+					LbEndpoints: []*endpointv3.LbEndpoint{{
+						HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
+							Endpoint: &endpointv3.Endpoint{
+								Address: &corev3.Address{
+									Address: &corev3.Address_SocketAddress{
+										SocketAddress: &corev3.SocketAddress{
+											Address: "127.0.0.1",
+											PortSpecifier: &corev3.SocketAddress_PortValue{
+												PortValue: internalapi.MCPProxyPort,
 											},
 										},
 									},
 								},
 							},
 						},
-					},
-				},
+					}},
+				}},
 			},
+		}
+	}
+
+	// Envoy Gateway names clusters <routeType>/<namespace>/<name>/rule/<N>, so spell the names
+	// out in full here: a bare "<name>/rule/0" would not exercise the segment the match relies on.
+	const (
+		mcpRule0    = "httproute/default/" + internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"
+		mcpRule1    = "httproute/default/" + internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/1"
+		mcpRule2    = "httproute/default/" + internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/2"
+		perBackend0 = "httproute/default/" + internalapi.MCPPerBackendRefHTTPRoutePrefix + "foo-bar/rule/0"
+	)
+
+	tests := []struct {
+		name             string
+		clusters         []*clusterv3.Cluster
+		expectedClusters []*clusterv3.Cluster
+	}{
+		{
+			name:             "rewrites the MCP traffic rule",
+			clusters:         []*clusterv3.Cluster{{Name: "normal-cluster"}, {Name: mcpRule0}},
+			expectedClusters: []*clusterv3.Cluster{{Name: "normal-cluster"}, rewritten(mcpRule0)},
+		},
+		{
+			// The OAuth protected resource metadata rule also forwards to the proxy, so it gets
+			// its own cluster.
+			name:             "rewrites the well-known rule",
+			clusters:         []*clusterv3.Cluster{{Name: mcpRule1}},
+			expectedClusters: []*clusterv3.Cluster{rewritten(mcpRule1)},
+		},
+		{
+			// A rule added after the two that exist today must be rewritten as well: every rule
+			// on the main route that forwards at all forwards to the proxy.
+			name:             "rewrites every forwarding rule on the main route",
+			clusters:         []*clusterv3.Cluster{{Name: mcpRule0}, {Name: mcpRule1}, {Name: mcpRule2}},
+			expectedClusters: []*clusterv3.Cluster{rewritten(mcpRule0), rewritten(mcpRule1), rewritten(mcpRule2)},
+		},
+		{
+			// Per-backend routes reach the real MCP servers and must keep their own endpoints.
+			name:             "leaves per-backend clusters alone",
+			clusters:         []*clusterv3.Cluster{{Name: perBackend0}},
+			expectedClusters: []*clusterv3.Cluster{{Name: perBackend0}},
+		},
+		{
+			// The prefix has to start the name segment. A user-named HTTPRoute that merely
+			// contains it is someone else's route and must keep its endpoints.
+			name:             "leaves a route whose name only contains the prefix alone",
+			clusters:         []*clusterv3.Cluster{{Name: "httproute/default/not-" + internalapi.MCPMainHTTPRoutePrefix + "mine/rule/0"}},
+			expectedClusters: []*clusterv3.Cluster{{Name: "httproute/default/not-" + internalapi.MCPMainHTTPRoutePrefix + "mine/rule/0"}},
+		},
+		{
+			// A namespace is a DNS-1123 label, so it can start with the prefix too. Only the
+			// name segment counts: an unrelated route here must not be pulled into the proxy.
+			name:             "leaves unrelated routes in a namespace named like the prefix alone",
+			clusters:         []*clusterv3.Cluster{{Name: "httproute/" + internalapi.MCPMainHTTPRoutePrefix + "team/some-route/rule/0"}},
+			expectedClusters: []*clusterv3.Cluster{{Name: "httproute/" + internalapi.MCPMainHTTPRoutePrefix + "team/some-route/rule/0"}},
+		},
+		{
+			// The prefix is looked for in the name segment specifically, so a name missing the
+			// leading <routeType>/<namespace> is not matched.
+			name:             "leaves names without the route type and namespace segments alone",
+			clusters:         []*clusterv3.Cluster{{Name: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"}},
+			expectedClusters: []*clusterv3.Cluster{{Name: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"}},
 		},
 	}
 
@@ -243,6 +290,7 @@ func TestServer_modifyMCPGatewayGeneratedCluster(t *testing.T) {
 			s := &Server{log: testr.New(t)}
 			s.modifyMCPGatewayGeneratedCluster(tt.clusters)
 
+			require.Len(t, tt.clusters, len(tt.expectedClusters))
 			for i, expectedCluster := range tt.expectedClusters {
 				require.Empty(t, cmp.Diff(expectedCluster, tt.clusters[i], protocmp.Transform()))
 			}
@@ -327,6 +375,19 @@ func TestServer_maybeUpdateMCPRoutes(t *testing.T) {
 										filterNameJWTAuthn:   emptyConfig,
 										filterNameAPIKeyAuth: emptyConfig,
 										filterNameExtAuth:    emptyConfig,
+									},
+									// rule/0 (frontend MCP proxy route) gets the dynamic-metadata -> header
+									// injection so the HTTP MCP proxy can read the backend subset; authn is
+									// preserved.
+									RequestHeadersToAdd: []*corev3.HeaderValueOption{
+										{
+											AppendAction:   corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+											KeepEmptyValue: true,
+											Header: &corev3.HeaderValue{
+												Key:   internalapi.MCPBackendSubsetHeader,
+												Value: `%DYNAMIC_METADATA(["aigateway.envoy.io", "mcp_backend_subset"])%`,
+											},
+										},
 									},
 								},
 								{
@@ -555,7 +616,7 @@ func TestServer_maybeGenerateResourcesForMCPGateway(t *testing.T) {
 					},
 				},
 				Clusters: []*clusterv3.Cluster{
-					{Name: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"},
+					{Name: "httproute/default/" + internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"},
 				},
 			},
 			check: func(t *testing.T, req *egextension.PostTranslateModifyRequest) {
@@ -566,7 +627,10 @@ func TestServer_maybeGenerateResourcesForMCPGateway(t *testing.T) {
 				require.Equal(t, "aigateway-mcp-backend-listener-route-config", req.Routes[1].Name)
 
 				require.Len(t, req.Clusters, 1)
-				require.Equal(t, internalapi.MCPMainHTTPRoutePrefix+"foo-bar/rule/0", req.Clusters[0].Name)
+				require.Equal(t, "httproute/default/"+internalapi.MCPMainHTTPRoutePrefix+"foo-bar/rule/0", req.Clusters[0].Name)
+				// Asserted before the type assertion: an unrewritten cluster leaves this nil, and
+				// a panic here says a lot less than a failure does.
+				require.NotNil(t, req.Clusters[0].GetClusterDiscoveryType())
 				require.Equal(t, clusterv3.Cluster_STATIC, req.Clusters[0].GetClusterDiscoveryType().(*clusterv3.Cluster_Type).Type)
 			},
 		},
@@ -583,5 +647,49 @@ func TestServer_maybeGenerateResourcesForMCPGateway(t *testing.T) {
 				tt.check(t, tt.req)
 			}
 		})
+	}
+}
+
+// TestServer_createBackendListener_headerToMetadataRules pins the header_to_metadata rules the MCP
+// backend listener is built with: a stable order, and Remove set only for the internal metadata
+// headers that must not reach the upstream MCP server.
+func TestServer_createBackendListener_headerToMetadataRules(t *testing.T) {
+	s := &Server{log: testr.New(t)}
+
+	type rule struct {
+		header string
+		key    string
+		remove bool
+	}
+	rulesOf := func(t *testing.T) []rule {
+		t.Helper()
+		listener, err := s.createBackendListener(nil, nil)
+		require.NoError(t, err)
+		hcm, _, err := findHCM(listener.FilterChains[0])
+		require.NoError(t, err)
+		i, filter := findHeaderToMetadataFilter(hcm.HttpFilters)
+		require.NotEqual(t, -1, i)
+		cfg := &htomv3.Config{}
+		require.NoError(t, filter.GetTypedConfig().UnmarshalTo(cfg))
+		rules := make([]rule, 0, len(cfg.RequestRules))
+		for _, r := range cfg.RequestRules {
+			rules = append(rules, rule{r.GetHeader(), r.GetOnHeaderPresent().GetKey(), r.GetRemove()})
+		}
+		return rules
+	}
+
+	got := rulesOf(t)
+	require.Equal(t, []rule{
+		{"x-ai-eg-mcp-backend", "mcp_backend", false},
+		{"x-ai-eg-mcp-metadata-method", "mcp_method", true},
+		{"x-ai-eg-mcp-metadata-request-id", "mcp_request_id", true},
+		{"x-ai-eg-mcp-metadata-resource-uri", "mcp_resource_uri", true},
+		{"x-ai-eg-mcp-metadata-tool-name", "mcp_tool_name", true},
+	}, got)
+
+	// Ranging a map is randomized per-iteration, so an unsorted build would differ across calls. An
+	// unstable order changes the serialized listener and makes Envoy drain it on every translation.
+	for range 20 {
+		require.Equal(t, got, rulesOf(t))
 	}
 }

@@ -201,6 +201,11 @@ func TestMessageContent_MessagesStreamChunk(t *testing.T) {
 			jsonStr: ` {"type":"message_stop"}`,
 		},
 		{
+			name:    "ping",
+			exp:     MessagesStreamChunk{Type: "ping"},
+			jsonStr: `{"type":"ping"}`,
+		},
+		{
 			name:    "invalid event",
 			jsonStr: `abcdes`,
 			wantErr: true,
@@ -706,7 +711,7 @@ func TestToolUnion_UnmarshalJSON(t *testing.T) {
 			jsonStr: `{"type":"custom","name":"my_tool","input_schema":{"type":"object"}}`,
 			want: ToolUnion{Tool: &Tool{
 				Type: "custom", Name: "my_tool",
-				InputSchema: ToolInputSchema{Type: "object"},
+				InputSchema: json.RawMessage(`{"type":"object"}`),
 			}},
 		},
 		{
@@ -739,7 +744,7 @@ func TestToolUnion_UnmarshalJSON(t *testing.T) {
 			jsonStr: `{"name":"my_tool","description":"A tool","input_schema":{"type":"object"}}`,
 			want: ToolUnion{Tool: &Tool{
 				Name: "my_tool", Description: "A tool",
-				InputSchema: ToolInputSchema{Type: "object"},
+				InputSchema: json.RawMessage(`{"type":"object"}`),
 			}},
 		},
 		{
@@ -747,7 +752,7 @@ func TestToolUnion_UnmarshalJSON(t *testing.T) {
 			jsonStr: `{"type":"","name":"my_tool","input_schema":{"type":"object"}}`,
 			want: ToolUnion{Tool: &Tool{
 				Type: "", Name: "my_tool",
-				InputSchema: ToolInputSchema{Type: "object"},
+				InputSchema: json.RawMessage(`{"type":"object"}`),
 			}},
 		},
 		{
@@ -780,7 +785,7 @@ func TestToolUnion_MarshalJSON(t *testing.T) {
 	}{
 		{
 			name: "custom tool",
-			tu:   ToolUnion{Tool: &Tool{Type: "custom", Name: "t", InputSchema: ToolInputSchema{Type: "object"}}},
+			tu:   ToolUnion{Tool: &Tool{Type: "custom", Name: "t", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 			want: `{"type":"custom","name":"t","input_schema":{"type":"object"}}`,
 		},
 		{
@@ -952,6 +957,11 @@ func TestThinking_UnmarshalJSON(t *testing.T) {
 			want:    Thinking{Adaptive: &ThinkingAdaptive{Type: "adaptive"}},
 		},
 		{
+			name:    "between_tools",
+			jsonStr: `{"type":"between_tools"}`,
+			want:    Thinking{BetweenTools: &ThinkingBetweenTools{Type: "between_tools"}},
+		},
+		{
 			name:    "enabled with display",
 			jsonStr: `{"type":"enabled","budget_tokens":2048,"display":"omitted"}`,
 			want:    Thinking{Enabled: &ThinkingEnabled{Type: "enabled", BudgetTokens: 2048, Display: "omitted"}},
@@ -1008,6 +1018,11 @@ func TestThinking_MarshalJSON(t *testing.T) {
 			name: "adaptive",
 			th:   Thinking{Adaptive: &ThinkingAdaptive{Type: "adaptive"}},
 			want: `{"type":"adaptive"}`,
+		},
+		{
+			name: "between_tools",
+			th:   Thinking{BetweenTools: &ThinkingBetweenTools{Type: "between_tools"}},
+			want: `{"type":"between_tools"}`,
 		},
 		{
 			name: "enabled with display",
@@ -1093,7 +1108,7 @@ func TestToolUnion_UnmarshalJSON_ErrorPaths(t *testing.T) {
 		name    string
 		jsonStr string
 	}{
-		{name: "custom invalid", jsonStr: `{"type":"custom","input_schema":"bad"}`},
+		{name: "custom invalid", jsonStr: `{"type":"custom","name":123}`},
 		{name: "bash invalid", jsonStr: `{"type":"bash_20250124","name":123}`},
 		{name: "text_editor_20250124 invalid", jsonStr: `{"type":"text_editor_20250124","name":123}`},
 		{name: "text_editor_20250429 invalid", jsonStr: `{"type":"text_editor_20250429","name":123}`},

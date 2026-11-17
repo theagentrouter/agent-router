@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # System Architecture Overview
 
-Envoy AI Gateway follows a modern cloud-native architecture pattern with distinct control and data planes. Let's explore how these components work together to manage AI traffic effectively.
+Agent Router follows a modern cloud-native architecture pattern with distinct control and data planes. Let's explore how these components work together to manage AI traffic effectively.
 
 The architecture is divided into two main planes:
 

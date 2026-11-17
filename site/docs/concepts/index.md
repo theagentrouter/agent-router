@@ -1,12 +1,12 @@
 ---
 id: concepts
 title: Concepts
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Concepts
 
-Welcome to the Concepts section of Envoy AI Gateway documentation. This section will help you understand the core components and how they work together to manage AI traffic effectively.
+Welcome to the Concepts section of Agent Router documentation. This section will help you understand the core components and how they work together to manage AI traffic effectively.
 
 ## Architecture
 

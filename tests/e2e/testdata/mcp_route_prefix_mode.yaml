@@ -1,0 +1,137 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# Test manifests for prefixMode=Never e2e tests.
+# Reuses the mcp-backend Deployment and mcp-gateway Gateway from mcp_route.yaml.
+# Apply mcp_route.yaml first, then this file.
+
+---
+# Two backend services pointing at the same mcp-backend Deployment.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-backend-a
+  namespace: default
+spec:
+  selector:
+    app: mcp-backend
+  ports:
+    - protocol: TCP
+      port: 1063
+      targetPort: 1063
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-backend-b
+  namespace: default
+spec:
+  selector:
+    app: mcp-backend
+  ports:
+    - protocol: TCP
+      port: 1063
+      targetPort: 1063
+  type: ClusterIP
+---
+# Never-only: single backend with prefixMode=Never.
+# tools/list must return bare names (no "mcp-backend-a__" prefix).
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-prefix-mode-never
+  namespace: default
+spec:
+  path: "/mcp/prefix-mode-never"
+  parentRefs:
+    - name: mcp-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-backend-a
+      port: 1063
+      prefixMode: Never
+      toolSelector:
+        include:
+          - echo
+          - sum
+      promptSelector:
+        include:
+          - code_review
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+---
+# Mixed: two backends on one route — backend-a uses Never, backend-b uses Always.
+# tools/list must return "echo","sum" (bare from backend-a) and
+# "mcp-backend-b__echo","mcp-backend-b__sum" (prefixed from backend-b).
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-prefix-mode-mixed
+  namespace: default
+spec:
+  path: "/mcp/prefix-mode-mixed"
+  parentRefs:
+    - name: mcp-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-backend-a
+      port: 1063
+      prefixMode: Never
+      toolSelector:
+        include:
+          - echo
+          - sum
+      promptSelector:
+        include:
+          - code_review
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+    - name: mcp-backend-b
+      port: 1063
+      prefixMode: Always
+      toolSelector:
+        include:
+          - echo
+          - sum
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+---
+# Collision: two Never backends declare the same tool — must be NotAccepted.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-prefix-mode-collision
+  namespace: default
+spec:
+  path: "/mcp/prefix-mode-collision"
+  parentRefs:
+    - name: mcp-gateway
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-backend-a
+      port: 1063
+      prefixMode: Never
+      toolSelector:
+        include:
+          - echo
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"
+    - name: mcp-backend-b
+      port: 1063
+      prefixMode: Never
+      toolSelector:
+        include:
+          - echo
+      securityPolicy:
+        apiKey:
+          inline: "test-api-key"

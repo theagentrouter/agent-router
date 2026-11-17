@@ -19,6 +19,7 @@ tests/e2e-upgrade/logs/
 # Files and directories to ignore in the site directory
 # dependencies
 site/node_modules
+site/tools/og-generator/node_modules
 
 # production
 site/build
@@ -53,3 +54,4 @@ inference-extension-conformance-test-report.yaml
 site/.cursorrules
 /.cursor
 .worktrees/
+examples/agent-substrate/.work/

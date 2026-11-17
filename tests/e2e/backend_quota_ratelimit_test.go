@@ -27,25 +27,38 @@ import (
 // using the QuotaPolicy CRD. This verifies that the upstream rate limit filter
 // enforces per-model token quotas on requests to AIServiceBackends.
 func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
+	const (
+		redisManifest     = "../../examples/token_ratelimit/redis.yaml"
+		ratelimitManifest = "testdata/ai_gateway_ratelimit.yaml"
+		manifest          = "testdata/backend_quota_ratelimit.yaml"
+	)
+
 	// Apply Redis manifest (shared with token rate limit tests).
-	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), "../../examples/token_ratelimit/redis.yaml"))
+	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), redisManifest))
 	t.Cleanup(func() {
-		_ = e2elib.KubectlDeleteManifest(context.Background(), "../../examples/token_ratelimit/redis.yaml")
+		_ = e2elib.KubectlDeleteManifest(context.Background(), redisManifest)
 	})
 
 	// Wait for the redis pod to be ready so that the rate limit service can connect.
 	e2elib.RequireWaitForPodReady(t, "redis-system", "app=redis")
 
-	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), "testdata/backend_quota_ratelimit.yaml"))
+	// Shared AI Gateway rate limit service (also used by cross-namespace QuotaPolicy e2e).
+	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), ratelimitManifest))
 	t.Cleanup(func() {
-		_ = e2elib.KubectlDeleteManifest(context.Background(), "testdata/backend_quota_ratelimit.yaml")
+		_ = e2elib.KubectlDeleteManifest(context.Background(), ratelimitManifest)
+	})
+	// Restart so RLS reconnects after Redis is ready (same pattern as token ratelimit e2e).
+	require.NoError(t, e2elib.KubectlRestartDeployment(t.Context(), e2elib.EnvoyGatewayNamespace, "envoy-ai-gateway-ratelimit"))
+	require.NoError(t, e2elib.Kubectl(t.Context(), "rollout", "status",
+		"deployment/envoy-ai-gateway-ratelimit", "-n", e2elib.EnvoyGatewayNamespace, "--timeout=2m").Run())
+
+	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), manifest))
+	t.Cleanup(func() {
+		_ = e2elib.KubectlDeleteManifest(context.Background(), manifest)
 	})
 
 	const egSelector = "gateway.envoyproxy.io/owning-gateway-name=envoy-ai-gateway-quota-ratelimit"
 	e2elib.RequireWaitForGatewayPodReady(t, egSelector)
-
-	// Wait for the AI Gateway rate limit service to be ready.
-	e2elib.RequireWaitForPodReady(t, e2elib.EnvoyGatewayNamespace, "app=envoy-ai-gateway-ratelimit")
 
 	// Flush any existing quota keys in Redis to start with a clean state.
 	flushQuotaKeys(t)
@@ -89,10 +102,82 @@ func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
 	// The QuotaPolicy sets a quota of 10 total tokens per hour for "quota-test-model".
 	t.Run("per-model quota", func(t *testing.T) {
 		makeRequest("quota-test-model", 20, http.StatusOK)
-		requireQuotaUsage(t, "quota-test-model", 21)
+		// Request-time quota checks use a zero cost. The completed response charges
+		// only the reported token usage.
+		requireQuotaUsage(t, "quota-test-model", 20)
 		makeRequest("quota-test-model", 5, http.StatusTooManyRequests)
-		requireQuotaUsage(t, "quota-test-model", 22)
+		// The rejected request is never completed, so it does not add response
+		// token usage to the quota counter.
+		requireQuotaUsage(t, "quota-test-model", 20)
 	})
+
+	// The AI Gateway controller stamps a hash of the applicable QuotaPolicies onto the generated HTTPRoute
+	// (the "gateway.envoyproxy.io/quota-policy-hash" annotation). A QuotaPolicy change must re-stamp a
+	// different hash, which is what forces Envoy Gateway to re-translate and re-run the extension
+	// server's PostTranslateModify hook. The generated HTTPRoute shares the AIGatewayRoute's
+	// name/namespace ("quota-test-model"/"default").
+	t.Run("quota policy update is applied live", func(t *testing.T) {
+		const routeName, routeNamespace = "quota-test-model", "default"
+
+		// The annotation must be present initially because a QuotaPolicy targets this route's backend.
+		var initialHash string
+		require.Eventually(t, func() bool {
+			initialHash = getHTTPRouteQuotaHash(t, routeNamespace, routeName)
+			return initialHash != ""
+		}, 30*time.Second, 500*time.Millisecond, "expected quota-policy-hash annotation to be set")
+
+		// Update the QuotaPolicy limit live (no controller/Envoy restart).
+		require.NoError(t, e2elib.Kubectl(t.Context(), "patch", "quotapolicy",
+			"envoy-ai-gateway-quota-ratelimit-policy", "-n", routeNamespace,
+			"--type=merge",
+			"-p", `{"spec":{"perModelQuotas":[{"modelName":"quota-test-model","quota":{"mode":"Shared","defaultBucket":{"limit":5,"duration":"1h"}}}]}}`,
+		).Run())
+
+		// The controller must re-stamp a different hash, proving the HTTPRoute was actually updated
+		// (and thus Envoy Gateway re-translated) in response to the QuotaPolicy change.
+		require.Eventually(t, func() bool {
+			return getHTTPRouteQuotaHash(t, routeNamespace, routeName) != initialHash
+		}, 30*time.Second, 500*time.Millisecond,
+			"quota-policy-hash annotation did not change after updating the QuotaPolicy")
+	})
+
+	// Deleting the QuotaPolicy must re-stamp the generated HTTPRoute so the quota-policy-hash annotation
+	// is removed, proving the controller notified the AIGatewayRoute on delete (via the finalizer) and
+	// Envoy Gateway re-translated without the deleted policy. This runs last because it removes the only
+	// QuotaPolicy targeting the backend.
+	t.Run("quota policy delete is applied live", func(t *testing.T) {
+		const routeName, routeNamespace = "quota-test-model", "default"
+
+		// Precondition: the annotation is present because a QuotaPolicy currently targets this route's backend.
+		require.Eventually(t, func() bool {
+			return getHTTPRouteQuotaHash(t, routeNamespace, routeName) != ""
+		}, 30*time.Second, 500*time.Millisecond, "expected quota-policy-hash annotation to be set before delete")
+
+		// Delete the QuotaPolicy live (no controller/Envoy restart).
+		require.NoError(t, e2elib.Kubectl(t.Context(), "delete", "quotapolicy",
+			"envoy-ai-gateway-quota-ratelimit-policy", "-n", routeNamespace,
+		).Run())
+
+		// With no QuotaPolicy targeting the backend, the controller must remove the annotation, proving the
+		// HTTPRoute was re-stamped (and thus Envoy Gateway re-translated) in response to the delete.
+		require.Eventually(t, func() bool {
+			return getHTTPRouteQuotaHash(t, routeNamespace, routeName) == ""
+		}, 30*time.Second, 500*time.Millisecond,
+			"quota-policy-hash annotation was not removed after deleting the QuotaPolicy")
+	})
+}
+
+// getHTTPRouteQuotaHash returns the value of the "gateway.envoyproxy.io/quota-policy-hash"
+// annotation stamped by the AI Gateway controller on the generated HTTPRoute. It returns "" when the
+// annotation is absent.
+func getHTTPRouteQuotaHash(t *testing.T, namespace, name string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "kubectl", "get", "httproute", name,
+		"-n", namespace,
+		"-o", `jsonpath={.metadata.annotations.gateway\.envoyproxy\.io/quota-policy-hash}`)
+	out, err := cmd.Output()
+	require.NoError(t, err, "failed to get httproute %s/%s", namespace, name)
+	return strings.TrimSpace(string(out))
 }
 
 // redisExec runs a redis-cli command on the Redis pod and returns the output.

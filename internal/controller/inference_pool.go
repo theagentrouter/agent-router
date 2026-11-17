@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,6 +23,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/inferencepool"
 )
 
 // InferencePoolController implements [reconcile.TypedReconciler] for [gwaiev1.InferencePool].
@@ -34,18 +36,29 @@ type InferencePoolController struct {
 	kube                   kubernetes.Interface
 	logger                 logr.Logger
 	inferencePoolEventChan chan event.GenericEvent
+	// gatewayEventChan is a channel to send events to the gateway controller.
+	gatewayEventChan chan event.GenericEvent
 }
+
+// errEndpointPickerRefMissing is returned by validateExtensionReference when the InferencePool's
+// spec.endpointPickerRef is unset. This is a legal, schema-valid state (the field is optional as of
+// Gateway API Inference Extension v1.5.0), but Envoy AI Gateway currently requires an endpoint picker
+// to route traffic, so it is reported via the upstream-defined
+// gwaiev1.InferencePoolReasonEndpointPickerRefMissing reason rather than a generic failure.
+var errEndpointPickerRefMissing = errors.New("endpointPickerRef is not set")
 
 // NewInferencePoolController creates a new reconcile.TypedReconciler for gwaiev1.InferencePool.
 func NewInferencePoolController(
 	client client.Client, kube kubernetes.Interface, logger logr.Logger,
 	inferencePoolEventChan chan event.GenericEvent,
+	gatewayEventChan chan event.GenericEvent,
 ) *InferencePoolController {
 	return &InferencePoolController{
 		client:                 client,
 		kube:                   kube,
 		logger:                 logger,
 		inferencePoolEventChan: inferencePoolEventChan,
+		gatewayEventChan:       gatewayEventChan,
 	}
 }
 
@@ -64,11 +77,13 @@ func (c *InferencePoolController) Reconcile(ctx context.Context, req reconcile.R
 	c.logger.Info("Reconciling InferencePool", "namespace", req.Namespace, "name", req.Name)
 	if err := c.syncInferencePool(ctx, &inferencePool); err != nil {
 		c.logger.Error(err, "failed to sync InferencePool")
-		c.updateInferencePoolStatus(ctx, &inferencePool, "NotAccepted", err.Error())
-		return ctrl.Result{}, err
+		reason := "NotAccepted"
+		if errors.Is(err, errEndpointPickerRefMissing) {
+			reason = string(gwaiev1.InferencePoolReasonEndpointPickerRefMissing)
+		}
+		return ctrl.Result{}, errors.Join(err, c.updateInferencePoolStatus(ctx, &inferencePool, reason, err.Error()))
 	}
-	c.updateInferencePoolStatus(ctx, &inferencePool, "Accepted", "InferencePool reconciled successfully")
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, c.updateInferencePoolStatus(ctx, &inferencePool, "Accepted", "InferencePool reconciled successfully")
 }
 
 // syncInferencePool is the main logic for reconciling the InferencePool resource.
@@ -85,6 +100,11 @@ func (c *InferencePoolController) syncInferencePool(ctx context.Context, inferen
 	}
 
 	c.logger.Info("Found referenced Gateways", "count", len(referencedGateways), "inferencePool", inferencePool.Name)
+	// Propagate to the Gateways so that changes to the BackendSecurityPolicy targeting this
+	// InferencePool (e.g. a rotated or revoked credential) are reflected in their filter config.
+	for _, gw := range referencedGateways {
+		c.gatewayEventChan <- event.GenericEvent{Object: gw}
+	}
 	return nil
 }
 
@@ -124,6 +144,10 @@ func (c *InferencePoolController) getReferencedGateways(ctx context.Context, inf
 
 // validateExtensionReference checks if the ExtensionReference service exists.
 func (c *InferencePoolController) validateExtensionReference(ctx context.Context, inferencePool *gwaiev1.InferencePool) error {
+	if inferencePool.Spec.EndpointPickerRef == nil {
+		return errEndpointPickerRefMissing
+	}
+
 	// Get the service name from ExtensionReference.
 	serviceName := inferencePool.Spec.EndpointPickerRef.Name
 	if serviceName == "" {
@@ -217,9 +241,7 @@ func (c *InferencePoolController) routeReferencesGateway(parentRefs []gwapiv1.Pa
 func (c *InferencePoolController) httpRouteReferencesInferencePool(route *gwapiv1.HTTPRoute, inferencePoolName string) bool {
 	for _, rule := range route.Spec.Rules {
 		for _, backendRef := range rule.BackendRefs {
-			if backendRef.Group != nil && string(*backendRef.Group) == "inference.networking.k8s.io" &&
-				backendRef.Kind != nil && string(*backendRef.Kind) == "InferencePool" &&
-				string(backendRef.Name) == inferencePoolName {
+			if inferencepool.IsBackendRef(&backendRef.BackendRef) && string(backendRef.Name) == inferencePoolName {
 				return true
 			}
 		}
@@ -228,15 +250,16 @@ func (c *InferencePoolController) httpRouteReferencesInferencePool(route *gwapiv
 }
 
 // updateInferencePoolStatus updates the status of the InferencePool.
-func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context, inferencePool *gwaiev1.InferencePool, conditionType string, message string) {
+// A returned error, such as a conflict with a concurrent status write, makes controller-runtime
+// requeue the pool, because no other event triggers a reconcile.
+func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context, inferencePool *gwaiev1.InferencePool, conditionType string, message string) error {
 	// Check if this is an ExtensionReference validation error.
 	isExtensionRefError := conditionType == "NotAccepted" &&
 		(strings.Contains(message, "ExtensionReference service") && strings.Contains(message, "not found"))
 	// Get the referenced Gateways from syncInferencePool logic.
 	referencedGateways, err := c.getReferencedGateways(ctx, inferencePool)
 	if err != nil {
-		c.logger.Error(err, "failed to get referenced Gateways for status update")
-		return
+		return fmt.Errorf("failed to get referenced Gateways for status update: %w", err)
 	}
 
 	// Build Parents status.
@@ -280,18 +303,20 @@ func (c *InferencePoolController) updateInferencePoolStatus(ctx context.Context,
 
 	inferencePool.Status.Parents = parents
 	if err := c.client.Status().Update(ctx, inferencePool); err != nil {
-		c.logger.Error(err, "failed to update InferencePool status")
+		return fmt.Errorf("failed to update InferencePool status: %w", err)
 	}
+	return nil
 }
 
 // buildAcceptedCondition builds a condition for the InferencePool status.
 func buildAcceptedCondition(gen int64, controllerName string, conditionType string, message string) metav1.Condition {
 	status := metav1.ConditionTrue
 	reason := "Accepted"
-	if conditionType == "NotAccepted" {
+	switch conditionType {
+	case "NotAccepted", string(gwaiev1.InferencePoolReasonEndpointPickerRefMissing):
 		status = metav1.ConditionFalse
-		reason = "NotAccepted"
-		conditionType = "Accepted"
+		reason = conditionType
+		conditionType = string(gwaiev1.InferencePoolConditionAccepted)
 	}
 
 	return metav1.Condition{
@@ -371,8 +396,7 @@ func (c *InferencePoolController) httpRouteEventHandler(_ context.Context, obj c
 	var requests []reconcile.Request
 	for _, rule := range route.Spec.Rules {
 		for _, backendRef := range rule.BackendRefs {
-			if backendRef.Group != nil && string(*backendRef.Group) == "inference.networking.k8s.io" &&
-				backendRef.Kind != nil && string(*backendRef.Kind) == "InferencePool" {
+			if inferencepool.IsBackendRef(&backendRef.BackendRef) {
 				requests = append(requests, reconcile.Request{
 					NamespacedName: client.ObjectKey{
 						Name:      string(backendRef.Name),

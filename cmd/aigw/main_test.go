@@ -147,6 +147,9 @@ Flags:
       --mcp-session-encryption-iterations=100000
                               Number of iterations for MCP session encryption
                               key derivation.
+      --file-id-encryption-iterations=100000
+                              Number of iterations for Files/Batch API id
+                              encryption key derivation.
 `,
 			expPanicCode: ptr.To(0),
 		},

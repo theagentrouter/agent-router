@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 
+	"github.com/envoyproxy/ai-gateway/internal/idcodec"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/llmcostcel"
 )
@@ -47,6 +48,9 @@ type RuntimeConfig struct {
 	ModelsByHostAndScope map[string]HeaderScopedModels
 	// Backends is the map of backends by name.
 	Backends map[string]*RuntimeBackend
+	// FileIDCodec is the Files/Batch API id codec built from the filter config's FileIDEncryption,
+	// or nil when the filter config does not carry one (the command line flags are used then).
+	FileIDCodec idcodec.Codec
 }
 
 // RuntimeBackend is a filter backend with its auth handler that is derived from the filterapi.Backend configuration.
@@ -125,8 +129,18 @@ func NewRuntimeConfig(ctx context.Context, config *Config, fn NewBackendAuthHand
 		costs = append(costs, RuntimeRequestCost{LLMRequestCost: c, CELProg: prog})
 	}
 
+	var fileIDCodec idcodec.Codec
+	if e := config.FileIDEncryption; e != nil {
+		var err error
+		fileIDCodec, err = idcodec.NewCodec(e.Seed, e.Iterations, e.FallbackSeed, e.FallbackIterations)
+		if err != nil {
+			return nil, fmt.Errorf("cannot create file id codec: %w", err)
+		}
+	}
+
 	return &RuntimeConfig{
 		UUID:                 config.UUID,
+		FileIDCodec:          fileIDCodec,
 		Backends:             backends,
 		GlobalRequestCosts:   globalCosts,
 		RequestCosts:         costs,

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	egextension "github.com/envoyproxy/gateway/proto/extension"
 	"github.com/go-logr/logr"
@@ -46,6 +47,10 @@ type Server struct {
 
 const serverName = "envoy-gateway-extension-server"
 
+// httpProtocolOptionsKey is the TypedExtensionProtocolOptions key of a cluster's
+// HttpProtocolOptions.
+const httpProtocolOptionsKey = "envoy.extensions.upstreams.http.v3.HttpProtocolOptions"
+
 // New creates a new instance of the extension server that implements the EnvoyGatewayExtensionServer interface.
 func New(k8sClient client.Client, logger logr.Logger, udsPath string, isStandAloneMode bool, requestHeaderAttributes, logRequestHeaderAttributes *string, quotaRateLimitServiceAddr string, quotaRateLimitTimeout int64, quotaRateLimitFailureModeDeny bool) (*Server, error) {
 	logger = logger.WithName(serverName)
@@ -77,8 +82,14 @@ func New(k8sClient client.Client, logger logr.Logger, udsPath string, isStandAlo
 func parseHostPort(hostPort string) (string, uint32, error) {
 	host, portStr, err := net.SplitHostPort(hostPort)
 	if err != nil {
-		// No port specified — use the default.
-		return hostPort, defaultQuotaRateLimitServicePort, nil
+		// A hostname without a port and a bare IPv6 literal both use the default port.
+		if hostPort != "" && (!strings.Contains(hostPort, ":") || net.ParseIP(hostPort) != nil) {
+			return hostPort, defaultQuotaRateLimitServicePort, nil
+		}
+		return "", 0, fmt.Errorf("invalid host:port: %w", err)
+	}
+	if host == "" {
+		return "", 0, fmt.Errorf("host must be non-empty")
 	}
 	port, err := strconv.ParseUint(portStr, 10, 32)
 	if err != nil {

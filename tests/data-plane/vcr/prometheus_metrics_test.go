@@ -87,6 +87,7 @@ func verifyPrometheusRequestDuration(t *testing.T, metric *dto.MetricFamily, exp
 	expectedLabels := map[string]string{
 		"gen_ai_operation_name": "chat",
 		"gen_ai_provider_name":  "openai",
+		"gen_ai_backend":        "openai",
 		"gen_ai_original_model": expectedRequestModel, // For non-override cases, original equals request
 		"gen_ai_request_model":  expectedRequestModel,
 		"gen_ai_response_model": "gpt-5-nano-2025-08-07",
@@ -157,6 +158,7 @@ func verifyPrometheusTokenUsage(t *testing.T, metric *dto.MetricFamily, expected
 		expectedLabels := map[string]string{
 			"gen_ai_operation_name": "chat",
 			"gen_ai_provider_name":  "openai",
+			"gen_ai_backend":        "openai",
 			"gen_ai_original_model": expectedModel, // For non-override cases, original equals request
 			"gen_ai_request_model":  expectedModel,
 			"gen_ai_response_model": "gpt-5-nano-2025-08-07",

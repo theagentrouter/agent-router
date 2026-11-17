@@ -69,6 +69,10 @@ func TestParseDuration(t *testing.T) {
 		{"1 second", "1s", rlsconfv3.RateLimitUnit_SECOND, false},
 		{"1 minute", "1m", rlsconfv3.RateLimitUnit_MINUTE, false},
 		{"1 hour", "1h", rlsconfv3.RateLimitUnit_HOUR, false},
+		{"1 day", "1d", rlsconfv3.RateLimitUnit_DAY, false},
+		{"1 week", "1w", rlsconfv3.RateLimitUnit_WEEK, false},
+		{"1 month", "1mo", rlsconfv3.RateLimitUnit_MONTH, false},
+		{"1 year", "1y", rlsconfv3.RateLimitUnit_YEAR, false},
 		{"30 seconds rejected", "30s", 0, true},
 		{"5 minutes rejected", "5m", 0, true},
 		{"2 hours rejected", "2h", 0, true},
@@ -102,6 +106,20 @@ func TestQuotaValueToPolicy(t *testing.T) {
 
 	t.Run("1 hour", func(t *testing.T) {
 		qv := &aigv1a1.QuotaValue{Limit: 500, Duration: "1h"}
+		policy, err := quotaValueToPolicy(qv)
+		require.NoError(t, err)
+		require.Equal(t, uint32(500), policy.RequestsPerUnit)
+		require.Equal(t, rlsconfv3.RateLimitUnit_HOUR, policy.Unit)
+	})
+
+	t.Run("dynamic metadata keeps static baseline", func(t *testing.T) {
+		qv := &aigv1a1.QuotaValue{
+			Limit: 500, Duration: "1h",
+			FromMetadata: &aigv1a1.QuotaLimitFromMetadata{
+				Namespace: "envoy.filters.http.ext_authz",
+				Key:       "total_limit",
+			},
+		}
 		policy, err := quotaValueToPolicy(qv)
 		require.NoError(t, err)
 		require.Equal(t, uint32(500), policy.RequestsPerUnit)

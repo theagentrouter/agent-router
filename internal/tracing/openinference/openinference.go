@@ -22,6 +22,9 @@ const (
 
 	// SpanKindEmbedding indicates an Embedding operation.
 	SpanKindEmbedding = "EMBEDDING"
+
+	// SpanKindTokenCounter indicates a token counting operation (e.g., tokenize, count_tokens).
+	SpanKindTokenCounter = "TOKEN_COUNTER"
 )
 
 // LLM Operation constants.
@@ -48,6 +51,8 @@ const (
 	LLMSystemCohere = "cohere"
 	// LLMSystemAnthropic for Anthropic systems.
 	LLMSystemAnthropic = "anthropic"
+	// LLMSystemTypeSafe for TypeSafe AI systems.
+	LLMSystemTypeSafe = "typesafe"
 )
 
 // Input/Output constants.

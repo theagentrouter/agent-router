@@ -426,6 +426,51 @@ var ToolCreateMessage = TestTool[struct{}, any]{
 	},
 }
 
+// ToolUIResource - returns a result carrying _meta.ui.resourceUri referencing UIRendererResource.
+var ToolUIResource = TestTool[struct{}, any]{
+	Tool: &mcp.Tool{
+		Name:        "ui_resource",
+		Description: "Return a tool result with _meta.ui.resourceUri",
+		InputSchema: &jsonschema.Schema{Type: "object", Properties: map[string]*jsonschema.Schema{}},
+	},
+	Handler: func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			Meta:    mcp.Meta{"ui": map[string]any{"resourceUri": UIRendererResource.URI}},
+			Content: []mcp.Content{&mcp.TextContent{Text: "rendered"}},
+		}, nil, nil
+	},
+}
+
+// ToolResourceLink - returns a result carrying a ResourceLink to UIRendererResource in Content.
+var ToolResourceLink = TestTool[struct{}, any]{
+	Tool: &mcp.Tool{
+		Name:        "resource_link",
+		Description: "Return a tool result with a ResourceLink in Content",
+		InputSchema: &jsonschema.Schema{Type: "object", Properties: map[string]*jsonschema.Schema{}},
+	},
+	Handler: func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.ResourceLink{URI: UIRendererResource.URI, Name: UIRendererResource.Name}},
+		}, nil, nil
+	},
+}
+
+// ToolEmbeddedResource - returns a result carrying an EmbeddedResource for UIRendererResource in Content.
+var ToolEmbeddedResource = TestTool[struct{}, any]{
+	Tool: &mcp.Tool{
+		Name:        "embedded_resource",
+		Description: "Return a tool result with an EmbeddedResource in Content",
+		InputSchema: &jsonschema.Schema{Type: "object", Properties: map[string]*jsonschema.Schema{}},
+	},
+	Handler: func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.EmbeddedResource{
+				Resource: &mcp.ResourceContents{URI: UIRendererResource.URI, MIMEType: UIRendererResource.MIMEType},
+			}},
+		}, nil, nil
+	},
+}
+
 type notificationCounts struct {
 	RootsListChanged,
 	Subscribe,

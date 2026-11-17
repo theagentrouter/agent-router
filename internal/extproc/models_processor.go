@@ -11,12 +11,14 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc/codes"
 
+	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -89,6 +91,70 @@ func setHeader(headers *extprocv3.HeaderMutation, key, value string) {
 			RawValue: []byte(value),
 		},
 	})
+}
+
+// anthropicModelsProcessor implements [Processor] for the Anthropic-compatible `/v1/models` endpoint.
+// This processor returns an immediate response with the list of models that are declared in the filter
+// configuration, formatted as an Anthropic model list rather than an OpenAI one.
+// Since it returns an immediate response after processing the headers, the rest of the methods of the
+// Processor are not implemented. Those should never be called.
+type anthropicModelsProcessor struct {
+	passThroughProcessor
+	logger *slog.Logger
+	models anthropic.ModelList
+}
+
+var _ Processor = (*anthropicModelsProcessor)(nil)
+
+// NewAnthropicModelsProcessor creates a new processor that returns the list of declared models
+// in the Anthropic API's model list format.
+func NewAnthropicModelsProcessor(config *filterapi.RuntimeConfig, requestHeaders map[string]string, logger *slog.Logger, isUpstreamFilter bool, _ bool) (Processor, error) {
+	if isUpstreamFilter {
+		return passThroughProcessor{}, nil
+	}
+
+	host := requestHost(requestHeaders)
+	selectedModels := selectModelsForHost(host, config)
+
+	modelList := anthropic.ModelList{
+		Data: make([]anthropic.Model, 0, len(selectedModels)),
+	}
+	for _, m := range selectedModels {
+		modelList.Data = append(modelList.Data, anthropic.Model{
+			ID:          m.Name,
+			Type:        "model",
+			DisplayName: m.Name,
+			CreatedAt:   m.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	if len(modelList.Data) > 0 {
+		modelList.FirstID = modelList.Data[0].ID
+		modelList.LastID = modelList.Data[len(modelList.Data)-1].ID
+	}
+	return &anthropicModelsProcessor{logger: logger.With("host", host), models: modelList}, nil
+}
+
+// ProcessRequestHeaders implements [Processor.ProcessRequestHeaders].
+func (m *anthropicModelsProcessor) ProcessRequestHeaders(_ context.Context, _ *corev3.HeaderMap) (*extprocv3.ProcessingResponse, error) {
+	body, err := json.Marshal(m.models)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal body: %w", err)
+	}
+
+	headerMutation := &extprocv3.HeaderMutation{}
+	setHeader(headerMutation, "content-length", fmt.Sprintf("%d", len(body)))
+	setHeader(headerMutation, "content-type", "application/json")
+
+	return &extprocv3.ProcessingResponse{
+		Response: &extprocv3.ProcessingResponse_ImmediateResponse{
+			ImmediateResponse: &extprocv3.ImmediateResponse{
+				Status:     &typev3.HttpStatus{Code: typev3.StatusCode_OK},
+				Headers:    headerMutation,
+				Body:       body,
+				GrpcStatus: &extprocv3.GrpcStatus{Status: uint32(codes.OK)},
+			},
+		},
+	}, nil
 }
 
 // requestHost normalizes the host/authority header for matching (lowercases and strips port).

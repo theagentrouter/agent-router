@@ -1,0 +1,77 @@
+.section {
+  background: var(--ar-cream);
+  padding: 104px 0;
+}
+:global([data-theme='dark']) .section { background: var(--ar-ink-900); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 22px;
+}
+
+/* soft card with the kit's bottom-right corner glow */
+.card {
+  position: relative;
+  isolation: isolate;
+  display: block;
+  background: var(--ar-paper);
+  border-radius: var(--ar-radius-lg);
+  padding: 32px 30px 36px;
+  box-shadow: var(--ar-shadow-sm);
+  transition: box-shadow 0.2s;
+  color: inherit;
+  text-decoration: none;
+}
+:global([data-theme='dark']) .card { background: var(--ar-ink-800); }
+
+.card:hover {
+  box-shadow: var(--ar-shadow-md);
+  color: inherit;
+  text-decoration: none;
+}
+
+.card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(var(--ar-glow-corner), rgba(255, 85, 0, 0.18), transparent 64%);
+  -webkit-mask-image: var(--ar-corner-mask);
+          mask-image: var(--ar-corner-mask);
+}
+
+.icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--ar-marquee-050);
+  color: var(--ar-marquee-700);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+:global([data-theme='dark']) .icon {
+  background: rgba(255, 85, 0, 0.14);
+  color: var(--ar-marquee-400);
+}
+.icon svg { width: 20px; height: 20px; }
+
+.cardTitle {
+  font: 700 var(--ar-text-xl) / 1.25 var(--ar-font-display);
+  letter-spacing: -0.01em;
+  margin: 0 0 10px;
+}
+
+.cardBody {
+  font-size: var(--ar-text-sm);
+  color: var(--ar-fg-muted);
+  margin: 0;
+}
+
+@media (max-width: 996px) {
+  .grid { grid-template-columns: 1fr; }
+}
