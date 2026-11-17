@@ -99,6 +99,8 @@ editorconfig:
 # This re-generates the CRDs for the API defined in the api directory.
 # Both v1alpha1 and v1beta1 are included for multi-version CRD support.
 # Object (deepcopy) generation runs separately per package to output to correct dirs.
+# CRD field descriptions are cut to 200 characters (maxDescLen=200) to keep the CRD chart's Helm release under
+# the 1 MiB Secret limit; the embedded Envoy Gateway types make the full schemas too large.
 .PHONY: apigen
 apigen: ## Generate CRDs for the API defined in the api directory.
 	@echo "apigen => ./api/v1alpha1/... (object)"
@@ -106,7 +108,7 @@ apigen: ## Generate CRDs for the API defined in the api directory.
 	@echo "apigen => ./api/v1beta1/... (object)"
 	@$(GO_TOOL) controller-gen object paths="./api/v1beta1/..." output:dir=./api/v1beta1
 	@echo "apigen => ./api/... (crd)"
-	@$(GO_TOOL) controller-gen crd paths="./api/v1alpha1/..." paths="./api/v1beta1/..." output:crd:dir=./manifests/charts/ai-gateway-crds-helm/templates
+	@$(GO_TOOL) controller-gen crd:maxDescLen=200 paths="./api/v1alpha1/..." paths="./api/v1beta1/..." output:crd:dir=./manifests/charts/ai-gateway-crds-helm/templates
 
 # This generates the API documentation for the API defined in the api directory.
 # Generates merged docs for all API versions (v1beta1 and v1alpha1).
@@ -399,11 +401,26 @@ helm-test: helm-package  ## Test the helm chart with a dummy version.
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "startupProbe:"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "failureThreshold: 75"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "name: ai-gateway-controller-mcp-session-encryption"
-	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -qF -- "--mcpSessionEncryptionSeed=\$$(MCP_SESSION_ENCRYPTION_SEED)"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "name: MCP_SESSION_ENCRYPTION_SEED"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "--mcpSessionEncryptionSeed"
 	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "default-insecure-seed"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.seed=my-test-seed | grep -q -- "seed: bXktdGVzdC1zZWVk"
 	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.existingSecret=my-seed-secret | grep -q -- "name: my-seed-secret"
 	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.existingSecret=my-seed-secret | grep -q -- "mcp-session-encryption"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "seed: bXktb2xkLXNlZWQ="
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "my-old-seed"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed --set controller.podAnnotations.foo=bar | grep -q -- "foo: bar"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.fullnameOverride=a-very-long-controller-fullname-override-value --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "name: a-very-long-controller-fullname-mcp-session-encryption-fallback"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -A3 -- "name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED" | grep -q -- "name: my-fallback-secret"
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "--mcpFallbackSessionEncryptionIterations="
+	@$(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "aigateway.envoyproxy.io/mcp-session-encryption-revision:"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret | grep -q -- "mcp-session-encryption-fallback"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "mcp-session-encryption-fallback"
+	@! $(GO_TOOL) helm template ${HELM_CHART_PATH} --set controller.mcp.sessionEncryption.fallback.existingSecret=my-fallback-secret --set controller.mcp.sessionEncryption.fallback.seed=my-old-seed | grep -q -- "bXktb2xkLXNlZWQ="
 
 # This pushes the helm chart to the OCI registry, requiring the access to the registry endpoint.
 .PHONY: helm-push

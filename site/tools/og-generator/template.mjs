@@ -36,7 +36,16 @@ export const CATEGORY_STYLES = {
   default:       { ground: '#12100E', accent: '#FF7A33' },
 };
 
-export function ogHtml({ title, subtitle, tag, date }) {
+// Optional co-brand logos, picked by the `og_logo` frontmatter key
+// (e.g. `og_logo: python`). Files live in ./logos so they don't ship with the site.
+const LOGOS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'logos');
+const logoUrl = (name) => {
+  const f = path.join(LOGOS_DIR, `${name}.svg`);
+  if (!fs.existsSync(f)) throw new Error(`og_logo "${name}" not found: ${f}`);
+  return 'file://' + f;
+};
+
+export function ogHtml({ title, subtitle, tag, date, logo, code }) {
   const style = CATEGORY_STYLES[(tag || 'default').toLowerCase()] ?? CATEGORY_STYLES.default;
   const titleSize = title.length > 56 ? 54 : title.length > 34 ? 62 : 72;
   const subtitleClamp = title.length > 56 ? 2 : 3;
@@ -89,6 +98,22 @@ export function ogHtml({ title, subtitle, tag, date }) {
     font: 500 28px 'JetBrains Mono'; color: #B8AFA6;
   }
   .mark { position: absolute; bottom: 56px; right: 72px; width: 132px; }
+  /* co-brand lockup: partner logo + AR mark, bottom right */
+  .lockup {
+    position: absolute; bottom: 56px; right: 72px;
+    display: flex; align-items: center; gap: 22px;
+  }
+  .lockup .partner { height: 88px; }
+  .lockup .mark { position: static; width: 116px; }
+  .lockup .plus { font: 300 48px 'Inter'; color: #8A7F76; }
+  /* one-line code chip for developer-facing posts (\`og_code\` frontmatter) */
+  .code {
+    margin-top: 30px; display: inline-block;
+    padding: 12px 22px; border-radius: 10px;
+    background: rgba(243, 239, 235, 0.06); border: 1px solid rgba(243, 239, 235, 0.14);
+    font: 500 24px 'JetBrains Mono'; color: #F3EFEB; white-space: nowrap;
+  }
+  .code .prompt { color: ${style.accent}; margin-right: 14px; }
   .oxidise {
     position: absolute; left: 0; right: 0; bottom: 0; height: 12px;
     background: linear-gradient(90deg, #FF5500 0%, #B83700 42%, #1A937F 100%);
@@ -100,9 +125,12 @@ export function ogHtml({ title, subtitle, tag, date }) {
   <div class="text">
     <div class="title">${escapeHtml(title)}</div>
     ${subtitle ? `<div class="subtitle">${escapeHtml(subtitle)}</div>` : ''}
+    ${code ? `<div class="code"><span class="prompt">&gt;&gt;&gt;</span>${escapeHtml(code)}</div>` : ''}
   </div>
   <div class="site">theagentrouter.ai</div>
-  <img class="mark" src="${markUrl}" alt="">
+  ${logo
+    ? `<div class="lockup"><img class="partner" src="${logoUrl(logo)}" alt=""><span class="plus">+</span><img class="mark" src="${markUrl}" alt=""></div>`
+    : `<img class="mark" src="${markUrl}" alt="">`}
   <div class="oxidise"></div>
 </div></body></html>`;
 }

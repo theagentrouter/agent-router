@@ -8,6 +8,10 @@ package backendauth
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -167,4 +171,39 @@ func TestGCPHandler_Do_TokenSourceError(t *testing.T) {
 
 	_, err := handler.Do(context.Background(), requestHeaders, nil)
 	require.ErrorContains(t, err, "failed to get GCP access token")
+}
+
+// The handler is built while a configuration loads, and the watcher cancels
+// that context the moment the load returns (filterapi.bundleConfigWatcher).
+// The ADC token source must not inherit the cancellation: external_account
+// credentials exchange tokens over HTTP under the context they were created
+// with, so every later exchange would fail with "context canceled".
+func TestNewGCPHandler_ADCTokenSourceOutlivesLoadContext(t *testing.T) {
+	sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"exchanged-token","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer","expires_in":3600}`))
+	}))
+	t.Cleanup(sts.Close)
+
+	dir := t.TempDir()
+	tokenFile := filepath.Join(dir, "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("projected-token"), 0o600))
+	credFile := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(credFile, fmt.Appendf(nil, `{
+  "type": "external_account",
+  "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/pool/providers/oidc",
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "token_url": %q,
+  "credential_source": {"file": %q}
+}`, sts.URL+"/v1/token", tokenFile), 0o600))
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", credFile)
+
+	loadCtx, cancelLoad := context.WithCancel(context.Background())
+	handler, err := newGCPHandler(loadCtx, &filterapi.GCPAuth{Region: "us-central1", ProjectName: "test-project"})
+	require.NoError(t, err)
+	cancelLoad()
+
+	hdrs, err := handler.Do(context.Background(), map[string]string{":path": "publishers/google/models/gemini-pro:generateContent"}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "Bearer exchanged-token", stringPairsToMap(hdrs)["Authorization"])
 }

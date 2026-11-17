@@ -84,6 +84,10 @@ func getAwsBedrockThinkingMap(tu *openai.ThinkingUnion) map[string]any {
 			reasoningConfigMap["display"] = tu.OfAdaptive.Display
 		}
 		resultMap["thinking"] = reasoningConfigMap
+	case tu.OfBetweenTools != nil:
+		resultMap["thinking"] = map[string]any{
+			"type": "between_tools",
+		}
 	}
 
 	return resultMap
@@ -309,7 +313,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) bedrockStopReasonToOpenAI
 		return openai.ChatCompletionChoicesFinishReasonStop
 	case awsbedrock.StopReasonMaxTokens:
 		return openai.ChatCompletionChoicesFinishReasonLength
-	case awsbedrock.StopReasonContentFiltered:
+	case awsbedrock.StopReasonContentFiltered, awsbedrock.StopReasonGuardrailIntervened:
 		return openai.ChatCompletionChoicesFinishReasonContentFilter
 	case awsbedrock.StopReasonToolUse:
 		return openai.ChatCompletionChoicesFinishReasonToolCalls
