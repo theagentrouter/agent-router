@@ -1,0 +1,35 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# Only actor JWTs minted by Substrate for this audience get in. The verified
+# subject (actor/<atespace>/<actor>) becomes x-actor-id, which the rate limit
+# rule uses as the bucket key. The JWT filter strips any x-actor-id the client
+# sent, so an actor can't claim to be another actor.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: agent-router
+  namespace: agent-router-demo
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agent-router
+  jwt:
+    providers:
+      - name: agent-substrate
+        issuer: https://idp.ate-system.svc
+        audiences:
+          - agent-router
+        remoteJWKS:
+          uri: https://idp.ate-system.svc/openid/v1/jwks
+          backendRefs:
+            - group: gateway.envoyproxy.io
+              kind: Backend
+              name: substrate-idp
+              port: 443
+        claimToHeaders:
+          - header: x-actor-id
+            claim: sub
