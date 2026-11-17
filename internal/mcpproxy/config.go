@@ -25,8 +25,10 @@ type (
 	// This implements [filterapi.ConfigReceiver] to gets the up-to-date configuration.
 	ProxyConfig struct {
 		*mcpProxyConfig
-		toolChangeSignaler         changeSignaler // signals tool changes to active sessions.
-		l                          *slog.Logger
+		toolChangeSignaler changeSignaler // signals tool changes to active sessions.
+		l                  *slog.Logger
+		// sessionCrypto is the session crypto configured at startup (from command line flags). It is
+		// only used when the loaded filter config does not carry its own session encryption config.
 		sessionCrypto              SessionCrypto
 		tracer                     tracingapi.MCPTracer
 		client                     http.Client
@@ -37,6 +39,9 @@ type (
 	mcpProxyConfig struct {
 		backendListenerAddr string
 		routes              map[filterapi.MCPRouteName]*mcpProxyConfigRoute // route name -> backends of that route.
+		// sessionCrypto is built from the session encryption config delivered in the filter config.
+		// It is nil when the filter config does not carry one.
+		sessionCrypto SessionCrypto
 	}
 
 	mcpProxyConfigRoute struct {
@@ -48,7 +53,13 @@ type (
 		// above, but is evaluated once per candidate backend in newSession() instead of
 		// per JSON-RPC method call.
 		backendSelector *compiledAuthorization
-		forwardHeaders  []string
+		// prm is the OAuth protected resource metadata served for this route, if any.
+		// The resource identifier is derived per request rather than stored here; see
+		// resourceIdentifier in oauth.go.
+		// Deliberately not compared by sameTools (it isn't a tool change); LoadConfig builds new route
+		// objects and swaps in the new config every time.
+		prm            *filterapi.MCPRouteOAuthProtectedResourceMetadata
+		forwardHeaders []string
 		// routePrefixMode is the route-level fallback when a backend has no per-backend PrefixMode set.
 		routePrefixMode filterapi.PrefixMode
 
@@ -261,6 +272,7 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 
 	// Talk to the backend MCP listener on the local Envoy instance.
 	newConfig.backendListenerAddr = mcpConfig.BackendListenerAddr
+	newConfig.sessionCrypto = sessionCryptoFromConfig(mcpConfig.SessionEncryption)
 
 	// Build a map of routes to backends.
 	// Each route has its own set of backends. For a given downstream request,
@@ -283,6 +295,7 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 			promptSelectors: make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
 			authorization:   compiledAuth,
 			backendSelector: compiledBackendSel,
+			prm:             route.ProtectedResourceMetadata,
 			forwardHeaders:  route.ForwardHeaders,
 			routePrefixMode: route.PrefixMode,
 		}
@@ -355,6 +368,34 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 }
 
 // newMultiWatcherSignaler creates a new multi-watcher signaler.
+// sessionCryptoFromConfig builds the SessionCrypto for the given session encryption config,
+// or returns nil if the config is nil.
+func sessionCryptoFromConfig(c *filterapi.MCPSessionEncryption) SessionCrypto {
+	if c == nil {
+		return nil
+	}
+	sessionCrypto := NewPBKDF2AesGcmSessionCrypto(c.Seed, c.Iterations)
+	if c.FallbackSeed != "" {
+		sessionCrypto = &FallbackEnabledSessionCrypto{
+			Primary:  sessionCrypto,
+			Fallback: NewPBKDF2AesGcmSessionCrypto(c.FallbackSeed, c.FallbackIterations),
+		}
+	}
+	return sessionCrypto
+}
+
+// currentSessionCrypto returns the SessionCrypto from the latest loaded filter config if it has one,
+// or the one configured at startup otherwise.
+func (p *ProxyConfig) currentSessionCrypto() SessionCrypto {
+	if p == nil {
+		return nil
+	}
+	if c := p.mcpProxyConfig; c != nil && c.sessionCrypto != nil {
+		return c.sessionCrypto
+	}
+	return p.sessionCrypto
+}
+
 func newMultiWatcherSignaler() *multiWatcherSignaler {
 	return &multiWatcherSignaler{
 		notify: make(chan struct{}),

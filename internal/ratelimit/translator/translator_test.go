@@ -112,6 +112,20 @@ func TestQuotaValueToPolicy(t *testing.T) {
 		require.Equal(t, rlsconfv3.RateLimitUnit_HOUR, policy.Unit)
 	})
 
+	t.Run("dynamic metadata keeps static baseline", func(t *testing.T) {
+		qv := &aigv1a1.QuotaValue{
+			Limit: 500, Duration: "1h",
+			FromMetadata: &aigv1a1.QuotaLimitFromMetadata{
+				Namespace: "envoy.filters.http.ext_authz",
+				Key:       "total_limit",
+			},
+		}
+		policy, err := quotaValueToPolicy(qv)
+		require.NoError(t, err)
+		require.Equal(t, uint32(500), policy.RequestsPerUnit)
+		require.Equal(t, rlsconfv3.RateLimitUnit_HOUR, policy.Unit)
+	})
+
 	t.Run("1 second", func(t *testing.T) {
 		qv := &aigv1a1.QuotaValue{Limit: 10, Duration: "1s"}
 		policy, err := quotaValueToPolicy(qv)

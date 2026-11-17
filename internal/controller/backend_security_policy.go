@@ -26,6 +26,7 @@ import (
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/controller/rotators"
 	"github.com/envoyproxy/ai-gateway/internal/controller/tokenprovider"
+	"github.com/envoyproxy/ai-gateway/internal/inferencepool"
 )
 
 const (
@@ -34,9 +35,9 @@ const (
 	// aiServiceBackendKind is the kind for AIServiceBackend resources.
 	aiServiceBackendKind = "AIServiceBackend"
 	// inferencePoolGroup is the API group for InferencePool resources.
-	inferencePoolGroup = "inference.networking.k8s.io"
+	inferencePoolGroup = inferencepool.Group
 	// inferencePoolKind is the kind for InferencePool resources.
-	inferencePoolKind = "InferencePool"
+	inferencePoolKind = inferencepool.Kind
 )
 
 const (
@@ -46,9 +47,8 @@ const (
 	// azureScopeURL specifies Microsoft Azure OAuth 2.0 scope to authenticate and authorize when accessing Azure OpenAI.
 	azureScopeURL = "https://cognitiveservices.azure.com/.default"
 
-	// preRotationWindow specifies how long before expiry to rotate credentials.
-	// Temporarily a fixed duration.
-	preRotationWindow = 5 * time.Minute
+	// DefaultPreRotationWindow is the default duration before expiry at which credentials are rotated.
+	DefaultPreRotationWindow = 5 * time.Minute
 )
 
 // BackendSecurityPolicyController implements [reconcile.TypedReconciler] for [aigv1b1.BackendSecurityPolicy].
@@ -63,9 +63,11 @@ type BackendSecurityPolicyController struct {
 	// referenceGrantValidator authorizes cross-namespace Secret references (static credential,
 	// Azure/GCP and OIDC SecretRefs) via Gateway API ReferenceGrant.
 	referenceGrantValidator *referenceGrantValidator
+	// preRotationWindow specifies how long before expiry to rotate credentials.
+	preRotationWindow time.Duration
 }
 
-func NewBackendSecurityPolicyController(client client.Client, kube kubernetes.Interface, logger logr.Logger, aiServiceBackendEventChan chan event.GenericEvent, inferencePoolEventChan chan event.GenericEvent) *BackendSecurityPolicyController {
+func NewBackendSecurityPolicyController(client client.Client, kube kubernetes.Interface, logger logr.Logger, aiServiceBackendEventChan chan event.GenericEvent, inferencePoolEventChan chan event.GenericEvent, preRotationWindow time.Duration) *BackendSecurityPolicyController {
 	return &BackendSecurityPolicyController{
 		client:                    client,
 		kube:                      kube,
@@ -73,6 +75,7 @@ func NewBackendSecurityPolicyController(client client.Client, kube kubernetes.In
 		aiServiceBackendEventChan: aiServiceBackendEventChan,
 		inferencePoolEventChan:    inferencePoolEventChan,
 		referenceGrantValidator:   newReferenceGrantValidator(client),
+		preRotationWindow:         preRotationWindow,
 	}
 }
 
@@ -101,7 +104,12 @@ func (c *BackendSecurityPolicyController) Reconcile(ctx context.Context, req ctr
 
 // reconcile reconciles BackendSecurityPolicy but extracted from Reconcile to centralize error handling.
 func (c *BackendSecurityPolicyController) reconcile(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy) (res ctrl.Result, err error) {
-	if handleFinalizer(ctx, c.client, c.logger, bsp, c.syncBackendSecurityPolicy) { // Propagate the bsp deletion all the way to relevant Gateways.
+	// Propagate the bsp deletion all the way to relevant Gateways.
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, bsp, c.syncBackendSecurityPolicy)
+	if err != nil {
+		return res, err
+	}
+	if onDelete {
 		return res, nil
 	}
 	// Determine if credential rotation is needed
@@ -166,7 +174,7 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 		if oidc != nil {
 			region := bsp.Spec.AWSCredentials.Region
 			roleArn := bsp.Spec.AWSCredentials.OIDCExchangeToken.AwsRoleArn
-			rotator, err = rotators.NewAWSOIDCRotator(ctx, c.client, nil, c.kube, c.logger, bsp.Namespace, bsp.Name, preRotationWindow, oidc, roleArn, region, c.referenceGrantValidator.validateSecretReference)
+			rotator, err = rotators.NewAWSOIDCRotator(ctx, c.client, nil, c.kube, c.logger, bsp.Namespace, bsp.Name, c.preRotationWindow, oidc, roleArn, region, c.referenceGrantValidator.validateSecretReference)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -218,7 +226,7 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 			return ctrl.Result{}, fmt.Errorf("one of secret ref or oidc must be defined, namespace %s name %s", bsp.Namespace, bsp.Name)
 		}
 
-		rotator, err = rotators.NewAzureTokenRotator(c.client, c.kube, c.logger, bsp.Namespace, bsp.Name, preRotationWindow, provider)
+		rotator, err = rotators.NewAzureTokenRotator(c.client, c.kube, c.logger, bsp.Namespace, bsp.Name, c.preRotationWindow, provider)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -234,7 +242,7 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 			if err != nil {
 				return ctrl.Result{}, fmt.Errorf("failed to initialize OIDC provider: %w", err)
 			}
-			rotator, err = rotators.NewGCPOIDCTokenRotator(c.client, c.logger, bsp, preRotationWindow, oidcProvider)
+			rotator, err = rotators.NewGCPOIDCTokenRotator(c.client, c.logger, bsp, c.preRotationWindow, oidcProvider)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -263,7 +271,7 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 				return ctrl.Result{}, err
 			}
 
-			rotator, err = rotators.NewGCPTokenRotator(c.client, c.kube, c.logger, bsp.Namespace, bsp.Name, preRotationWindow, tokenProvider)
+			rotator, err = rotators.NewGCPTokenRotator(c.client, c.kube, c.logger, bsp.Namespace, bsp.Name, c.preRotationWindow, tokenProvider)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -274,6 +282,16 @@ func (c *BackendSecurityPolicyController) rotateCredential(ctx context.Context, 
 			return ctrl.Result{}, nil
 		}
 
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		var provider tokenprovider.TokenProvider
+		provider, err = c.newOpenAITokenProvider(ctx, bsp)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		rotator, err = rotators.NewOpenAITokenRotator(c.client, c.kube, c.logger, bsp.Namespace, bsp.Name, c.preRotationWindow, provider)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
 	default:
 		err = fmt.Errorf("backend security type %s does not support OIDC token exchange", bsp.Spec.Type)
 		c.logger.Error(err, "unsupported backend security type", "namespace", bsp.Namespace, "name", bsp.Name)
@@ -320,7 +338,7 @@ func (c *BackendSecurityPolicyController) executeRotation(ctx context.Context, r
 			if err != nil {
 				c.logger.Error(err, "failed to rotate token, retry in one minute")
 			} else {
-				rotationTime = expirationTime.Add(-preRotationWindow)
+				rotationTime = expirationTime.Add(-c.preRotationWindow)
 				if r := time.Until(rotationTime); r > 0 {
 					requeue = r
 					c.logger.Info(
@@ -340,6 +358,32 @@ func (c *BackendSecurityPolicyController) executeRotation(ctx context.Context, r
 	return ctrl.Result{RequeueAfter: requeue}, err
 }
 
+// newOpenAITokenProvider returns a TokenProvider that exchanges the configured subject token for an
+// OpenAI access token via OpenAI Workload Identity Federation.
+func (c *BackendSecurityPolicyController) newOpenAITokenProvider(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy) (tokenprovider.TokenProvider, error) {
+	wif := &bsp.Spec.OpenAICredentials.WorkloadIdentityFederationConfig
+	var subjectTokens tokenprovider.TokenProvider
+	var err error
+	switch {
+	case wif.SubjectToken.SPIFFEJWTSVID != nil:
+		svid := wif.SubjectToken.SPIFFEJWTSVID
+		subjectTokens, err = tokenprovider.NewSPIFFETokenProvider(svid.SocketPath, svid.Audience)
+	case wif.SubjectToken.OIDCExchangeToken != nil:
+		subjectTokens, err = tokenprovider.NewOidcTokenProvider(ctx, c.client, &wif.SubjectToken.OIDCExchangeToken.OIDC,
+			bsp.Namespace, c.referenceGrantValidator.validateSecretReference)
+	default:
+		return nil, fmt.Errorf("one of spiffeJWTSVID or oidcExchangeToken must be defined, namespace %s name %s", bsp.Namespace, bsp.Name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize subject token provider: %w", err)
+	}
+	return tokenprovider.NewOpenAIWorkloadIdentityTokenProvider(tokenprovider.OpenAIWorkloadIdentityConfig{
+		TokenURL:           tokenprovider.OpenAITokenExchangeURL,
+		IdentityProviderID: wif.IdentityProviderID,
+		ServiceAccountID:   wif.ServiceAccountID,
+	}, subjectTokens)
+}
+
 // getBackendSecurityPolicyAuthOIDC returns the backendSecurityPolicy's OIDC pointer or nil.
 func getBackendSecurityPolicyAuthOIDC(spec *aigv1b1.BackendSecurityPolicySpec) *egv1a1.OIDC {
 	switch spec.Type {
@@ -355,6 +399,10 @@ func getBackendSecurityPolicyAuthOIDC(spec *aigv1b1.BackendSecurityPolicySpec) *
 	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
 		if spec.GCPCredentials != nil && spec.GCPCredentials.WorkloadIdentityFederationConfig != nil {
 			return &spec.GCPCredentials.WorkloadIdentityFederationConfig.OIDCExchangeToken.OIDC
+		}
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		if spec.OpenAICredentials != nil && spec.OpenAICredentials.WorkloadIdentityFederationConfig.SubjectToken.OIDCExchangeToken != nil {
+			return &spec.OpenAICredentials.WorkloadIdentityFederationConfig.SubjectToken.OIDCExchangeToken.OIDC
 		}
 	}
 	return nil
@@ -469,6 +517,8 @@ func getBSPGeneratedSecretName(bsp *aigv1b1.BackendSecurityPolicy) string {
 		aigv1b1.BackendSecurityPolicyTypeAzureAPIKey,
 		aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
 		return "" // APIKey does not require rotation.
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		// The exchanged access token is always stored in a generated secret.
 	default:
 		panic("BUG: unsupported backend security policy type: " + string(bsp.Spec.Type))
 	}
