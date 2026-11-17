@@ -50,7 +50,7 @@ jobs:
     name: Unit Test
     env:
       # Pin the version for deterministic behaviour of aigw run
-      ENVOY_VERSION: 1.39.6
+      ENVOY_VERSION: 1.40.2
     strategy:
       fail-fast: false
       matrix:
@@ -216,10 +216,10 @@ jobs:
         include:
           - name: latest
             envoy_gateway_version: v0.0.0-latest
-          - name: v1.9.2
-            envoy_gateway_version: v1.9.2
-          - name: v1.8.5
-            envoy_gateway_version: v1.8.5
+          - name: v1.10.0
+            envoy_gateway_version: v1.10.0
+          - name: v1.9.3
+            envoy_gateway_version: v1.9.3
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
@@ -277,7 +277,7 @@ jobs:
       - run: make test-e2e-upgrade
         env:
           # We only need to test the upgrade from the latest stable version of EG.
-          EG_VERSION: v1.8.5
+          EG_VERSION: v1.9.3
           K8S_VERSION: ${{ matrix.k8s-version }}
 
   test_e2e_inference_extension:
@@ -352,7 +352,7 @@ jobs:
         env:
           # We only need to test with the latest stable version of EG, since these e2e tests
           # do not depend on the EG version.
-          EG_VERSION: v1.9.2
+          EG_VERSION: v1.10.0
 
   test_e2e_aigw:
     needs: changes
