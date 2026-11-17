@@ -2384,8 +2384,8 @@ References:
 <ApiField
   name="resource"
   type="string"
-  required="true"
-  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`."
+  required="false"
+  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Leave it unset unless the gateway is fronted by something that rewrites the<br />externally visible URL in a way the forwarded headers do not reflect.<br />The derived identifier names the request's Host. Set Hostnames to restrict which hosts<br />it can name: the metadata endpoint is only reachable on hosts Hostnames matches. Without<br />Hostnames, every authority the Gateway listener accepts is reflected as-is.<br />Audiences need not be the resource URL; it is whatever the authorization server puts in<br />the token's `aud`. Only an authorization server that honours RFC 8707 binds `aud` to the<br />`resource` parameter, which clients set to the advertised identifier. With such a server<br />and a non-empty Audiences, a derived identifier has to agree with Audiences, so list every<br />address the route is reachable on, or set Resource explicitly."
 /><ApiField
   name="resourceName"
   type="string"
@@ -5392,8 +5392,8 @@ References:
 <ApiField
   name="resource"
   type="string"
-  required="true"
-  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`."
+  required="false"
+  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Leave it unset unless the gateway is fronted by something that rewrites the<br />externally visible URL in a way the forwarded headers do not reflect.<br />The derived identifier names the request's Host. Set Hostnames to restrict which hosts<br />it can name: the metadata endpoint is only reachable on hosts Hostnames matches. Without<br />Hostnames, every authority the Gateway listener accepts is reflected as-is.<br />Audiences need not be the resource URL; it is whatever the authorization server puts in<br />the token's `aud`. Only an authorization server that honours RFC 8707 binds `aud` to the<br />`resource` parameter, which clients set to the advertised identifier. With such a server<br />and a non-empty Audiences, a derived identifier has to agree with Audiences, so list every<br />address the route is reachable on, or set Resource explicitly."
 /><ApiField
   name="resourceName"
   type="string"

@@ -5448,7 +5448,7 @@ func TestRedactImageFromResponseRequestParameters(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			inputBytes := mustJSON(tc.input)
-			result, err := redactImageFromResponseRequestParameters(inputBytes, tc.hideInputImages, tc.base64ImageMaxLength)
+			result, err := redactImageFromResponseRequestParameters(inputBytes, tc.hideInputImages, tc.base64ImageMaxLength, responsesImagePartArrays)
 
 			if tc.shouldHaveError {
 				require.Error(t, err)
