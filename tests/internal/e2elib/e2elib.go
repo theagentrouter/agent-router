@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -656,16 +657,37 @@ func RequireGatewayListenerAddressViaMetalLB(t *testing.T, namespace, name strin
 	return
 }
 
-// requireWaitForGatewayPod waits for the Envoy Gateway pod containing the
-// extproc container.
+// requireWaitForGatewayPod waits until no gateway pod is terminating and every one carries the extproc container.
+// A pod admitted before the filter config existed has none and answers AI routes with 500 until it is replaced.
 func requireWaitForGatewayPod(t *testing.T, namespace, selector string) {
-	waitUntilKubectl(t, 2*time.Minute, 1*time.Second, func(output string) error {
-		if !strings.Contains(output, "ai-gateway-extproc") {
-			return fmt.Errorf("container not found, output: %s", output)
+	waitUntilKubectl(t, 3*time.Minute, 1*time.Second, gatewayPodsHaveExtProc,
+		"get", "pod", "-n", namespace, "--selector="+selector, "-o", gatewayPodsJSONPath)
+}
+
+const extProcContainerName = "ai-gateway-extproc"
+
+// gatewayPodsJSONPath prints one "name<TAB>deletionTimestamp<TAB>container names" line per pod.
+const gatewayPodsJSONPath = `jsonpath={range .items[*]}{.metadata.name}{"\t"}{.metadata.deletionTimestamp}{"\t"}` +
+	`{.spec.initContainers[*].name} {.spec.containers[*].name}{"\n"}{end}`
+
+func gatewayPodsHaveExtProc(output string) error {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return errors.New("no gateway pod found")
+	}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 {
+			return fmt.Errorf("unexpected pod listing %q", line)
 		}
-		return nil
-	}, "get", "pod", "-n", namespace,
-		"--selector="+selector, "-o", "jsonpath='{.items[0].spec.initContainers[*].name} {.items[0].spec.containers[*].name}'")
+		if fields[1] != "" {
+			return fmt.Errorf("pod %s is terminating", fields[0])
+		}
+		if !slices.Contains(strings.Fields(fields[2]), extProcContainerName) {
+			return fmt.Errorf("pod %s has no %s container: %s", fields[0], extProcContainerName, fields[2])
+		}
+	}
+	return nil
 }
 
 // RequireWaitForPodReady waits for the pod with the given selector to be ready.
