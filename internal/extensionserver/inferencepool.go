@@ -312,7 +312,12 @@ func buildInferencePoolHTTPFilter(pool *gwaiev1.InferencePool) (*httpconnectionm
 		return nil, fmt.Errorf("failed to build HTTP filter for InferencePool %s/%s: %w", pool.GetNamespace(), pool.GetName(), err)
 	}
 	return &httpconnectionmanagerv3.HttpFilter{
-		Name:       httpFilterNameForInferencePool(pool),
+		Name: httpFilterNameForInferencePool(pool),
+		// Disable the filter by default, it will be enabled per route where the route uses this InferencePool.
+		// When the pool is removed, connections draining on the old listener still run their old filter chain
+		// against the new route configuration, which no longer carries any per-route override for this filter.
+		// Being disabled by default keeps those connections from calling a removed endpoint picker.
+		Disabled:   true,
 		ConfigType: &httpconnectionmanagerv3.HttpFilter_TypedConfig{TypedConfig: a},
 	}, nil
 }
