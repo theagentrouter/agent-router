@@ -75,7 +75,7 @@ func (r *SpeechRecorder) RecordResponse(span trace.Span, resp *[]byte) {
 
 // RecordResponseOnError implements the same method as defined in tracingapi.SpeechRecorder.
 func (r *SpeechRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
 
 // buildSpeechRequestAttributes builds OpenInference attributes from the speech request.

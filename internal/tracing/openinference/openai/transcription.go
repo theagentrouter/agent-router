@@ -141,5 +141,5 @@ func (r *TranscriptionRecorder) RecordResponseChunks(span trace.Span, chunks []*
 
 // RecordResponseOnError implements the same method as defined in tracingapi.TranscriptionRecorder.
 func (r *TranscriptionRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }

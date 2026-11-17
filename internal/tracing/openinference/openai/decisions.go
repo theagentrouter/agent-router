@@ -62,8 +62,8 @@ func (r *DecisionsRecorder) RecordRequest(span trace.Span, req *openaischema.Dec
 	span.SetAttributes(attrs...)
 }
 
-func (*DecisionsRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+func (r *DecisionsRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
 
 func (r *DecisionsRecorder) RecordResponse(span trace.Span, resp *openaischema.DecisionResponse) {
