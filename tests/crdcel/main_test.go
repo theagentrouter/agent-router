@@ -141,6 +141,11 @@ func TestGatewayConfigs(t *testing.T) {
 			name:   "bad_metadata_forwarding_namespace.yaml",
 			expErr: "metadata namespaces may only contain letters, digits, '.', '_', '/' and '-'",
 		},
+		{name: "no_proxy.yaml"},
+		{
+			name:   "bad_no_proxy.yaml",
+			expErr: "each noProxy entry must be '*', a domain name, or an IP address or CIDR range",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := testdata.ReadFile(path.Join("testdata/gatewayconfigs", tc.name))

@@ -446,8 +446,8 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	}
 
 	// Route upstream egress through a forward proxy when the owning Gateway's GatewayConfig
-	// configures one. InferencePool clusters use in-cluster ORIGINAL_DST endpoints, so they are
-	// excluded.
+	// configures one; endpoints matching the forwardProxy.noProxy list connect directly.
+	// InferencePool clusters use in-cluster ORIGINAL_DST endpoints, so they are excluded.
 	if pool == nil {
 		if err = s.maybeWrapClusterInForwardProxy(ctx, cluster, &aigwRoute); err != nil {
 			return fmt.Errorf("failed to configure forward proxy for cluster %s: %w", cluster.Name, err)
