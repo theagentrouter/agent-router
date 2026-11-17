@@ -285,6 +285,73 @@
           "description": "Unchanged from v1.1."
         }
       ]
+    },
+    {
+      "version": "v1.2.1",
+      "date": "October 27, 2026",
+      "type": "patch",
+      "tags": [
+        {
+          "text": "Security",
+          "type": "patch"
+        },
+        {
+          "text": "MCP",
+          "type": "patch"
+        },
+        {
+          "text": "Bug Fix",
+          "type": "patch"
+        },
+        {
+          "text": "Go 1.27.3",
+          "type": "patch"
+        }
+      ],
+      "overview": "Agent Router v1.2.1 is a security and stability patch for the v1.2 series. It tightens MCP session handling and makes the external processor tolerate malformed upstream responses. It also keeps MCP session encryption seeds out of Pod specs and logs, and moves to Go 1.27.3 for standard library CVE fixes. Upgrading rolls Gateway pods that serve MCPRoutes once. An MCP session ID now works only on the MCPRoute that created it. Envoy Gateway stays at v1.9.2, with Envoy Proxy v1.39.1 and Gateway API v1.6.1.",
+      "features": [],
+      "apiChanges": [],
+      "deprecations": [],
+      "bugFixes": [
+        {
+          "title": "MCP proxy listens on loopback only",
+          "description": "The MCP proxy in the external processor sidecar now binds to <code>127.0.0.1:9856</code> instead of every interface, so only the Envoy proxy in the same pod can reach it. The controller rolls existing Gateway pods whose sidecar still listens on all interfaces. <code>aigw run</code> no longer exposes the port on the host network."
+        },
+        {
+          "title": "MCP sessions are bound to their MCPRoute",
+          "description": "A session ID is now accepted only on requests routed through the <code>MCPRoute</code> that created it, so that route's security policy always applies to its sessions. Reusing a session ID on a different MCPRoute returns 400; the client must initialize a new session."
+        },
+        {
+          "title": "<code>promptSelector</code> is enforced on <code>prompts/get</code> and completions",
+          "description": "Prompts filtered out of <code>prompts/list</code> by a backend's <code>promptSelector</code> could still be fetched by name. <code>prompts/get</code> and <code>completion/complete</code> with a prompt reference now return 400 for those prompts, matching how <code>toolSelector</code> already applied to <code>tools/call</code>."
+        },
+        {
+          "title": "MCP session encryption seeds stay out of Pod specs",
+          "description": "The controller used to pass the MCP session encryption seeds to the external processor as command-line arguments, where anyone who could read Gateway Pods could see them. It now delivers them in the filter config Secret, so changing a seed no longer rolls the Gateway pods. The controller reads the seeds from the <code>MCP_SESSION_ENCRYPTION_SEED</code> and <code>MCP_FALLBACK_SESSION_ENCRYPTION_SEED</code> environment variables. The Helm chart stores <code>controller.mcp.sessionEncryption.fallback.seed</code> in its own Secret, and restarts the controller on every <code>helm upgrade</code> while a fallback seed is set so that a seed rotation takes effect."
+        },
+        {
+          "title": "Malformed upstream responses no longer crash the external processor",
+          "description": "A 2xx response with missing or null fields could panic the external processor. This covered Anthropic messages without <code>usage</code> on Anthropic, AWS, and GCP backends, null image generation or Gemini bodies, and null Bedrock Converse content blocks. Such responses are now handled as empty responses or responses without usage. OpenInference tracing of Anthropic responses without usage and of null rerank results no longer panics either."
+        },
+        {
+          "title": "More credential headers redacted in debug logs",
+          "description": "Debug logs now redact the <code>api-key</code> (Azure API key) and <code>x-amz-security-token</code> (AWS session token) headers, in addition to <code>authorization</code> and <code>x-api-key</code>. Header mutations in immediate (locally generated) responses are redacted too."
+        },
+        {
+          "title": "OAuth metadata fetch is size-limited",
+          "description": "When resolving an MCPRoute's OAuth authorization server metadata, the controller reads at most 1 MiB of each response. Larger documents are skipped and the next well-known URL is tried."
+        },
+        {
+          "title": "Controller replicas no longer restart on a fresh install",
+          "description": "With <code>controller.replicaCount</code> of 2 or more, replicas that started together raced to patch the admission webhook's <code>caBundle</code>, and the losers exited with a conflict error. The update is now retried, and a replica that finds the bundle already in place does nothing."
+        },
+        {
+          "title": "Go 1.27.3",
+          "description": "Built with Go 1.27.3, which includes standard library CVE fixes."
+        }
+      ],
+      "breakingChanges": [],
+      "dependencies": []
     }
   ],
   "navigation": {

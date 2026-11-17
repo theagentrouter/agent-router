@@ -377,7 +377,7 @@ func buildResponsesRequestAttributes(req *openai.ResponseRequest, body []byte, c
 		attrs = append(attrs, attribute.String(openinference.InputValue, openinference.RedactedValue))
 	} else {
 		// Redact images if hide input images is true OR if base64 image max length is set
-		modifiedBody, err := redactImageFromResponseRequestParameters(body, config.HideInputImages, config.Base64ImageMaxLength)
+		modifiedBody, err := redactImageFromResponseRequestParameters(body, config.HideInputImages, config.Base64ImageMaxLength, responsesImagePartArrays)
 		if err == nil {
 			attrs = append(attrs, attribute.String(openinference.InputValue, string(modifiedBody)))
 		}
@@ -430,7 +430,12 @@ func buildResponsesRequestAttributes(req *openai.ResponseRequest, body []byte, c
 	return attrs
 }
 
-func redactImageFromResponseRequestParameters(requestJSON []byte, hideInputImages bool, base64ImageMaxLength int) ([]byte, error) {
+// imagePartArrays names where content parts live: <itemsPath>.N.<partsKey>.M.
+type imagePartArrays struct{ itemsPath, partsKey string }
+
+var responsesImagePartArrays = []imagePartArrays{{itemsPath: "input", partsKey: "content"}}
+
+func redactImageFromResponseRequestParameters(requestJSON []byte, hideInputImages bool, base64ImageMaxLength int, partArrays []imagePartArrays) ([]byte, error) {
 	// Return if hide input image is false and base64 image max length is not set
 	if !hideInputImages && base64ImageMaxLength <= 0 {
 		return requestJSON, nil
@@ -440,58 +445,58 @@ func redactImageFromResponseRequestParameters(requestJSON []byte, hideInputImage
 	// deep copy to avoid mutating original body
 	copy(modifiedJSON, requestJSON)
 
-	// Iterate over input[]
-	inputArray := gjson.GetBytes(requestJSON, "input")
-	if !inputArray.IsArray() {
-		return modifiedJSON, nil
-	}
-
-	inputIdx := 0
-	inputArray.ForEach(func(_, inputItem gjson.Result) bool {
-		content := inputItem.Get("content")
-		// skip if content is not array
-		if !content.IsArray() {
-			inputIdx++
-			return true
+	for _, partArray := range partArrays {
+		items := gjson.GetBytes(requestJSON, partArray.itemsPath)
+		if !items.IsArray() {
+			continue
 		}
 
-		// Iterate over content[]
-		contentIdx := 0
-		content.ForEach(func(_, contentItem gjson.Result) bool {
-			if contentItem.Get("type").String() != "input_image" {
-				contentIdx++
+		itemIdx := 0
+		items.ForEach(func(_, item gjson.Result) bool {
+			parts := item.Get(partArray.partsKey)
+			// skip if the parts field is not an array, e.g. a plain string
+			if !parts.IsArray() {
+				itemIdx++
 				return true
 			}
 
-			imageURL := contentItem.Get("image_url")
-			if !imageURL.Exists() || imageURL.Type != gjson.String {
-				contentIdx++
-				return true
-			}
-
-			url := imageURL.String()
-
-			shouldRedact := hideInputImages ||
-				(isBase64URL(url) && len(url) > base64ImageMaxLength)
-
-			if shouldRedact {
-				// Build JSON path dynamically - construct full path from root
-				path := fmt.Sprintf("input.%d.content.%d.image_url", inputIdx, contentIdx)
-				var err error
-				modifiedJSON, err = sjson.SetBytesOptions(modifiedJSON, path, openinference.RedactedValue, &sjson.Options{ReplaceInPlace: true, Optimistic: true})
-				if err != nil {
-					contentIdx++
-					return false
+			partIdx := 0
+			parts.ForEach(func(_, part gjson.Result) bool {
+				if part.Get("type").String() != "input_image" {
+					partIdx++
+					return true
 				}
-			}
 
-			contentIdx++
+				imageURL := part.Get("image_url")
+				if !imageURL.Exists() || imageURL.Type != gjson.String {
+					partIdx++
+					return true
+				}
+
+				url := imageURL.String()
+
+				shouldRedact := hideInputImages ||
+					(isBase64URL(url) && len(url) > base64ImageMaxLength)
+
+				if shouldRedact {
+					// Build JSON path dynamically - construct full path from root
+					path := fmt.Sprintf("%s.%d.%s.%d.image_url", partArray.itemsPath, itemIdx, partArray.partsKey, partIdx)
+					var err error
+					modifiedJSON, err = sjson.SetBytesOptions(modifiedJSON, path, openinference.RedactedValue, &sjson.Options{ReplaceInPlace: true, Optimistic: true})
+					if err != nil {
+						partIdx++
+						return false
+					}
+				}
+
+				partIdx++
+				return true
+			})
+
+			itemIdx++
 			return true
 		})
-
-		inputIdx++
-		return true
-	})
+	}
 
 	return modifiedJSON, nil
 }

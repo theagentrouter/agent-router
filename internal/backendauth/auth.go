@@ -45,6 +45,9 @@ func NewHandler(ctx context.Context, config *filterapi.BackendAuth) (filterapi.B
 	case config.GCPAuth != nil:
 		inner, err = newGCPHandler(ctx, config.GCPAuth)
 		applyFn = makeGCPApplyFn(config.GCPAuth.Region, config.GCPAuth.ProjectName)
+	case config.OpenAIAuth != nil:
+		inner, err = newOpenAIHandler(config.OpenAIAuth)
+		applyFn = makeOpenAIApplyFn(config.OpenAIAuth.Organization, config.OpenAIAuth.Project)
 	case config.AnthropicAPIKey != nil:
 		inner, err = newAnthropicAPIKeyHandler(config.AnthropicAPIKey)
 		applyFn = applyAnthropicCredential

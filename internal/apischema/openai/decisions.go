@@ -8,8 +8,7 @@ package openai
 import "github.com/envoyproxy/ai-gateway/internal/json"
 
 // DecisionRequest represents the request body for POST /v1/decisions.
-// Input is kept as raw JSON because the API accepts either a string or an array
-// of user messages containing text and inline base64 images.
+// Input is kept as raw JSON because the API accepts either a string or an array of input items.
 // Docs: https://developers.openai.com/api/reference/resources/decisions/methods/create
 type DecisionRequest struct {
 	Model     string             `json:"model"`
@@ -19,13 +18,13 @@ type DecisionRequest struct {
 	SafetyIdentifier string `json:"safety_identifier,omitempty"`
 }
 
-// DecisionQuestion is a predicate, choice, or score question.
+// DecisionQuestion is a predicate, choice, or score question. Instructions is raw because it is a string or an array of input_text and input_image parts.
 // Docs: https://developers.openai.com/api/docs/guides/decisions
 // SDK: https://github.com/openai/openai-go/blob/v3.73.0/decision.go
 type DecisionQuestion struct {
 	Type         string                 `json:"type"`
 	Name         string                 `json:"name,omitempty"`
-	Instructions string                 `json:"instructions"`
+	Instructions json.RawMessage        `json:"instructions"`
 	Choices      []DecisionChoiceOption `json:"choices,omitempty"`
 	Levels       []DecisionScoreLevel   `json:"levels,omitempty"`
 }

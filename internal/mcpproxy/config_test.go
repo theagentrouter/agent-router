@@ -96,6 +96,61 @@ func TestLoadConfig_NilMCPConfig(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestLoadConfig_SessionEncryption(t *testing.T) {
+	flagCrypto := NewPBKDF2AesGcmSessionCrypto("flag-seed", 100)
+	proxy, _, err := NewMCPProxy(slog.Default(), stubMetrics{}, noopTracer, flagCrypto, nil)
+	require.NoError(t, err)
+
+	// Before any config is loaded, the crypto configured at startup is used.
+	require.Equal(t, flagCrypto, proxy.currentSessionCrypto())
+
+	// A config without session encryption keeps using the crypto configured at startup.
+	require.NoError(t, proxy.LoadConfig(t.Context(), &filterapi.Config{MCPConfig: &filterapi.MCPConfig{}}))
+	require.Equal(t, flagCrypto, proxy.currentSessionCrypto())
+
+	flagEncrypted, err := flagCrypto.Encrypt("plaintext")
+	require.NoError(t, err)
+	oldSeedEncrypted, err := NewPBKDF2AesGcmSessionCrypto("old-seed", 200).Encrypt("plaintext")
+	require.NoError(t, err)
+
+	// A config with session encryption takes precedence over the crypto configured at startup.
+	require.NoError(t, proxy.LoadConfig(t.Context(), &filterapi.Config{MCPConfig: &filterapi.MCPConfig{
+		SessionEncryption: &filterapi.MCPSessionEncryption{Seed: "config-seed", Iterations: 100},
+	}}))
+	sc := proxy.currentSessionCrypto()
+	require.NotEqual(t, flagCrypto, sc)
+	encrypted, err := sc.Encrypt("plaintext")
+	require.NoError(t, err)
+	decrypted, err := NewPBKDF2AesGcmSessionCrypto("config-seed", 100).Decrypt(encrypted)
+	require.NoError(t, err)
+	require.Equal(t, "plaintext", decrypted)
+	// IDs encrypted with the seed from the flags must no longer be accepted.
+	_, err = sc.Decrypt(flagEncrypted)
+	require.Error(t, err)
+	_, err = sc.Decrypt(oldSeedEncrypted)
+	require.Error(t, err)
+
+	// The fallback seed is accepted for decryption only.
+	require.NoError(t, proxy.LoadConfig(t.Context(), &filterapi.Config{MCPConfig: &filterapi.MCPConfig{
+		SessionEncryption: &filterapi.MCPSessionEncryption{
+			Seed: "config-seed", Iterations: 100, FallbackSeed: "old-seed", FallbackIterations: 200,
+		},
+	}}))
+	sc = proxy.currentSessionCrypto()
+	decrypted, err = sc.Decrypt(oldSeedEncrypted)
+	require.NoError(t, err)
+	require.Equal(t, "plaintext", decrypted)
+	encrypted, err = sc.Encrypt("plaintext")
+	require.NoError(t, err)
+	_, err = NewPBKDF2AesGcmSessionCrypto("old-seed", 200).Decrypt(encrypted)
+	require.Error(t, err)
+}
+
+func TestProxyConfig_currentSessionCrypto_nil(t *testing.T) {
+	var p *ProxyConfig
+	require.Nil(t, p.currentSessionCrypto())
+}
+
 func TestLoadConfig_BasicConfiguration(t *testing.T) {
 	proxy := &ProxyConfig{
 		mcpProxyConfig:     &mcpProxyConfig{},
