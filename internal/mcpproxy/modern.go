@@ -1383,16 +1383,20 @@ func rewriteAcknowledgedSubscriptions(params json.RawMessage, backendName string
 		return nil, false
 	}
 
+	// A successfully decoded string[] (including []) is authoritative: an
+	// empty array means the backend accepted none of the resource URIs.
+	// Only non-array shapes (go-sdk's boolean true, null, etc.) fall back to
+	// substituting the client's gateway-namespaced URIs for this backend.
 	var uris []string
-	if json.Unmarshal(urisRaw, &uris) == nil && len(uris) > 0 {
-		// Backend echoed an array of upstream URIs — re-prefix for the client.
+	trimmed := bytes.TrimSpace(urisRaw)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		if json.Unmarshal(trimmed, &uris) != nil {
+			return nil, false
+		}
 		for i, uri := range uris {
 			uris[i] = downstreamResourceURI(uri, backendName)
 		}
 	} else {
-		// Boolean true / null / empty / unexpected shape — substitute the
-		// client's gateway-namespaced URIs for this backend so the ack is
-		// still a string[] as the spec requires.
 		uris = append([]string(nil), clientURIs...)
 	}
 	prefixed, err := json.Marshal(uris)

@@ -2328,6 +2328,23 @@ func TestRewriteAcknowledgedSubscriptions(t *testing.T) {
 		require.Equal(t, clientURIs, uris)
 	})
 
+	t.Run("empty array preserved as authoritative", func(t *testing.T) {
+		clientURIs := []string{
+			downstreamResourceURI("file:///a", "backend1"),
+		}
+		in := json.RawMessage(`{"notifications":{"resourceSubscriptions":[],"toolsListChanged":true}}`)
+		out, ok := rewriteAcknowledgedSubscriptions(in, "backend1", clientURIs)
+		require.True(t, ok)
+		var m map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(out, &m))
+		var notifs map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(m["notifications"], &notifs))
+		var uris []string
+		require.NoError(t, json.Unmarshal(notifs["resourceSubscriptions"], &uris))
+		require.Empty(t, uris)
+		require.Equal(t, json.RawMessage(`true`), notifs["toolsListChanged"])
+	})
+
 	t.Run("empty params", func(t *testing.T) {
 		out, ok := rewriteAcknowledgedSubscriptions(nil, "backend1", nil)
 		require.False(t, ok)
