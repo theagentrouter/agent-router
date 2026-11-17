@@ -131,6 +131,8 @@ func newModernDumbHandler() http.Handler {
 			} else {
 				writeJSONRPCError(w, req.ID, -32601, "tool not found: "+name)
 			}
+		case "subscriptions/listen":
+			handleModernSubscriptionsListen(w, &req)
 		default:
 			writeJSONRPCError(w, req.ID, -32601, "method not found: "+method)
 		}
@@ -197,10 +199,60 @@ func newModernFullHandler() http.Handler {
 			handleModernPromptGet(w, &req)
 		case "completion/complete":
 			handleModernComplete(w, &req)
+		case "subscriptions/listen":
+			handleModernSubscriptionsListen(w, &req)
 		default:
 			writeJSONRPCError(w, req.ID, -32601, "method not found: "+method)
 		}
 	})
+}
+
+// handleModernSubscriptionsListen acknowledges the requested resource URIs and
+// immediately emits a resources/updated notification for each one. The stream
+// then ends so the gateway can synthesize resultType:"complete".
+func handleModernSubscriptionsListen(w http.ResponseWriter, req *jsonRPCRequest) {
+	var params struct {
+		Notifications struct {
+			ResourceSubscriptions []string `json:"resourceSubscriptions"`
+		} `json:"notifications"`
+	}
+	_ = json.Unmarshal(req.Params, &params)
+	uris := params.Notifications.ResourceSubscriptions
+
+	flusher, _ := w.(http.Flusher)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+
+	writeSSENotification(w, "notifications/subscriptions/acknowledged", map[string]any{
+		"notifications": map[string]any{
+			"resourceSubscriptions": uris,
+		},
+	})
+	if flusher != nil {
+		flusher.Flush()
+	}
+	for _, uri := range uris {
+		writeSSENotification(w, "notifications/resources/updated", map[string]any{"uri": uri})
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+func writeSSENotification(w http.ResponseWriter, method string, params any) {
+	payload := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  method,
+		"params":  params,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_, _ = w.Write([]byte("event: message\ndata: "))
+	_, _ = w.Write(encoded)
+	_, _ = w.Write([]byte("\n\n"))
 }
 
 func handleModernToolCall(w http.ResponseWriter, r *http.Request, req *jsonRPCRequest) {

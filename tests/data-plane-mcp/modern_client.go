@@ -6,10 +6,13 @@
 package dataplanemcp
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -263,4 +266,65 @@ func (c *modernClient) complete(t *testing.T, params map[string]any) modernCompl
 	var out modernCompleteResult
 	require.NoError(t, res.unmarshal(&out))
 	return out
+}
+
+// listenSubscriptions opens subscriptions/listen as an SSE stream and returns
+// a channel of raw JSON-RPC message payloads (the SSE data: lines). The caller
+// must cancel ctx (or close the response body) to end the stream.
+func (c *modernClient) listenSubscriptions(t *testing.T, ctx context.Context, resourceURIs []string) (<-chan []byte, *http.Response) {
+	t.Helper()
+	id := c.reqIDSeq.Add(1)
+
+	paramsRaw, err := json.Marshal(map[string]any{
+		"notifications": map[string]any{
+			"resourceSubscriptions": resourceURIs,
+		},
+	})
+	require.NoError(t, err)
+	paramsRaw = injectModernMeta(paramsRaw)
+
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"method":  "subscriptions/listen",
+		"params":  paramsRaw,
+	})
+	require.NoError(t, err)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set(modernVersionHeader, modernProtocolVersion)
+	req.Header.Set(modernMethodHeader, "subscriptions/listen")
+
+	// No client timeout — the stream is long-lived until ctx cancel.
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "listen status")
+	require.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+
+	events := make(chan []byte, 16)
+	go func() {
+		defer close(events)
+		defer resp.Body.Close()
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			payload := bytes.TrimSpace([]byte(strings.TrimPrefix(line, "data:")))
+			if len(payload) == 0 {
+				continue
+			}
+			select {
+			case events <- append([]byte(nil), payload...):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return events, resp
 }

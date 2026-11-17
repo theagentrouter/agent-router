@@ -7,9 +7,11 @@ package dataplanemcp
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -181,6 +183,61 @@ func TestModernMCP(t *testing.T) {
 			"ref":      map[string]any{"type": "ref/resource", "uri": defaultMCPBackendResourceURIPrefix + "file://results-{id}.txt"},
 		})
 		require.Equal(t, []string{"file://results-23.txt"}, result.Completion.Values)
+	})
+
+	t.Run("SubscriptionsListen/TwoBackends", func(t *testing.T) {
+		subDefault := defaultMCPBackendResourceURIPrefix + testmcp.DummyResource.URI
+		subDumb := "dumb-mcp-backend+" + testmcp.DummyResource.URI
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		events, _ := cli.listenSubscriptions(t, ctx, []string{subDefault, subDumb})
+
+		var (
+			ackCount       int
+			sawUpdatedDef  bool
+			sawUpdatedDumb bool
+			sawComplete    bool
+		)
+		for {
+			select {
+			case <-ctx.Done():
+				t.Fatal("timed out waiting for listen events")
+			case raw, ok := <-events:
+				if !ok {
+					require.GreaterOrEqual(t, ackCount, 1, "expected an acknowledgement")
+					require.True(t, sawUpdatedDef, "missing namespaced update for default backend")
+					require.True(t, sawUpdatedDumb, "missing namespaced update for dumb backend")
+					return
+				}
+				payload := string(raw)
+				switch {
+				case strings.Contains(payload, `"method":"notifications/subscriptions/acknowledged"`):
+					ackCount++
+					require.Contains(t, payload, subDefault)
+					require.Contains(t, payload, subDumb)
+				case strings.Contains(payload, `"method":"notifications/resources/updated"`):
+					require.NotContains(t, payload, `"uri":"file:///`, "updated URI must be gateway-namespaced")
+					if strings.Contains(payload, subDefault) {
+						sawUpdatedDef = true
+					}
+					if strings.Contains(payload, subDumb) {
+						sawUpdatedDumb = true
+					}
+				case strings.Contains(payload, `"resultType":"complete"`):
+					sawComplete = true
+				}
+				if ackCount == 1 && sawUpdatedDef && sawUpdatedDumb && sawComplete {
+					cancel()
+					// Drain until the reader exits.
+					for range events {
+					}
+					require.Equal(t, 1, ackCount, "gateway must emit exactly one merged acknowledgement")
+					return
+				}
+			}
+		}
 	})
 
 	t.Run("Metrics/MethodCount", func(t *testing.T) {

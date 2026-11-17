@@ -2422,6 +2422,11 @@ func Test_errorType(t *testing.T) {
 			expected: metrics.MCPErrorInvalidParam,
 		},
 		{
+			name:     "invalid resource URI error",
+			err:      errInvalidResourceURI,
+			expected: metrics.MCPErrorInvalidParam,
+		},
+		{
 			name:     "wrapped backend not found error",
 			err:      fmt.Errorf("failed to call backend: %w", errBackendNotFound),
 			expected: metrics.MCPErrorInvalidParam,

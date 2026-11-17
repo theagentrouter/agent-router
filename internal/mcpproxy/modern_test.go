@@ -1713,7 +1713,7 @@ func TestHandleModernPromptsGet_PromptSelectorDenied(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "prompts/get", fmt.Appendf(nil, `{"name":%q}`, downstreamResourceName("blocked", "backend1")))
 	_, err := proxy.handleModernPromptsGet(context.Background(), rr, newModernRequest("prompts/get"), req, "test-route", nil)
-	require.ErrorIs(t, err, errInvalidToolName)
+	require.ErrorIs(t, err, errInvalidPromptName)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
@@ -1804,7 +1804,7 @@ func TestHandleModernComplete_PromptSelector(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "completion/complete", []byte(`{"ref":{"type":"ref/prompt","name":"backend1__private_prompt"},"argument":{"name":"a","value":"v"}}`))
 	_, err := proxy.handleModernComplete(context.Background(), rr, newModernRequest("completion/complete"), req, "test-route", nil)
-	require.ErrorIs(t, err, errInvalidToolName)
+	require.ErrorIs(t, err, errInvalidPromptName)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	require.Contains(t, rr.Body.String(), "invalid prompt name")
 	require.Zero(t, hits, "excluded prompts must not be forwarded to the backend")
@@ -1864,10 +1864,12 @@ func (s *streamResponseWriter) Write(b []byte) (int, error) { return s.w.Write(b
 func (s *streamResponseWriter) Flush()                      {}
 
 func TestHandleSubscriptionsListen_MergesAndRewritesEvents(t *testing.T) {
-	// Each backend emits one resources/updated notification with an upstream URI;
-	// the gateway must re-prefix each URI into the downstream namespace and forward
-	// only events matching the client's namespaced subscriptions. Backends must
-	// receive bare (unprefixed) URIs for their own resources only.
+	// Each backend emits one acknowledgement and one resources/updated
+	// notification with an upstream URI. The gateway must:
+	//   - re-prefix each URI into the downstream namespace
+	//   - emit exactly one merged acknowledgements notification
+	//   - forward only events matching the client's namespaced subscriptions
+	// Backends must receive bare (unprefixed) URIs for their own resources only.
 	var mu sync.Mutex
 	gotUpstream := map[string][]string{} // backend -> resourceSubscriptions seen
 
@@ -1888,7 +1890,11 @@ func TestHandleSubscriptionsListen_MergesAndRewritesEvents(t *testing.T) {
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
+		ack := fmt.Sprintf(
+			`{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"notifications":{"resourceSubscriptions":["file:///watched-%s"]}}}`,
+			backend)
 		notif := fmt.Sprintf(`{"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":"file:///watched-%s"}}`, backend)
+		_, _ = w.Write([]byte("event: message\ndata: " + ack + "\n\n"))
 		_, _ = w.Write([]byte("event: message\ndata: " + notif + "\n\n"))
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
@@ -1923,10 +1929,19 @@ func TestHandleSubscriptionsListen_MergesAndRewritesEvents(t *testing.T) {
 	// Poll a mutex-protected body snapshot; the handler writes concurrently.
 	require.Eventually(t, func() bool {
 		body := rr.bodyString()
-		return strings.Contains(body, sub1) && strings.Contains(body, sub2)
+		return strings.Contains(body, sub1) &&
+			strings.Contains(body, sub2) &&
+			strings.Contains(body, `"method":"notifications/subscriptions/acknowledged"`) &&
+			strings.Contains(body, `"method":"notifications/resources/updated"`)
 	}, time.Second, 10*time.Millisecond)
 	cancel()
 	<-done
+
+	body := rr.bodyString()
+	require.Equal(t, 1, strings.Count(body, `"method":"notifications/subscriptions/acknowledged"`),
+		"gateway must emit one merged acknowledgement, got:\n%s", body)
+	require.Contains(t, body, sub1)
+	require.Contains(t, body, sub2)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -3242,7 +3257,7 @@ func TestHandleModernPromptsGet_InvalidName(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "prompts/get", []byte(`{"name":"no-prefix"}`))
 	_, err := proxy.handleModernPromptsGet(context.Background(), rr, newModernRequest("prompts/get"), req, "test-route", nil)
-	require.ErrorIs(t, err, errInvalidToolName)
+	require.ErrorIs(t, err, errInvalidPromptName)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
@@ -3270,6 +3285,26 @@ func TestSendModernRequestAndProxy_BackendFailure(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 	require.Contains(t, rr.Body.String(), "call to backend1 failed")
 	require.NotContains(t, rr.Body.String(), "upstream boom", "backend response body must not leak to the client")
+}
+
+func TestSendModernRequestAndProxy_NotificationAccepted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+	proxy.requestHeaders = http.Header{}
+
+	rr := httptest.NewRecorder()
+	// Zero-value ID is invalid → JSON-RPC notification (fire-and-forget).
+	req := &jsonrpc.Request{Method: "tools/call", Params: []byte(`{"name":"backend1__do-it"}`)}
+	backend := proxy.routes["test-route"].backends["backend1"]
+	_, err := proxy.sendModernRequestAndProxy(context.Background(), rr, req, "test-route", backend, handlerResult{}, nil, nil)
+
+	require.NoError(t, err)
+	require.Empty(t, rr.Body.String(), "notification must not write a response body")
 }
 
 func TestSendModernRequest_ForwardsMcpParamHeaders(t *testing.T) {

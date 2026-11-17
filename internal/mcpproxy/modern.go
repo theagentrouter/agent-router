@@ -8,7 +8,6 @@ package mcpproxy
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -742,7 +741,7 @@ func (m *mcpRequestContext) handleModernResourcesRead(ctx context.Context, w htt
 	backendName, upstreamURI, err := upstreamResourceURI(params.URI)
 	if err != nil {
 		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid resource URI: %v", err), req.ID)
-		return handlerResult{}, fmt.Errorf("%w: %s", errInvalidToolName, params.URI)
+		return handlerResult{}, fmt.Errorf("%w: %s", errInvalidResourceURI, params.URI)
 	}
 	result := handlerResult{backendName: backendName}
 
@@ -838,7 +837,7 @@ func (m *mcpRequestContext) handleModernPromptsGet(ctx context.Context, w http.R
 	backendName, upstreamName, err := m.resolvePromptBackend(route, params.Name)
 	if err != nil {
 		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid prompt name: %v", err), req.ID)
-		return handlerResult{}, fmt.Errorf("%w: %s", errInvalidToolName, params.Name)
+		return handlerResult{}, fmt.Errorf("%w: %s", errInvalidPromptName, params.Name)
 	}
 	result := handlerResult{backendName: backendName}
 
@@ -850,7 +849,7 @@ func (m *mcpRequestContext) handleModernPromptsGet(ctx context.Context, w http.R
 	// Enforce per-route prompt selector filters (parity with the tools/call path).
 	if selector := routeConfig.promptSelectors[backendName]; selector != nil && !selector.allows(upstreamName) {
 		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid prompt name: %s", upstreamName), req.ID)
-		return result, fmt.Errorf("%w: %s", errInvalidToolName, upstreamName)
+		return result, fmt.Errorf("%w: %s", errInvalidPromptName, upstreamName)
 	}
 
 	params.Name = upstreamName
@@ -886,7 +885,7 @@ func (m *mcpRequestContext) handleModernComplete(ctx context.Context, w http.Res
 	}
 	if params.Ref == nil {
 		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "completion/complete requires a ref", req.ID)
-		return handlerResult{}, fmt.Errorf("%w: missing ref", errInvalidToolName)
+		return handlerResult{}, errors.New("completion/complete requires a ref")
 	}
 
 	// completion/complete targets a specific prompt or resource by ref. Resolve
@@ -898,15 +897,19 @@ func (m *mcpRequestContext) handleModernComplete(ctx context.Context, w http.Res
 	switch params.Ref.Type {
 	case "ref/prompt":
 		backendName, params.Ref.Name, err = m.resolvePromptBackend(route, params.Ref.Name)
+		if err != nil {
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid ref %s: %v", params.Ref.Name, err), req.ID)
+			return handlerResult{}, fmt.Errorf("%w: %s", errInvalidPromptName, params.Ref.Name)
+		}
 	case "ref/resource":
 		backendName, params.Ref.URI, err = upstreamResourceURI(params.Ref.URI)
+		if err != nil {
+			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid ref %s: %v", params.Ref.URI, err), req.ID)
+			return handlerResult{}, fmt.Errorf("%w: %s", errInvalidResourceURI, params.Ref.URI)
+		}
 	default:
 		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("unsupported ref type: %s", params.Ref.Type), req.ID)
-		return handlerResult{}, fmt.Errorf("%w: unsupported ref type %s", errInvalidToolName, params.Ref.Type)
-	}
-	if err != nil {
-		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid ref %s: %v", cmp.Or(params.Ref.Name, params.Ref.URI), err), req.ID)
-		return handlerResult{}, err
+		return handlerResult{}, fmt.Errorf("unsupported completion ref type: %s", params.Ref.Type)
 	}
 	result := handlerResult{backendName: backendName}
 
@@ -920,7 +923,7 @@ func (m *mcpRequestContext) handleModernComplete(ctx context.Context, w http.Res
 	if params.Ref.Type == "ref/prompt" {
 		if selector := routeConfig.promptSelectors[backendName]; selector != nil && !selector.allows(params.Ref.Name) {
 			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid prompt name: %s", params.Ref.Name), req.ID)
-			return result, fmt.Errorf("%w: %s", errInvalidToolName, params.Ref.Name)
+			return result, fmt.Errorf("%w: %s", errInvalidPromptName, params.Ref.Name)
 		}
 	}
 
@@ -984,6 +987,9 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 	// First structured non-200 rejection. Forwarded when no stream opens, so a
 	// 400/-32602 from the backend is not replaced by a generic 502/-32603.
 	var rejection *backendJSONRPCError
+	// Tracks per-backend accept/reject/ack so the merge loop can emit one
+	// gateway-level acknowledgement after every established stream responds.
+	fanout := newSubscriptionFanout()
 	for _, backend := range selected {
 		uris := perBackendURIs[backend.Name]
 		if len(uris) == 0 && !wantListChanged {
@@ -1038,6 +1044,7 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 			continue
 		}
 		established++
+		fanout.track(backend.Name)
 		if span != nil {
 			span.RecordRouteToBackend(backend.Name, "", true)
 		}
@@ -1088,7 +1095,6 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 	// A backend can return HTTP 200 and then reject the listen with a JSON-RPC
 	// error; if every established stream does that, the client still gets a
 	// JSON-RPC error instead of a synthesized resultType:"complete".
-	fanout := newSubscriptionFanout()
 	headersSent := false
 	flusher, _ := w.(http.Flusher)
 	writeListenHeaders := func() {
@@ -1100,6 +1106,17 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 		headersSent = true
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	maybeWriteMergedAck := func() {
+		params, ok := fanout.takeMergedAckIfReady()
+		if !ok {
+			return
+		}
+		writeListenHeaders()
+		writeSSENotification(w, "notifications/subscriptions/acknowledged", params)
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -1146,6 +1163,7 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 				writeListenHeaders()
 				event.writeAndMaybeFlush(w)
 			}
+			maybeWriteMergedAck()
 		case <-keepAlive.C:
 			if !headersSent {
 				continue
@@ -1259,9 +1277,15 @@ func (m *mcpRequestContext) forwardSubscriptionEvent(event *sseEvent, intent sub
 					continue
 				}
 			case "notifications/subscriptions/acknowledged":
+				// Buffer per-backend acks and emit one merged acknowledgement
+				// once every established stream has acked or rejected. From
+				// the client's perspective the gateway is a single server.
 				if rewritten, ok := rewriteAcknowledgedSubscriptions(json.RawMessage(v.Params), event.backend, intent.resourceURIsForBackend(event.backend)); ok {
-					v.Params = []byte(rewritten)
+					fanout.recordAck(event.backend, rewritten)
+				} else {
+					fanout.accept(event.backend)
 				}
+				continue
 			case "notifications/cancelled":
 				// Server-initiated subscription teardown (spec: server MUST
 				// send this when it tears down the stream). Forward as-is.
@@ -1284,17 +1308,35 @@ func (m *mcpRequestContext) forwardSubscriptionEvent(event *sseEvent, intent sub
 // accepted the subscription and which rejected it with a JSON-RPC error.
 // The latest signal from a backend wins: a terminal JSON-RPC error overrides
 // an earlier notification, and a later notification overrides an earlier error.
+//
+// Per-backend notifications/subscriptions/acknowledged are buffered until
+// every tracked stream has acknowledged or rejected, then emitted once as a
+// merged gateway-level acknowledgement.
 type subscriptionFanout struct {
-	accepted map[filterapi.MCPBackendName]struct{}
-	rejected map[filterapi.MCPBackendName]struct{}
-	firstErr json.RawMessage
+	established      map[filterapi.MCPBackendName]struct{}
+	accepted         map[filterapi.MCPBackendName]struct{}
+	rejected         map[filterapi.MCPBackendName]struct{}
+	acked            map[filterapi.MCPBackendName]struct{}
+	ackURIs          map[string]struct{}
+	ackTools         bool
+	ackPrompts       bool
+	ackResources     bool
+	mergedAckEmitted bool
+	firstErr         json.RawMessage
 }
 
 func newSubscriptionFanout() *subscriptionFanout {
 	return &subscriptionFanout{
-		accepted: map[filterapi.MCPBackendName]struct{}{},
-		rejected: map[filterapi.MCPBackendName]struct{}{},
+		established: map[filterapi.MCPBackendName]struct{}{},
+		accepted:    map[filterapi.MCPBackendName]struct{}{},
+		rejected:    map[filterapi.MCPBackendName]struct{}{},
+		acked:       map[filterapi.MCPBackendName]struct{}{},
+		ackURIs:     map[string]struct{}{},
 	}
+}
+
+func (f *subscriptionFanout) track(backend filterapi.MCPBackendName) {
+	f.established[backend] = struct{}{}
 }
 
 func (f *subscriptionFanout) accept(backend filterapi.MCPBackendName) {
@@ -1307,10 +1349,71 @@ func (f *subscriptionFanout) accept(backend filterapi.MCPBackendName) {
 // delivered an event and then failed is not reported as a clean close.
 func (f *subscriptionFanout) reject(backend filterapi.MCPBackendName, raw json.RawMessage) {
 	delete(f.accepted, backend)
+	delete(f.acked, backend)
 	f.rejected[backend] = struct{}{}
 	if f.firstErr == nil && len(raw) > 0 {
 		f.firstErr = raw
 	}
+}
+
+// recordAck buffers a rewritten notifications/subscriptions/acknowledged
+// payload from one backend. Individual acks are not forwarded; the merge loop
+// emits a single union once every established stream has acked or rejected.
+func (f *subscriptionFanout) recordAck(backend filterapi.MCPBackendName, rewrittenParams json.RawMessage) {
+	f.accept(backend)
+	if _, already := f.acked[backend]; already {
+		return
+	}
+	f.acked[backend] = struct{}{}
+	uris, tools, prompts, resources := parseAcknowledgedSubscriptionParams(rewrittenParams)
+	for _, uri := range uris {
+		f.ackURIs[uri] = struct{}{}
+	}
+	f.ackTools = f.ackTools || tools
+	f.ackPrompts = f.ackPrompts || prompts
+	f.ackResources = f.ackResources || resources
+}
+
+func (f *subscriptionFanout) readyForMergedAck() bool {
+	if f.mergedAckEmitted || len(f.established) == 0 || len(f.acked) == 0 {
+		return false
+	}
+	for backend := range f.established {
+		_, acked := f.acked[backend]
+		_, rejected := f.rejected[backend]
+		if !acked && !rejected {
+			return false
+		}
+	}
+	return true
+}
+
+// takeMergedAckIfReady returns the merged acknowledgement params once every
+// established stream has acknowledged or rejected, and at least one ack was
+// received. Subsequent calls return false.
+func (f *subscriptionFanout) takeMergedAckIfReady() (map[string]any, bool) {
+	if !f.readyForMergedAck() {
+		return nil, false
+	}
+	f.mergedAckEmitted = true
+	uris := make([]string, 0, len(f.ackURIs))
+	for uri := range f.ackURIs {
+		uris = append(uris, uri)
+	}
+	sort.Strings(uris)
+	notifs := map[string]any{
+		"resourceSubscriptions": uris,
+	}
+	if f.ackTools {
+		notifs["toolsListChanged"] = true
+	}
+	if f.ackPrompts {
+		notifs["promptsListChanged"] = true
+	}
+	if f.ackResources {
+		notifs["resourcesListChanged"] = true
+	}
+	return map[string]any{"notifications": notifs}, true
 }
 
 // allEstablishedRejected reports that every HTTP 200 stream rejected the
@@ -1318,6 +1421,26 @@ func (f *subscriptionFanout) reject(backend filterapi.MCPBackendName, raw json.R
 // uncounted, so a silent close is still a graceful completion.
 func (f *subscriptionFanout) allEstablishedRejected(established int) bool {
 	return established > 0 && len(f.accepted) == 0 && len(f.rejected) == established
+}
+
+// parseAcknowledgedSubscriptionParams extracts the namespaced URI list and
+// list_changed flags from a rewritten acknowledgements params object.
+func parseAcknowledgedSubscriptionParams(params json.RawMessage) (uris []string, tools, prompts, resources bool) {
+	var envelope struct {
+		Notifications struct {
+			ResourceSubscriptions []string `json:"resourceSubscriptions"`
+			ToolsListChanged      bool     `json:"toolsListChanged"`
+			PromptsListChanged    bool     `json:"promptsListChanged"`
+			ResourcesListChanged  bool     `json:"resourcesListChanged"`
+		} `json:"notifications"`
+	}
+	if json.Unmarshal(params, &envelope) != nil {
+		return nil, false, false, false
+	}
+	return envelope.Notifications.ResourceSubscriptions,
+		envelope.Notifications.ToolsListChanged,
+		envelope.Notifications.PromptsListChanged,
+		envelope.Notifications.ResourcesListChanged
 }
 
 // jsonRPCErrorRaw is the JSON object for a decoded JSON-RPC error, suitable
@@ -1348,6 +1471,23 @@ func writeSSECompletionResult(w io.Writer, listenID jsonrpc.ID) {
 	encoded, _ := json.Marshal(result)
 	resp := &jsonrpc.Response{ID: listenID, Result: encoded}
 	data, _ := jsonrpc.EncodeMessage(resp)
+	_, _ = w.Write([]byte("event: message\n"))
+	_, _ = w.Write([]byte("data: "))
+	_, _ = w.Write(data)
+	_, _ = w.Write([]byte("\n\n"))
+}
+
+// writeSSENotification writes a JSON-RPC notification as one SSE message event.
+func writeSSENotification(w io.Writer, method string, params any) {
+	paramsRaw, err := json.Marshal(params)
+	if err != nil {
+		return
+	}
+	msg := &jsonrpc.Request{Method: method, Params: paramsRaw}
+	data, err := jsonrpc.EncodeMessage(msg)
+	if err != nil {
+		return
+	}
 	_, _ = w.Write([]byte("event: message\n"))
 	_, _ = w.Write([]byte("data: "))
 	_, _ = w.Write(data)
@@ -1561,6 +1701,12 @@ func (m *mcpRequestContext) sendModernRequestAndProxy(
 		return m.writeModernCallError(w, req, backend, result, err)
 	}
 	defer resp.Body.Close()
+	// JSON-RPC notifications (no id) are acknowledged by backends with 202 and
+	// no response body. Treat that as success so fire-and-forget tools/call is
+	// not logged/counted as a failed request.
+	if resp.StatusCode == http.StatusAccepted && !req.ID.IsValid() {
+		return result, nil
+	}
 	if resp.StatusCode != http.StatusOK {
 		return m.writeModernCallError(w, req, backend, result, backendHTTPStatusError(resp))
 	}

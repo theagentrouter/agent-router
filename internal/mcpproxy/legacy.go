@@ -39,6 +39,7 @@ var (
 	errBackendNotFound      = errors.New("backend not found")
 	errInvalidToolName      = errors.New("invalid tool name")
 	errInvalidPromptName    = errors.New("invalid prompt name")
+	errInvalidResourceURI   = errors.New("invalid resource URI")
 	errBackendResponseError = errors.New("one or more backends returned an error response")
 )
 
@@ -458,7 +459,9 @@ func errorType(err error) metrics.MCPErrorType {
 	}
 
 	// Check for specific error types
-	if errors.Is(err, errBackendNotFound) || errors.Is(err, errSessionNotFound) || errors.Is(err, errInvalidToolName) || errors.Is(err, errInvalidPromptName) {
+	if errors.Is(err, errBackendNotFound) || errors.Is(err, errSessionNotFound) ||
+		errors.Is(err, errInvalidToolName) || errors.Is(err, errInvalidPromptName) ||
+		errors.Is(err, errInvalidResourceURI) {
 		return metrics.MCPErrorInvalidParam
 	}
 	var toolCallValidaitonError *errToolCall

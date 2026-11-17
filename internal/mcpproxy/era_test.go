@@ -501,6 +501,20 @@ func TestValidateModernRequest(t *testing.T) {
 		require.Nil(t, got.err)
 		require.Equal(t, eraModern, got.era)
 	})
+
+	t.Run("id-less subscriptions/listen is rejected", func(t *testing.T) {
+		got := validateModernRequest(&requestDetails{
+			headerVersion:   protocolVersion20260728,
+			headerMethod:    "subscriptions/listen",
+			method:          "subscriptions/listen",
+			isRequest:       true,
+			expectsResponse: false,
+			params:          modernMeta(protocolVersion20260728, nil),
+		})
+		require.NotNil(t, got.err)
+		require.Equal(t, errCodeInvalidRequest, got.err.Code)
+		require.Contains(t, got.err.Message, "subscriptions/listen requires a request id")
+	})
 }
 
 // TestDetectClientEra_ModernEndToEnd exercises the full detectClientEra path

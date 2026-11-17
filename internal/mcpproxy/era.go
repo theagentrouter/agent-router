@@ -335,6 +335,16 @@ func validateModernRequest(requestDetails *requestDetails) eraDetection {
 			HTTPStatus: http.StatusNotFound,
 		}}
 	}
+	// subscriptions/listen is a long-lived response stream. An id-less
+	// notification can never receive HTTP 202 because the handler blocks until
+	// the client disconnects, so require a request id.
+	if requestDetails.method == "subscriptions/listen" && !requestDetails.expectsResponse {
+		return eraDetection{err: &protocolError{
+			Code:       errCodeInvalidRequest,
+			Message:    "Invalid Request: subscriptions/listen requires a request id",
+			HTTPStatus: http.StatusBadRequest,
+		}}
+	}
 
 	if requestDetails.sessionID != "" {
 		// Sessions were removed alongside the initialization handshake. A
