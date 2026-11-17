@@ -750,6 +750,7 @@ html.blog-post-page .markdown img {
     color: CanvasText !important;
     background: Canvas !important;
   }
-  /* node fills stay authored, so their labels keep the authored colour that contrasts with them */
-  .docusaurus-mermaid-container .node .nodeLabel { forced-color-adjust: none; }
+  /* authored node fill and label colour only contrast as a pair; foreignObject
+     resets forced-color-adjust, so the HTML label needs its own opt-out */
+  .docusaurus-mermaid-container :is(.node, .node .nodeLabel) { forced-color-adjust: none; }
 }
