@@ -192,7 +192,7 @@ func TestModernMCP(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		events, _ := cli.listenSubscriptions(t, ctx, []string{subDefault, subDumb})
+		events := cli.listenSubscriptions(ctx, t, []string{subDefault, subDumb})
 
 		var (
 			ackCount       int

@@ -270,18 +270,20 @@ func (c *modernClient) complete(t *testing.T, params map[string]any) modernCompl
 
 // listenSubscriptions opens subscriptions/listen as an SSE stream and returns
 // a channel of raw JSON-RPC message payloads (the SSE data: lines). The caller
-// must cancel ctx (or close the response body) to end the stream.
-func (c *modernClient) listenSubscriptions(t *testing.T, ctx context.Context, resourceURIs []string) (<-chan []byte, *http.Response) {
+// must cancel ctx to end the stream; the response body is closed by this helper.
+func (c *modernClient) listenSubscriptions(ctx context.Context, t *testing.T, resourceURIs []string) <-chan []byte {
 	t.Helper()
 	id := c.reqIDSeq.Add(1)
 
-	paramsRaw, err := json.Marshal(map[string]any{
+	// Must be json.RawMessage (not []byte): []byte values in map[string]any are
+	// base64-encoded by sonic, which makes _meta undecodable on the gateway.
+	paramsBytes, err := json.Marshal(map[string]any{
 		"notifications": map[string]any{
 			"resourceSubscriptions": resourceURIs,
 		},
 	})
 	require.NoError(t, err)
-	paramsRaw = injectModernMeta(paramsRaw)
+	paramsRaw := injectModernMeta(paramsBytes)
 
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
@@ -294,7 +296,8 @@ func (c *modernClient) listenSubscriptions(t *testing.T, ctx context.Context, re
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	// Streamable HTTP clients advertise both; some intermediaries reject SSE-only Accept.
+	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set(modernVersionHeader, modernProtocolVersion)
 	req.Header.Set(modernMethodHeader, "subscriptions/listen")
 
@@ -302,13 +305,18 @@ func (c *modernClient) listenSubscriptions(t *testing.T, ctx context.Context, re
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode, "listen status")
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode, "listen status: %s", string(respBody))
+	}
 	require.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+	// Owned here so bodyclose can see the closer; the reader goroutine drains until EOF/cancel.
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	events := make(chan []byte, 16)
 	go func() {
 		defer close(events)
-		defer resp.Body.Close()
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -326,5 +334,5 @@ func (c *modernClient) listenSubscriptions(t *testing.T, ctx context.Context, re
 			}
 		}
 	}()
-	return events, resp
+	return events
 }
