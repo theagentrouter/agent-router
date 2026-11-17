@@ -316,6 +316,9 @@ Understanding how these resources work together is crucial for successful provid
 
 ```mermaid
 graph TD
+    accTitle: How provider resources connect
+    accDescr: A client request reaches the AIGatewayRoute, which matches on the model header. gpt-4o-mini goes to the OpenAI AIServiceBackend, then its OpenAI BackendSecurityPolicy, then the OpenAI API. claude-3-sonnet goes to the Bedrock AIServiceBackend, then its AWS BackendSecurityPolicy, then the AWS Bedrock API.
+
     A[Client Request] --> B[AIGatewayRoute]
     B --> C{Model Header}
     C -->|gpt-4o-mini| D[OpenAI AIServiceBackend]
@@ -325,12 +328,12 @@ graph TD
     F --> H[OpenAI API]
     G --> I[AWS Bedrock API]
 
-    style A fill:#e1f5fe
-    style B fill:#f3e5f5
-    style D fill:#e8f5e8
-    style E fill:#e8f5e8
-    style F fill:#fff3e0
-    style G fill:#fff3e0
+    style A fill:#e1f5fe,color:#12100E
+    style B fill:#f3e5f5,color:#12100E
+    style D fill:#e8f5e8,color:#12100E
+    style E fill:#e8f5e8,color:#12100E
+    style F fill:#fff3e0,color:#12100E
+    style G fill:#fff3e0,color:#12100E
 ```
 
 ### Data Flow Process

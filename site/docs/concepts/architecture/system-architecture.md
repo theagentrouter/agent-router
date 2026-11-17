@@ -28,6 +28,9 @@ The Control Plane configures the Data Plane through several paths:
 
 ```mermaid
 graph TB
+    accTitle: Agent Router system architecture
+    accDescr: The control plane holds the Kubernetes API server, the AI Gateway controller and the Envoy Gateway controller. The AI Gateway controller reads AI Gateway resources from the API server, writes Gateway API and Envoy Gateway resources back, and fine-tunes Envoy Gateway's xDS. The Envoy Gateway controller reads Gateway API and Envoy Gateway resources. In the data plane, Envoy Proxy calls the rate limit service and the external processor. The AI Gateway controller configures the external processor; the Envoy Gateway controller configures the rate limit service and updates Envoy Proxy's config.
+
     subgraph "Control Plane"
         K8s[Kubernetes API Server]
         Controller[AI Gateway Controller]
@@ -38,8 +41,8 @@ graph TB
         K8s -->|GWAPI/EG resources| EGController
         Controller <-->|xDS fine-tune| EGController
 
-        style Controller fill:#f9f,stroke:#333,stroke-width:2px
-        style EGController fill:#ddf,stroke:#333
+        style Controller fill:#f9f,stroke:#333,stroke-width:2px,color:#12100E
+        style EGController fill:#ddf,stroke:#333,color:#12100E
     end
 
     subgraph "Data Plane"
@@ -50,9 +53,9 @@ graph TB
         Envoy --> RateLimit
         Envoy --> ExtProc
 
-        style Envoy fill:#f9f,stroke:#333,stroke-width:2px
-        style ExtProc fill:#f9f,stroke:#333,stroke-width:2px
-        style RateLimit fill:#dfd,stroke:#333
+        style Envoy fill:#f9f,stroke:#333,stroke-width:2px,color:#12100E
+        style ExtProc fill:#f9f,stroke:#333,stroke-width:2px,color:#12100E
+        style RateLimit fill:#dfd,stroke:#333,color:#12100E
     end
 
     Controller -.->|Configures| ExtProc

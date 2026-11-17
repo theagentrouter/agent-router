@@ -55,7 +55,7 @@ This design cleanly separates external access from internal implementation, givi
 - Unified API access
 - Cost tracking and traffic governance
 
-![](/img/blog/aigw-ref.drawio.png)
+![Two-tier reference architecture. Client applications reach a cloud load balancer in front of the Tier 1 Envoy AI Gateway on Kubernetes, which provides unified LLM provider access, upstream auth, token-based rate limiting, LLM observability, model and provider fallback, and a Model Context Protocol proxy. Tier 1 routes to external providers (AWS Bedrock, GCP Vertex, Azure OpenAI and others) and to a Tier 2 Envoy AI Gateway in a self-hosted cluster, which routes with KV cache, prefix cache and load awareness and P/D disaggregation to DeepSeek and other models served by KServe.](/img/blog/aigw-ref.drawio.png)
 
 ### Routing and Traffic Management
 

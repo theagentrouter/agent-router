@@ -10,65 +10,46 @@ The control plane is responsible for configuring and managing the system. It con
 
 ```mermaid
 graph TB
-    %% Define styles for different component categories
-    classDef aiGatewayStyle fill:#f9f,stroke:#E74C3C,color:#000
-    classDef envoyGatewayStyle fill:#ddf,stroke:#none,color:#000
-    classDef aiGatewayResourceStyle fill:#f9f,stroke:#E74C3C,color:#000
-    classDef envoyGatewayResourceStyle fill:#ddf,stroke:#none,color:#000
-    classDef generatedResourceStyle fill:#ddf,stroke:#none,color:#000
-    classDef envoyProxyStyle fill:#F5CBA7,stroke:#D35400,color:#000
-    classDef aiGatewayExtProcStyle fill:#f9f,stroke:#E74C3C,color:#000
+    accTitle: Agent Router control plane
+    accDescr: The Agent Router controller watches the AI Gateway resources and the Gateway, and generates HTTPRoute, HTTPRouteFilter and the AI Gateway ExtProc secret. The Envoy Gateway controller watches the Envoy Gateway resources and the generated routes, talks to the Agent Router controller over the extension server protocol, and sends xDS config to Envoy Proxy. The Agent Router controller inserts the AI Gateway ExtProc as a sidecar in the Envoy Proxy pod, and the generated secret is mounted into the ExtProc as its config.
 
-    subgraph "UserAppliedResources"["User Applied Resources"]
-        subgraph "AI Gateway Resources"
-            AIGatewayRoute:::aiGatewayResourceStyle
-            AIServiceBackend:::aiGatewayResourceStyle
-            BackendSecurityPolicy:::aiGatewayResourceStyle
-        end
-        subgraph "Envoy Gateway resources"
-            Gateway:::envoyGatewayResourceStyle
-            Backend:::envoyGatewayResourceStyle
-            EGDots[...]:::envoyGatewayResourceStyle
-        end
+    classDef aiGatewayStyle fill:#f9f,stroke:#E74C3C,color:#12100E
+    classDef envoyGatewayStyle fill:#ddf,stroke:#7070C0,color:#12100E
+    classDef envoyProxyStyle fill:#F5CBA7,stroke:#D35400,color:#12100E
+
+    subgraph UserAppliedResources["User Applied Resources"]
+        AIGatewayResources["<b>AI Gateway</b><br/>AIGatewayRoute<br/>AIServiceBackend<br/>BackendSecurityPolicy"]:::aiGatewayStyle
+        EnvoyGatewayResources["<b>Envoy Gateway</b><br/>Gateway<br/>Backend<br/>..."]:::envoyGatewayStyle
     end
     style UserAppliedResources fill:none,stroke-dasharray:5
 
     AIGateway((Agent Router
-                    Controller)):::aiGatewayStyle
+                Controller)):::aiGatewayStyle
     EnvoyGateway((Envoy Gateway
-                    Controller)):::envoyGatewayStyle
-    subgraph "Generated Resources"
-        HTTPRoute:::generatedResourceStyle
-        HTTPRouteFilter:::generatedResourceStyle
-        ExtProcConfigSecret[AI Gateway ExtProc Secret]:::aiGatewayExtProcStyle
+                  Controller)):::envoyGatewayStyle
+
+    subgraph GeneratedResources["Generated Resources"]
+        Routes["HTTPRoute<br/>HTTPRouteFilter"]:::envoyGatewayStyle
+        ExtProcConfigSecret[AI Gateway ExtProc Secret]:::aiGatewayStyle
     end
 
-    subgraph "EnvoyProxyPod"[Envoy Proxy Pod]
+    subgraph EnvoyProxyPod["Envoy Proxy Pod"]
         EnvoyProxy[Envoy Proxy]:::envoyProxyStyle
-        AIExtProc[AI Gateway ExtProc]:::aiGatewayExtProcStyle
+        AIExtProc[AI Gateway ExtProc]:::aiGatewayStyle
     end
-    style EnvoyProxyPod fill:none,stroke:5
 
-    AIGatewayRoute -.->AIGateway
-    AIServiceBackend -.->AIGateway
-    BackendSecurityPolicy -.->AIGateway
-    Gateway -.->|Watching|AIGateway
-
-    Gateway -.->EnvoyGateway
-    Backend -.->EnvoyGateway
-    EGDots -.->EnvoyGateway
-
-    AIGateway -.->HTTPRoute
-    AIGateway -.->HTTPRouteFilter
-    AIGateway -.->ExtProcConfigSecret
-    HTTPRoute -.->EnvoyGateway
-    HTTPRouteFilter -.->EnvoyGateway
-    ExtProcConfigSecret -.->AIExtProc
-
-    EnvoyGateway -.->|xDS/Envoy config|EnvoyProxy
-    AIGateway <-.->|Extension Server protocol|EnvoyGateway
-    AIGateway -.->|Inserting ExtProc as Sidecar|AIExtProc
+    AIGatewayResources -.->|watched by| AIGateway
+    EnvoyGatewayResources -.->|Gateway watched by| AIGateway
+    EnvoyGatewayResources -.->|watched by| EnvoyGateway
+    AIGateway -->|generates| GeneratedResources
+    Routes -.->|watched by| EnvoyGateway
+    AIGateway <-->|extension server protocol| EnvoyGateway
+    EnvoyGateway -->|xDS / Envoy config| EnvoyProxy
+    AIGateway -->|inserts as sidecar| AIExtProc
+    ExtProcConfigSecret -.->|mounted into| AIExtProc
 ```
+
+Dotted arrows point from a resource to the component that watches or reads it. Solid arrows show a component creating or sending configuration; the two-way arrow is the extension server exchange, in which Envoy Gateway sends its xDS to the Agent Router controller and receives the fine-tuned result.
 
 ## How It Works
 

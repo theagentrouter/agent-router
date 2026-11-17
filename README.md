@@ -55,7 +55,7 @@ When using Agent Router, we refer to a two-tier gateway pattern. **The Tier One 
 - The **Tier One Gateway** handles authentication, top-level routing, and global rate limiting.
 - The **Tier Two Gateway** provides fine-grained control over self-hosted model access, with endpoint picker support for LLM inference optimization.
 
-![](site/blog/images/aigw-ref.drawio.png)
+![Two-tier reference architecture. Client applications reach a cloud load balancer in front of the Tier 1 Agent Router on Kubernetes, which provides unified LLM provider access, upstream auth, token-based rate limiting, LLM observability, model and provider fallback, and a Model Context Protocol proxy. Tier 1 routes to external providers (AWS Bedrock, GCP Vertex, Azure OpenAI and others) and to a Tier 2 Agent Router in a self-hosted cluster, which routes with KV cache, prefix cache and load awareness and P/D disaggregation to DeepSeek and other models served by KServe.](site/blog/images/aigw-ref.drawio.png)
 
 ## Supported AI Providers
 

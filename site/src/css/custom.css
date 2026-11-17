@@ -718,3 +718,38 @@ html.blog-post-page .markdown img {
 
 /* blockquotes carry a quiet marquee edge */
 .markdown blockquote { border-left: 3px solid var(--ar-marquee-300); }
+
+/* mermaid: themeConfig.mermaid.options apply to both colour modes, so dark-mode
+   edges are re-coloured here; !important beats mermaid's id-scoped <style> */
+@media (forced-colors: none) {
+  [data-theme='dark'] .docusaurus-mermaid-container .flowchart-link:not([style*='stroke:']) {
+    stroke: var(--ar-fg-muted) !important;
+  }
+  [data-theme='dark'] .docusaurus-mermaid-container .marker.flowchart-v2 {
+    fill: var(--ar-fg-muted) !important;
+    stroke: var(--ar-fg-muted) !important;
+  }
+  [data-theme='dark'] .docusaurus-mermaid-container .edgeLabel :is(p, span) {
+    color: var(--ar-fg) !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .docusaurus-mermaid-container :is(.flowchart-link, .messageLine0, .messageLine1, .actor-line, .loopLine) {
+    stroke: CanvasText !important;
+  }
+  .docusaurus-mermaid-container :is(.marker.flowchart-v2, .marker.flowchart-v2 path, marker:is([id$='-arrowhead'], [id$='-filled-head'], [id$='-crosshead']) path) {
+    fill: CanvasText !important;
+    stroke: CanvasText !important;
+  }
+  .docusaurus-mermaid-container .cluster rect {
+    fill: Canvas !important;
+    stroke: CanvasText !important;
+  }
+  .docusaurus-mermaid-container :is(.edgeLabel, .cluster-label) :is(p, span, div) {
+    color: CanvasText !important;
+    background: Canvas !important;
+  }
+  /* node fills stay authored, so their labels keep the authored colour that contrasts with them */
+  .docusaurus-mermaid-container .node .nodeLabel { forced-color-adjust: none; }
+}
