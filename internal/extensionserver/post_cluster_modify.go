@@ -45,11 +45,17 @@ func (s *Server) PostClusterModify(_ context.Context, req *egextension.PostClust
 	// BackendExtensionResources contains unstructured Kubernetes resources that were
 	// referenced in the AIGatewayRoute's BackendRefs with non-empty Group and Kind fields.
 	// If we found an InferencePool, configure the cluster for ORIGINAL_DST.
-	// Envoy Gateway builds one cluster per InferencePool backendRef and passes only that
+	// Envoy Gateway v1.11+ builds one cluster per InferencePool backendRef and passes only that
 	// cluster's own pool here, even when the rule references several pools.
 	if inferencePools := s.constructInferencePoolsFrom(req.PostClusterContext.BackendExtensionResources); inferencePools != nil {
-		if len(inferencePools) != 1 {
-			return nil, fmt.Errorf("BUG: expected exactly one InferencePool per cluster but found %d", len(inferencePools))
+		if len(inferencePools) > 1 {
+			// Envoy Gateway before v1.11 (envoyproxy/gateway#10328) builds a single cluster for a
+			// rule with several InferencePools. Fail only that rule rather than the whole
+			// translation: PostRouteModify rejects its route, and the marked cluster gets no EPP config.
+			s.log.Error(nil, "cluster references several InferencePools; Envoy Gateway v1.11+ is required",
+				"cluster", req.Cluster.Name, "count", len(inferencePools))
+			markClusterWithoutEndpointPicker(req.Cluster)
+			return &egextension.PostClusterModifyResponse{Cluster: req.Cluster}, nil
 		}
 		pool := inferencePools[0]
 		// Routing to an InferencePool without an endpoint picker isn't supported: don't wire up EPP

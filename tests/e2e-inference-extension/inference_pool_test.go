@@ -136,8 +136,8 @@ func TestInferencePoolIntegration(t *testing.T) {
 		{"httproute_inference_pools_with_and_without_epp", "epp-pool-and-no-epp-pool", true},
 		{"httproute_only_inference_pool_without_epp", "only-no-epp-pool", false},
 	}
-	// The manifest has rules with two InferencePools. Older Envoy Gateway releases fail the whole
-	// xDS translation on those, which would break every route on the Gateway, so don't apply it.
+	// The manifest has rules with two InferencePools. On older Envoy Gateway releases the extension
+	// server rejects those rules with a 500 instead of splitting them, so don't apply it.
 	supported := e2elib.EnvoyGatewaySupportsMultipleInferencePoolsPerRule()
 	if supported {
 		const noEPPManifest = "testdata/inference-pool-without-epp.yaml"

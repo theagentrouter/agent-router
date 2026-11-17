@@ -45,6 +45,17 @@ func (s *Server) PostRouteModify(_ context.Context, req *egextension.PostRouteMo
 			return nil, status.Errorf(codes.FailedPrecondition, "cannot configure InferencePool %s on non-forwarding route %q", strings.Join(names, ","), req.Route.Name)
 		}
 
+		// Envoy Gateway v1.11+ (envoyproxy/gateway#10328) always builds a weighted route for a rule
+		// with several InferencePools. A non-weighted route with several pools comes from an older
+		// Envoy Gateway, which builds a single cluster for all of them: reject only that rule rather
+		// than failing the whole translation of the gateway.
+		if len(inferencePools) > 1 && routeAction.GetWeightedClusters() == nil {
+			s.log.Error(nil, "route references several InferencePools; Envoy Gateway v1.11+ is required",
+				"route", req.Route.Name, "count", len(inferencePools))
+			rejectInferencePoolRoute(req.Route)
+			return &egextension.PostRouteModifyResponse{Route: req.Route}, nil
+		}
+
 		// Routing to an InferencePool without an endpoint picker isn't supported. Leave such pools
 		// out of the route metadata, so no endpoint picker runs for them, and only their own share
 		// of the traffic fails as for an invalid backendRef (with a 500, or a 503 when the rule also

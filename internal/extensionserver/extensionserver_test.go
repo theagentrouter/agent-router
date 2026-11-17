@@ -1862,10 +1862,11 @@ func TestPostClusterModify(t *testing.T) {
 	})
 
 	t.Run("with two InferencePool backends", func(t *testing.T) {
-		// Envoy Gateway builds one cluster per InferencePool backendRef and passes only that
-		// cluster's own pool, so a cluster with two pools is a bug.
+		// Envoy Gateway before v1.11 builds a single cluster for a rule with several pools. Only
+		// that rule fails: the cluster is marked and left without EPP config, with no error.
+		cluster := &clusterv3.Cluster{Name: "test-cluster", LbPolicy: clusterv3.Cluster_ROUND_ROBIN}
 		req := &egextension.PostClusterModifyRequest{
-			Cluster: &clusterv3.Cluster{Name: "test-cluster"},
+			Cluster: cluster,
 			PostClusterContext: &egextension.PostClusterExtensionContext{
 				BackendExtensionResources: []*egextension.ExtensionResource{
 					createInferencePoolExtensionResource("pool-a", "default"),
@@ -1873,8 +1874,13 @@ func TestPostClusterModify(t *testing.T) {
 				},
 			},
 		}
-		_, err := s.PostClusterModify(context.Background(), req)
-		require.ErrorContains(t, err, "expected exactly one InferencePool per cluster but found 2")
+		resp, err := s.PostClusterModify(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, cluster, resp.Cluster)
+		require.Nil(t, cluster.ClusterDiscoveryType)
+		require.Equal(t, clusterv3.Cluster_ROUND_ROBIN, cluster.LbPolicy)
+		require.Empty(t, getInferencePoolsByMetadata(cluster.Metadata))
+		require.True(t, isClusterWithoutEndpointPicker(cluster))
 	})
 }
 
@@ -1997,7 +2003,16 @@ func TestPostRouteModify(t *testing.T) {
 		route := &routev3.Route{
 			Name: "test-route",
 			Action: &routev3.Route_Route{
-				Route: &routev3.RouteAction{},
+				Route: &routev3.RouteAction{
+					ClusterSpecifier: &routev3.RouteAction_WeightedClusters{
+						WeightedClusters: &routev3.WeightedCluster{
+							Clusters: []*routev3.WeightedCluster_ClusterWeight{
+								{Name: "pool-a-cluster", Weight: wrapperspb.UInt32(70)},
+								{Name: "pool-b-cluster", Weight: wrapperspb.UInt32(30)},
+							},
+						},
+					},
+				},
 			},
 		}
 		req := &egextension.PostRouteModifyRequest{
@@ -2060,7 +2075,16 @@ func TestPostRouteModify(t *testing.T) {
 		route := &routev3.Route{
 			Name: "test-route",
 			Action: &routev3.Route_Route{
-				Route: &routev3.RouteAction{},
+				Route: &routev3.RouteAction{
+					ClusterSpecifier: &routev3.RouteAction_WeightedClusters{
+						WeightedClusters: &routev3.WeightedCluster{
+							Clusters: []*routev3.WeightedCluster_ClusterWeight{
+								{Name: "pool-a-cluster", Weight: wrapperspb.UInt32(70)},
+								{Name: "pool-b-cluster", Weight: wrapperspb.UInt32(30)},
+							},
+						},
+					},
+				},
 			},
 		}
 		poolA := createInferencePoolExtensionResource("pool-a", "default")
@@ -2081,6 +2105,31 @@ func TestPostRouteModify(t *testing.T) {
 		require.Len(t, pools, 2)
 		names := []string{pools[0].Name, pools[1].Name}
 		require.ElementsMatch(t, []string{"pool-a", "pool-b"}, names)
+	})
+
+	t.Run("non-weighted route with two InferencePool extensions", func(t *testing.T) {
+		// Envoy Gateway before v1.11 builds a single non-weighted route and cluster for a rule
+		// with several pools. Only that rule is rejected, rather than the whole translation.
+		route := &routev3.Route{
+			Name: "test-route",
+			Action: &routev3.Route_Route{
+				Route: &routev3.RouteAction{},
+			},
+		}
+		req := &egextension.PostRouteModifyRequest{
+			Route: route,
+			PostRouteContext: &egextension.PostRouteExtensionContext{
+				ExtensionResources: []*egextension.ExtensionResource{
+					createInferencePoolExtensionResource("pool-a", "default"),
+					createInferencePoolExtensionResource("pool-b", "default"),
+				},
+			},
+		}
+		resp, err := s.PostRouteModify(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, route, resp.Route)
+		require.Equal(t, uint32(500), route.GetDirectResponse().GetStatus())
+		require.Empty(t, getInferencePoolsByMetadata(route.Metadata))
 	})
 }
 

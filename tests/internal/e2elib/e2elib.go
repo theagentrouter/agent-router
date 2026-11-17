@@ -425,8 +425,7 @@ const envoyGatewayMultipleInferencePoolsPerRuleVersion = "v1.11.0-rc.1"
 // EnvoyGatewaySupportsMultipleInferencePoolsPerRule reports whether the installed Envoy Gateway
 // builds one cluster per InferencePool backendRef of a route rule: the main build, or
 // v1.11.0-rc.1 and later. Older releases pass every InferencePool of the rule to a single
-// PostClusterModify call, which the extension server rejects, so EG skips publishing the whole
-// xDS update.
+// PostClusterModify call, so the extension server rejects that rule with a 500.
 func EnvoyGatewaySupportsMultipleInferencePoolsPerRule() bool {
 	v := EnvoyGatewayVersion()
 	return v == EnvoyGatewayLatestVersion ||

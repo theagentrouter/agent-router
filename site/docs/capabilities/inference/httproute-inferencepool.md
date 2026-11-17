@@ -158,7 +158,11 @@ The following rules apply to any HTTPRoute rule that references an InferencePool
 InferencePools without an `endpointPickerRef` may be supported in a future release.
 
 :::info
-Weighted routing across InferencePools requires Envoy Gateway v1.11.0 or v0.0.0-latest, which includes [envoyproxy/gateway#10328](https://github.com/envoyproxy/gateway/pull/10328).
+Weighted routing across InferencePools requires Envoy Gateway v1.11.0 or later, which includes [envoyproxy/gateway#10328](https://github.com/envoyproxy/gateway/pull/10328).
+:::
+
+:::warning
+On an older Envoy Gateway, an HTTPRoute rule that references more than one InferencePool isn't split: every request it matches returns `500`. Other rules and routes on the Gateway aren't affected.
 :::
 
 ## Next Steps
