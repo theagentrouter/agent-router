@@ -6,6 +6,10 @@
 # One rule serves every actor: a separate daily token budget per x-actor-id
 # value. To give specific actors different budgets, see "Different budgets per
 # actor" in the README.
+#
+# Tokens are charged when a response ends, so calls in flight at the same time
+# and calls cut off before the model reports usage can exceed the budget. See
+# "Things to know" in the README.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
 metadata:

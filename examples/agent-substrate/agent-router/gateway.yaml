@@ -62,6 +62,8 @@ metadata:
 spec:
   gatewayClassName: agent-router
   listeners:
+    # Plain HTTP for the local demo. The actor JWT crosses this hop, so use
+    # HTTPS elsewhere (see "Things to know" in the README).
     - name: http
       protocol: HTTP
       port: 80

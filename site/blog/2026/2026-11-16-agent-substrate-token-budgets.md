@@ -204,9 +204,19 @@ We haven't timed that.
 
 ## What to watch for
 
-- **Budgets can overshoot by one response.** Tokens are charged when a response ends, and a request is
-  admitted as long as the bucket isn't over the limit. So a budget of N tokens at C tokens per call
-  allows `floor(N/C) + 1` calls. In the demo, 500 tokens allows three calls of 200.
+- **Budgets can overshoot.** Tokens are charged when a response ends, and a request is admitted as
+  long as the bucket isn't over the limit. With one call at a time, a budget of N tokens at C tokens
+  per call allows `floor(N/C) + 1` calls. In the demo, 500 tokens allows three calls of 200. Calls
+  that run at the same time all see the same balance, so an agent can overshoot by every response it
+  has in flight.
+- **A call cut off early isn't charged.** The charge comes from the usage the model reports at the
+  end of the response. If the agent drops the connection before then, for example partway through a
+  stream, the budget isn't charged, though the provider may still bill for the tokens. A second rule
+  that limits each actor's request count puts a bound on this.
+- **The demo's hop to Agent Router is plain HTTP.** The actor JWT on it is a bearer token that's
+  valid for 15 minutes, so anyone who can read that traffic can replay it. That's fine on a laptop.
+  Elsewhere, encrypt the hop, for example with an `https` egress rule and an HTTPS listener on Agent
+  Router. We haven't tested that yet.
 - **A day is a UTC day.** Budgets reset at 00:00 UTC, not 24 hours after first use.
 - **The agent has to send an `Authorization` header.** Substrate's egress gateway replaces the
   header and doesn't add one. Any value works, so "no credentials in the agent" literally means

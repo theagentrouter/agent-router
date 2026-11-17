@@ -183,8 +183,9 @@ curl -s localhost:28102/ -d '{}' | jq -c '{status, limit: .headers["x-ratelimit-
 {"status":200,"limit":"500, 500;w=86400","remaining":"500"}
 ```
 
-In general, a budget of N tokens against C tokens per call allows `floor(N/C) + 1` calls: an
-agent can overshoot by up to one response.
+In general, with one call at a time, a budget of N tokens against C tokens per call allows
+`floor(N/C) + 1` calls: an agent can overshoot by up to one response. Calls made at the same time
+can overshoot by more (see [Things to know](#things-to-know)).
 
 ### 3. Try to impersonate another actor
 
@@ -418,8 +419,18 @@ this while building the example, but it isn't part of it.
   Agent Router, and Agent Router decides how many tokens it may spend.
 - **Every model call takes two hops.** Measured on a laptop kind cluster, the full path adds
   about 3 ms at the median and 5 ms at p95 over calling the model directly.
-- **Overshoot.** Tokens are charged after the response, so an agent can exceed its budget by
-  up to one response.
+- **Overshoot.** Tokens are charged after the response, and a request is let in while the bucket
+  isn't over the limit. With one call at a time, an agent can exceed its budget by up to one
+  response. Calls made at the same time are all checked against the same balance, so an agent can
+  exceed it by every response it has in flight.
+- **A call cut off early isn't charged.** The charge is the usage the model reports at the end of
+  the response. If the agent drops the connection before then, for example partway through a
+  stream, the budget isn't charged, though the provider may still bill for the tokens. To bound
+  this, add a second rule that limits how many requests each actor can make.
+- **The example uses plain HTTP to Agent Router.** The actor JWT on that hop is a bearer token
+  that's valid for 15 minutes, so anyone who can read the traffic can replay it as the actor.
+  That's fine on a local kind cluster. Elsewhere, encrypt the hop, for example with an `https`
+  egress rule and an HTTPS listener on Agent Router. We haven't tested that variant.
 - **Keep the JWT away from providers.** When you swap the mock for a real provider, keep
   `headerMutation: {remove: [authorization]}` on its `AIServiceBackend`.
 - **Many models.** Keep `shared: true` so each actor has one budget across all routes.

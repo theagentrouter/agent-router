@@ -251,6 +251,16 @@ The rule above gives every actor the same budget. To give specific actors a diff
 - **The provider sees the actor's ID.** `x-actor-id` goes upstream with the request. Keep it there:
   the rate limit reads it again to charge the response, so if you add it to `headerMutation.remove`,
   nothing gets charged.
-- **Budgets can be overshot by one response.** Tokens are charged when the response ends, so a
-  budget of N tokens against C tokens per call allows `floor(N/C) + 1` calls.
+- **Budgets can be overshot.** Tokens are charged when the response ends, and a request is let in
+  while the bucket isn't over the limit. With one call at a time, a budget of N tokens against C
+  tokens per call allows `floor(N/C) + 1` calls. Calls made at the same time are all checked
+  against the same balance, so an actor can overshoot by every response it has in flight.
+- **A call cut off early isn't charged.** The charge is the usage the model reports at the end of
+  the response. If the actor drops the connection before then, for example partway through a
+  stream, the budget isn't charged, though the provider may still bill for the tokens. To bound
+  this, add a second rule that limits how many requests each actor can make.
+- **The example uses plain HTTP to Agent Router.** The actor JWT on that hop is a bearer token
+  that's valid for 15 minutes, so anyone who can read the traffic can replay it as the actor.
+  Outside a local cluster, encrypt the hop, for example with an `https` egress rule and an HTTPS
+  listener on Agent Router. We haven't tested that variant.
 - **`Day` is a fixed UTC day.** Budgets reset at 00:00 UTC, not 24 hours after first use.
