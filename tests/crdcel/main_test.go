@@ -255,7 +255,7 @@ func TestBackendSecurityPolicies(t *testing.T) {
 			expErr: "Exactly one of oidcExchangeToken, spiffeJWTSVID or serviceAccountToken must be specified",
 		},
 		{
-			name:   "openai_serviceaccount_token_missing_audience.yaml",
+			name:   "openai_serviceaccount_token_empty_audience.yaml",
 			expErr: "spec.openAICredentials.workloadIdentityFederationConfig.subjectToken.serviceAccountToken.audience in body should be at least 1 chars long",
 		},
 		{

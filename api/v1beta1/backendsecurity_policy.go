@@ -428,11 +428,19 @@ type OpenAISubjectToken struct {
 	SPIFFEJWTSVID *BackendSecurityPolicySPIFFEJWTSVID `json:"spiffeJWTSVID,omitempty"`
 
 	// ServiceAccountToken obtains the subject token from the Kubernetes TokenRequest API, as a token for a
-	// ServiceAccount in the namespace of the policy. The issuer of the token is the Kubernetes API server.
+	// ServiceAccount in the namespace of the policy. The issuer of the token is the Kubernetes API server,
+	// so the token exchange endpoint must be able to discover that issuer and fetch its keys: the cluster's
+	// ServiceAccount issuer and its OpenID Connect discovery document must be publicly reachable.
 	//
 	// Unlike SPIFFEJWTSVID, each policy authenticates as its own ServiceAccount. The controller needs the
 	// "create" permission on the "serviceaccounts/token" subresource for that ServiceAccount, which can be
 	// granted per namespace and per ServiceAccount name with a Role and RoleBinding.
+	//
+	// Anyone who can create a BackendSecurityPolicy in a namespace can make the controller authenticate as
+	// any ServiceAccount of that namespace that the controller can request tokens for, so grant the
+	// permission only for ServiceAccounts meant to be used this way.
+	//
+	// This source requires a Kubernetes API server and is not supported by "aigw run".
 	//
 	// A new token is requested for every token exchange, including retries, so that token exchange
 	// endpoints accepting each token ID ("jti" claim) only once can be used.
