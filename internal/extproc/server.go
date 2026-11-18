@@ -125,6 +125,10 @@ func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFi
 		}
 	}
 
+	if isKServePredictivePath(path) {
+		return passThroughProcessor{}, nil
+	}
+
 	return nil, fmt.Errorf("%w: %s", errNoProcessor, path)
 }
 
