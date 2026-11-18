@@ -113,11 +113,6 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 			}
 			gcpParts = append(gcpParts, part)
 		case msgUnion.OfAssistant != nil:
-			// Flush any accumulated user/tool parts before assistant.
-			if len(gcpParts) > 0 {
-				gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
-				gcpParts = nil
-			}
 			msg := msgUnion.OfAssistant
 			assistantParts, toolCalls, err := assistantMsgToGeminiParts(msg)
 			if err != nil {
@@ -125,14 +120,23 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 			}
 			maps.Copy(knownToolCalls, toolCalls)
 			// Skip empty assistant turns (e.g. from an interrupted or empty completion
-			// persisted in history) and coalesce consecutive model turns so Gemini's
-			// strict user/model turn alternation is preserved.
-			if len(assistantParts) > 0 {
-				if n := len(gcpContents); n > 0 && gcpContents[n-1].Role == genai.RoleModel {
-					gcpContents[n-1].Parts = mergeGeminiModelParts(gcpContents[n-1].Parts, assistantParts)
-				} else {
-					gcpContents = append(gcpContents, genai.Content{Role: genai.RoleModel, Parts: assistantParts})
-				}
+			// persisted in history). Pending user/tool parts are deliberately left in
+			// gcpParts so they merge with the following user/tool messages instead of
+			// producing two adjacent user turns.
+			if len(assistantParts) == 0 {
+				continue
+			}
+			// Flush any accumulated user/tool parts before the model turn.
+			if len(gcpParts) > 0 {
+				gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
+				gcpParts = nil
+			}
+			// Coalesce consecutive model turns so Gemini's strict user/model turn
+			// alternation is preserved.
+			if n := len(gcpContents); n > 0 && gcpContents[n-1].Role == genai.RoleModel {
+				gcpContents[n-1].Parts = mergeGeminiModelParts(gcpContents[n-1].Parts, assistantParts)
+			} else {
+				gcpContents = append(gcpContents, genai.Content{Role: genai.RoleModel, Parts: assistantParts})
 			}
 		default:
 			return nil, nil, fmt.Errorf("%w: invalid role in message", internalapi.ErrInvalidRequestBody)
@@ -623,10 +627,26 @@ func reasoningEffortAvailable(requestModel internalapi.RequestModel) bool {
 	return isGemini3OrNewer(requestModel)
 }
 
-// isGemini3OrNewer reports whether requestModel is a Gemini 3.x or 4.x model.
+// isGemini3OrNewer reports whether requestModel is a Gemini model with major version 3 or higher.
+// Only the numeric component immediately after "gemini-" is considered, so digits in revision
+// or date suffixes (e.g. "gemini-2.5-flash-preview-04-17") do not affect the result. A path
+// prefix such as "publishers/google/models/" is tolerated.
 func isGemini3OrNewer(requestModel internalapi.RequestModel) bool {
 	m := strings.ToLower(requestModel)
-	return strings.Contains(m, "gemini") && (strings.Contains(m, "3") || strings.Contains(m, "4"))
+	const prefix = "gemini-"
+	i := strings.LastIndex(m, prefix)
+	if i < 0 {
+		return false
+	}
+	major, digits := 0, 0
+	for _, c := range m[i+len(prefix):] {
+		if c < '0' || c > '9' {
+			break
+		}
+		major = major*10 + int(c-'0')
+		digits++
+	}
+	return digits > 0 && major >= 3
 }
 
 // isGeminiFlashModel checks if the model is a Gemini Flash model.

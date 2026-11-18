@@ -206,6 +206,35 @@ func TestOpenAIMessagesToGeminiContents(t *testing.T) {
 			},
 		},
 		{
+			name: "empty assistant between user messages merges the surrounding user turns",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "a"},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: ""},
+					},
+				},
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "b"},
+					},
+				},
+			},
+			expectedContents: []genai.Content{
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "a"}, {Text: "b"}},
+				},
+			},
+		},
+		{
 			name: "mid-conversation system message is kept in chronological user turn while leading system stays in SystemInstruction",
 			messages: []openai.ChatCompletionMessageParamUnion{
 				{
@@ -3266,6 +3295,37 @@ func TestMapReasoningEffortToThinkingLevel(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tc.expectedThinking, thinking)
 			}
+		})
+	}
+}
+
+func TestIsGemini3OrNewer(t *testing.T) {
+	tests := []struct {
+		model    internalapi.RequestModel
+		expected bool
+	}{
+		{"gemini-3-pro", true},
+		{"gemini-3-pro-preview", true},
+		{"gemini-3.1-flash-lite-image", true},
+		{"gemini-3.5-flash", true},
+		{"gemini-4-carbon", true},
+		{"Gemini-3-Pro", true},
+		{"publishers/google/models/gemini-3-pro", true},
+		{"gemini-10-pro", true},
+		// 2.x models whose revision/date suffix contains a 3 or 4 must not be treated as 3+.
+		{"gemini-2.5-flash-preview-04-17", false},
+		{"gemini-2.5-flash-preview-03-25", false},
+		{"gemini-2.0-flash-001", false},
+		{"gemini-1.5-pro-002", false},
+		// No numeric major version right after "gemini-".
+		{"gemini-embedding-exp-03-07", false},
+		{"gemini-exp-1206", false},
+		{"gemini", false},
+		{"claude-3-opus", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.model, func(t *testing.T) {
+			assert.Equal(t, tc.expected, isGemini3OrNewer(tc.model))
 		})
 	}
 }
