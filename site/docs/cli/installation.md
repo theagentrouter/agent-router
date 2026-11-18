@@ -4,11 +4,62 @@ title: Installation
 sidebar_position: 1
 ---
 
+## Install with one command
+
+The quickest way to get `aigw` is the install script. It downloads the latest release binary for your platform,
+verifies its checksum, and installs it to `~/.local/bin`:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/theagentrouter/agent-router/main/install.sh | sh
+```
+
+The same script is also served from `https://theagentrouter.ai/install.sh`.
+
+Then run the gateway locally with your provider credentials, for example for the [OpenAI provider](../getting-started/connect-providers/openai.md):
+
+```shell
+OPENAI_API_KEY=sk-... aigw run
+```
+
+The script honors the following environment variables:
+
+| Environment Variable | Default            | Description                                                                |
+| -------------------- | ------------------ | -------------------------------------------------------------------------- |
+| `AIGW_VERSION`       | latest release     | Release to install, with or without the leading `v` (e.g. `v1.1.0`).       |
+| `AIGW_INSTALL_DIR`   | `$HOME/.local/bin` | Directory to install the binary into. Created if missing, never uses sudo. |
+| `GITHUB_TOKEN`       | unset              | Optional token for GitHub API calls, useful in CI to avoid rate limits.    |
+
+For example, to pin a version and install it somewhere else:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/theagentrouter/agent-router/main/install.sh | AIGW_VERSION=v1.1.0 AIGW_INSTALL_DIR=/usr/local/bin sh
+```
+
+Re-running the script replaces the installed binary, which is how you upgrade.
+The script only needs `curl` or `wget`, and uses `sha256sum` or `shasum` to verify the download when a checksum is
+published for the release. If `~/.local/bin` is not on your `PATH`, the script prints the line to add to your shell profile.
+
+### Supported platforms
+
+Release binaries are published for the following platforms:
+
+| Platform                    | Supported                                           |
+| --------------------------- | --------------------------------------------------- |
+| Linux amd64 (x86_64)        | Yes                                                 |
+| Linux arm64                 | Yes                                                 |
+| macOS Apple Silicon (arm64) | Yes                                                 |
+| macOS Intel (amd64)         | No, use the [Docker image](#using-the-docker-image) |
+| Windows                     | No, use the [Docker image](#using-the-docker-image) |
+
+There is no macOS amd64 binary because Envoy, which `aigw` runs under the hood, is not published for that platform.
+The install script fails with a clear message on Intel Macs and points to the Docker image instead.
+
 ## Official CLI binaries
 
 Each release includes the binaries for the `aigw` CLI build for different platforms.<br/>
 They can be downloaded directly from the corresponding release in the
 [GitHub releases page](https://github.com/theagentrouter/agent-router/releases).
+Newer releases also include a `checksums.txt` file with the SHA-256 checksum of every binary, which the install script verifies against.
 
 ## Using the Docker image
 
