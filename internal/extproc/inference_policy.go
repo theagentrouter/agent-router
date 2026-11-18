@@ -50,8 +50,35 @@ type instructionBlock struct {
 	Content   string `json:"content"`
 }
 
+// inferencePolicyTransport says where an operation's request carries the
+// conversation-level system prompt.
+type inferencePolicyTransport int
+
+const (
+	// policyTransportByField infers the transport from the body's fields and
+	// rejects bodies without one. It is kept for operations that have no
+	// prompt slot (completions, embeddings) so a bound policy fails closed.
+	policyTransportByField inferencePolicyTransport = iota
+	// policyTransportChat merges into OpenAI chat messages.
+	policyTransportChat
+	// policyTransportChatBatch merges into every conversation of vLLM's
+	// /v1/chat/completions/batch messages list.
+	policyTransportChatBatch
+	// policyTransportResponses merges into the Responses API instructions.
+	policyTransportResponses
+	// policyTransportAnthropic merges into the Anthropic top-level system.
+	policyTransportAnthropic
+	// policyTransportNone forwards the body unchanged: scoring, ranking and
+	// tokenizer operations have no prompt the policy could govern.
+	policyTransportNone
+)
+
 func normalizeInferencePolicy(header string, body []byte) ([]byte, bool, error) {
-	if header == "" {
+	return normalizeInferencePolicyFor(policyTransportByField, header, body)
+}
+
+func normalizeInferencePolicyFor(transport inferencePolicyTransport, header string, body []byte) ([]byte, bool, error) {
+	if header == "" || transport == policyTransportNone {
 		return body, false, nil
 	}
 	policy, err := decodeInferencePolicy(header)
@@ -70,6 +97,14 @@ func normalizeInferencePolicy(header string, body []byte) ([]byte, bool, error) 
 
 	var changed bool
 	switch {
+	case transport == policyTransportChat:
+		changed, err = applyMessagesPolicy(request, platformPrompt, conversation.ClientSystemPrompt)
+	case transport == policyTransportChatBatch:
+		changed, err = applyBatchMessagesPolicy(request, platformPrompt, conversation.ClientSystemPrompt)
+	case transport == policyTransportResponses:
+		changed, err = applyStringInstructionPolicy(request, "instructions", platformPrompt, conversation.ClientSystemPrompt)
+	case transport == policyTransportAnthropic:
+		changed, err = applyAnthropicSystemPolicy(request, platformPrompt, conversation.ClientSystemPrompt)
 	case hasField(request, "instructions"):
 		changed, err = applyStringInstructionPolicy(request, "instructions", platformPrompt, conversation.ClientSystemPrompt)
 	case hasField(request, "system"):
@@ -238,6 +273,28 @@ func applyMessagesPolicy(request map[string]any, platformPrompt, mode string) (b
 	}
 	platformMessage := map[string]any{"role": "system", "content": platformPrompt}
 	request["messages"] = append([]any{platformMessage}, filtered...)
+	return true, nil
+}
+
+// applyBatchMessagesPolicy applies the chat policy to every conversation of a
+// batch request independently.
+func applyBatchMessagesPolicy(request map[string]any, platformPrompt, mode string) (bool, error) {
+	conversations, ok := request["messages"].([]any)
+	if !ok {
+		return false, errors.New("messages must be an array of conversations")
+	}
+	for index, raw := range conversations {
+		conversation, ok := raw.([]any)
+		if !ok {
+			return false, fmt.Errorf("messages[%d] must be an array of messages", index)
+		}
+		single := map[string]any{"messages": conversation}
+		if _, err := applyMessagesPolicy(single, platformPrompt, mode); err != nil {
+			return false, fmt.Errorf("messages[%d]: %w", index, err)
+		}
+		conversations[index] = single["messages"]
+	}
+	request["messages"] = conversations
 	return true, nil
 }
 

@@ -157,10 +157,13 @@ type (
 		reasoningPolicy       string
 		streamUsagePolicy     string
 		inferencePolicyBundle string
-		bodyMutator           *bodymutator.BodyMutator
-		backendName           string
-		routeName             string
-		handler               filterapi.BackendAuthHandler
+		// backendSchemaName is the API schema of the selected backend; it decides
+		// where an inference policy merges into the translated body.
+		backendSchemaName filterapi.APISchemaName
+		bodyMutator       *bodymutator.BodyMutator
+		backendName       string
+		routeName         string
+		handler           filterapi.BackendAuthHandler
 		// cost is the cost of the request that is accumulated during the processing of the response.
 		costs metrics.TokenUsage
 		// metrics tracking.
@@ -574,7 +577,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 		policyBody = normalized
 		forceBodyMutation = true
 	}
-	if normalized, changed, policyErr := normalizeInferencePolicy(u.inferencePolicyBundle, policyBody); policyErr != nil {
+	if normalized, changed, policyErr := normalizeInferencePolicyFor(policyTransportFor[EndpointSpecT](u.backendSchemaName), u.inferencePolicyBundle, policyBody); policyErr != nil {
 		u.logger.Info("rejecting invalid inference policy request", slog.String("error", policyErr.Error()))
 		u.metrics.RecordRequestCompletion(ctx, false, metrics.GenAIErrorInvalidRequest, u.requestHeaders)
 		u.publishEvent(ctx, false, string(metrics.GenAIErrorInvalidRequest), nil)
@@ -931,6 +934,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	u.metrics.SetBackend(backend.Backend)
 	u.modelNameOverride = backend.Backend.ModelNameOverride
 	u.backendName = backend.Backend.Name
+	u.backendSchemaName = backend.Backend.Schema.Name
 	u.routeName = routeName
 
 	if u.events != nil {

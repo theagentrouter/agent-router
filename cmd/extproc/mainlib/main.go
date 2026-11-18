@@ -37,6 +37,8 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 	"github.com/envoyproxy/ai-gateway/internal/requestheaderattrs"
 	"github.com/envoyproxy/ai-gateway/internal/tracing"
+	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
+	"github.com/envoyproxy/ai-gateway/internal/translator"
 	"github.com/envoyproxy/ai-gateway/internal/version"
 )
 
@@ -479,6 +481,11 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	transcriptionMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTranscription)
 	translationMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTranslation)
 	rerankMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationRerank)
+	chatBatchMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationChatBatch)
+	scoreMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationScore)
+	tokenizeMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTokenize)
+	detokenizeMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationDetokenize)
+	poolingMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationPooling)
 	mcpMetrics := metrics.NewMCP(meter, metricsRequestHeaderAttributes)
 
 	// Create event publisher factory for per-request events.
@@ -564,6 +571,7 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 		l.Info("compatible inference auth enabled", slog.String("pathPrefix", pathPrefix))
 	}
 
+	var passthroughTracer tracingapi.RequestTracer[translator.PassthroughRequest, translator.PassthroughResponse, struct{}] = tracingapi.NoopTracer[translator.PassthroughRequest, translator.PassthroughResponse, struct{}]{}
 	server, err := extproc.NewServer(l, flags.enableRedaction)
 	if err != nil {
 		return fmt.Errorf("failed to create external processor server: %w", err)
@@ -591,6 +599,26 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/models"), extproc.NewModelsProcessor)
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/messages"), extproc.NewFactoryWithCompatibleAuth(
 		messagesMetricsFactory, eventFactory, "messages", tracing.MessageTracer(), endpointspec.MessagesEndpointSpec{}, compatibleAuthorizer))
+	if anthropicRoot := path.Join(flags.rootPrefix, "/v1/messages"); anthropicRoot != path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/messages") {
+		// vLLM serves Anthropic Messages at the root; accept the same path
+		// clients use against it.
+		server.Register(anthropicRoot, extproc.NewFactoryWithCompatibleAuth(
+			messagesMetricsFactory, eventFactory, "messages", tracing.MessageTracer(), endpointspec.MessagesEndpointSpec{}, compatibleAuthorizer))
+	}
+	// vLLM-native JSON operations forwarded unchanged apart from the model
+	// override. Unregistered paths keep the "unsupported path" 404.
+	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/chat/completions/batch"), extproc.NewFactoryWithCompatibleAuth(
+		chatBatchMetricsFactory, eventFactory, "chat_batch", passthroughTracer, endpointspec.ChatCompletionsBatchEndpointSpec{}, compatibleAuthorizer))
+	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/rerank"), extproc.NewFactory(
+		rerankMetricsFactory, eventFactory, "rerank", passthroughTracer, endpointspec.PassthroughEndpointSpec{}))
+	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/v1/score"), extproc.NewFactory(
+		scoreMetricsFactory, eventFactory, "score", passthroughTracer, endpointspec.PassthroughEndpointSpec{}))
+	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/tokenize"), extproc.NewFactory(
+		tokenizeMetricsFactory, eventFactory, "tokenize", passthroughTracer, endpointspec.PassthroughEndpointSpec{}))
+	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/detokenize"), extproc.NewFactory(
+		detokenizeMetricsFactory, eventFactory, "detokenize", passthroughTracer, endpointspec.PassthroughEndpointSpec{}))
+	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.OpenAI, "/pooling"), extproc.NewFactory(
+		poolingMetricsFactory, eventFactory, "pooling", passthroughTracer, endpointspec.PassthroughEndpointSpec{}))
 
 	// Create and register gRPC server with ExternalProcessorServer (the service Envoy calls).
 	if err = filterapi.StartConfigWatcher(ctx, flags.configPath, server, l, time.Second*5); err != nil {
