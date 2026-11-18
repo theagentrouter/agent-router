@@ -1940,6 +1940,9 @@ func TestHandleSubscriptionsListen_MergesAndRewritesEvents(t *testing.T) {
 	body := rr.bodyString()
 	require.Equal(t, 1, strings.Count(body, `"method":"notifications/subscriptions/acknowledged"`),
 		"gateway must emit one merged acknowledgement, got:\n%s", body)
+	ackAt := strings.Index(body, `"method":"notifications/subscriptions/acknowledged"`)
+	updatedAt := strings.Index(body, `"method":"notifications/resources/updated"`)
+	require.Greater(t, updatedAt, ackAt, "acknowledgement must precede resources/updated, got:\n%s", body)
 	require.Contains(t, body, sub1)
 	require.Contains(t, body, sub2)
 
@@ -1951,6 +1954,209 @@ func TestHandleSubscriptionsListen_MergesAndRewritesEvents(t *testing.T) {
 		"backend2 must receive the bare upstream URI only")
 	require.True(t, proxy.perBackendMetricsRecorded)
 	require.Equal(t, "text/event-stream", rr.Header().Get("Content-Type"))
+}
+
+func TestHandleSubscriptionsListen_ListChangedAckWithoutResourceURIs(t *testing.T) {
+	// go-sdk omits resourceSubscriptions when the client only asked for
+	// list_changed. Both backends must still count as acknowledged, and the
+	// gateway emits one merged ack before either list_changed notification.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		ack := `{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"notifications":{"toolsListChanged":true}}}`
+		changed := `{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}`
+		_, _ = w.Write([]byte("event: message\ndata: " + ack + "\n\n"))
+		_, _ = w.Write([]byte("event: message\ndata: " + changed + "\n\n"))
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	params, err := json.Marshal(map[string]any{
+		"notifications": map[string]any{
+			"toolsListChanged": true,
+		},
+	})
+	require.NoError(t, err)
+
+	rr := &concurrentRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := modernReq(t, "subscriptions/listen", params)
+	done := make(chan struct{})
+	go func() {
+		_, _ = proxy.handleSubscriptionsListen(ctx, rr, newModernRequest("subscriptions/listen").WithContext(ctx), req, "test-route", nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for list_changed-only acknowledgements")
+	}
+
+	body := rr.bodyString()
+	require.Equal(t, 1, strings.Count(body, `"method":"notifications/subscriptions/acknowledged"`),
+		"gateway must emit one merged acknowledgement, got:\n%s", body)
+	require.Contains(t, body, `"toolsListChanged":true`)
+	ackAt := strings.Index(body, `"method":"notifications/subscriptions/acknowledged"`)
+	changedAt := strings.Index(body, `"method":"notifications/tools/list_changed"`)
+	require.Greater(t, changedAt, ackAt, "acknowledgement must precede list_changed, got:\n%s", body)
+	require.Contains(t, body, `"resultType":"complete"`)
+}
+
+func TestHandleSubscriptionsListen_AckBeforeNotifications(t *testing.T) {
+	// A fast backend's resources/updated must stay buffered until the slow
+	// backend acknowledges, so the merged ack is the first client message.
+	releaseSlow := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseSlow) }) }
+	defer release()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		backend := r.Header.Get(internalapi.MCPBackendHeader)
+		if backend == "backend2" {
+			select {
+			case <-releaseSlow:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		ack := fmt.Sprintf(
+			`{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"notifications":{"resourceSubscriptions":["file:///watched-%s"]}}}`,
+			backend)
+		_, _ = w.Write([]byte("event: message\ndata: " + ack + "\n\n"))
+		if backend == "backend1" {
+			notif := `{"jsonrpc":"2.0","method":"notifications/resources/updated","params":{"uri":"file:///watched-backend1"}}`
+			_, _ = w.Write([]byte("event: message\ndata: " + notif + "\n\n"))
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	sub1 := downstreamResourceURI("file:///watched-backend1", "backend1")
+	sub2 := downstreamResourceURI("file:///watched-backend2", "backend2")
+	params, err := json.Marshal(map[string]any{
+		"notifications": map[string]any{
+			"resourceSubscriptions": []string{sub1, sub2},
+		},
+	})
+	require.NoError(t, err)
+
+	rr := &concurrentRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := modernReq(t, "subscriptions/listen", params)
+	done := make(chan struct{})
+	go func() {
+		_, _ = proxy.handleSubscriptionsListen(ctx, rr, newModernRequest("subscriptions/listen").WithContext(ctx), req, "test-route", nil)
+		close(done)
+	}()
+
+	require.Never(t, func() bool {
+		return strings.Contains(rr.bodyString(), `"method":"notifications/resources/updated"`)
+	}, 200*time.Millisecond, 10*time.Millisecond, "resources/updated was forwarded before the slow backend acknowledged")
+
+	release()
+
+	require.Eventually(t, func() bool {
+		body := rr.bodyString()
+		return strings.Contains(body, `"method":"notifications/subscriptions/acknowledged"`) &&
+			strings.Contains(body, sub1)
+	}, 2*time.Second, 10*time.Millisecond)
+
+	body := rr.bodyString()
+	ackAt := strings.Index(body, `"method":"notifications/subscriptions/acknowledged"`)
+	updatedAt := strings.Index(body, `"method":"notifications/resources/updated"`)
+	require.Greater(t, updatedAt, ackAt, "acknowledgement must precede resources/updated, got:\n%s", body)
+	require.Equal(t, 1, strings.Count(body, `"method":"notifications/subscriptions/acknowledged"`))
+
+	cancel()
+	<-done
+}
+
+func TestHandleSubscriptionsListen_HeaderDeadlineEmitsPartialAck(t *testing.T) {
+	// A silent backend must not hold the status line or the ack until the
+	// client gives up. After the first keep-alive, emit what has arrived.
+	prev := listenKeepAliveInterval
+	listenKeepAliveInterval = 30 * time.Millisecond
+	t.Cleanup(func() { listenKeepAliveInterval = prev })
+
+	hold := make(chan struct{})
+	defer close(hold)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		if r.Header.Get(internalapi.MCPBackendHeader) == "backend1" {
+			ack := `{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"notifications":{"toolsListChanged":true}}}`
+			changed := `{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}`
+			_, _ = w.Write([]byte("event: message\ndata: " + ack + "\n\n"))
+			_, _ = w.Write([]byte("event: message\ndata: " + changed + "\n\n"))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+		select {
+		case <-hold:
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	params, err := json.Marshal(map[string]any{
+		"notifications": map[string]any{
+			"toolsListChanged": true,
+		},
+	})
+	require.NoError(t, err)
+
+	rr := &concurrentRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := modernReq(t, "subscriptions/listen", params)
+	done := make(chan struct{})
+	go func() {
+		_, _ = proxy.handleSubscriptionsListen(ctx, rr, newModernRequest("subscriptions/listen").WithContext(ctx), req, "test-route", nil)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		body := rr.bodyString()
+		return strings.Contains(body, `"method":"notifications/subscriptions/acknowledged"`) &&
+			strings.Contains(body, `"method":"notifications/tools/list_changed"`)
+	}, 2*time.Second, 10*time.Millisecond)
+
+	body := rr.bodyString()
+	require.Equal(t, 1, strings.Count(body, `"method":"notifications/subscriptions/acknowledged"`),
+		"silent backend must not block the ack, got:\n%s", body)
+	require.Contains(t, body, `"toolsListChanged":true`)
+	ackAt := strings.Index(body, `"method":"notifications/subscriptions/acknowledged"`)
+	changedAt := strings.Index(body, `"method":"notifications/tools/list_changed"`)
+	require.Greater(t, changedAt, ackAt, "acknowledgement must precede list_changed, got:\n%s", body)
+
+	cancel()
+	<-done
 }
 
 func TestHandleSubscriptionsListen_OnlyContactsOwningBackend(t *testing.T) {
@@ -2368,6 +2574,15 @@ func TestRewriteAcknowledgedSubscriptions(t *testing.T) {
 
 	t.Run("missing notifications", func(t *testing.T) {
 		out, ok := rewriteAcknowledgedSubscriptions(json.RawMessage(`{}`), "backend1", nil)
+		require.False(t, ok)
+		require.Nil(t, out)
+	})
+
+	t.Run("missing resourceSubscriptions is not rewritten", func(t *testing.T) {
+		// go-sdk omitempty. The listen handler must still record this as an
+		// ack; rewrite itself has no URI list to normalize.
+		in := json.RawMessage(`{"notifications":{"toolsListChanged":true}}`)
+		out, ok := rewriteAcknowledgedSubscriptions(in, "backend1", nil)
 		require.False(t, ok)
 		require.Nil(t, out)
 	})

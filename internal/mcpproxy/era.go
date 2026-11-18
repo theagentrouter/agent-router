@@ -55,6 +55,10 @@ const (
 // legacyProtocolVersions are the pre-2026-07-28 versions a client may declare in
 // Mcp-Protocol-Version, newest first. 2024-11-05 is absent because it predates
 // Streamable HTTP and never sends the header.
+//
+// This is a second hardcoded list next to the negotiation floor in
+// mergedProtocolVersion (mcpproxy.go). Update both together when the versions
+// the gateway speaks change.
 var legacyProtocolVersions = []string{
 	protocolVersion20251125,
 	protocolVersion20250618,

@@ -206,7 +206,8 @@ func TestModernMCP(t *testing.T) {
 				t.Fatal("timed out waiting for listen events")
 			case raw, ok := <-events:
 				if !ok {
-					require.GreaterOrEqual(t, ackCount, 1, "expected an acknowledgement")
+					require.Equal(t, 1, ackCount, "gateway must emit exactly one merged acknowledgement")
+					require.True(t, sawComplete, "missing graceful completion")
 					require.True(t, sawUpdatedDef, "missing namespaced update for default backend")
 					require.True(t, sawUpdatedDumb, "missing namespaced update for dumb backend")
 					return
@@ -219,6 +220,7 @@ func TestModernMCP(t *testing.T) {
 					require.Contains(t, payload, subDumb)
 				case strings.Contains(payload, `"method":"notifications/resources/updated"`):
 					require.NotContains(t, payload, `"uri":"file:///`, "updated URI must be gateway-namespaced")
+					require.Greater(t, ackCount, 0, "resources/updated arrived before the merged acknowledgement")
 					if strings.Contains(payload, subDefault) {
 						sawUpdatedDef = true
 					}
@@ -230,10 +232,15 @@ func TestModernMCP(t *testing.T) {
 				}
 				if ackCount == 1 && sawUpdatedDef && sawUpdatedDumb && sawComplete {
 					cancel()
-					// Drain until the reader exits.
-					for range events {
+					// Drain until the reader exits, still counting acks so a
+					// late per-backend acknowledgement fails the test.
+					for raw := range events {
+						if strings.Contains(string(raw), `"method":"notifications/subscriptions/acknowledged"`) {
+							ackCount++
+						}
 					}
 					require.Equal(t, 1, ackCount, "gateway must emit exactly one merged acknowledgement")
+					require.True(t, sawComplete, "missing graceful completion")
 					return
 				}
 			}

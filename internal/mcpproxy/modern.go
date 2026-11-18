@@ -938,6 +938,12 @@ func (m *mcpRequestContext) handleModernComplete(ctx context.Context, w http.Res
 	return m.sendModernRequestAndProxy(ctx, w, req, route, backend, result, span, nil)
 }
 
+// listenKeepAliveInterval bounds how long subscriptions/listen holds the HTTP
+// status line while waiting for every backend to acknowledge. On the first
+// tick with a stream already open, headers are written and the merged
+// acknowledgement is emitted from whatever has arrived. Tests shorten it.
+var listenKeepAliveInterval = 15 * time.Second
+
 // handleSubscriptionsListen handles subscriptions/listen (P1.8).
 // Opens SSE streams to backends and merges notification events.
 //
@@ -1091,11 +1097,17 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 		return handlerResult{}, err
 	}
 
-	// SSE headers stay unwritten until a notification is actually forwarded.
+	// SSE headers stay unwritten until the merged acknowledgement (or, if none
+	// ever arrives, the first queued event / completion) is sent. The first
+	// keep-alive also releases them when a stream is already open, so one
+	// silent backend cannot hold the status line past the deadline.
 	// A backend can return HTTP 200 and then reject the listen with a JSON-RPC
 	// error; if every established stream does that, the client still gets a
 	// JSON-RPC error instead of a synthesized resultType:"complete".
 	headersSent := false
+	// Once set, stop waiting for every backend and emit the ack from whatever
+	// has arrived. A tick that beats the first ack must not drop that ack.
+	ackWaitExpired := false
 	flusher, _ := w.(http.Flusher)
 	writeListenHeaders := func() {
 		if headersSent {
@@ -1110,24 +1122,47 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 			flusher.Flush()
 		}
 	}
+	flushPending := func() {
+		pending := fanout.pending
+		fanout.pending = nil
+		for _, event := range pending {
+			event.writeAndMaybeFlush(w)
+		}
+	}
+	writeAck := func(params map[string]any) {
+		// The ack is the first message on the stream. Queued notifications
+		// follow it.
+		writeListenHeaders()
+		writeSSENotification(w, "notifications/subscriptions/acknowledged", params)
+		flushPending()
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 	maybeWriteMergedAck := func() {
 		params, ok := fanout.takeMergedAckIfReady()
 		if !ok {
 			return
 		}
-		writeListenHeaders()
-		writeSSENotification(w, "notifications/subscriptions/acknowledged", params)
-		if flusher != nil {
-			flusher.Flush()
+		writeAck(params)
+	}
+	// writeArrivedAck emits one acknowledgement from acks received so far,
+	// without waiting for backends that are still silent.
+	writeArrivedAck := func() {
+		params, ok := fanout.takeMergedAckFromArrivals()
+		if !ok {
+			return
 		}
+		writeAck(params)
 	}
 
 	// Merge loop: forward rewritten, intent-filtered events to the client,
-	// sending periodic keep-alives while idle. When all backends close
-	// (gracefully or otherwise), the gateway writes a completion result per
-	// the subscriptions spec before returning, unless every stream rejected
-	// the subscription.
-	keepAlive := time.NewTicker(15 * time.Second)
+	// sending periodic keep-alives while idle. Non-ack events are queued until
+	// the merged acknowledgement is written so it stays the first message.
+	// When all backends close (gracefully or otherwise), the gateway writes a
+	// completion result per the subscriptions spec before returning, unless
+	// every stream rejected the subscription.
+	keepAlive := time.NewTicker(listenKeepAliveInterval)
 	defer keepAlive.Stop()
 	done := ctx.Done()
 	for {
@@ -1140,6 +1175,11 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 		case event, ok := <-events:
 			if !ok {
 				if fanout.allEstablishedRejected(established) {
+					// Deliver anything already queued, then the terminal error.
+					if len(fanout.pending) > 0 {
+						writeListenHeaders()
+						flushPending()
+					}
 					err := fmt.Errorf("subscriptions/listen: all %d backend(s) failed", established)
 					if headersSent {
 						writeModernSSEError(w, req.ID, &backendJSONRPCError{raw: fanout.firstErr})
@@ -1148,10 +1188,17 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 					writeBackendJSONRPCError(w, req.ID, fanout.firstErr)
 					return handlerResult{}, err
 				}
-				// All backend streams ended. Write a graceful completion
-				// result so the client knows the subscription closed cleanly
-				// rather than via a transport drop.
+				// Every stream has finished. Emit the ack (complete, or from
+				// whoever responded) before queued notifications, then a
+				// graceful completion so nothing buffered is dropped when no
+				// ack ever arrives.
 				// https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions#graceful-closure
+				maybeWriteMergedAck()
+				writeArrivedAck()
+				if len(fanout.pending) > 0 {
+					writeListenHeaders()
+					flushPending()
+				}
 				writeListenHeaders()
 				writeSSECompletionResult(w, req.ID)
 				if flusher != nil {
@@ -1160,12 +1207,28 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 				return handlerResult{}, nil
 			}
 			if m.forwardSubscriptionEvent(event, intent, fanout) {
-				writeListenHeaders()
-				event.writeAndMaybeFlush(w)
+				if fanout.mergedAckEmitted {
+					writeListenHeaders()
+					event.writeAndMaybeFlush(w)
+				} else {
+					fanout.pending = append(fanout.pending, event)
+				}
 			}
-			maybeWriteMergedAck()
+			if ackWaitExpired {
+				writeArrivedAck()
+			} else {
+				maybeWriteMergedAck()
+			}
 		case <-keepAlive.C:
 			if !headersSent {
+				// First tick with an open stream: release the status line and
+				// the ack from whatever has arrived, instead of waiting on a
+				// silent backend until the client times out.
+				if established > 0 {
+					ackWaitExpired = true
+					writeListenHeaders()
+					writeArrivedAck()
+				}
 				continue
 			}
 			_, _ = w.Write([]byte(": keep-alive\n\n"))
@@ -1280,10 +1343,13 @@ func (m *mcpRequestContext) forwardSubscriptionEvent(event *sseEvent, intent sub
 				// Buffer per-backend acks and emit one merged acknowledgement
 				// once every established stream has acked or rejected. From
 				// the client's perspective the gateway is a single server.
+				// Any acknowledged notification counts, including a
+				// list_changed-only ack that omits resourceSubscriptions
+				// (go-sdk tags that field omitempty).
 				if rewritten, ok := rewriteAcknowledgedSubscriptions(json.RawMessage(v.Params), event.backend, intent.resourceURIsForBackend(event.backend)); ok {
 					fanout.recordAck(event.backend, rewritten)
 				} else {
-					fanout.accept(event.backend)
+					fanout.recordAck(event.backend, json.RawMessage(v.Params))
 				}
 				continue
 			case "notifications/cancelled":
@@ -1322,7 +1388,10 @@ type subscriptionFanout struct {
 	ackPrompts       bool
 	ackResources     bool
 	mergedAckEmitted bool
-	firstErr         json.RawMessage
+	// pending holds non-ack events until the merged acknowledgement is
+	// written, so the ack stays the first message on the listen stream.
+	pending  []*sseEvent
+	firstErr json.RawMessage
 }
 
 func newSubscriptionFanout() *subscriptionFanout {
@@ -1396,6 +1465,22 @@ func (f *subscriptionFanout) takeMergedAckIfReady() (map[string]any, bool) {
 		return nil, false
 	}
 	f.mergedAckEmitted = true
+	return f.mergedAckParams(), true
+}
+
+// takeMergedAckFromArrivals returns one acknowledgement built from acks
+// received so far, without waiting for established streams that have not
+// responded. Used when the header deadline fires or every stream has ended.
+// Subsequent calls return false.
+func (f *subscriptionFanout) takeMergedAckFromArrivals() (map[string]any, bool) {
+	if f.mergedAckEmitted || len(f.acked) == 0 {
+		return nil, false
+	}
+	f.mergedAckEmitted = true
+	return f.mergedAckParams(), true
+}
+
+func (f *subscriptionFanout) mergedAckParams() map[string]any {
 	uris := make([]string, 0, len(f.ackURIs))
 	for uri := range f.ackURIs {
 		uris = append(uris, uri)
@@ -1413,7 +1498,7 @@ func (f *subscriptionFanout) takeMergedAckIfReady() (map[string]any, bool) {
 	if f.ackResources {
 		notifs["resourcesListChanged"] = true
 	}
-	return map[string]any{"notifications": notifs}, true
+	return map[string]any{"notifications": notifs}
 }
 
 // allEstablishedRejected reports that every HTTP 200 stream rejected the
@@ -1424,7 +1509,9 @@ func (f *subscriptionFanout) allEstablishedRejected(established int) bool {
 }
 
 // parseAcknowledgedSubscriptionParams extracts the namespaced URI list and
-// list_changed flags from a rewritten acknowledgements params object.
+// list_changed flags from an acknowledgements params object. A missing
+// resourceSubscriptions field is valid: go-sdk omits it when the client only
+// subscribed to list_changed notifications.
 func parseAcknowledgedSubscriptionParams(params json.RawMessage) (uris []string, tools, prompts, resources bool) {
 	var envelope struct {
 		Notifications struct {

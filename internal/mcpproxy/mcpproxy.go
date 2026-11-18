@@ -414,6 +414,8 @@ type backendReportedVersions struct {
 // minimum is a best-effort "honest floor" rather than a correctness guarantee;
 // mismatches across a breaking boundary are surfaced via the warnings below.
 func mergedProtocolVersion(l *slog.Logger, clientVersion string, backends []backendReportedVersions) string {
+	// floor is the oldest version this gateway will advertise. Keep it aligned
+	// with legacyProtocolVersions in era.go.
 	const floor = protocolVersion20250618
 
 	// Compute the minimum, across backends, of each backend's best (highest)
