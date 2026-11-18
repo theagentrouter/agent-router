@@ -7,12 +7,14 @@ package extensionserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	ratelimitfilterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ratelimit/v3"
@@ -20,6 +22,7 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -2864,4 +2867,287 @@ func newTestQuotaPolicyWithMetadata(name, uid, model, namespace, key string, lim
 			}},
 		},
 	}
+}
+
+// --- host_allowlist stamping + wrapping tests ---
+
+// endpointQuotaMeta reads the host_allowlist routing metadata (backend_name,
+// model_name_override) an endpoint was stamped with, if any.
+func endpointQuotaMeta(ep *endpointv3.LbEndpoint) (backend, model string, stamped bool) {
+	if ep.Metadata == nil {
+		return "", "", false
+	}
+	m, ok := ep.Metadata.FilterMetadata[internalapi.InternalEndpointMetadataNamespace]
+	if !ok || m == nil {
+		return "", "", false
+	}
+	b, ok := m.Fields[internalapi.InternalMetadataShortBackendNameKey]
+	if !ok {
+		return "", "", false
+	}
+	return b.GetStringValue(),
+		m.Fields[internalapi.InternalMetadataModelNameOverrideKey].GetStringValue(),
+		true
+}
+
+// clusterWrappedInHostAllowlist reports whether the cluster's LB policy is the host_allowlist policy.
+func clusterWrappedInHostAllowlist(c *clusterv3.Cluster) bool {
+	lb := c.GetLoadBalancingPolicy()
+	if lb == nil {
+		return false
+	}
+	for _, p := range lb.GetPolicies() {
+		if p.GetTypedExtensionConfig().GetName() == hostAllowlistPolicyName {
+			return true
+		}
+	}
+	return false
+}
+
+// lbEndpointGroup builds one LocalityLbEndpoints group with a single endpoint. The region encodes the
+// backend index for parity with Envoy Gateway output; endpoint groups are mapped to BackendRefs
+// positionally.
+func lbEndpointGroup(route string, backendIdx int) *endpointv3.LocalityLbEndpoints {
+	return &endpointv3.LocalityLbEndpoints{
+		Locality:    &corev3.Locality{Region: fmt.Sprintf("%s/backend/%d", route, backendIdx)},
+		LbEndpoints: []*endpointv3.LbEndpoint{{}},
+	}
+}
+
+func TestBackendRefHasQuotaForModel(t *testing.T) {
+	policies := map[string][]aigv1a1.QuotaPolicy{
+		"default/be": {{
+			Spec: aigv1a1.QuotaPolicySpec{
+				PerModelQuotas: []aigv1a1.PerModelQuota{
+					{ModelName: ptr.To("with-default"), Quota: aigv1a1.QuotaDefinition{
+						DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
+					}},
+					{ModelName: ptr.To("with-rules"), Quota: aigv1a1.QuotaDefinition{
+						BucketRules: []aigv1a1.QuotaRule{{Quota: aigv1a1.QuotaValue{Limit: 5, Duration: "1m"}}},
+					}},
+					{ModelName: ptr.To("no-limit"), Quota: aigv1a1.QuotaDefinition{
+						DefaultBucket: aigv1a1.QuotaValue{Limit: 0},
+					}},
+					{ModelName: nil, Quota: aigv1a1.QuotaDefinition{
+						DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
+					}},
+				},
+			},
+		}},
+	}
+	ref := func(name, model string) *aigv1b1.AIGatewayRouteRuleBackendRef {
+		return &aigv1b1.AIGatewayRouteRuleBackendRef{Name: name, ModelNameOverride: model}
+	}
+
+	t.Run("backend not in map", func(t *testing.T) {
+		require.False(t, backendRefHasQuotaForModel(ref("other", "with-default"), "default", policies))
+	})
+	t.Run("model with positive default bucket", func(t *testing.T) {
+		require.True(t, backendRefHasQuotaForModel(ref("be", "with-default"), "default", policies))
+	})
+	t.Run("model with bucket rules", func(t *testing.T) {
+		require.True(t, backendRefHasQuotaForModel(ref("be", "with-rules"), "default", policies))
+	})
+	t.Run("model present but no enforceable quota", func(t *testing.T) {
+		require.False(t, backendRefHasQuotaForModel(ref("be", "no-limit"), "default", policies))
+	})
+	t.Run("model mismatch", func(t *testing.T) {
+		require.False(t, backendRefHasQuotaForModel(ref("be", "unknown-model"), "default", policies))
+	})
+	t.Run("nil PerModelQuota model name never matches", func(t *testing.T) {
+		require.False(t, backendRefHasQuotaForModel(ref("be", ""), "default", policies))
+	})
+}
+
+func TestApplyHostAllowlistToQuotaCluster(t *testing.T) {
+	const routePrefix = "httproute/default/myroute/rule/0"
+	const clusterName = routePrefix
+
+	route := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "default"},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			Rules: []aigv1b1.AIGatewayRouteRule{{
+				BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+					{Name: "be-a", ModelNameOverride: "gpt-4"},
+					{Name: "be-b", ModelNameOverride: "gpt-5"},
+					{Name: "be-c", ModelNameOverride: "claude"},
+				},
+			}},
+		},
+	}
+	// Only (be-a, gpt-4) has an enforceable quota.
+	quotaOnA := map[string][]aigv1a1.QuotaPolicy{
+		"default/be-a": {{Spec: aigv1a1.QuotaPolicySpec{
+			PerModelQuotas: []aigv1a1.PerModelQuota{{
+				ModelName: ptr.To("gpt-4"),
+				Quota:     aigv1a1.QuotaDefinition{DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"}},
+			}},
+		}}},
+	}
+
+	s := newTestServerWithRoute(t, route)
+
+	t.Run("stamps only the quota (backend, model) and wraps", func(t *testing.T) {
+		c := &clusterv3.Cluster{
+			Name: clusterName,
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				lbEndpointGroup(routePrefix, 0),
+				lbEndpointGroup(routePrefix, 1),
+				lbEndpointGroup(routePrefix, 2),
+			}},
+		}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+
+		b, m, stamped := endpointQuotaMeta(c.LoadAssignment.Endpoints[0].LbEndpoints[0])
+		require.True(t, stamped)
+		require.Equal(t, "default/be-a", b)
+		require.Equal(t, "gpt-4", m)
+
+		_, _, s1 := endpointQuotaMeta(c.LoadAssignment.Endpoints[1].LbEndpoints[0])
+		_, _, s2 := endpointQuotaMeta(c.LoadAssignment.Endpoints[2].LbEndpoints[0])
+		require.False(t, s1, "non-quota backend must stay unstamped")
+		require.False(t, s2, "non-quota backend must stay unstamped")
+
+		require.True(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("skips the rate limit service cluster", func(t *testing.T) {
+		c := &clusterv3.Cluster{Name: quotaRateLimitClusterName}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		require.False(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("unresolvable cluster name is a no-op", func(t *testing.T) {
+		c := &clusterv3.Cluster{Name: "not-a-route-cluster"}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		require.False(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("no quota backend is not wrapped", func(t *testing.T) {
+		c := &clusterv3.Cluster{
+			Name: clusterName,
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				lbEndpointGroup(routePrefix, 0),
+			}},
+		}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, map[string][]aigv1a1.QuotaPolicy{})
+		_, _, stamped := endpointQuotaMeta(c.LoadAssignment.Endpoints[0].LbEndpoints[0])
+		require.False(t, stamped)
+		require.False(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("EDS cluster with nil LoadAssignment is not wrapped", func(t *testing.T) {
+		c := &clusterv3.Cluster{Name: clusterName} // quota backend exists, but no inline endpoints.
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		require.False(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("maps non-first backend positionally", func(t *testing.T) {
+		// Quota is on be-c, the third (index 2) BackendRef.
+		quotaOnC := map[string][]aigv1a1.QuotaPolicy{
+			"default/be-c": {{Spec: aigv1a1.QuotaPolicySpec{
+				PerModelQuotas: []aigv1a1.PerModelQuota{{
+					ModelName: ptr.To("claude"),
+					Quota:     aigv1a1.QuotaDefinition{DefaultBucket: aigv1a1.QuotaValue{Limit: 100, Duration: "1m"}},
+				}},
+			}}},
+		}
+		c := &clusterv3.Cluster{
+			Name: clusterName,
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				lbEndpointGroup(routePrefix, 0),
+				lbEndpointGroup(routePrefix, 1),
+				lbEndpointGroup(routePrefix, 2),
+			}},
+		}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnC)
+
+		_, _, s0 := endpointQuotaMeta(c.LoadAssignment.Endpoints[0].LbEndpoints[0])
+		_, _, s1 := endpointQuotaMeta(c.LoadAssignment.Endpoints[1].LbEndpoints[0])
+		require.False(t, s0)
+		require.False(t, s1)
+		b, m, s2 := endpointQuotaMeta(c.LoadAssignment.Endpoints[2].LbEndpoints[0])
+		require.True(t, s2)
+		require.Equal(t, "default/be-c", b)
+		require.Equal(t, "claude", m)
+		require.True(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("stamps every endpoint within a quota group", func(t *testing.T) {
+		group := lbEndpointGroup(routePrefix, 0)
+		group.LbEndpoints = append(group.LbEndpoints, &endpointv3.LbEndpoint{})
+		c := &clusterv3.Cluster{
+			Name: clusterName,
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				group,
+			}},
+		}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		for _, ep := range c.LoadAssignment.Endpoints[0].LbEndpoints {
+			b, m, stamped := endpointQuotaMeta(ep)
+			require.True(t, stamped)
+			require.Equal(t, "default/be-a", b)
+			require.Equal(t, "gpt-4", m)
+		}
+		require.True(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("quota group with no endpoints is not wrapped", func(t *testing.T) {
+		emptyGroup := lbEndpointGroup(routePrefix, 0)
+		emptyGroup.LbEndpoints = nil
+		c := &clusterv3.Cluster{
+			Name: clusterName,
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				emptyGroup,
+			}},
+		}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		require.False(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("zero-weight quota backend is skipped", func(t *testing.T) {
+		zeroWeightRoute := &aigv1b1.AIGatewayRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "zwroute", Namespace: "default"},
+			Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{{
+					BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+						{Name: "be-a", ModelNameOverride: "gpt-4", Weight: ptr.To(int32(0))},
+					},
+				}},
+			},
+		}
+		zeroWeightServer := newTestServerWithRoute(t, zeroWeightRoute)
+		c := &clusterv3.Cluster{
+			Name: "httproute/default/zwroute/rule/0",
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				lbEndpointGroup("httproute/default/zwroute/rule/0", 0),
+			}},
+		}
+		zeroWeightServer.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		require.False(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("logs and skips host_allowlist marshal error", func(t *testing.T) {
+		originalMarshalAny := marshalAny
+		t.Cleanup(func() {
+			marshalAny = originalMarshalAny
+		})
+		marshalAny = func(proto.Message) (*anypb.Any, error) {
+			return nil, errors.New("forced marshal error")
+		}
+
+		c := &clusterv3.Cluster{
+			Name: clusterName,
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				lbEndpointGroup(routePrefix, 0),
+			}},
+			LoadBalancingPolicy: &clusterv3.LoadBalancingPolicy{
+				Policies: []*clusterv3.LoadBalancingPolicy_Policy{{
+					TypedExtensionConfig: &corev3.TypedExtensionConfig{Name: "existing-picker"},
+				}},
+			},
+		}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		require.False(t, clusterWrappedInHostAllowlist(c))
+	})
 }

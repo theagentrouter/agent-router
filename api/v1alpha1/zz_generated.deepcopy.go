@@ -1427,7 +1427,9 @@ func (in *MCPRouteOAuth) DeepCopyInto(out *MCPRouteOAuth) {
 	if in.ClaimToHeaders != nil {
 		in, out := &in.ClaimToHeaders, &out.ClaimToHeaders
 		*out = make([]apiv1alpha1.ClaimToHeader, len(*in))
-		copy(*out, *in)
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
 	}
 }
 
