@@ -21,6 +21,13 @@ spec:
               value: rerank-english-v3.0
       backendRefs:
         - name: envoy-ai-gateway-basic-cohere
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: embed-v4.0
+      backendRefs:
+        - name: envoy-ai-gateway-basic-cohere
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: AIServiceBackend
