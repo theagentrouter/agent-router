@@ -278,6 +278,7 @@ func (a *anthropicToOpenAIV1ChatCompletionTranslator) RedactAnthropicBody(resp *
 			redacted.Content[i] = redactAnthropicContent(&resp.Content[i])
 		}
 	}
+	redacted.StopDetails = redactRefusalStopDetails(resp.StopDetails)
 
 	return &redacted
 }
