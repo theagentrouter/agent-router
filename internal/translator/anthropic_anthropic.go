@@ -334,7 +334,20 @@ func (a *anthropicToAnthropicTranslator) RedactAnthropicBody(resp *anthropic.Mes
 			redacted.Content[i] = redactAnthropicContent(&resp.Content[i])
 		}
 	}
+	redacted.StopDetails = redactRefusalStopDetails(resp.StopDetails)
 
+	return &redacted
+}
+
+// redactRefusalStopDetails redacts the explanation of a refusal, which is model-generated text that can repeat the request. The type and policy category are kept so the log still shows why the model refused.
+func redactRefusalStopDetails(details *anthropic.RefusalStopDetails) *anthropic.RefusalStopDetails {
+	if details == nil {
+		return nil
+	}
+	redacted := *details
+	if details.Explanation != nil {
+		redacted.Explanation = ptr.To(redaction.RedactString(*details.Explanation))
+	}
 	return &redacted
 }
 

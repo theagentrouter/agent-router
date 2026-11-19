@@ -516,7 +516,7 @@ func redactResponseTool(tool *openai.ResponseToolUnion) openai.ResponseToolUnion
 		redactInPlace(&location.City, &location.Region, &location.Country, &location.Timezone)
 		return openai.ResponseToolUnion{OfWebSearchPreview: &webSearch}
 	case tool.OfUnknown != nil:
-		return openai.ResponseToolUnion{OfUnknown: redactRawJSON(tool.OfUnknown)}
+		return openai.ResponseToolUnion{OfUnknown: redactUnknownTool(tool.OfUnknown)}
 	default:
 		return *tool
 	}
@@ -695,7 +695,7 @@ var mcpServerKeptKeys = map[string]bool{"type": true, "name": true, "tool_config
 func redactMCPServer(server anthropic.MCPServer) anthropic.MCPServer {
 	entry, ok := server.(map[string]any)
 	if !ok {
-		return redactInterfaceValue(server)
+		return redactWholeValue(server)
 	}
 	redacted := make(map[string]any, len(entry))
 	for k, v := range entry {
@@ -703,9 +703,25 @@ func redactMCPServer(server anthropic.MCPServer) anthropic.MCPServer {
 			redacted[k] = v
 			continue
 		}
-		redacted[k] = redactInterfaceValue(v)
+		redacted[k] = redactWholeValue(v)
 	}
 	return redacted
+}
+
+// redactWholeValue replaces v with a single placeholder for its JSON encoding. Unlike [redactInterfaceValue] it keeps nothing from v: [redaction.RedactJSONTree] keeps numbers and "type" values, which in a credential field would be the credential itself.
+func redactWholeValue(v any) any {
+	switch val := v.(type) {
+	case nil:
+		return nil
+	case string:
+		// Hash the string itself, not its quoted JSON form, so the placeholder matches other redacted fields holding the same value.
+		return redaction.RedactString(val)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return redaction.RedactString("redaction-error")
+	}
+	return redaction.RedactString(string(b))
 }
 
 // redactOptionalString returns a pointer to the redacted value of s, or nil if s is nil.
@@ -855,6 +871,18 @@ func redactRawJSON(raw json.RawMessage) json.RawMessage {
 	}
 	placeholder, _ := json.Marshal(redaction.RedactString(string(raw)))
 	return placeholder
+}
+
+// redactUnknownTool redacts a Responses tool whose type the gateway does not recognize. The "type" value is kept so the log still shows which tool the caller sent; everything else is collapsed into one placeholder, because the gateway does not know which of the tool's fields are configuration and which are caller data. If the tool is not an object with a string "type", the whole value is collapsed like [redactRawJSON].
+func redactUnknownTool(raw json.RawMessage) json.RawMessage {
+	var tool struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &tool); err != nil || tool.Type == "" {
+		return redactRawJSON(raw)
+	}
+	redacted, _ := json.Marshal(map[string]string{"type": tool.Type, "redacted": redaction.RedactString(string(raw))})
+	return redacted
 }
 
 // ParseBody implements [EndpointSpec.ParseBody].

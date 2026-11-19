@@ -219,6 +219,7 @@ func redactGCPAnthropicResponseMessage(msg *openai.ChatCompletionResponseChoiceM
 		redactedMsg.ReasoningContent = redactReasoningContent(msg.ReasoningContent)
 	}
 	redactedMsg.ThinkingBlocks = redactThinkingBlocks(msg.ThinkingBlocks)
+	redactRefusalAndSources(msg, &redactedMsg)
 
 	return redactedMsg
 }

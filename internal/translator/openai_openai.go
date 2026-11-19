@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/tidwall/sjson"
+	"google.golang.org/genai"
+	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -299,8 +301,53 @@ func redactResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) open
 		redactedMsg.ReasoningContent = redactReasoningContent(msg.ReasoningContent)
 	}
 	redactedMsg.ThinkingBlocks = redactThinkingBlocks(msg.ThinkingBlocks)
+	redactRefusalAndSources(msg, &redactedMsg)
 
 	return redactedMsg
+}
+
+// redactRefusalAndSources redacts the refusal text, URL citations and grounding metadata of msg into out. The refusal is model-generated and can repeat the request; citation URLs and titles and the grounding search queries and retrieved chunks come from searches driven by the request. Every chat completion message redactor calls this so a field a provider starts populating later is not logged by one translator and redacted by another.
+func redactRefusalAndSources(msg, out *openai.ChatCompletionResponseChoiceMessage) {
+	if msg.Refusal != nil {
+		out.Refusal = ptr.To(redaction.RedactString(*msg.Refusal))
+	}
+	if msg.Annotations != nil {
+		annotations := make([]openai.Annotation, len(*msg.Annotations))
+		for i, a := range *msg.Annotations {
+			annotations[i] = a
+			if a.URLCitation != nil {
+				citation := *a.URLCitation
+				citation.URL = redaction.RedactString(citation.URL)
+				citation.Title = redaction.RedactString(citation.Title)
+				annotations[i].URLCitation = &citation
+			}
+		}
+		out.Annotations = &annotations
+	}
+	if msg.GroundingMetadata != nil {
+		out.GroundingMetadata = redactGroundingMetadata(msg.GroundingMetadata)
+	}
+}
+
+// redactGroundingMetadata redacts every string in the grounding metadata, keeping its shape, scores and indices. It round-trips through JSON because GroundingMetadata is a deep tree of SDK types; if the redacted tree does not decode back (a []byte field cannot hold a placeholder), it returns nil so nothing unredacted is logged.
+func redactGroundingMetadata(gm *genai.GroundingMetadata) *genai.GroundingMetadata {
+	b, err := json.Marshal(gm)
+	if err != nil {
+		return nil
+	}
+	var generic any
+	if err = json.Unmarshal(b, &generic); err != nil {
+		return nil
+	}
+	redacted, err := json.Marshal(redaction.RedactJSONTree(generic))
+	if err != nil {
+		return nil
+	}
+	var out genai.GroundingMetadata
+	if err = json.Unmarshal(redacted, &out); err != nil {
+		return nil
+	}
+	return &out
 }
 
 // redactThinkingBlocks redacts the text, signature and encrypted data of each thinking block. Translators copy the model's reasoning into ThinkingBlocks as well as ReasoningContent, so redacting only ReasoningContent would still log the reasoning. Only the block type is kept.

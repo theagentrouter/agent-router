@@ -2118,7 +2118,13 @@ func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
 		require.Equal(t, map[string]string{"X-Key": redaction.RedactString(headerMarker)}, redacted.Tools[0].OfMcp.Headers)
 		require.Contains(t, out, "label-kept", "server_label is config and is kept")
 		require.Contains(t, out, "fn-kept", "function tool definitions are kept")
+		require.JSONEq(t, `{"type":"vendor_tool","redacted":"`+redaction.RedactString(`{"type":"vendor_tool","secret":"`+unknownMarker+`"}`)+`"}`, string(redacted.Tools[2].OfUnknown), "the unknown tool type is kept")
 		require.Contains(t, mustMarshal(t, req), tokenMarker, "original must not be mutated")
+	})
+
+	t.Run("responses unknown tool without a string type", func(t *testing.T) {
+		raw := json.RawMessage(`{"type":42,"secret":"unknown-tool-secret-marker"}`)
+		require.Equal(t, redactRawJSON(raw), redactUnknownTool(raw))
 	})
 
 	t.Run("anthropic messages mcp_servers", func(t *testing.T) {
@@ -2137,6 +2143,23 @@ func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
 		require.Contains(t, out, "server-kept", "name is config and is kept")
 		require.Contains(t, out, "tool-kept", "tool_configuration is config and is kept")
 		require.Contains(t, mustMarshal(t, req), tokenMarker, "original must not be mutated")
+	})
+
+	t.Run("anthropic messages mcp_servers non-string credentials", func(t *testing.T) {
+		// RedactJSONTree keeps numbers and "type" values, so a credential sent as a number or nested under "type" must be collapsed as a whole.
+		body := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"hi"}],"mcp_servers":[` +
+			`{"type":"url","name":"server-kept","authorization_token":987654321,"headers":{"type":"secret-type-marker"}},987654322]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, "987654321")
+		require.NotContains(t, out, "987654322")
+		require.NotContains(t, out, "secret-type-marker")
+		require.Contains(t, out, redaction.RedactString("987654321"))
+		require.Contains(t, out, redaction.RedactString(`{"type":"secret-type-marker"}`))
+		require.Contains(t, out, "server-kept")
 	})
 
 	const cityMarker = "city-marker"

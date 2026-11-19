@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genai"
 	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
@@ -741,6 +742,77 @@ func TestRedactBody_ThinkingBlocks(t *testing.T) {
 			require.Equal(t, thinking, resp.Choices[0].Message.ThinkingBlocks[0].Thinking, "original must not be mutated")
 		})
 	}
+}
+
+func TestRedactBody_RefusalAndSources(t *testing.T) {
+	const refusal = "refusal-marker"
+	const url = "https://example.com/url-marker"
+	const title = "title-marker"
+	const query = "query-marker"
+	for _, tc := range []struct {
+		name       string
+		translator interface {
+			RedactBody(*openai.ChatCompletionResponse) *openai.ChatCompletionResponse
+		}
+	}{
+		{name: "openai", translator: &openAIToOpenAITranslatorV1ChatCompletion{}},
+		{name: "aws bedrock", translator: &openAIToAWSBedrockTranslatorV1ChatCompletion{}},
+		{name: "gcp vertex ai", translator: &openAIToGCPVertexAITranslatorV1ChatCompletion{}},
+		{name: "gcp anthropic", translator: &openAIToGCPAnthropicTranslatorV1ChatCompletion{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &openai.ChatCompletionResponse{
+				Choices: []openai.ChatCompletionResponseChoice{{
+					Message: openai.ChatCompletionResponseChoiceMessage{
+						Role:    "assistant",
+						Refusal: ptr.To(refusal),
+						Annotations: &[]openai.Annotation{{
+							Type:        "url_citation",
+							URLCitation: &openai.URLCitation{StartIndex: 1, EndIndex: 5, URL: url, Title: title},
+						}},
+						GroundingMetadata: &genai.GroundingMetadata{
+							WebSearchQueries: []string{query},
+							GroundingChunks:  []*genai.GroundingChunk{{Web: &genai.GroundingChunkWeb{URI: url, Title: title}}},
+							GroundingSupports: []*genai.GroundingSupport{{
+								ConfidenceScores:      []float32{0.5},
+								GroundingChunkIndices: []int32{0},
+							}},
+						},
+					},
+				}},
+			}
+
+			msg := tc.translator.RedactBody(resp).Choices[0].Message
+
+			require.Equal(t, redaction.RedactString(refusal), *msg.Refusal)
+			require.Equal(t, []openai.Annotation{{
+				Type:        "url_citation",
+				URLCitation: &openai.URLCitation{StartIndex: 1, EndIndex: 5, URL: redaction.RedactString(url), Title: redaction.RedactString(title)},
+			}}, *msg.Annotations)
+			require.Equal(t, &genai.GroundingMetadata{
+				WebSearchQueries: []string{redaction.RedactString(query)},
+				GroundingChunks:  []*genai.GroundingChunk{{Web: &genai.GroundingChunkWeb{URI: redaction.RedactString(url), Title: redaction.RedactString(title)}}},
+				GroundingSupports: []*genai.GroundingSupport{{
+					ConfidenceScores:      []float32{0.5},
+					GroundingChunkIndices: []int32{0},
+				}},
+			}, msg.GroundingMetadata, "strings are redacted; scores and indices are kept")
+
+			orig := resp.Choices[0].Message
+			require.Equal(t, refusal, *orig.Refusal, "original must not be mutated")
+			require.Equal(t, url, (*orig.Annotations)[0].URLCitation.URL, "original must not be mutated")
+			require.Equal(t, query, orig.GroundingMetadata.WebSearchQueries[0], "original must not be mutated")
+		})
+	}
+}
+
+func TestRedactGroundingMetadata_UndecodableFallsBackToNil(t *testing.T) {
+	// SDKBlob is []byte, so its redacted placeholder is not valid base64 and the tree cannot decode back.
+	gm := &genai.GroundingMetadata{
+		WebSearchQueries: []string{"query-marker"},
+		SearchEntryPoint: &genai.SearchEntryPoint{SDKBlob: []byte("blob-marker")},
+	}
+	require.Nil(t, redactGroundingMetadata(gm))
 }
 
 func TestRedactReasoningContent_SignatureAndRedactedContent(t *testing.T) {

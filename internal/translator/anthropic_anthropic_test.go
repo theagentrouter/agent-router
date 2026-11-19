@@ -11,11 +11,13 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"k8s.io/utils/ptr"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
+	"github.com/envoyproxy/ai-gateway/internal/redaction"
 )
 
 func TestAnthropicToAnthropic_RequestBody(t *testing.T) {
@@ -412,5 +414,39 @@ func TestAnthropicMessagesTranslators_ResponseBody_non_streaming_withoutUsage(t 
 				}
 			})
 		}
+	}
+}
+
+func TestRedactAnthropicBody_RefusalStopDetails(t *testing.T) {
+	const explanation = "explanation-marker"
+	for _, tc := range []struct {
+		name       string
+		translator interface {
+			RedactAnthropicBody(*anthropicschema.MessagesResponse) *anthropicschema.MessagesResponse
+		}
+	}{
+		{name: "anthropic to anthropic", translator: &anthropicToAnthropicTranslator{}},
+		{name: "anthropic to openai", translator: &anthropicToOpenAIV1ChatCompletionTranslator{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &anthropicschema.MessagesResponse{
+				StopReason: ptr.To(anthropicschema.StopReasonRefusal),
+				StopDetails: &anthropicschema.RefusalStopDetails{
+					Type:        "refusal",
+					Category:    ptr.To("category-kept"),
+					Explanation: ptr.To(explanation),
+				},
+			}
+
+			redacted := tc.translator.RedactAnthropicBody(resp)
+
+			require.Equal(t, &anthropicschema.RefusalStopDetails{
+				Type:        "refusal",
+				Category:    ptr.To("category-kept"),
+				Explanation: ptr.To(redaction.RedactString(explanation)),
+			}, redacted.StopDetails)
+			require.Equal(t, explanation, *resp.StopDetails.Explanation, "original must not be mutated")
+			require.Nil(t, tc.translator.RedactAnthropicBody(&anthropicschema.MessagesResponse{}).StopDetails)
+		})
 	}
 }
