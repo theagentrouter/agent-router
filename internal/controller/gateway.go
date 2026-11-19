@@ -487,9 +487,10 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 				var bsp *aigv1b1.BackendSecurityPolicy
 				backendNamespace := backendRef.GetNamespace(aiGatewayRoute.Namespace)
-				if !backendRef.IsInferencePool() {
-					b.AIServiceBackendName = NamespacedNameKey(backendNamespace, backendRef.Name)
-				}
+				// InferencePools also get the namespace/name identity, which extproc already derives for
+				// them at runtime. QuotaPolicy enforcement keys on this identity, so a QuotaPolicy targeting
+				// an AIServiceBackend with the same namespace/name as an InferencePool applies to that pool.
+				b.AIServiceBackendName = NamespacedNameKey(backendNamespace, backendRef.Name)
 
 				if backendRef.IsCrossNamespace(aiGatewayRoute.Namespace) {
 					var rgErr error
