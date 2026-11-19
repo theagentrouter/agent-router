@@ -120,6 +120,97 @@ func TestOpenAIMessagesToGeminiContents(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "conversation ending with user turn is unchanged",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{Role: openai.ChatMessageRoleUser, Content: openai.StringOrUserRoleContentUnion{Value: "Hi"}}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{Role: openai.ChatMessageRoleAssistant, Content: openai.StringOrAssistantRoleContentUnion{Value: "Hello"}}},
+				{OfUser: &openai.ChatCompletionUserMessageParam{Role: openai.ChatMessageRoleUser, Content: openai.StringOrUserRoleContentUnion{Value: "How are you?"}}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Hi"}}},
+				{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "Hello"}}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "How are you?"}}},
+			},
+		},
+		{
+			name: "trailing assistant text message gets a continue user turn",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{Role: openai.ChatMessageRoleUser, Content: openai.StringOrUserRoleContentUnion{Value: "Hi"}}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{Role: openai.ChatMessageRoleAssistant, Content: openai.StringOrAssistantRoleContentUnion{Value: "Hello"}}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Hi"}}},
+				{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "Hello"}}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: geminiUserContinueText}}},
+			},
+		},
+		{
+			name: "trailing empty assistant message is dropped",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{Role: openai.ChatMessageRoleUser, Content: openai.StringOrUserRoleContentUnion{Value: "Hi"}}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{Role: openai.ChatMessageRoleAssistant, Content: openai.StringOrAssistantRoleContentUnion{Value: ""}}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Hi"}}},
+			},
+		},
+		{
+			name: "trailing empty assistant message after assistant text gets a continue user turn",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{Role: openai.ChatMessageRoleUser, Content: openai.StringOrUserRoleContentUnion{Value: "Hi"}}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{Role: openai.ChatMessageRoleAssistant, Content: openai.StringOrAssistantRoleContentUnion{Value: "Hello"}}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{Role: openai.ChatMessageRoleAssistant}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "Hi"}}},
+				{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "Hello"}}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: geminiUserContinueText}}},
+			},
+		},
+		{
+			name: "only an empty assistant message",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{Role: openai.ChatMessageRoleAssistant}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: geminiUserContinueText}}},
+			},
+		},
+		{
+			name: "trailing assistant tool calls without tool results get error function responses",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{Role: openai.ChatMessageRoleUser, Content: openai.StringOrUserRoleContentUnion{Value: "List files"}}},
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: "Running ls"},
+					ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+						{
+							ID:       ptr.To("call_1"),
+							Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "bash", Arguments: `{"command":"ls"}`},
+							Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+						},
+						{
+							ID:       ptr.To("call_2"),
+							Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "read", Arguments: `{"path":"README.md"}`},
+							Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+						},
+					},
+				}},
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "List files"}}},
+				{Role: genai.RoleModel, Parts: []*genai.Part{
+					{FunctionCall: &genai.FunctionCall{Name: "bash", Args: map[string]any{"command": "ls"}}, ThoughtSignature: dummyThoughtSignature},
+					{FunctionCall: &genai.FunctionCall{Name: "read", Args: map[string]any{"path": "README.md"}}},
+					{Text: "Running ls"},
+				}},
+				{Role: genai.RoleUser, Parts: []*genai.Part{
+					{FunctionResponse: &genai.FunctionResponse{Name: "bash", Response: map[string]any{"error": geminiUnansweredToolCallError}}},
+					{FunctionResponse: &genai.FunctionResponse{Name: "read", Response: map[string]any{"error": geminiUnansweredToolCallError}}},
+				}},
+			},
+		},
 	}
 
 	for _, tc := range tests {

@@ -123,7 +123,49 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 	if len(gcpParts) > 0 {
 		gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
 	}
-	return gcpContents, systemInstruction, nil
+	return ensureGeminiContentsEndWithUserTurn(gcpContents), systemInstruction, nil
+}
+
+// geminiUserContinueText is the text of the user turn appended when a conversation ends with a model turn.
+// It matches LiteLLM's DEFAULT_USER_CONTINUE_MESSAGE.
+const geminiUserContinueText = "Please continue."
+
+// geminiUnansweredToolCallError is the error reported back to the model for tool calls of a trailing
+// model turn that never received a tool result.
+const geminiUnansweredToolCallError = "tool call was not executed: no tool result was provided"
+
+// ensureGeminiContentsEndWithUserTurn makes sure the contents do not end with a model turn, which Gemini
+// rejects with "Requests ending with a model turn are not supported." OpenAI-compatible clients send such
+// requests e.g. when they resume an interrupted session or when the previous response was cut off, so
+// the request is repaired instead of being forwarded to a guaranteed 400:
+//   - a trailing model turn without parts (empty assistant message) is dropped,
+//   - unanswered function calls of a trailing model turn get an error function response, since Gemini
+//     expects a function call turn to be followed by the matching function responses,
+//   - any other trailing model turn is followed by a short user turn asking the model to continue.
+func ensureGeminiContentsEndWithUserTurn(contents []genai.Content) []genai.Content {
+	if len(contents) == 0 || contents[len(contents)-1].Role != genai.RoleModel {
+		return contents
+	}
+	for len(contents) > 0 && contents[len(contents)-1].Role == genai.RoleModel && len(contents[len(contents)-1].Parts) == 0 {
+		contents = contents[:len(contents)-1]
+	}
+	if len(contents) > 0 && contents[len(contents)-1].Role != genai.RoleModel {
+		return contents
+	}
+
+	var responses []*genai.Part
+	if len(contents) > 0 {
+		for _, part := range contents[len(contents)-1].Parts {
+			if part.FunctionCall != nil {
+				responses = append(responses, genai.NewPartFromFunctionResponse(part.FunctionCall.Name,
+					map[string]any{"error": geminiUnansweredToolCallError}))
+			}
+		}
+	}
+	if len(responses) > 0 {
+		return append(contents, genai.Content{Role: genai.RoleUser, Parts: responses})
+	}
+	return append(contents, genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{genai.NewPartFromText(geminiUserContinueText)}})
 }
 
 // mapDetailMediaResolution converts OpenAI image detail levels to Gemini media resolution levels.
