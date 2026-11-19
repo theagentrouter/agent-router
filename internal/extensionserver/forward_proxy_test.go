@@ -28,8 +28,6 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/controller"
 )
 
-const tlsTransportSocketName = "envoy.transport_sockets.tls"
-
 // tlsTransportSocket builds a TLS transport socket carrying the given SNI, as Envoy Gateway would
 // attach to an AI Gateway upstream cluster.
 func tlsTransportSocket(t *testing.T, sni string) *corev3.TransportSocket {
@@ -111,7 +109,7 @@ func TestMaybeModifyCluster_forwardProxy(t *testing.T) {
 		s := newServerWithForwardProxy(t, "proxy.corp:3128")
 		cluster := clusterWithTLSMatch(t, "api.openai.com")
 
-		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil, forwardProxySecrets{}))
 
 		wrapper := unwrapHTTP11Proxy(t, cluster.TransportSocketMatches[0].TransportSocket)
 		requireProxyAddress(t, wrapper, "proxy.corp", 3128)
@@ -129,7 +127,7 @@ func TestMaybeModifyCluster_forwardProxy(t *testing.T) {
 		cluster.TransportSocket = tlsTransportSocket(t, "api.openai.com")
 		cluster.TransportSocketMatches = nil
 
-		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil, forwardProxySecrets{}))
 
 		wrapper := unwrapHTTP11Proxy(t, cluster.TransportSocket)
 		requireProxyAddress(t, wrapper, "10.0.0.9", 8080)
@@ -140,7 +138,7 @@ func TestMaybeModifyCluster_forwardProxy(t *testing.T) {
 		s := newServerWithForwardProxy(t, "") // GatewayConfig without forwardProxy.
 		cluster := clusterWithTLSMatch(t, "api.openai.com")
 
-		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil, forwardProxySecrets{}))
 
 		require.Equal(t, tlsTransportSocketName, cluster.TransportSocketMatches[0].TransportSocket.Name)
 	})
@@ -164,12 +162,13 @@ func TestParseForwardProxyAddress(t *testing.T) {
 		{name: "out-of-range port", addr: "proxy.corp:70000", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseForwardProxyAddress(tc.addr)
+			host, got, err := parseForwardProxyAddress(tc.addr)
 			if tc.wantErr {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
+			require.Equal(t, tc.wantHost, host)
 			sa := got.GetSocketAddress()
 			require.Equal(t, tc.wantHost, sa.GetAddress())
 			require.Equal(t, tc.wantPort, sa.GetPortValue())
@@ -178,8 +177,9 @@ func TestParseForwardProxyAddress(t *testing.T) {
 }
 
 func TestWrapClusterInForwardProxy(t *testing.T) {
-	proxy, err := parseForwardProxyAddress("proxy.corp:3128")
+	_, address, err := parseForwardProxyAddress("proxy.corp:3128")
 	require.NoError(t, err)
+	proxy := &forwardProxyConfig{address: address}
 
 	t.Run("idempotent: wrapping twice does not double-wrap", func(t *testing.T) {
 		cluster := clusterWithTLSMatch(t, "api.openai.com")
@@ -253,7 +253,7 @@ func routeWithParents(parents ...gwapiv1.ParentReference) *aigv1b1.AIGatewayRout
 	}
 }
 
-func TestResolveForwardProxyAddr(t *testing.T) {
+func TestResolveForwardProxy(t *testing.T) {
 	gwParent := gwapiv1.ParentReference{Name: "eg-gateway"}
 	for _, tc := range []struct {
 		name  string
@@ -316,14 +316,19 @@ func TestResolveForwardProxyAddr(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := serverWithObjects(t, tc.objs...)
-			got, err := s.resolveForwardProxyAddr(t.Context(), tc.route)
+			got, err := s.resolveForwardProxy(t.Context(), tc.route)
 			require.NoError(t, err)
-			require.Equal(t, tc.want, got)
+			if tc.want == "" {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			require.Equal(t, tc.want, got.Spec.ForwardProxy.Address)
 		})
 	}
 }
 
-func TestResolveForwardProxyAddr_getError(t *testing.T) {
+func TestResolveForwardProxy_getError(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(controller.Scheme).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
@@ -333,12 +338,12 @@ func TestResolveForwardProxyAddr_getError(t *testing.T) {
 	s, err := New(c, logr.Discard(), udsPath, false, nil, nil, "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
 	require.NoError(t, err)
 
-	_, err = s.resolveForwardProxyAddr(t.Context(), routeWithParents(gwapiv1.ParentReference{Name: "eg-gateway"}))
+	_, err = s.resolveForwardProxy(t.Context(), routeWithParents(gwapiv1.ParentReference{Name: "eg-gateway"}))
 	require.ErrorContains(t, err, "boom")
 }
 
 func TestMaybeModifyCluster_forwardProxyInvalidAddress(t *testing.T) {
 	s := newServerWithForwardProxy(t, "missing-port") // not host:port.
-	err := s.maybeModifyCluster(t.Context(), clusterWithTLSMatch(t, "api.openai.com"), nil)
+	err := s.maybeModifyCluster(t.Context(), clusterWithTLSMatch(t, "api.openai.com"), nil, forwardProxySecrets{})
 	require.ErrorContains(t, err, "forward proxy")
 }

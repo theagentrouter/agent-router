@@ -374,3 +374,50 @@ func TestGatewayConfigConditionsNotAccepted(t *testing.T) {
 	require.Equal(t, metav1.ConditionFalse, conds[0].Status)
 	require.Equal(t, "nope", conds[0].Message)
 }
+
+func TestGatewayConfigController_ForwardProxySecretValidation(t *testing.T) {
+	fakeClient := requireNewFakeClientForGatewayConfig(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewGatewayConfigController(fakeClient, ctrl.Log, eventCh.Ch)
+
+	gateway := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "gw",
+			Namespace:   "default",
+			Annotations: map[string]string{GatewayConfigAnnotationKey: "fp-config"},
+		},
+		Spec: gwapiv1.GatewaySpec{GatewayClassName: "eg"},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), gateway))
+	gatewayConfig := &aigv1b1.GatewayConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "fp-config", Namespace: "default"},
+		Spec: aigv1b1.GatewayConfigSpec{ForwardProxy: &aigv1b1.GatewayConfigForwardProxy{
+			Address: "proxy.corp:3128",
+			Auth: &aigv1b1.GatewayConfigForwardProxyAuth{
+				HeaderValueRef: &gwapiv1.SecretObjectReference{Name: "proxy-token"},
+			},
+		}},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), gatewayConfig))
+	key := client.ObjectKeyFromObject(gatewayConfig)
+
+	// Missing Secret: NotAccepted, but the Gateway is still notified.
+	_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: key})
+	require.ErrorContains(t, err, "proxy-token")
+	eventCh.RequireItemsEventually(t, 1)
+	var updated aigv1b1.GatewayConfig
+	require.NoError(t, fakeClient.Get(t.Context(), key, &updated))
+	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updated.Status.Conditions[0].Type)
+	require.Contains(t, updated.Status.Conditions[0].Message, "proxy-token")
+
+	// Secret present with the expected key: Accepted.
+	require.NoError(t, fakeClient.Create(t.Context(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "proxy-token", Namespace: "default"},
+		Data:       map[string][]byte{"value": []byte("Bearer abc")},
+	}))
+	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: key})
+	require.NoError(t, err)
+	eventCh.RequireItemsEventually(t, 1)
+	require.NoError(t, fakeClient.Get(t.Context(), key, &updated))
+	require.Equal(t, aigv1b1.ConditionTypeAccepted, updated.Status.Conditions[0].Type)
+}

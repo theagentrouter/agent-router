@@ -585,6 +585,9 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [GCPWorkloadIdentityFederationConfig](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gcpworkloadidentityfederationconfig)
 - [GatewayConfigExtProc](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigextproc)
 - [GatewayConfigForwardProxy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxy)
+- [GatewayConfigForwardProxyAuth](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxyauth)
+- [GatewayConfigForwardProxyBasicAuth](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxybasicauth)
+- [GatewayConfigForwardProxyTLS](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxytls)
 - [GatewayConfigSpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigspec)
 - [GatewayConfigStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigstatus)
 - [HTTPBodyField](#github-com-envoyproxy-ai-gateway-api-v1alpha1-httpbodyfield)
@@ -1533,6 +1536,95 @@ GatewayConfigForwardProxy configures an HTTP CONNECT forward proxy for upstream 
   type="string"
   required="true"
   description="Address is the `host:port` of the HTTP CONNECT proxy. The host may be a hostname or an<br />IP address; the port is required. Upstream connections are tunnelled through this proxy<br />via Envoy's http_11_proxy transport socket, preserving the upstream TLS session."
+/><ApiField
+  name="tls"
+  type="[GatewayConfigForwardProxyTLS](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxytls)"
+  required="false"
+  description="TLS enables TLS on the connection to the proxy itself (an HTTPS proxy). When unset, the<br />connection to the proxy is plaintext. The upstream TLS session, if any, still runs<br />end-to-end inside the tunnel.<br />When TLS or Auth is set, a CONNECT request is always sent to the proxy, also for<br />plaintext upstreams."
+/><ApiField
+  name="auth"
+  type="[GatewayConfigForwardProxyAuth](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxyauth)"
+  required="false"
+  description="Auth configures the credentials sent to the proxy in the Proxy-Authorization header of<br />the CONNECT request. When unset, no Proxy-Authorization header is sent."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxyauth">GatewayConfigForwardProxyAuth</a>
+
+
+
+**Appears in:**
+- [GatewayConfigForwardProxy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxy)
+
+GatewayConfigForwardProxyAuth configures the Proxy-Authorization credentials sent to the
+forward proxy. Exactly one of Basic or HeaderValueRef must be set.
+
+##### Fields
+
+
+
+<ApiField
+  name="basic"
+  type="[GatewayConfigForwardProxyBasicAuth](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxybasicauth)"
+  required="false"
+  description="Basic configures username and password credentials, sent as<br />`Proxy-Authorization: Basic base64(username:password)` (RFC 7617)."
+/><ApiField
+  name="headerValueRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="false"
+  description="HeaderValueRef references a Secret in the same namespace as the GatewayConfig whose<br />`value` key is sent verbatim as the Proxy-Authorization header value, for example<br />`Bearer <token>`. Use this for authentication schemes other than Basic."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxybasicauth">GatewayConfigForwardProxyBasicAuth</a>
+
+
+
+**Appears in:**
+- [GatewayConfigForwardProxyAuth](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxyauth)
+
+GatewayConfigForwardProxyBasicAuth configures Basic credentials for the forward proxy.
+
+##### Fields
+
+
+
+<ApiField
+  name="secretRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="true"
+  description="SecretRef references a Secret in the same namespace as the GatewayConfig with the<br />`username` and `password` keys. The username must not contain a colon."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxytls">GatewayConfigForwardProxyTLS</a>
+
+
+
+**Appears in:**
+- [GatewayConfigForwardProxy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfigforwardproxy)
+
+GatewayConfigForwardProxyTLS configures TLS for the connection to the forward proxy.
+
+##### Fields
+
+
+
+<ApiField
+  name="sni"
+  type="string"
+  required="false"
+  description="SNI is the server name sent to the proxy and verified against its certificate. Defaults<br />to the host of the proxy address when it is a hostname. When the address host is an IP<br />address and SNI is unset, no SNI is sent."
+/><ApiField
+  name="caCertificateRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="false"
+  description="CACertificateRef references a Secret in the same namespace as the GatewayConfig whose<br />`ca.crt` key holds the PEM-encoded CA bundle used to verify the proxy certificate.<br />When unset, the system trust store of the Envoy proxy is used."
+/><ApiField
+  name="clientCertificateRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="false"
+  description="ClientCertificateRef references a kubernetes.io/tls Secret in the same namespace as the<br />GatewayConfig (`tls.crt` and `tls.key` keys) presented to the proxy as a client<br />certificate (mutual TLS)."
 />
 
 
@@ -3200,6 +3292,9 @@ MCPRouteList contains a list of MCPRoute.
 - [GCPWorkloadIdentityFederationConfig](#github-com-envoyproxy-ai-gateway-api-v1beta1-gcpworkloadidentityfederationconfig)
 - [GatewayConfigExtProc](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigextproc)
 - [GatewayConfigForwardProxy](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxy)
+- [GatewayConfigForwardProxyAuth](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxyauth)
+- [GatewayConfigForwardProxyBasicAuth](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxybasicauth)
+- [GatewayConfigForwardProxyTLS](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxytls)
 - [GatewayConfigSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigspec)
 - [GatewayConfigStatus](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigstatus)
 - [HTTPBodyField](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpbodyfield)
@@ -4322,6 +4417,95 @@ GatewayConfigForwardProxy configures an HTTP CONNECT forward proxy for upstream 
   type="string"
   required="true"
   description="Address is the `host:port` of the HTTP CONNECT proxy. The host may be a hostname or an<br />IP address; the port is required. Upstream connections are tunnelled through this proxy<br />via Envoy's http_11_proxy transport socket, preserving the upstream TLS session."
+/><ApiField
+  name="tls"
+  type="[GatewayConfigForwardProxyTLS](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxytls)"
+  required="false"
+  description="TLS enables TLS on the connection to the proxy itself (an HTTPS proxy). When unset, the<br />connection to the proxy is plaintext. The upstream TLS session, if any, still runs<br />end-to-end inside the tunnel.<br />When TLS or Auth is set, a CONNECT request is always sent to the proxy, also for<br />plaintext upstreams."
+/><ApiField
+  name="auth"
+  type="[GatewayConfigForwardProxyAuth](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxyauth)"
+  required="false"
+  description="Auth configures the credentials sent to the proxy in the Proxy-Authorization header of<br />the CONNECT request. When unset, no Proxy-Authorization header is sent."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxyauth">GatewayConfigForwardProxyAuth</a>
+
+
+
+**Appears in:**
+- [GatewayConfigForwardProxy](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxy)
+
+GatewayConfigForwardProxyAuth configures the Proxy-Authorization credentials sent to the
+forward proxy. Exactly one of Basic or HeaderValueRef must be set.
+
+##### Fields
+
+
+
+<ApiField
+  name="basic"
+  type="[GatewayConfigForwardProxyBasicAuth](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxybasicauth)"
+  required="false"
+  description="Basic configures username and password credentials, sent as<br />`Proxy-Authorization: Basic base64(username:password)` (RFC 7617)."
+/><ApiField
+  name="headerValueRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="false"
+  description="HeaderValueRef references a Secret in the same namespace as the GatewayConfig whose<br />`value` key is sent verbatim as the Proxy-Authorization header value, for example<br />`Bearer <token>`. Use this for authentication schemes other than Basic."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxybasicauth">GatewayConfigForwardProxyBasicAuth</a>
+
+
+
+**Appears in:**
+- [GatewayConfigForwardProxyAuth](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxyauth)
+
+GatewayConfigForwardProxyBasicAuth configures Basic credentials for the forward proxy.
+
+##### Fields
+
+
+
+<ApiField
+  name="secretRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="true"
+  description="SecretRef references a Secret in the same namespace as the GatewayConfig with the<br />`username` and `password` keys. The username must not contain a colon."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxytls">GatewayConfigForwardProxyTLS</a>
+
+
+
+**Appears in:**
+- [GatewayConfigForwardProxy](#github-com-envoyproxy-ai-gateway-api-v1beta1-gatewayconfigforwardproxy)
+
+GatewayConfigForwardProxyTLS configures TLS for the connection to the forward proxy.
+
+##### Fields
+
+
+
+<ApiField
+  name="sni"
+  type="string"
+  required="false"
+  description="SNI is the server name sent to the proxy and verified against its certificate. Defaults<br />to the host of the proxy address when it is a hostname. When the address host is an IP<br />address and SNI is unset, no SNI is sent."
+/><ApiField
+  name="caCertificateRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="false"
+  description="CACertificateRef references a Secret in the same namespace as the GatewayConfig whose<br />`ca.crt` key holds the PEM-encoded CA bundle used to verify the proxy certificate.<br />When unset, the system trust store of the Envoy proxy is used."
+/><ApiField
+  name="clientCertificateRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="false"
+  description="ClientCertificateRef references a kubernetes.io/tls Secret in the same namespace as the<br />GatewayConfig (`tls.crt` and `tls.key` keys) presented to the proxy as a client<br />certificate (mutual TLS)."
 />
 
 

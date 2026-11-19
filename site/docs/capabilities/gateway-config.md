@@ -150,8 +150,69 @@ Under the hood, each upstream cluster's transport socket is wrapped in Envoy's `
 The forward proxy applies to all AI Gateway upstream (LLM) clusters for Gateways that reference this `GatewayConfig`. InferencePool backends, which use in-cluster endpoints, are not proxied.
 :::
 
-:::warning
-Proxy authentication (for example, `Proxy-Authorization`) and a TLS connection to the proxy itself are not currently supported. The proxy is expected to be reachable over plaintext HTTP and to authorize the gateway by network policy (for example, an IP allowlist).
+By default the connection to the proxy is plaintext, and no credentials are sent. Use `tls` and `auth` to secure it.
+
+#### TLS to the Proxy
+
+Set `tls` to connect to an HTTPS proxy. The proxy certificate is verified against the CA in `caCertificateRef` (key `ca.crt`), or against the Envoy proxy's system trust store when it is omitted. The certificate must match the SNI, which defaults to the host of `address`. When `address` uses an IP address and `sni` is unset, no SNI is sent and the certificate must carry that IP address. Set `clientCertificateRef` to a `kubernetes.io/tls` Secret to present a client certificate to the proxy (mutual TLS).
+
+```yaml
+spec:
+  forwardProxy:
+    address: proxy.corp:3129
+    tls:
+      # Optional: defaults to the host of the address.
+      sni: proxy.corp
+      # Optional: Secret with a "ca.crt" key. Defaults to the system trust store.
+      caCertificateRef:
+        name: proxy-ca
+      # Optional: kubernetes.io/tls Secret for mutual TLS.
+      clientCertificateRef:
+        name: proxy-client-cert
+```
+
+The upstream TLS session still runs end-to-end inside the tunnel, so the traffic to the provider is encrypted twice between Envoy and the proxy.
+
+#### Proxy Authentication
+
+Set `auth` to send a `Proxy-Authorization` header on the `CONNECT` request. Configure exactly one of:
+
+- `basic`: a Secret with `username` and `password` keys. The gateway sends `Proxy-Authorization: Basic base64(username:password)`. The username must not contain a colon.
+- `headerValueRef`: a Secret whose `value` key is sent verbatim as the header value, for example `Bearer <token>`, for other authentication schemes.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: proxy-credentials
+  namespace: default
+stringData:
+  username: gateway
+  password: s3cr3t
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: GatewayConfig
+metadata:
+  name: my-gateway-config
+  namespace: default
+spec:
+  forwardProxy:
+    address: proxy.corp:3129
+    tls: {}
+    auth:
+      basic:
+        secretRef:
+          name: proxy-credentials
+```
+
+Credentials are delivered to Envoy as SDS secrets and are not part of the cluster configuration. Updating a referenced Secret rotates the credentials without editing the `GatewayConfig`.
+
+:::note
+All referenced Secrets must be in the same namespace as the `GatewayConfig`. When a referenced Secret is missing or lacks a required key, the `GatewayConfig` reports `NotAccepted` and the configuration is not applied.
+:::
+
+:::info
+When `tls` or `auth` is set, Envoy always opens a `CONNECT` tunnel through the proxy, including for plaintext (`http://`) upstreams, which are otherwise sent to the proxy as absolute-form requests. TLS to the proxy and proxy authentication require an Envoy proxy version whose `http_11_proxy` transport socket supports `proxy_transport_socket` and `proxy_authorization`.
 :::
 
 ## Environment Variable Precedence

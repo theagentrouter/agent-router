@@ -27,8 +27,9 @@ import (
 func TestSecretController_Reconcile(t *testing.T) {
 	bspCh := internaltesting.NewControllerEventChan[*aigv1b1.BackendSecurityPolicy]()
 	mcpRouteCh := internaltesting.NewControllerEventChan[*aigv1b1.MCPRoute]()
+	gatewayConfigCh := internaltesting.NewControllerEventChan[*aigv1b1.GatewayConfig]()
 	fakeClient := requireNewFakeClientWithIndexes(t)
-	c := NewSecretController(fakeClient, fake2.NewClientset(), ctrl.Log, bspCh.Ch, mcpRouteCh.Ch)
+	c := NewSecretController(fakeClient, fake2.NewClientset(), ctrl.Log, bspCh.Ch, mcpRouteCh.Ch, gatewayConfigCh.Ch)
 
 	err := fakeClient.Create(t.Context(), &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "mysecret", Namespace: "default"},
@@ -73,6 +74,22 @@ func TestSecretController_Reconcile(t *testing.T) {
 	}
 	require.NoError(t, fakeClient.Create(t.Context(), mcp))
 
+	// Create a GatewayConfig whose forward proxy references the secret, and one that does not.
+	gatewayConfig := &aigv1b1.GatewayConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gwconfig", Namespace: "default"},
+		Spec: aigv1b1.GatewayConfigSpec{ForwardProxy: &aigv1b1.GatewayConfigForwardProxy{
+			Address: "proxy.corp:3128",
+			Auth: &aigv1b1.GatewayConfigForwardProxyAuth{
+				Basic: &aigv1b1.GatewayConfigForwardProxyBasicAuth{SecretRef: gwapiv1.SecretObjectReference{Name: "mysecret"}},
+			},
+		}},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), gatewayConfig))
+	require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.GatewayConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "default"},
+		Spec:       aigv1b1.GatewayConfigSpec{ForwardProxy: &aigv1b1.GatewayConfigForwardProxy{Address: "proxy.corp:3128"}},
+	}))
+
 	_, err = c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{
 		Namespace: "default", Name: "mysecret",
 	}})
@@ -91,6 +108,9 @@ func TestSecretController_Reconcile(t *testing.T) {
 	mcpActual := mcpRouteCh.RequireItemsEventually(t, 1)
 	require.Equal(t, mcp, mcpActual[0])
 
+	gatewayConfigActual := gatewayConfigCh.RequireItemsEventually(t, 1)
+	require.Equal(t, gatewayConfig.Name, gatewayConfigActual[0].Name)
+
 	// Test the case where the Secret is being deleted.
 	err = fakeClient.Delete(t.Context(), &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "mysecret", Namespace: "default"},
@@ -100,4 +120,8 @@ func TestSecretController_Reconcile(t *testing.T) {
 		Namespace: "default", Name: "mysecret",
 	}})
 	require.NoError(t, err)
+
+	// The deletion still notifies the GatewayConfig referencing the secret.
+	gatewayConfigActual = gatewayConfigCh.RequireItemsEventually(t, 1)
+	require.Equal(t, gatewayConfig.Name, gatewayConfigActual[0].Name)
 }

@@ -20,6 +20,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/forwardproxy"
 )
 
 // GatewayConfigController implements [reconcile.TypedReconciler] for [aigv1b1.GatewayConfig].
@@ -77,9 +78,14 @@ func (c *GatewayConfigController) syncGatewayConfig(ctx context.Context, gateway
 		return fmt.Errorf("failed to find referencing Gateways: %w", err)
 	}
 
-	// Notify all referencing Gateways to reconcile.
+	// Notify all referencing Gateways to reconcile. This also happens when the configuration is
+	// invalid so that the Gateways pick up the change (for example, a Secret being removed).
 	c.notifyReferencingGateways(gatewayConfig, referencingGateways)
 
+	// Validate the Secrets referenced by the forward proxy.
+	if _, err = forwardproxy.LoadCredentials(ctx, c.client, gatewayConfig.Namespace, gatewayConfig.Spec.ForwardProxy); err != nil {
+		return fmt.Errorf("invalid forwardProxy: %w", err)
+	}
 	return nil
 }
 

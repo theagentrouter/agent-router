@@ -27,6 +27,7 @@ type secretController struct {
 	kubeClient                                        kubernetes.Interface
 	logger                                            logr.Logger
 	backendSecurityPolicyEventChan, mcpRouteEventChan chan event.GenericEvent
+	gatewayConfigEventChan                            chan event.GenericEvent
 }
 
 // NewSecretController creates a new reconcile.TypedReconciler[reconcile.Request] for corev1.Secret.
@@ -34,6 +35,7 @@ func NewSecretController(client client.Client, kubeClient kubernetes.Interface,
 	logger logr.Logger,
 	backendSecurityPolicyEventChan chan event.GenericEvent,
 	mcpRouteEventChan chan event.GenericEvent,
+	gatewayConfigEventChan chan event.GenericEvent,
 ) reconcile.TypedReconciler[reconcile.Request] {
 	return &secretController{
 		client:                         client,
@@ -41,6 +43,7 @@ func NewSecretController(client client.Client, kubeClient kubernetes.Interface,
 		logger:                         logger,
 		backendSecurityPolicyEventChan: backendSecurityPolicyEventChan,
 		mcpRouteEventChan:              mcpRouteEventChan,
+		gatewayConfigEventChan:         gatewayConfigEventChan,
 	}
 }
 
@@ -49,7 +52,8 @@ func (c *secretController) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var secret corev1.Secret
 	if err := c.client.Get(ctx, req.NamespacedName, &secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
+			// A deleted forward proxy Secret must still invalidate the GatewayConfigs using it.
+			return ctrl.Result{}, c.syncGatewayConfigs(ctx, req.Namespace, req.Name)
 		}
 		return ctrl.Result{}, err
 	}
@@ -92,6 +96,26 @@ func (c *secretController) syncSecret(ctx context.Context, namespace, name strin
 		c.logger.Info("Syncing MCPRoute",
 			"namespace", mcpRoute.Namespace, "name", mcpRoute.Name)
 		c.mcpRouteEventChan <- event.GenericEvent{Object: mcpRoute}
+	}
+	return c.syncGatewayConfigs(ctx, namespace, name)
+}
+
+// syncGatewayConfigs notifies the GatewayConfigs whose forward proxy references the given secret.
+func (c *secretController) syncGatewayConfigs(ctx context.Context, namespace, name string) error {
+	var gatewayConfigs aigv1b1.GatewayConfigList
+	err := c.client.List(ctx, &gatewayConfigs,
+		client.MatchingFields{
+			k8sClientIndexSecretToReferencingGatewayConfig: namespacedNameIndexKey(name, namespace),
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to list GatewayConfigList: %w", err)
+	}
+	for i := range gatewayConfigs.Items {
+		gatewayConfig := &gatewayConfigs.Items[i]
+		c.logger.Info("Syncing GatewayConfig",
+			"namespace", gatewayConfig.Namespace, "name", gatewayConfig.Name)
+		c.gatewayConfigEventChan <- event.GenericEvent{Object: gatewayConfig}
 	}
 	return nil
 }

@@ -8,6 +8,7 @@ package v1beta1
 import (
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // GatewayConfig provides configuration for the AI Gateway external processor
@@ -120,6 +121,84 @@ type GatewayConfigForwardProxy struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Address string `json:"address"`
+
+	// TLS enables TLS on the connection to the proxy itself (an HTTPS proxy). When unset, the
+	// connection to the proxy is plaintext. The upstream TLS session, if any, still runs
+	// end-to-end inside the tunnel.
+	//
+	// When TLS or Auth is set, a CONNECT request is always sent to the proxy, also for
+	// plaintext upstreams.
+	//
+	// +optional
+	TLS *GatewayConfigForwardProxyTLS `json:"tls,omitempty"`
+
+	// Auth configures the credentials sent to the proxy in the Proxy-Authorization header of
+	// the CONNECT request. When unset, no Proxy-Authorization header is sent.
+	//
+	// +optional
+	Auth *GatewayConfigForwardProxyAuth `json:"auth,omitempty"`
+}
+
+// GatewayConfigForwardProxyTLS configures TLS for the connection to the forward proxy.
+type GatewayConfigForwardProxyTLS struct {
+	// SNI is the server name sent to the proxy and verified against its certificate. Defaults
+	// to the host of the proxy address when it is a hostname. When the address host is an IP
+	// address and SNI is unset, no SNI is sent.
+	//
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	SNI *string `json:"sni,omitempty"`
+
+	// CACertificateRef references a Secret in the same namespace as the GatewayConfig whose
+	// "ca.crt" key holds the PEM-encoded CA bundle used to verify the proxy certificate.
+	// When unset, the system trust store of the Envoy proxy is used.
+	//
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="!has(self.kind) || self.kind == 'Secret'",message="only Secret references are supported"
+	// +kubebuilder:validation:XValidation:rule="!has(self.group) || self.group == ''",message="only core Secret references are supported"
+	CACertificateRef *gwapiv1.SecretObjectReference `json:"caCertificateRef,omitempty"`
+
+	// ClientCertificateRef references a kubernetes.io/tls Secret in the same namespace as the
+	// GatewayConfig ("tls.crt" and "tls.key" keys) presented to the proxy as a client
+	// certificate (mutual TLS).
+	//
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="!has(self.kind) || self.kind == 'Secret'",message="only Secret references are supported"
+	// +kubebuilder:validation:XValidation:rule="!has(self.group) || self.group == ''",message="only core Secret references are supported"
+	ClientCertificateRef *gwapiv1.SecretObjectReference `json:"clientCertificateRef,omitempty"`
+}
+
+// GatewayConfigForwardProxyAuth configures the Proxy-Authorization credentials sent to the
+// forward proxy. Exactly one of Basic or HeaderValueRef must be set.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.basic) != has(self.headerValueRef)",message="exactly one of basic or headerValueRef must be set"
+type GatewayConfigForwardProxyAuth struct {
+	// Basic configures username and password credentials, sent as
+	// "Proxy-Authorization: Basic base64(username:password)" (RFC 7617).
+	//
+	// +optional
+	Basic *GatewayConfigForwardProxyBasicAuth `json:"basic,omitempty"`
+
+	// HeaderValueRef references a Secret in the same namespace as the GatewayConfig whose
+	// "value" key is sent verbatim as the Proxy-Authorization header value, for example
+	// "Bearer <token>". Use this for authentication schemes other than Basic.
+	//
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="!has(self.kind) || self.kind == 'Secret'",message="only Secret references are supported"
+	// +kubebuilder:validation:XValidation:rule="!has(self.group) || self.group == ''",message="only core Secret references are supported"
+	HeaderValueRef *gwapiv1.SecretObjectReference `json:"headerValueRef,omitempty"`
+}
+
+// GatewayConfigForwardProxyBasicAuth configures Basic credentials for the forward proxy.
+type GatewayConfigForwardProxyBasicAuth struct {
+	// SecretRef references a Secret in the same namespace as the GatewayConfig with the
+	// "username" and "password" keys. The username must not contain a colon.
+	//
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="!has(self.kind) || self.kind == 'Secret'",message="only Secret references are supported"
+	// +kubebuilder:validation:XValidation:rule="!has(self.group) || self.group == ''",message="only core Secret references are supported"
+	SecretRef gwapiv1.SecretObjectReference `json:"secretRef"`
 }
 
 // GatewayConfigStatus defines the observed state of GatewayConfig.

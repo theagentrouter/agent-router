@@ -4832,3 +4832,46 @@ func TestGatewayController_warnUndeclaredMetadataNamespaces(t *testing.T) {
 	c.warnUndeclaredMetadataNamespaces(ec, []string{"declared.ns", "missing.ns", "other-missing.ns"}, "gw", "ns")
 	require.Empty(t, logged)
 }
+
+func TestGatewayController_stampGatewayConfigHash_forwardProxySecret(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	c := newTestGatewayController(fakeClient, fake2.NewClientset(), logr.Discard(), "ns", "img", "info", false, nil, true)
+	gw := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
+	require.NoError(t, fakeClient.Create(t.Context(), gw))
+
+	gwConfig := &aigv1b1.GatewayConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gwconfig", Namespace: "ns"},
+		Spec: aigv1b1.GatewayConfigSpec{ForwardProxy: &aigv1b1.GatewayConfigForwardProxy{
+			Address: "proxy.corp:3128",
+			Auth: &aigv1b1.GatewayConfigForwardProxyAuth{
+				Basic: &aigv1b1.GatewayConfigForwardProxyBasicAuth{SecretRef: gwapiv1.SecretObjectReference{Name: "proxy-creds"}},
+			},
+		}},
+	}
+	hash := func() string {
+		var stored gwapiv1.Gateway
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(gw), &stored))
+		require.NoError(t, c.stampGatewayConfigHash(t.Context(), &stored, gwConfig))
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(gw), &stored))
+		return stored.Annotations[gatewayConfigHashAnnotationKey]
+	}
+
+	// Secret missing: the hash is still stamped.
+	missing := hash()
+	require.Len(t, missing, 16)
+
+	// Secret created: the hash changes.
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "proxy-creds", Namespace: "ns"},
+		Data:       map[string][]byte{"username": []byte("user"), "password": []byte("pass")},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), secret))
+	created := hash()
+	require.NotEqual(t, missing, created)
+	require.Equal(t, created, hash())
+
+	// Secret rotated: the hash changes again.
+	secret.Data["password"] = []byte("rotated")
+	require.NoError(t, fakeClient.Update(t.Context(), secret))
+	require.NotEqual(t, created, hash())
+}

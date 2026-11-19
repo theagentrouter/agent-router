@@ -611,7 +611,7 @@ func Test_maybeModifyCluster_forwardsDeclaredMetadataNamespaces(t *testing.T) {
 		namespaces, err := s.metadataForwardingNamespacesForSnapshot(t.Context(), snapshotOf(gatewayNames...))
 		require.NoError(t, err)
 		cluster := &clusterv3.Cluster{Name: clusterName}
-		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, namespaces))
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, namespaces, forwardProxySecrets{}))
 		return extProcFilterConfig(t, cluster)
 	}
 
@@ -697,7 +697,7 @@ func Test_maybeModifyCluster_rebuildsOwnFiltersOnExistingChain(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, []string{"envoy.filters.http.ext_authz"}))
+	require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, []string{"envoy.filters.http.ext_authz"}, forwardProxySecrets{}))
 
 	cfg := extProcFilterConfig(t, cluster)
 	require.Equal(t, []string{"envoy.filters.http.ext_authz"},

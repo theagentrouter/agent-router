@@ -141,6 +141,19 @@ func TestGatewayConfigs(t *testing.T) {
 			name:   "bad_metadata_forwarding_namespace.yaml",
 			expErr: "metadata namespaces may only contain letters, digits, '.', '_', '/' and '-'",
 		},
+		{name: "forward_proxy_tls_auth.yaml"},
+		{
+			name:   "forward_proxy_both_auth.yaml",
+			expErr: "exactly one of basic or headerValueRef must be set",
+		},
+		{
+			name:   "forward_proxy_empty_auth.yaml",
+			expErr: "exactly one of basic or headerValueRef must be set",
+		},
+		{
+			name:   "forward_proxy_bad_ref_kind.yaml",
+			expErr: "only Secret references are supported",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := testdata.ReadFile(path.Join("testdata/gatewayconfigs", tc.name))

@@ -27,6 +27,7 @@ import (
 	header_mutationv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_mutation/v3"
 	upstream_codecv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/upstream_codec/v3"
 	httpconnectionmanagerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -122,11 +123,18 @@ func (s *Server) PostTranslateModify(ctx context.Context, req *egextension.PostT
 	}
 
 	// Process existing clusters - may add metadata or modify configurations.
+	proxySecrets := forwardProxySecrets{}
 	for _, cluster := range req.Clusters {
-		if err := s.maybeModifyCluster(ctx, cluster, metadataForwardingNamespaces); err != nil {
+		if err := s.maybeModifyCluster(ctx, cluster, metadataForwardingNamespaces, proxySecrets); err != nil {
 			return nil, fmt.Errorf("failed to modify cluster %s: %w", cluster.Name, err)
 		}
 		extProcUDSExist = extProcUDSExist || cluster.Name == extProcUDSClusterName
+	}
+	// Emit the SDS secrets referenced by forward proxy configurations.
+	for _, secret := range proxySecrets.sorted() {
+		if !slices.ContainsFunc(req.Secrets, func(existing *tlsv3.Secret) bool { return existing.Name == secret.Name }) {
+			req.Secrets = append(req.Secrets, secret)
+		}
 	}
 
 	// A rule weighted across several backendRefs, at least one of them an InferencePool, becomes a
@@ -328,7 +336,7 @@ func retrieveAndCache[T any, PT interface {
 //
 // The resulting configuration is similar to the envoy.yaml files in tests/data-plane/.
 // Only clusters with names matching the AIGatewayRoute pattern are modified.
-func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Cluster, metadataForwardingNamespaces []string) error {
+func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Cluster, metadataForwardingNamespaces []string, secrets forwardProxySecrets) error {
 	clusterName, err := parseAIGatewayClusterName(cluster.Name)
 	if err != nil {
 		s.log.Info("non-ai-gateway cluster name", "cluster_name", cluster.Name, "error", err)
@@ -454,7 +462,7 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	// configures one. InferencePool clusters use in-cluster ORIGINAL_DST endpoints, so they are
 	// excluded.
 	if len(pools) == 0 {
-		if err = s.maybeWrapClusterInForwardProxy(ctx, cluster, &aigwRoute); err != nil {
+		if err = s.maybeWrapClusterInForwardProxy(ctx, cluster, &aigwRoute, secrets); err != nil {
 			return fmt.Errorf("failed to configure forward proxy for cluster %s: %w", cluster.Name, err)
 		}
 	}

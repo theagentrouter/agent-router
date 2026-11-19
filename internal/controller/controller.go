@@ -42,6 +42,7 @@ import (
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/forwardproxy"
 	"github.com/envoyproxy/ai-gateway/internal/ratelimit/runner"
 )
 
@@ -231,8 +232,9 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 		}
 	}
 	mcpRouteEventChan := make(chan event.GenericEvent, 100)
+	gatewayConfigEventChan := make(chan event.GenericEvent, 100)
 	secretC := NewSecretController(c, kubernetes.NewForConfigOrDie(config), logger.
-		WithName("secret"), backendSecurityPolicyEventChan, mcpRouteEventChan)
+		WithName("secret"), backendSecurityPolicyEventChan, mcpRouteEventChan, gatewayConfigEventChan)
 	// Do not use TypedControllerBuilderForCRD for secret, as changing a secret content doesn't change the generation.
 	if err = ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Secret{}).
@@ -256,6 +258,10 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	// GatewayConfig controller for gateway-scoped configuration.
 	gatewayConfigC := NewGatewayConfigController(c, logger.WithName("gateway-config"), gatewayEventChan)
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.GatewayConfig{}).
+		WatchesRawSource(source.Channel(
+			gatewayConfigEventChan,
+			&handler.EnqueueRequestForObject{},
+		)).
 		Complete(gatewayConfigC); err != nil {
 		return fmt.Errorf("failed to create controller for GatewayConfig: %w", err)
 	}
@@ -334,6 +340,9 @@ const (
 	// k8sClientIndexQuotaPolicyTargetNamespace maps a target namespace to
 	// QuotaPolicies that contain a targetRef resolved to that namespace.
 	k8sClientIndexQuotaPolicyTargetNamespace = "QuotaPolicyTargetNamespace"
+	// k8sClientIndexSecretToReferencingGatewayConfig maps from a Secret to the GatewayConfigs whose
+	// forward proxy references it.
+	k8sClientIndexSecretToReferencingGatewayConfig = "SecretToReferencingGatewayConfig"
 	// k8sClientIndexGatewayToGatewayConfig maps from a GatewayConfig name to Gateways referencing it.
 	k8sClientIndexGatewayToGatewayConfig = "GatewayToGatewayConfig"
 
@@ -392,6 +401,12 @@ func ApplyIndexing(ctx context.Context, indexer func(ctx context.Context, obj cl
 		k8sClientIndexGatewayToGatewayConfig, gatewayToGatewayConfigIndexFunc)
 	if err != nil {
 		return fmt.Errorf("failed to create index from GatewayConfig to Gateway: %w", err)
+	}
+
+	err = indexer(ctx, &aigv1b1.GatewayConfig{},
+		k8sClientIndexSecretToReferencingGatewayConfig, gatewayConfigToReferencedSecretIndexFunc)
+	if err != nil {
+		return fmt.Errorf("failed to create index from Secret to GatewayConfig: %w", err)
 	}
 
 	err = indexer(ctx, &gwapiv1b1.ReferenceGrant{},
@@ -466,6 +481,15 @@ func gatewayToGatewayConfigIndexFunc(o client.Object) []string {
 		return nil
 	}
 	return []string{configName}
+}
+
+func gatewayConfigToReferencedSecretIndexFunc(o client.Object) []string {
+	gatewayConfig := o.(*aigv1b1.GatewayConfig)
+	var ret []string
+	for _, key := range forwardproxy.SecretRefs(gatewayConfig.Namespace, gatewayConfig.Spec.ForwardProxy) {
+		ret = append(ret, namespacedNameIndexKey(key.Name, key.Namespace))
+	}
+	return ret
 }
 
 func aiGatewayRouteToAttachedGatewayIndexFunc(o client.Object) []string {

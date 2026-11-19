@@ -38,6 +38,7 @@ import (
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/controller/rotators"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/forwardproxy"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/llmcostcel"
 	"github.com/envoyproxy/ai-gateway/internal/version"
@@ -1582,7 +1583,13 @@ func (c *GatewayController) stampGatewayConfigHash(ctx context.Context, gw *gwap
 		if err != nil {
 			return fmt.Errorf("failed to marshal GatewayConfig spec: %w", err)
 		}
-		sum := sha256.Sum256(marshaled)
+		// The extension server reads the forward proxy Secrets when translating, so their
+		// contents must also reach the hash for a rotation to reach the data plane.
+		secretVersions, err := c.forwardProxySecretVersions(ctx, gwConfig)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(append(marshaled, secretVersions...))
 		desired = hex.EncodeToString(sum[:8])
 	}
 	if gw.Annotations[gatewayConfigHashAnnotationKey] == desired {
@@ -1601,6 +1608,21 @@ func (c *GatewayController) stampGatewayConfigHash(ctx context.Context, gw *gwap
 		return fmt.Errorf("failed to patch Gateway with GatewayConfig hash: %w", err)
 	}
 	return nil
+}
+
+// forwardProxySecretVersions returns the names and resource versions of the Secrets referenced by
+// the GatewayConfig forward proxy. A missing Secret contributes an empty version, so its creation
+// changes the result.
+func (c *GatewayController) forwardProxySecretVersions(ctx context.Context, gwConfig *aigv1b1.GatewayConfig) ([]byte, error) {
+	var out []byte
+	for _, key := range forwardproxy.SecretRefs(gwConfig.Namespace, gwConfig.Spec.ForwardProxy) {
+		var secret corev1.Secret
+		if err := c.client.Get(ctx, key, &secret); err != nil && !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("failed to get forward proxy secret %s: %w", key, err)
+		}
+		out = fmt.Appendf(out, "\x00%s=%s", key, secret.ResourceVersion)
+	}
+	return out, nil
 }
 
 // fetchGatewayConfig returns the referenced GatewayConfig (if present) for the given Gateway.
