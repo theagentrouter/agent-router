@@ -1,0 +1,245 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: models-header-scope-jwt
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: models-header-scope-jwt
+  namespace: default
+spec:
+  gatewayClassName: models-header-scope-jwt
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: models-header-scope-jwt
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: models-header-scope-jwt
+  namespace: default
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        container:
+          resources: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: models-header-scope-jwt-jwks
+  namespace: default
+data:
+  jwks: |
+    {
+      "keys": [
+        {
+          "alg": "RS256",
+          "e": "AQAB",
+          "key_ops": [
+            "verify"
+          ],
+          "kty": "RSA",
+          "n": "lQiREO6mH0tV14KjhSz02zNaJ1SExS1QjlGoMSbG2-NUeURmvnwg-eY95sDCFpWuH3_ovFyRBGTi0e3j79mrQhM53PZQys-gr-rYGz8LeHp8G6H3XmeDxTvyemhB6uiN4EZkjOo6xT2ipmPEN3u315xPCR60Pwac2E0t4vZGxtU4LGYatIFOYtUvDdMPBLfGMKVapHBzbx9Ll4INEic1fNrAIUVtOn6i3sxzGHj4iGWsMrEUIXDOWEHzioXgPuRjJDRjhHRuEeA9i_Y-a9hY92q6P-dcPnCDLNF3349WDyw7jIMlU6TLM8lQ5ci_TS_0avovXPNECsuOObtT78LJJKLg58ghTnqrihwvSccVgW4M43Ntv7TOAgOsRl-NKY7QQJIbkxemvh14-gzwA6LijMvb0Tjrh6NynKfCIO0ASsMp3K3uks4cYhBALLJ1E41V-cYqdwg0c6Jam0Y4OXxNv_0FfmcsOk8iXdroNgWjBs3KaObMiMvNOKHNWZ4PsEll",
+          "use": "sig",
+          "kid": "8b267675394d7786f98ae29d8fddf905"
+        }
+      ]
+    }
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: models-header-scope-jwt
+  namespace: default
+spec:
+  parentRefs:
+    - name: models-header-scope-jwt
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-jwt-sub
+              value: client-a
+            - type: Exact
+              name: x-ai-eg-model
+              value: model-a1
+      backendRefs:
+        - name: models-header-scope-jwt-backend
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-jwt-sub
+              value: client-a
+            - type: Exact
+              name: x-ai-eg-model
+              value: model-a2
+      backendRefs:
+        - name: models-header-scope-jwt-backend
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-jwt-sub
+              value: client-b
+            - type: Exact
+              name: x-ai-eg-model
+              value: model-b1
+      backendRefs:
+        - name: models-header-scope-jwt-backend
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-jwt-sub
+              value: client-b
+            - type: Exact
+              name: x-ai-eg-model
+              value: model-b2
+      backendRefs:
+        - name: models-header-scope-jwt-backend
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: models-header-scope-jwt-policy
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: models-header-scope-jwt
+  jwt:
+    providers:
+      - name: tenant-jwt
+        issuer: https://auth-server.example.com
+        recomputeRoute: true
+        claimToHeaders:
+          - claim: sub
+            header: x-jwt-sub
+        localJWKS:
+          type: ValueRef
+          valueRef:
+            group: ""
+            kind: ConfigMap
+            name: models-header-scope-jwt-jwks
+  authorization:
+    defaultAction: Deny
+    rules:
+      - name: allow-tenant-clients
+        action: Allow
+        principal:
+          jwt:
+            provider: tenant-jwt
+            claims:
+              - name: sub
+                values:
+                  - client-a
+                  - client-b
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: models-header-scope-jwt-backend
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: models-header-scope-jwt-upstream
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: models-header-scope-jwt-backend-api-key
+  namespace: default
+spec:
+  type: APIKey
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: models-header-scope-jwt-backend
+  apiKey:
+    secretRef:
+      name: models-header-scope-jwt-backend-api-key
+      namespace: default
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: models-header-scope-jwt-backend-api-key
+  namespace: default
+type: Opaque
+stringData:
+  apiKey: dummy-token
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: models-header-scope-jwt-upstream
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: models-header-scope-jwt-upstream.default.svc.cluster.local
+        port: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: models-header-scope-jwt-upstream
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: models-header-scope-jwt-upstream
+  template:
+    metadata:
+      labels:
+        app: models-header-scope-jwt-upstream
+    spec:
+      containers:
+        - name: models-header-scope-jwt-upstream
+          image: docker.io/envoyproxy/ai-gateway-testupstream:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: models-header-scope-jwt-upstream
+  namespace: default
+spec:
+  selector:
+    app: models-header-scope-jwt-upstream
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
