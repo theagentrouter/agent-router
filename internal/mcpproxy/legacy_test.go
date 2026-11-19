@@ -885,6 +885,71 @@ func TestHandleToolCallRequest_NoSession(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "no MCP session found for backend backend2")
 }
 
+func TestHandleToolCallRequest_InsufficientScope(t *testing.T) {
+	makeToken := func(scopes ...string) string {
+		token := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"scope": scopes})
+		signed, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+		return signed
+	}
+
+	auth, err := compileAuthorization(&filterapi.MCPRouteAuthorization{
+		DefaultAction: "Deny",
+		Rules: []filterapi.MCPRouteAuthorizationRule{{
+			Action: "Allow",
+			Source: &filterapi.MCPAuthorizationSource{
+				JWT: filterapi.JWTSource{Scopes: []string{"read", "write"}},
+			},
+			Target: &filterapi.MCPAuthorizationTarget{
+				Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "test-tool"}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	newDeniedCall := func(prm *filterapi.MCPRouteOAuthProtectedResourceMetadata) (*httptest.ResponseRecorder, error) {
+		proxy := newTestMCPProxy()
+		route := proxy.routes["test-route"]
+		route.authorization = auth
+		route.prm = prm
+		s := &session{
+			reqCtx: proxy,
+			perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+				"backend1": {sessionID: "test-session"},
+			},
+			route: "test-route",
+		}
+		httpReq := httptest.NewRequest(http.MethodPost, "http://api.example.com:8443/mcp", nil)
+		httpReq.Host = "api.example.com:8443"
+		httpReq.Header.Set("x-forwarded-proto", "https")
+		httpReq.Header.Set("Authorization", "Bearer "+makeToken("read"))
+		rr := httptest.NewRecorder()
+		_, callErr := proxy.handleToolCallRequest(t.Context(), s, rr, &jsonrpc.Request{Method: "tools/call"},
+			&mcp.CallToolParams{Name: "backend1__test-tool"}, nil, httpReq)
+		return rr, callErr
+	}
+
+	t.Run("derived resource metadata is included when OAuth is configured", func(t *testing.T) {
+		rr, err := newDeniedCall(&filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
+		require.ErrorContains(t, err, "authorization failed")
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		require.Equal(t,
+			`Bearer error="insufficient_scope", scope="read write", resource_metadata="https://api.example.com:8443/.well-known/oauth-protected-resource/mcp", error_description="The token is missing required scopes"`,
+			rr.Header().Get("WWW-Authenticate"),
+		)
+	})
+
+	t.Run("resource metadata is omitted when OAuth is not configured", func(t *testing.T) {
+		rr, err := newDeniedCall(nil)
+		require.ErrorContains(t, err, "authorization failed")
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		require.Equal(t,
+			`Bearer error="insufficient_scope", scope="read write", error_description="The token is missing required scopes"`,
+			rr.Header().Get("WWW-Authenticate"),
+		)
+	})
+}
+
 func TestHandleToolCallRequest_BackendError(t *testing.T) {
 	// Mock backend server that returns error.
 	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

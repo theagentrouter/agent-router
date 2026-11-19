@@ -947,34 +947,42 @@ func testElicit(t *testing.T, m *mcpEnv) {
 func testNotificationCancelled(t *testing.T, m *mcpEnv) {
 	s := m.newSession(t)
 
-	ctx, cancel := context.WithCancel(t.Context()) //nolint: govet
-	doneCh := make(chan any)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	doneCh := make(chan struct{})
 	go func() {
 		_, _ = s.session.CallTool(ctx, &mcp.CallToolParams{
 			Name:      defaultMCPBackendResourcePrefix + testmcp.ToolDelay.Tool.Name,
-			Arguments: testmcp.ToolDelayArgs{Duration: "1s"},
+			Arguments: testmcp.ToolDelayArgs{Duration: "3s"},
 		})
-		doneCh <- struct{}{}
+		close(doneCh)
 	}()
 
+	// Wait until the tools/call is in flight, then cancel it. A few hundred
+	// microseconds is not enough on a slow runner: the client aborts locally,
+	// the gateway never records a span, and the assertion below fails.
+	const inFlightWait = 500 * time.Millisecond
 	select {
-	case <-time.After(time.Microsecond * 500):
+	case <-time.After(inFlightWait):
 		cancel()
-		// Wait for the goroutine to complete so its span doesn't leak to the next test.
-		<-doneCh
-		// Consume the CallTool span from the cancelled operation.
-		// This span will have an exception event due to cancellation.
-		requireToolSpan(t, m.collector.TakeSpan(), "default-mcp-backend", testmcp.ToolDelay.Tool.Name, false, "context canceled")
-		// we cannot do the test in TearDownSuite,
-		// we need to wait a while for notifications/cancelled,
-		// metric won't be updated if the test exits too early.
-		requireMetricGreaterThan(t, m, "mcp_method_count_total", map[string]string{
-			"mcp_method_name": "notifications/cancelled",
-		}, 0)
 	case <-doneCh:
-		cancel()
 		t.Fatal("CallTool returned before the delay")
 	}
+
+	// Wait for the goroutine to complete so its span doesn't leak to the next test.
+	select {
+	case <-doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for cancelled CallTool to return")
+	}
+	// Consume the CallTool span from the cancelled operation.
+	// This span will have an exception event due to cancellation.
+	requireToolSpan(t, m.collector.TakeSpan(), "default-mcp-backend", testmcp.ToolDelay.Tool.Name, false, "context canceled")
+	// The notifications/cancelled metric is updated asynchronously after the
+	// client reports the cancellation. Exit only after it has been recorded.
+	requireMetricGreaterThan(t, m, "mcp_method_count_total", map[string]string{
+		"mcp_method_name": "notifications/cancelled",
+	}, 0)
 }
 
 func testComplete(t *testing.T, m *mcpEnv) {

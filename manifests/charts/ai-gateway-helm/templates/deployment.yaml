@@ -17,7 +17,7 @@ spec:
       {{- include "ai-gateway-helm.controller.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- $mcpFallback := .Values.controller.mcp.sessionEncryption.fallback.seed }}
+      {{- $mcpFallback := include "ai-gateway-helm.controller.mcpFallbackSessionEncryptionEnabled" . }}
       {{- $fileIDFallback := .Values.controller.fileIDEncryption.fallback.seed }}
       {{- if or .Values.controller.podAnnotations $mcpFallback $fileIDFallback }}
       annotations:
@@ -135,7 +135,7 @@ spec:
             # The MCP session encryption seeds are read from the MCP_SESSION_ENCRYPTION_SEED and
             # MCP_FALLBACK_SESSION_ENCRYPTION_SEED environment variables, so they are not exposed in the command line.
             - --mcpSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.iterations }}
-            {{- if .Values.controller.mcp.sessionEncryption.fallback.seed }}
+            {{- if $mcpFallback }}
             - --mcpFallbackSessionEncryptionIterations={{ .Values.controller.mcp.sessionEncryption.fallback.iterations }}
             {{- end }}
             # The Files/Batch API id encryption seeds are read from the FILE_ID_ENCRYPTION_SEED and
@@ -170,7 +170,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "ai-gateway-helm.controller.fileIDEncryptionSecretName" . }}
                   key: seed
-            {{- if .Values.controller.mcp.sessionEncryption.fallback.seed }}
+            {{- if $mcpFallback }}
             - name: MCP_FALLBACK_SESSION_ENCRYPTION_SEED
               valueFrom:
                 secretKeyRef:
