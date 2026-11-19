@@ -108,7 +108,7 @@ controller:
 
   # Comma-separated key-value pairs for mapping HTTP request headers to Otel metric attributes.
   # Format: "header1:label1,header2:label2"
-  # Example: "x-tenant-id:tenant.id,x-tenant-id:tenant.id"
+  # Example: "x-tenant-id:tenant.id"
   metricsRequestHeaderAttributes: ""
 
   # Comma-separated key-value pairs for mapping HTTP request headers to access log attributes.
