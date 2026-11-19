@@ -166,6 +166,10 @@ func openAIMessageToBedrockMessageRoleUser(
 
 // unmarshalToolCallArguments is a helper method to unmarshal tool call arguments.
 func unmarshalToolCallArguments(arguments string) (map[string]any, error) {
+	// A tool without parameters can be sent back with empty arguments.
+	if strings.TrimSpace(arguments) == "" {
+		return map[string]any{}, nil
+	}
 	var input map[string]any
 	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal tool call arguments: %w", err)
