@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 The Envoy AI Gateway supports the OpenAI-compatible **Files API** (`/v1/files`), letting clients
 upload, list, retrieve, download, and delete files through the gateway. Files are commonly used as
-inputs to other workflows such as the Batch API and fine-tuning.
+inputs to other workflows such as the [Batch API](./batch-api.md) and fine-tuning.
 
 ## Overview
 
@@ -411,6 +411,7 @@ Response:
 
 ## What's Next
 
+- **[Batch API](./batch-api.md)** - Run batch jobs on uploaded input files
 - **[Supported API Endpoints](./supported-endpoints.md)** - Full list of OpenAI-compatible endpoints
 - **[Connect OpenAI](../../getting-started/connect-providers/openai.md)** - Configure an OpenAI backend
 - **[Basic Usage](../../getting-started/basic-usage.md)** - Deploy a gateway and make your first request
