@@ -132,7 +132,7 @@ const config: Config = {
             },
             '1.2': {
               label: '1.2',
-              path: '/',
+              path: '1.2',
               banner: 'none'
             },
             '1.1': {
