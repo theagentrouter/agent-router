@@ -5054,6 +5054,16 @@ func TestResponseInputItemUnionParamMarshalJSON(t *testing.T) {
 			expRes: []byte(`{"type":"compaction_trigger"}`),
 		},
 		{
+			name: "marshal configuration_update",
+			input: ResponseInputItemUnionParam{
+				OfConfigurationUpdate: &ResponseInputItemConfigurationUpdateParam{
+					Type:      "configuration_update",
+					Reasoning: &ReasoningParam{Effort: "high"},
+				},
+			},
+			expRes: []byte(`{"type":"configuration_update","reasoning":{"effort":"high"}}`),
+		},
+		{
 			name: "marshal item_reference",
 			input: ResponseInputItemUnionParam{
 				OfItemReference: &ResponseInputItemItemReferenceParam{
@@ -5599,6 +5609,16 @@ func TestResponseInputItemUnionParamUnmarshalJSON(t *testing.T) {
 				},
 			},
 			input: []byte(`{"type":"compaction_trigger"}`),
+		},
+		{
+			name: "unmarshal configuration_update",
+			expRes: ResponseInputItemUnionParam{
+				OfConfigurationUpdate: &ResponseInputItemConfigurationUpdateParam{
+					Type:      "configuration_update",
+					Reasoning: &ReasoningParam{Effort: "high"},
+				},
+			},
+			input: []byte(`{"type":"configuration_update","reasoning":{"effort":"high"}}`),
 		},
 		{
 			name: "unmarshal item_reference",
