@@ -9,7 +9,7 @@
 #
 # Filters are honored only by AWSAnthropic and GCPAnthropic backends, and only on /v1/messages requests.
 #
-# Prerequisites: apply aws.yaml and gcp_vertex.yaml first. This example reuses their Backend, BackendTLSPolicy and credential Secret resources.
+# Prerequisites: apply basic.yaml, aws.yaml and gcp_vertex.yaml first. This example attaches to the envoy-ai-gateway-basic Gateway from basic.yaml and reuses the Backend, BackendTLSPolicy and credential Secret resources from aws.yaml and gcp_vertex.yaml.
 
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: AIGatewayRoute
