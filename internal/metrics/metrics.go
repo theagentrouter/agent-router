@@ -138,7 +138,7 @@ func NewMetricsFactory(meter metric.Meter, requestHeaderLabelMapping map[string]
 }
 
 // TokenUsage represents the token usage reported usually by the backend API in the response body,
-// along with provider-reported billable units that are not tokens, such as fal's billable units.
+// along with provider-reported billable units that are not tokens, such as Cohere rerank search units or fal's billable units.
 //
 // Fields are not exported to control the optionality of each field via the accompanying boolean flags.
 type TokenUsage struct {
@@ -154,7 +154,7 @@ type TokenUsage struct {
 	cacheCreationInputTokens uint32
 	// ReasoningTokens is the number of reasoning tokens consumed.
 	reasoningTokens uint32
-	// billableUnits is the provider-reported billing quantity, e.g. fal's X-Fal-Billable-Units.
+	// billableUnits is the provider-reported billing quantity, e.g. Cohere rerank billed_units.search_units or fal's X-Fal-Billable-Units.
 	billableUnits float64
 
 	inputTokenSet, outputTokenSet, totalTokenSet, cachedInputTokenSet, cacheCreationInputTokenSet, reasoningTokenSet, billableUnitsSet bool
