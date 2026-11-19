@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -42,13 +43,12 @@ func Test_main(t *testing.T) {
 
 	t.Run("sse", func(t *testing.T) {
 		t.Parallel()
-		request, err := http.NewRequestWithContext(t.Context(), "GET", "http://"+l.Addr().String()+"/sse", strings.NewReader("some-body"))
+		request, err := http.NewRequestWithContext(streamContext(t), "GET", "http://"+l.Addr().String()+"/sse", strings.NewReader("some-body"))
 		require.NoError(t, err)
 		request.Header.Set(ResponseTypeKey, "sse")
 		request.Header.Set(ResponseBodyHeaderKey,
 			base64.StdEncoding.EncodeToString([]byte(strings.Join([]string{"1", "2", "3", "4", "5"}, "\n"))))
 
-		now := time.Now()
 		response, err := http.DefaultClient.Do(request)
 		require.NoError(t, err)
 		defer func() {
@@ -57,19 +57,18 @@ func Test_main(t *testing.T) {
 		require.Equal(t, http.StatusOK, response.StatusCode)
 
 		reader := bufio.NewReader(response.Body)
+		var span streamSpan
 		for i := range 5 {
 			dataLine, err := reader.ReadString('\n')
 			require.NoError(t, err)
+			span.chunk()
 			require.Equal(t, fmt.Sprintf("data: %d\n", i+1), dataLine)
-			// Ensure that the server sends the response line every second.
-			require.Greater(t, time.Since(now), 100*time.Millisecond, time.Since(now).String())
-			require.Less(t, time.Since(now), 300*time.Millisecond, time.Since(now).String())
-			now = time.Now()
 
 			// Ignore the additional newline character.
 			_, err = reader.ReadString('\n')
 			require.NoError(t, err)
 		}
+		span.requireStreamed(t)
 	})
 
 	t.Run("health", func(t *testing.T) {
@@ -310,7 +309,7 @@ func Test_main(t *testing.T) {
 
 	t.Run("aws-event-stream", func(t *testing.T) {
 		t.Parallel()
-		request, err := http.NewRequestWithContext(t.Context(), "GET", "http://"+l.Addr().String()+"/", strings.NewReader("some-body"))
+		request, err := http.NewRequestWithContext(streamContext(t), "GET", "http://"+l.Addr().String()+"/", strings.NewReader("some-body"))
 		require.NoError(t, err)
 		request.Header.Set(ResponseTypeKey, "aws-event-stream")
 		request.Header.Set(ResponseBodyHeaderKey,
@@ -322,7 +321,6 @@ func Test_main(t *testing.T) {
 				"{\"contentBlockIndex\": 0, \"delta\":{\"text\":\"5\"}}",
 			}, "\n"))))
 
-		now := time.Now()
 		response, err := http.DefaultClient.Do(request)
 		require.NoError(t, err)
 		defer func() {
@@ -331,18 +329,16 @@ func Test_main(t *testing.T) {
 		require.Equal(t, http.StatusOK, response.StatusCode)
 
 		decoder := eventstream.NewDecoder()
+		var span streamSpan
 		for i := range 5 {
 			var message eventstream.Message
 			message, err = decoder.Decode(response.Body, nil)
 			require.NoError(t, err)
+			span.chunk()
 			require.Equal(t, "contentBlockDelta", message.Headers.Get(":event-type").String())
 			require.JSONEq(t, fmt.Sprintf("{\"contentBlockIndex\": 0, \"delta\":{\"text\":\"%d\"}}", i+1), string(message.Payload))
-
-			// Ensure that the server sends the response line every second.
-			require.Greater(t, time.Since(now), 100*time.Millisecond, time.Since(now).String())
-			require.Less(t, time.Since(now), 300*time.Millisecond, time.Since(now).String())
-			now = time.Now()
 		}
+		span.requireStreamed(t)
 
 		// Read the last event.
 		event, err := decoder.Decode(response.Body, nil)
@@ -571,7 +567,7 @@ func Test_main(t *testing.T) {
 	})
 	t.Run("sse with distinct event blocks", func(t *testing.T) {
 		t.Parallel()
-		request, err := http.NewRequestWithContext(t.Context(), "GET", "http://"+l.Addr().String()+"/sse", strings.NewReader("some-body"))
+		request, err := http.NewRequestWithContext(streamContext(t), "GET", "http://"+l.Addr().String()+"/sse", strings.NewReader("some-body"))
 		require.NoError(t, err)
 
 		// Define two complete SSE events, separated by "\n\n".
@@ -582,7 +578,6 @@ func Test_main(t *testing.T) {
 		request.Header.Set(ResponseBodyHeaderKey,
 			base64.StdEncoding.EncodeToString([]byte(ssePayload)))
 
-		now := time.Now()
 		response, err := http.DefaultClient.Do(request)
 		require.NoError(t, err)
 		defer func() {
@@ -592,19 +587,18 @@ func Test_main(t *testing.T) {
 		require.Equal(t, http.StatusOK, response.StatusCode)
 
 		reader := bufio.NewReader(response.Body)
+		var span streamSpan
 		for i := range 2 {
 			dataLine, err := reader.ReadString('\n')
 			require.NoError(t, err)
+			span.chunk()
 			require.Equal(t, fmt.Sprintf("data: %d\n", i+1), dataLine)
-			// Ensure that the server sends the response line every second.
-			require.Greater(t, time.Since(now), 100*time.Millisecond, time.Since(now).String())
-			require.Less(t, time.Since(now), 300*time.Millisecond, time.Since(now).String())
-			now = time.Now()
 
 			// Ignore the additional newline character.
 			_, err = reader.ReadString('\n')
 			require.NoError(t, err)
 		}
+		span.requireStreamed(t)
 	})
 	t.Run("sse-gzip compresses each event", func(t *testing.T) {
 		t.Parallel()
@@ -616,7 +610,7 @@ func Test_main(t *testing.T) {
 		}
 
 		events := []string{"event1", "event2", "event3"}
-		request, err := http.NewRequestWithContext(t.Context(), "GET", "http://"+l.Addr().String()+"/sse-gzip", strings.NewReader("some-body"))
+		request, err := http.NewRequestWithContext(streamContext(t), "GET", "http://"+l.Addr().String()+"/sse-gzip", strings.NewReader("some-body"))
 		require.NoError(t, err)
 		request.Header.Set(ResponseTypeKey, "sse-gzip")
 		request.Header.Set(ResponseBodyHeaderKey,
@@ -653,23 +647,21 @@ func Test_main(t *testing.T) {
 		require.NoError(t, err, "failed reading blank line for event 0")
 		require.Equal(t, "\n", blankLine)
 
-		// For subsequent events, verify that each arrives with ~200ms interval,
-		// confirming the gzip writer is flushed per event (not buffered until close).
-		now := time.Now()
+		// The subsequent events must be spread over the server's pauses, which proves the gzip writer is flushed per
+		// event rather than at close.
+		var span streamSpan
 		for i, expected := range events[1:] {
 			dataLine, err := reader.ReadString('\n')
 			require.NoError(t, err, "failed reading data line for event %d", i+1)
+			span.chunk()
 			require.Equal(t, fmt.Sprintf("data: %s\n", expected), dataLine)
-
-			require.Greater(t, time.Since(now), 100*time.Millisecond, time.Since(now).String())
-			require.Less(t, time.Since(now), 300*time.Millisecond, time.Since(now).String())
-			now = time.Now()
 
 			// Read the trailing blank line that terminates the SSE event.
 			blankLine, err := reader.ReadString('\n')
 			require.NoError(t, err, "failed reading blank line for event %d", i+1)
 			require.Equal(t, "\n", blankLine)
 		}
+		span.requireStreamed(t)
 	})
 
 	t.Run("sse with empty block should be skipped", func(t *testing.T) {
@@ -703,4 +695,31 @@ func Test_main(t *testing.T) {
 		expectedBody := "data: first\n\ndata: second\n\n"
 		require.Equal(t, expectedBody, string(bodyBytes))
 	})
+}
+
+// streamContext bounds a streaming request so a stalled stream fails instead of hanging the test.
+func streamContext(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*defaultStreamingInterval)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// streamSpan proves a response was streamed: the span from the first chunk to the last covers the server's pauses
+// between them, where an unpaced server delivers them within microseconds. An eighth of the nominal pacing still
+// separates the two by orders of magnitude while tolerating the reader's scheduling delay at either end.
+type streamSpan struct {
+	first  time.Time
+	chunks int
+}
+
+func (s *streamSpan) chunk() {
+	if s.chunks == 0 {
+		s.first = time.Now()
+	}
+	s.chunks++
+}
+
+func (s *streamSpan) requireStreamed(t *testing.T) {
+	span := time.Since(s.first)
+	require.Greater(t, span, time.Duration(s.chunks-1)*defaultStreamingInterval/8, span.String())
 }

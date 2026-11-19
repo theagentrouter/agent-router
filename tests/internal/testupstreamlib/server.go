@@ -39,9 +39,12 @@ type Server struct {
 	streamingInterval time.Duration
 }
 
+// defaultStreamingInterval is the pause between streamed chunks.
+const defaultStreamingInterval = 200 * time.Millisecond
+
 // DoMain starts the server and listens on the given listener.
 func (s *Server) DoMain(ct context.Context, l net.Listener) {
-	s.streamingInterval = 200 * time.Millisecond
+	s.streamingInterval = defaultStreamingInterval
 	server := &http.Server{} //nolint
 	go func() {
 		<-ct.Done()
