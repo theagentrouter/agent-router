@@ -33,6 +33,17 @@ const (
 	InternalMetadataUpstreamHostKey = "upstream_host"
 	// InternalMetadataRouteNameKey is the key used to store the route name.
 	InternalMetadataRouteNameKey = "aigw_route_name"
+	// InternalMetadataShortBackendNameKey is the key used to store the short "namespace/name"
+	// backend identity on endpoint metadata. It is the primary host key the Envoy host_allowlist
+	// load balancing policy matches against the rate limit service's backend_name descriptor in the
+	// passedBackends candidate list for quota-aware routing. Its value must match the rate limit
+	// descriptor value produced by the translator (translator.BackendDomainValue).
+	InternalMetadataShortBackendNameKey = "backend_name"
+	// InternalMetadataModelNameOverrideKey is the key used to store the backend's model name override
+	// on endpoint metadata. It is the secondary host key the Envoy host_allowlist load balancing
+	// policy matches against the rate limit service's model_name_override descriptor in the
+	// passedBackends candidate list for quota-aware routing.
+	InternalMetadataModelNameOverrideKey = "model_name_override"
 	// UpstreamHostHeader carries the upstream host resolved at config time from the upstream ext_proc
 	// filter to backend auth handlers. The AWS handler derives its SigV4 signing region from this host,
 	// so there is no separate region header.
