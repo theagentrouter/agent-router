@@ -389,6 +389,63 @@ func TestAnthropicToOpenAITranslator_ResponseBody_Streaming(t *testing.T) {
 	require.JSONEq(t, `{"type":"message_stop"}`, events[5].data)
 }
 
+// Some OpenAI-compatible backends attach the usage object to the last content chunk, the
+// one that carries finish_reason, and never send a separate chunk with empty choices.
+func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_UsageOnFinishReasonChunk(t *testing.T) {
+	const (
+		contentChunk = "data: {\"id\":\"chatcmpl-xyz\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello!\"}}],\"model\":\"gpt-4o\"}\n\n"
+		finishChunk  = "data: {\"id\":\"chatcmpl-xyz\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n"
+		usageChunk   = "data: {\"id\":\"chatcmpl-xyz\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n"
+		done         = "data: [DONE]\n\n"
+	)
+	for _, tc := range []struct {
+		name  string
+		input string
+	}{
+		{name: "usage only on the finish_reason chunk", input: contentChunk + finishChunk + done},
+		{name: "usage repeated on a trailing usage-only chunk", input: contentChunk + finishChunk + usageChunk + done},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "claude-3-haiku")
+			reqBody := &anthropic.MessagesRequest{
+				Model:     "claude-3-haiku",
+				MaxTokens: 100,
+				Stream:    true,
+				Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hello"}}},
+			}
+			_, _, err := translator.RequestBody(nil, reqBody, false)
+			require.NoError(t, err)
+
+			_, body, tokenUsage, _, err := translator.ResponseBody(
+				map[string]string{"content-type": "text/event-stream"},
+				strings.NewReader(tc.input),
+				true,
+				nil,
+			)
+			require.NoError(t, err)
+
+			inputTokens, inputSet := tokenUsage.InputTokens()
+			outputTokens, outputSet := tokenUsage.OutputTokens()
+			totalTokens, totalSet := tokenUsage.TotalTokens()
+			require.True(t, inputSet)
+			require.True(t, outputSet)
+			require.True(t, totalSet)
+			assert.Equal(t, uint32(10), inputTokens)
+			assert.Equal(t, uint32(5), outputTokens)
+			assert.Equal(t, uint32(15), totalTokens)
+
+			// The chunk is still translated: its finish_reason reaches the client, and the
+			// stream is closed exactly once with the usage the client sees.
+			events := parseSSEEventsFromBytes(body)
+			require.Len(t, events, 6)
+			assert.Equal(t, "content_block_stop", events[3].eventType)
+			assert.Equal(t, "message_delta", events[4].eventType)
+			require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"input_tokens":10,"output_tokens":5}}`, events[4].data)
+			assert.Equal(t, "message_stop", events[5].eventType)
+		})
+	}
+}
+
 func TestAnthropicToOpenAITranslator_ResponseBody_StreamingRequestModelFallback(t *testing.T) {
 	// When the OpenAI chunk has no model, responseModel should fall back to requestModel.
 	translator := NewAnthropicToChatCompletionOpenAITranslator("v1", "my-override")
