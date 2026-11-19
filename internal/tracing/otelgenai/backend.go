@@ -23,15 +23,16 @@ import (
 // are an established contract for existing dashboards: coupling them would mean
 // a change here silently altering metrics. Keep the two in sync.
 var providerBySchema = map[string]Provider{
-	"OpenAI":       ProviderOpenAI,
-	"AzureOpenAI":  ProviderAzureOpenAI,
-	"AWSBedrock":   ProviderAWSBedrock,
-	"AWSAnthropic": ProviderAWSAnthropic,
-	"GCPVertexAI":  ProviderGCPVertexAI,
-	"GCPAnthropic": ProviderGCPAnthropic,
-	"Anthropic":    ProviderAnthropic,
-	"Cohere":       ProviderCohere,
-	"TypeSafe":     ProviderTypeSafe,
+	"OpenAI":         ProviderOpenAI,
+	"AzureOpenAI":    ProviderAzureOpenAI,
+	"AWSBedrock":     ProviderAWSBedrock,
+	"AWSAnthropic":   ProviderAWSAnthropic,
+	"GCPVertexAI":    ProviderGCPVertexAI,
+	"GoogleAIStudio": ProviderGCPGemini,
+	"GCPAnthropic":   ProviderGCPAnthropic,
+	"Anthropic":      ProviderAnthropic,
+	"Cohere":         ProviderCohere,
+	"TypeSafe":       ProviderTypeSafe,
 }
 
 // ProviderForSchema returns the GenAI provider name for a backend API schema.

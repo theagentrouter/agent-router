@@ -225,6 +225,7 @@ spec:
                     - AWSAnthropic
                     - AWSOpenAI
                     - TypeSafe
+                    - GoogleAIStudio
                     type: string
                   prefix:
                     description: |-
@@ -557,6 +558,7 @@ spec:
                     - AWSAnthropic
                     - AWSOpenAI
                     - TypeSafe
+                    - GoogleAIStudio
                     type: string
                   prefix:
                     description: |-

@@ -15,6 +15,7 @@ import (
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/gcp"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
@@ -285,6 +286,18 @@ func newResponsesInputTokensTracer(tracer trace.Tracer, propagator propagation.T
 		headerAttributes,
 		func(span trace.Span, recorder tracingapi.ResponsesInputTokensRecorder) tracingapi.ResponsesInputTokensSpan {
 			return &responsesInputTokensSpan{span: span, recorder: recorder}
+		},
+	)
+}
+
+func newGeminiGenerateContentTracer(tracer trace.Tracer, propagator propagation.TextMapPropagator, recorder tracingapi.GeminiGenerateContentRecorder, headerAttributes map[string]string) tracingapi.GeminiGenerateContentTracer {
+	return newRequestTracer(
+		tracer,
+		propagator,
+		recorder,
+		headerAttributes,
+		func(s trace.Span, recorder tracingapi.GeminiGenerateContentRecorder) tracingapi.GeminiGenerateContentSpan {
+			return &span[gcp.GeminiGenerateContentResponse, gcp.GeminiGenerateContentResponse]{span: s, recorder: recorder}
 		},
 	)
 }

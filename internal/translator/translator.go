@@ -117,6 +117,11 @@ type RequestHeadersSetter interface {
 	SetRequestHeaders(headers map[string]string)
 }
 
+// RequestHeadersRemover identifies client headers that may not be forwarded on any attempt.
+type RequestHeadersRemover interface {
+	RemovedRequestHeaders() []string
+}
+
 // HeaderValueFilterSetter is an optional interface for translators that can filter individual
 // values out of a multi-valued request header before forwarding upstream.
 //

@@ -102,6 +102,8 @@ func (b *metricsImpl) SetBackend(backend *filterapi.Backend) {
 		b.backend = genaiProviderAWSAnthropic
 	case filterapi.APISchemaGCPVertexAI:
 		b.backend = genaiProviderGCPVertexAI
+	case filterapi.APISchemaGoogleAIStudio:
+		b.backend = genaiProviderGoogleGemini
 	case filterapi.APISchemaGCPAnthropic:
 		b.backend = genaiProviderGCPAnthropic
 	case filterapi.APISchemaAnthropic:

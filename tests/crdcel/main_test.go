@@ -30,6 +30,8 @@ func TestAIGatewayRoutes(t *testing.T) {
 	}{
 		{name: "basic.yaml"},
 		{name: "rule_name.yaml"},
+		{name: "path_match.yaml"},
+		{name: "path_prefix_invalid.yaml", expErr: "pathPrefix must not contain empty or dot segments"},
 		{
 			name:   "duplicate_rule_names.yaml",
 			expErr: "spec.rules: Invalid value: \"array\": rule name must be unique within the route",
@@ -95,6 +97,7 @@ func TestAIServiceBackends(t *testing.T) {
 	}{
 		{name: "basic.yaml"},
 		{name: "anthropic-schema.yaml"},
+		{name: "google-ai-studio-schema.yaml"},
 		{name: "basic-eg-backend-aws.yaml"},
 		{name: "aws-openai-schema.yaml"},
 		{name: "basic-eg-backend-azure.yaml"},
@@ -181,6 +184,8 @@ func TestBackendSecurityPolicies(t *testing.T) {
 			name:   "multiple_security_policies.yaml",
 			expErr: "When type is APIKey, only apiKey field should be set",
 		},
+		{name: "google-api-key.yaml"},
+		{name: "google-api-key-with-bearer-key.yaml", expErr: "When type is GoogleAPIKey, only googleAPIKey field should be set"},
 		{
 			name:   "azure_credentials_missing_client_id.yaml",
 			expErr: "spec.azureCredentials.clientID in body should be at least 1 chars long",

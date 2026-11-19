@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -59,12 +60,14 @@ var LogRequestHeaderAttributes map[string]string
 func NewFactory[ReqT any, RespT any, RespChunkT any, EndpointSpecT endpointspec.Spec[ReqT, RespT, RespChunkT]](
 	f metrics.Factory,
 	tracer tracingapi.RequestTracer[ReqT, RespT, RespChunkT],
-	_ EndpointSpecT, // This is a type marker to bind EndpointSpecT without specifying ReqT, RespT, RespChunkT explicitly.
+	spec EndpointSpecT,
 ) ProcessorFactory {
 	return func(config *filterapi.RuntimeConfig, requestHeaders map[string]string, logger *slog.Logger, isUpstreamFilter bool, enableRedaction bool) (Processor, error) {
 		logger = logger.With("isUpstreamFilter", fmt.Sprintf("%v", isUpstreamFilter))
 		if !isUpstreamFilter {
-			return newRouterProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](config, requestHeaders, logger, tracer, enableRedaction), nil
+			p := newRouterProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](config, requestHeaders, logger, tracer, enableRedaction)
+			p.eh = spec
+			return p, nil
 		}
 		return newUpstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](requestHeaders, f.NewMetrics(), logger), nil
 	}
@@ -383,6 +386,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	}
 
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
+	if remover, ok := u.translator.(translator.RequestHeadersRemover); ok {
+		headerMutation.RemoveHeaders = append(headerMutation.RemoveHeaders, remover.RemovedRequestHeaders()...)
+	}
 
 	// Apply header mutations from the route and also restore original headers on retry.
 	if h := u.headerMutator; h != nil {
@@ -757,13 +763,17 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	)
 	u.routeName = routeName
 	u.handler = backend.Handler
-	u.headerMutator = headermutator.NewHeaderMutator(backend.Backend.HeaderMutation, rp.requestHeaders)
 	u.bodyMutator = bodymutator.NewBodyMutator(backend.Backend.BodyMutation, rp.originalRequestBodyRaw)
 	// Header-derived labels/CEL must be able to see the overridden request model.
 	if u.modelNameOverride != "" {
 		u.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = u.modelNameOverride
 	}
 	u.parent = rp // Set parent before GetTranslator so it can access rp.eh
+	if backend.Backend.Schema.Name == filterapi.APISchemaGoogleAIStudio &&
+		(backend.Backend.Auth == nil || backend.Backend.Auth.GoogleAPIKey == nil) {
+		u.unsupportedBackendErr = errors.New("GoogleAIStudio requires a GoogleAPIKey backend security policy")
+		return nil
+	}
 
 	u.translator, err = u.parent.eh.GetTranslator(backend.Backend.Schema, u.modelNameOverride)
 	if err != nil {
@@ -781,6 +791,14 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	if setter, ok := u.translator.(translator.ContentTypeSetter); ok {
 		setter.SetContentType(rp.requestHeaders["content-type"])
 	}
+	originalHeaders := rp.requestHeaders
+	if remover, ok := u.translator.(translator.RequestHeadersRemover); ok {
+		originalHeaders = maps.Clone(originalHeaders)
+		for _, name := range remover.RemovedRequestHeaders() {
+			delete(originalHeaders, name)
+		}
+	}
+	u.headerMutator = headermutator.NewHeaderMutator(backend.Backend.HeaderMutation, originalHeaders)
 	rp.upstreamFilter = u // Only assign after translator is confirmed valid
 
 	if headerSetter, ok := u.translator.(translator.RequestHeadersSetter); ok {
@@ -877,6 +895,9 @@ func buildRequestHeaderDynamicMetadata(requestHeaders map[string]string) *struct
 	}
 	fields := make(map[string]*structpb.Value, len(LogRequestHeaderAttributes))
 	for header, attr := range LogRequestHeaderAttributes {
+		if strings.EqualFold(header, internalapi.GoogleAPIKeyHeader) {
+			continue
+		}
 		value, ok := requestHeaders[header]
 		if !ok || value == "" {
 			continue

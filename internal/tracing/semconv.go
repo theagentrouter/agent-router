@@ -13,6 +13,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/google"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/openai"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/otelgenai"
@@ -44,8 +45,9 @@ type recorderSet struct {
 	message         tracingapi.MessageRecorder
 	tokenize        tracingapi.TokenizeRecorder
 
-	responsesInputTokens tracingapi.ResponsesInputTokensRecorder
-	countTokens          tracingapi.CountTokensRecorder
+	responsesInputTokens  tracingapi.ResponsesInputTokensRecorder
+	countTokens           tracingapi.CountTokensRecorder
+	geminiGenerateContent tracingapi.GeminiGenerateContentRecorder
 
 	// mcp is the vocabulary used for MCP spans. MCP is not an LLM endpoint and
 	// has no recorder, but it is convention-scoped for the same reason the
@@ -120,8 +122,9 @@ func newOpenInferenceRecorders() recorderSet {
 		message:         anthropic.NewMessageRecorder(cfg),
 		tokenize:        openai.NewTokenizeRecorder(cfg),
 
-		responsesInputTokens: openai.NewResponsesInputTokensRecorder(cfg),
-		countTokens:          anthropic.NewCountTokensRecorder(cfg),
+		responsesInputTokens:  openai.NewResponsesInputTokensRecorder(cfg),
+		countTokens:           anthropic.NewCountTokensRecorder(cfg),
+		geminiGenerateContent: google.NewGenerateContentRecorder(),
 
 		// OpenInference defines no MCP conventions, so MCP spans keep the
 		// gateway-specific vocabulary they have always emitted.
@@ -150,8 +153,9 @@ func newOTelGenAIRecorders() recorderSet {
 		message:         otelgenai.NewMessageRecorder(cfg),
 		tokenize:        otelgenai.NewTokenizeRecorder(cfg),
 
-		responsesInputTokens: otelgenai.NewResponsesInputTokensRecorder(cfg),
-		countTokens:          otelgenai.NewCountTokensRecorder(cfg),
+		responsesInputTokens:  otelgenai.NewResponsesInputTokensRecorder(cfg),
+		countTokens:           otelgenai.NewCountTokensRecorder(cfg),
+		geminiGenerateContent: otelgenai.NewGeminiGenerateContentRecorder(cfg),
 
 		mcp: mcpVocabularyOTel(cfg.CaptureMessageContent),
 

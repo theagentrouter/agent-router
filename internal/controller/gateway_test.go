@@ -1314,6 +1314,15 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			},
 		},
 		{
+			ObjectMeta: metav1.ObjectMeta{Name: "bsp-google-apikey", Namespace: namespace},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeGoogleAPIKey,
+				GoogleAPIKey: &aigv1b1.BackendSecurityPolicyGoogleAPIKey{
+					SecretRef: &gwapiv1.SecretObjectReference{Name: "api-key-secret"},
+				},
+			},
+		},
+		{
 			ObjectMeta: metav1.ObjectMeta{Name: "openai-credentials", Namespace: namespace},
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
@@ -1416,6 +1425,12 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			bspName: "bsp-anthropic-apikey",
 			exp: &filterapi.BackendAuth{
 				AnthropicAPIKey: &filterapi.AnthropicAPIKeyAuth{Key: "thisisapikey"},
+			},
+		},
+		{
+			bspName: "bsp-google-apikey",
+			exp: &filterapi.BackendAuth{
+				GoogleAPIKey: &filterapi.GoogleAPIKeyAuth{Key: "thisisapikey"},
 			},
 		},
 		{

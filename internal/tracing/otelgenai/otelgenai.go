@@ -85,6 +85,7 @@ const (
 
 	// The following are custom values: the registry has no equivalent.
 	OperationImageGeneration Operation = "image_generation"
+	OperationGenerateContent Operation = "generate_content"
 	OperationSpeech          Operation = "speech"
 	OperationTranscription   Operation = "transcription"
 	OperationTranslation     Operation = "translation"
@@ -105,6 +106,7 @@ const (
 	ProviderAWSBedrock   Provider = "aws.bedrock"
 	ProviderAWSAnthropic Provider = "aws.anthropic"
 	ProviderGCPVertexAI  Provider = "gcp.vertex_ai"
+	ProviderGCPGemini    Provider = "gcp.gemini"
 	ProviderGCPAnthropic Provider = "gcp.anthropic"
 	ProviderAnthropic    Provider = "anthropic"
 	ProviderCohere       Provider = "cohere"

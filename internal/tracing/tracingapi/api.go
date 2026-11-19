@@ -15,6 +15,7 @@ import (
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/gcp"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
@@ -54,6 +55,8 @@ type (
 		ResponsesInputTokensTracer() ResponsesInputTokensTracer
 		// CountTokensTracer creates spans for Anthropic count tokens requests.
 		CountTokensTracer() CountTokensTracer
+		// GeminiGenerateContentTracer creates spans for native Gemini generation.
+		GeminiGenerateContentTracer() GeminiGenerateContentTracer
 		// MCPTracer creates spans for MCP requests.
 		MCPTracer() MCPTracer
 		// Shutdown shuts down the tracer, flushing any buffered spans.
@@ -108,6 +111,8 @@ type (
 	ResponsesInputTokensTracer = RequestTracer[openai.ResponseRequest, openai.ResponsesInputTokensResponse, struct{}]
 	// CountTokensTracer creates spans for Anthropic count tokens requests.
 	CountTokensTracer = RequestTracer[anthropicschema.CountTokensRequest, anthropicschema.CountTokensResponse, struct{}]
+	// GeminiGenerateContentTracer creates spans for native Gemini generation.
+	GeminiGenerateContentTracer = RequestTracer[gcp.GeminiGenerateContentRequest, gcp.GeminiGenerateContentResponse, gcp.GeminiGenerateContentResponse]
 )
 
 type (
@@ -153,6 +158,8 @@ type (
 	ResponsesInputTokensSpan = Span[openai.ResponsesInputTokensResponse, struct{}]
 	// CountTokensSpan represents an Anthropic count tokens request span.
 	CountTokensSpan = Span[anthropicschema.CountTokensResponse, struct{}]
+	// GeminiGenerateContentSpan represents a native Gemini generation.
+	GeminiGenerateContentSpan = Span[gcp.GeminiGenerateContentResponse, gcp.GeminiGenerateContentResponse]
 )
 
 type (
@@ -212,6 +219,8 @@ type (
 	ResponsesInputTokensRecorder = SpanRecorder[openai.ResponseRequest, openai.ResponsesInputTokensResponse, struct{}]
 	// CountTokensRecorder records attributes to a span according to a semantic convention.
 	CountTokensRecorder = SpanRecorder[anthropicschema.CountTokensRequest, anthropicschema.CountTokensResponse, struct{}]
+	// GeminiGenerateContentRecorder records attributes for native Gemini generation.
+	GeminiGenerateContentRecorder = SpanRecorder[gcp.GeminiGenerateContentRequest, gcp.GeminiGenerateContentResponse, gcp.GeminiGenerateContentResponse]
 )
 
 // Backend describes the upstream a request was routed to. It is deliberately a
@@ -322,6 +331,11 @@ func (NoopTracing) TokenizeTracer() TokenizeTracer {
 // ResponsesInputTokensTracer implements Tracing.ResponsesInputTokensTracer.
 func (NoopTracing) ResponsesInputTokensTracer() ResponsesInputTokensTracer {
 	return NoopResponsesInputTokensTracer{}
+}
+
+// GeminiGenerateContentTracer implements Tracing.GeminiGenerateContentTracer.
+func (NoopTracing) GeminiGenerateContentTracer() GeminiGenerateContentTracer {
+	return NoopTracer[gcp.GeminiGenerateContentRequest, gcp.GeminiGenerateContentResponse, gcp.GeminiGenerateContentResponse]{}
 }
 
 // CountTokensTracer implements Tracing.CountTokensTracer.
