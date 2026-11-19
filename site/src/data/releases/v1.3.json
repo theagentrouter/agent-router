@@ -1,0 +1,236 @@
+{
+  "series": {
+    "version": "v1.3",
+    "title": "Agent Router v1.3.x",
+    "subtitle": "End-to-end QuotaPolicy enforcement with dynamic limits, long windows, cross-namespace backends and quota-aware failover, plus the OpenAI Files and Decisions APIs, OpenAI workload identity federation, and Envoy Gateway v1.10.",
+    "badge": "Latest",
+    "badgeType": "milestone"
+  },
+  "releases": [
+    {
+      "version": "v1.3.0",
+      "date": "November 24, 2026",
+      "type": "minor",
+      "tags": [
+        { "text": "QuotaPolicy End-to-End", "type": "feature" },
+        { "text": "Dynamic Quota Limits", "type": "feature" },
+        { "text": "Weekly/Monthly/Yearly Quotas", "type": "feature" },
+        { "text": "Quota-Aware Failover", "type": "feature" },
+        { "text": "OpenAI Files API", "type": "feature" },
+        { "text": "Decisions API", "type": "feature" },
+        { "text": "OpenAI Workload Identity", "type": "feature" },
+        { "text": "Claude Sonnet 5.5", "type": "feature" },
+        { "text": "Weighted InferencePools", "type": "feature" },
+        { "text": "Envoy Gateway v1.10", "type": "feature" }
+      ],
+      "overview": "Agent Router v1.3.0 makes QuotaPolicy a complete token-budget system. Per-model quotas are now charged accurately and applied without restarts. Limits can come from request metadata, windows can be weekly, monthly, or yearly, policies can target backends in other namespaces, and routes can fail over away from backends whose quota is exhausted. The release also adds the OpenAI Files API and the Decisions API, OpenAI workload identity federation for BackendSecurityPolicy, Claude Sonnet 5.5 between-tools thinking, and moves to Envoy Gateway v1.10.0 with Envoy Proxy v1.40.2. A few provider translations and the Go API changed, so read the breaking changes before you upgrade.",
+      "features": [
+        {
+          "title": "QuotaPolicy, End to End",
+          "items": [
+            {
+              "title": "Accurate token charging",
+              "description": "A request used to be charged one extra unit when it was admitted, on top of its real token cost when the response finished, so a 28-token request deducted 29. The admission check now charges zero, and only the token cost reported at the end of the response or stream is deducted. Budgets now match the usage your providers bill for."
+            },
+            {
+              "title": "Policy changes apply live",
+              "description": "Creating, updating, or deleting a <code>QuotaPolicy</code> used to take effect only after the controller and the Envoy pods restarted. The controller now stamps a hash of the applicable policies on the generated HTTPRoute (<code>aigateway.envoyproxy.io/quota-policy-hash</code>), so Envoy Gateway re-translates and the new limits, models, and bucket rules apply within seconds. Deleting a policy also updates routes in other namespaces."
+            },
+            {
+              "title": "Per-tenant limits from request metadata with <code>fromMetadata</code>",
+              "description": "Serve many tenants from one policy by letting an earlier filter, usually <code>ext_authz</code>, decide each tenant's budget. Set <code>fromMetadata.namespace</code> and <code>fromMetadata.key</code> on any <code>QuotaValue</code>, and have the filter write <code>requests_per_unit</code> and <code>unit</code> (for example <code>HOUR</code>) to dynamic metadata. The static <code>limit</code> and <code>duration</code> stay required and apply when the metadata is missing or malformed. A value of <code>0</code> suspends the tenant. <a href=\"/docs/capabilities/traffic/quota-policy#dynamic-bucket-limits-with-frommetadata\">Dynamic bucket limits →</a>"
+            },
+            {
+              "title": "Weekly, monthly, and yearly windows",
+              "description": "<code>duration</code> now accepts <code>1w</code>, <code>1mo</code>, and <code>1y</code> in addition to <code>1s</code>, <code>1m</code>, <code>1h</code>, and <code>1d</code>, so you can express weekly team budgets or monthly spend caps directly. These are Envoy rate limit windows, not calendar-aligned billing periods. Your rate limit service image must support the <code>WEEK</code>, <code>MONTH</code>, and <code>YEAR</code> units (see Upgrade Guidance)."
+            },
+            {
+              "title": "Cross-namespace quota targets",
+              "description": "A platform team can keep budgets in its own namespace while backends live with the teams that own them. Set <code>targetRefs[].namespace</code> to point a <code>QuotaPolicy</code> at an <code>AIServiceBackend</code> in another namespace, and authorize it with a ReferenceGrant in the backend's namespace (<code>from</code> QuotaPolicy, <code>to</code> AIServiceBackend). Omitting the namespace keeps the previous same-namespace behavior and needs no grant."
+            },
+            {
+              "title": "Quota-aware backend failover (preview)",
+              "description": "When a route has several prioritized backends and one runs out of quota, Agent Router can now route the request to the next backend that still has budget instead of returning 429. The quota rate limit service reports which (backend, model) groups still have quota, and Agent Router wraps quota-backed clusters in Envoy's <code>host_allowlist</code> load balancing policy so exhausted backends are skipped. A 429 is returned only when every quota group on the route is exhausted. This needs an Envoy build that includes <code>host_allowlist</code>, which Envoy v1.40.2 (shipped by Envoy Gateway v1.10.0) does not, and a rate limit service with <code>RESPONSE_DYNAMIC_METADATA=true</code>. On other data planes the route falls back to its normal load balancing and quotas are still enforced."
+            }
+          ]
+        },
+        {
+          "title": "OpenAI APIs & Providers",
+          "items": [
+            {
+              "title": "OpenAI Files API",
+              "description": "Upload, list, retrieve, download, and delete files through the gateway with <code>/v1/files</code>, so batch and fine-tuning workflows no longer need direct provider access. Uploads route on the multipart <code>model</code> field. The gateway never returns the upstream file ID. It returns an encrypted ID that records the owning backend and model, so later requests route back to the right place. Files work with OpenAI-schema backends and need exactly one <code>backendRef</code> on the matching rule. <a href=\"/docs/capabilities/llm-integrations/files-api\">Files API →</a>"
+            },
+            {
+              "title": "Decisions API on OpenAI and Azure OpenAI",
+              "description": "<code>POST /v1/decisions</code> is passed through to OpenAI, and to Azure OpenAI at <code>/openai/v1/decisions</code>, with usage tracking, metrics, and tracing under the new <code>decisions</code> operation. Question <code>instructions</code> can be a string or a list of text and image parts. Streaming and <code>file_id</code> inputs are not supported."
+            },
+            {
+              "title": "Claude Sonnet 5.5 <code>between_tools</code> thinking",
+              "description": "Send <code>\"thinking\": {\"type\": \"between_tools\"}</code> to skip up-front thinking while keeping short progress updates between tool calls. It works on <code>/v1/messages</code> and Chat Completions for Anthropic, GCP Anthropic, AWS Anthropic, and AWS Bedrock Converse backends. Messages requests to Bedrock Converse now also forward <code>adaptive</code> thinking."
+            },
+            {
+              "title": "Structured output and effort for Sonnet 5.5 and Haiku 5.5",
+              "description": "Chat Completions requests to <code>sonnet-5-5</code> and <code>haiku-5-5</code> now forward <code>reasoning_effort</code> as Anthropic <code>output_config.effort</code> on AWS and GCP Anthropic, and <code>response_format</code> JSON schemas as <code>output_config.format</code> on GCP Anthropic. These were silently dropped before."
+            },
+            {
+              "title": "<code>reasoning_effort: high</code> on Gemini 3 Pro",
+              "description": "<code>reasoning_effort: high</code> now maps to <code>thinking_level: high</code> on every Gemini 3 model instead of returning 400 on non-Flash models. See Breaking Changes for the related change to <code>medium</code>."
+            }
+          ]
+        },
+        {
+          "title": "Credentials & Security",
+          "items": [
+            {
+              "title": "OpenAI workload identity federation",
+              "description": "Stop storing long-lived OpenAI API keys. A <code>BackendSecurityPolicy</code> of <code>type: OpenAICredentials</code> exchanges a SPIFFE JWT-SVID or an OIDC token for a short-lived OpenAI access token, rotates it before it expires, and sets the optional <code>OpenAI-Organization</code> and <code>OpenAI-Project</code> headers. Set <code>AI_GATEWAY_OPENAI_PROXY_URL</code> on the controller to send the exchange through a proxy. Every SPIFFE-based policy authenticates as the controller's identity, so only trusted administrators should be allowed to create them."
+            },
+            {
+              "title": "Configurable credential pre-rotation window",
+              "description": "<code>controller.credentialPreRotationWindow</code> (default <code>5m</code>) sets how long before expiry the controller refreshes AWS, Azure, GCP, and OpenAI tokens. Raise it when your identity provider is slow or rate-limits token requests."
+            },
+            {
+              "title": "MCP OAuth resource identifier derived from the request",
+              "description": "<code>protectedResourceMetadata.resource</code> on an <code>MCPRoute</code> is now optional. Leave it out and the gateway builds the identifier from each request's scheme, host, and MCP path, so one route can serve several hostnames or environments. Restrict the accepted hosts with route or listener <code>hostnames</code>. Routes that set it keep exactly the same behavior."
+            },
+            {
+              "title": "Bring-your-own Secret for the MCP fallback seed",
+              "description": "<code>controller.mcp.sessionEncryption.fallback.existingSecret</code> reads the fallback session encryption seed from a Secret you manage, so GitOps users can rotate seeds without the seed appearing in Helm values."
+            }
+          ]
+        },
+        {
+          "title": "Inference & Operations",
+          "items": [
+            {
+              "title": "Weighted routing across multiple InferencePools",
+              "description": "An <code>HTTPRoute</code> rule can now list several <code>InferencePool</code> backends with Gateway API <code>weight</code>s, for example to shift traffic between model server fleets. Each pool keeps its own endpoint picker. This needs Envoy Gateway v1.11 or later. On Envoy Gateway v1.10, a rule with more than one InferencePool returns 500. <code>AIGatewayRoute</code> rules still accept one InferencePool."
+            },
+            {
+              "title": "One endpoint picker call per request",
+              "description": "A pool reached by several route matches used to get one endpoint picker filter per match, so each request ran several scheduling passes. That broke stateful scorers such as prefix-cache affinity. The extension server now adds one filter per pool."
+            },
+            {
+              "title": "More reliable reconciliation",
+              "description": "Finalizer writes use merge patches and are retried, so resources no longer end up without a finalizer or stuck terminating after a conflict. InferencePool status updates are retried too, so <code>status.parents</code> lists every Gateway."
+            }
+          ]
+        }
+      ],
+      "apiChanges": [
+        {
+          "title": "<code>QuotaPolicy.spec.targetRefs[].namespace</code>",
+          "description": "<code>targetRefs</code> changed from <code>LocalPolicyTargetReference</code> to <code>NamespacedPolicyTargetReference</code>. The optional <code>namespace</code> defaults to the policy's namespace. A cross-namespace target needs a ReferenceGrant, and an ungranted target is reported with the new <code>RefNotPermitted</code> reason. v1alpha1 only."
+        },
+        {
+          "title": "<code>QuotaValue.fromMetadata</code>",
+          "description": "Optional <code>{namespace, key}</code> (each 1-256 characters, <code>^[A-Za-z0-9._:-]+$</code>) naming the dynamic metadata struct that overrides <code>limit</code> and <code>duration</code> per request. <code>limit</code> and <code>duration</code> are now explicitly required. <code>fromMetadata</code> under <code>serviceQuota</code> is accepted but has no effect."
+        },
+        {
+          "title": "<code>QuotaValue.duration</code>: <code>1w</code>, <code>1mo</code>, <code>1y</code>",
+          "description": "Three new enum values."
+        },
+        {
+          "title": "<code>BackendSecurityPolicy</code> <code>type: OpenAICredentials</code>",
+          "description": "New <code>openAICredentials</code> field with optional <code>organization</code> and <code>project</code> and a required <code>workloadIdentityFederationConfig</code> (<code>identityProviderID</code>, <code>serviceAccountID</code>, and a <code>subjectToken</code> that is exactly one of <code>spiffeJWTSVID</code> or <code>oidcExchangeToken</code>). An OIDC client Secret in another namespace needs a ReferenceGrant. v1beta1 only."
+        },
+        {
+          "title": "<code>MCPRoute</code> <code>protectedResourceMetadata.resource</code> is optional",
+          "description": "No longer required in v1alpha1 or v1beta1. When it is unset, the identifier is derived from the request."
+        },
+        {
+          "title": "Embedded Envoy Gateway v1.10 types",
+          "description": "The CRDs pick up new optional fields from Envoy Gateway v1.10, such as OIDC <code>cookieNames</code> and <code>codeVerifierTTL</code> under <code>oidcExchangeToken</code>, and <code>http3</code>, <code>enableTrailers</code>, and <code>failTrafficOnPanic</code> in backend settings. CRD descriptions are now truncated to 200 characters to keep the CRD Helm release under the 1 MiB Secret limit. No schema types or validation changed."
+        },
+        {
+          "title": "New Helm values",
+          "description": "<code>controller.credentialPreRotationWindow</code>, <code>controller.fileIDEncryption.{seed, existingSecret, iterations, fallback.seed, fallback.iterations}</code>, and <code>controller.mcp.sessionEncryption.fallback.existingSecret</code>."
+        }
+      ],
+      "deprecations": [
+        {
+          "title": "<code>cache_creation_input_tokens</code> in translated OpenAI-format responses",
+          "description": "Still returned alongside <code>cache_write_tokens</code> in v1.3. Read <code>cache_write_tokens</code> instead. The legacy field was scheduled for removal in v1.3.0, and removal has moved to v1.4.0."
+        }
+      ],
+      "breakingChanges": [
+        {
+          "title": "Legacy Gemini schema conversion removed",
+          "description": "Chat Completions and tokenize requests to GCP Vertex AI now always send <code>response_format</code> schemas as <code>responseJsonSchema</code> and tool parameters as <code>parametersJsonSchema</code>, unchanged. Before, models whose name (or <code>modelNameOverride</code>) didn't contain <code>gemini</code> plus <code>2.5</code> or <code>3</code> got a converted OpenAPI-subset schema. If you route to Gemini through an alias without a <code>modelNameOverride</code>, or still use a pre-2.5 model, check that your schemas work as standard JSON Schema."
+        },
+        {
+          "title": "Gemini <code>reasoning_effort: medium</code> mapping",
+          "description": "<code>medium</code> now maps to <code>thinking_level: medium</code> on every Gemini 3 model except <code>gemini-3-pro*</code> and Flash-Lite Image, which get <code>high</code>. Before, every non-Flash model got <code>high</code>, so models such as Gemini 3.1 Pro now think less at <code>medium</code>. Send <code>high</code> to keep the previous behavior."
+        },
+        {
+          "title": "<code>gen_ai_backend</code> metric label uses the backend's namespace",
+          "description": "The backend metric attribute is now the <code>AIServiceBackend</code>'s own <code>&lt;namespace&gt;/&lt;name&gt;</code>. Before, it used the route's namespace, so the value changes for routes that reference a backend in another namespace. Update dashboards and alerts that filter on the old value."
+        },
+        {
+          "title": "MCP OAuth protected resource metadata is served by the external processor",
+          "description": "<code>/.well-known/oauth-protected-resource/...</code> is now answered by the MCP proxy in the external processor sidecar instead of an Envoy direct response. It returns 503 while the route isn't loaded, for example during an external processor restart. The controller deletes the old <code>HTTPRouteFilter</code> on upgrade. If a later release drops that cleanup, users upgrading directly from v1.2 or earlier will need to delete the stale filter by hand."
+        },
+        {
+          "title": "<code>GCPWorkloadIdentityProvider</code> Go type removed",
+          "description": "The unused type was removed from the <code>api/v1alpha1</code> and <code>api/v1beta1</code> Go packages. No CRD field referenced it, so manifests are unaffected. Only Go code that imports the type needs to change."
+        }
+      ],
+      "bugFixes": [
+        {
+          "title": "GCP workload identity federation survives config reloads",
+          "description": "With ADC credentials of type <code>external_account</code> (for example from EKS or AKS), every GCP request failed with <code>context canceled</code> after the first config reload until the external processor restarted. The token source now outlives the reload."
+        },
+        {
+          "title": "Anthropic overload errors arrive in the stream",
+          "description": "When Anthropic sends <code>overloaded_error</code> mid-stream on a Chat Completions request to AWS or GCP Anthropic, the client now receives a final SSE error event, so it can retry. Before, it got a generic 500 or a truncated stream."
+        },
+        {
+          "title": "Bedrock ping events are forwarded",
+          "description": "<code>/v1/messages</code> streams to AWS Anthropic backends now forward <code>ping</code> keepalive events, so clients such as Claude Code no longer hit idle timeouts during long tool calls."
+        },
+        {
+          "title": "Bedrock guardrail stops report <code>content_filter</code>",
+          "description": "A Bedrock <code>guardrail_intervened</code> stop reason now maps to <code>finish_reason: content_filter</code> instead of <code>stop</code>, so clients can tell a guardrail block from a normal completion."
+        },
+        {
+          "title": "Anthropic passthrough keeps the query string",
+          "description": "<code>/v1/messages</code> requests to an <code>Anthropic</code>-schema backend now forward the client's query string, for example <code>?beta=true</code>."
+        },
+        {
+          "title": "More request bodies redacted in debug logs",
+          "description": "With redaction enabled, debug logs now redact <code>/v1/responses/input_tokens</code>, <code>/v1/messages/count_tokens</code>, and tokenize <code>chat_template_kwargs</code>."
+        }
+      ],
+      "dependencies": [
+        {
+          "title": "Go 1.27.3",
+          "description": "Unchanged from v1.2.1, which moved to Go 1.27.3 for standard library CVE fixes."
+        },
+        {
+          "title": "Envoy Gateway v1.10.0",
+          "description": "Built on Envoy Gateway v1.10.0, up from v1.9.2."
+        },
+        {
+          "title": "Envoy v1.40",
+          "description": "Envoy Proxy v1.40.2, as shipped by Envoy Gateway v1.10.0. The aigw run command also downloads v1.40.2 by default."
+        },
+        {
+          "title": "Gateway API v1.6.1",
+          "description": "Unchanged from v1.2."
+        },
+        {
+          "title": "Gateway API Inference Extension v1.6.2",
+          "description": "Unchanged from v1.2."
+        },
+        {
+          "title": "MCP Go SDK v1.7.0",
+          "description": "Unchanged from v1.2."
+        }
+      ]
+    }
+  ],
+  "navigation": {
+    "previous": { "version": "v1.2.x Series", "path": "/release-notes/v1.2" }
+  }
+}

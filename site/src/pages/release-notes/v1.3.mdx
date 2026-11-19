@@ -1,0 +1,181 @@
+---
+title: Agent Router v1.3.x Release Series
+description: End-to-end QuotaPolicy enforcement with dynamic limits, long windows, cross-namespace backends and quota-aware failover, plus the OpenAI Files and Decisions APIs, OpenAI workload identity federation, and Envoy Gateway v1.10
+toc_min_heading_level: 2
+toc_max_heading_level: 4
+---
+
+import Link from '@docusaurus/Link';
+import {
+  ReleaseSeriesLayout,
+  ReleaseHeader,
+  FeatureSectionCard,
+  PatchRelease,
+  ItemList,
+  Dependencies
+} from '../../components/ReleaseNotes';
+import releaseData from '../../data/releases/v1.3.json';
+import React from 'react';
+
+export const { series, releases, navigation } = releaseData;
+export const mainRelease = releases[0];
+export const patchReleases = releases.slice(1).reverse();
+
+<ReleaseSeriesLayout
+  title={series.title}
+  subtitle={series.subtitle}
+  seriesVersion={series.version}
+  badgeText={series.badge}
+  badgeType={series.badgeType}
+  previousSeries={navigation.previous}
+>
+
+<ReleaseHeader
+  version={mainRelease.version}
+  date={mainRelease.date}
+  type={mainRelease.type}
+  tags={mainRelease.tags}
+>
+
+{mainRelease.overview}
+
+</ReleaseHeader>
+
+## ✨ New Features
+
+{mainRelease.features.map((featureSection, index) => (
+  <FeatureSectionCard key={index} section={featureSection} />
+))}
+
+## 🔗 API Updates
+
+{mainRelease.apiChanges.length > 0 && (
+  <ItemList items={mainRelease.apiChanges} />
+)}
+
+### Deprecations
+
+<ItemList items={mainRelease.deprecations} />
+
+## ⚠️ Breaking Changes
+
+<ItemList items={mainRelease.breakingChanges} />
+
+## 🐛 Bug Fixes
+
+{mainRelease.bugFixes?.length > 0 && (
+  <ItemList items={mainRelease.bugFixes} />
+)}
+
+## 📖 Upgrade Guidance
+
+Upgrading from **v1.2** needs no CRD storage migration, and every new field is optional. Upgrade from v1.2.x, not directly from v1.1.x.
+
+### 1. Upgrade Envoy Gateway first
+
+Gateway API stays at v1.6.1. Upgrade the Envoy Gateway CRDs and controller to v1.10.0:
+
+```shell
+helm template eg-crds oci://docker.io/envoyproxy/gateway-crds-helm \
+  --version v1.10.0 \
+  --set crds.gatewayAPI.enabled=true \
+  --set crds.envoyGateway.enabled=true \
+  | kubectl apply --force-conflicts --server-side -f -
+
+helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm \
+  --version v1.10.0 \
+  --namespace envoy-gateway-system \
+  -f https://raw.githubusercontent.com/theagentrouter/agent-router/v1.3.0/manifests/envoy-gateway-values.yaml
+```
+
+Envoy Gateway v1.10 has its own breaking changes. Read its [v1.10.0 release notes](https://gateway.envoyproxy.io/news/releases/notes/v1.10.0/). The ones most likely to affect AI traffic:
+
+- Rate-limited 429 responses now include `Retry-After` by default. Set `ClientTrafficPolicy.spec.headers.disableRetryAfterHeader: true` to turn it off.
+- JWT requirement names change once on upgrade. On MCPRoutes with OAuth, requests on connections opened before the upgrade can get 403 `Wrong requirement_name` until those connections drain.
+- OIDC session cookies move to AES-256-GCM, so users with an active OIDC session sign in again once. HTTP OIDC issuer URLs are rejected.
+- `Strict` Lua validation now denies filesystem and environment access by default.
+
+### 2. Keep Files API IDs stable
+
+The chart now creates a random file ID encryption seed in the Secret `<controller fullname>-file-id-encryption` and reuses it on later `helm upgrade`s. If you deploy with `helm template` or GitOps, the chart can't read back the seed it generated, so it generates a new one on every render and invalidates file IDs it has already issued. Supply your own Secret instead:
+
+```shell
+kubectl create secret generic file-id-seed -n envoy-ai-gateway-system \
+  --from-literal=seed="$(openssl rand -hex 32)"
+```
+
+Then set `controller.fileIDEncryption.existingSecret: file-id-seed`. To rotate the seed later without breaking existing IDs, move the old seed to `controller.fileIDEncryption.fallback.seed`.
+
+### 3. Update the quota rate limit service
+
+If you use `QuotaPolicy`:
+
+- `1w`, `1mo`, and `1y` windows need a rate limit service image that supports the `WEEK`, `MONTH`, and `YEAR` units. Agent Router's CI uses `docker.io/envoyproxy/ratelimit:63c7e9cc`. Older images, including `60d8e81b` from the `token_ratelimit` example, don't support these units.
+- To try quota-aware failover, run that image with `RESPONSE_DYNAMIC_METADATA=true`, and use an Envoy build that includes the `envoy.load_balancing_policies.host_allowlist` load balancing policy. Envoy v1.40.2 doesn't include it. Without it, routes keep their normal load balancing and quotas are still enforced.
+- Quota counters are now charged exactly once per request. Clients that sat just under a limit get slightly more headroom.
+- `serviceQuota` is still not enforced. Use per-model quotas.
+
+### 4. Check Gemini requests and dashboards
+
+- If you route to Gemini through an alias without `modelNameOverride`, or still use a pre-2.5 model, check that your `response_format` and tool schemas are valid standard JSON Schema.
+- If you send `reasoning_effort: medium` to Gemini models other than 3 Pro and Flash, send `high` to keep the previous behavior.
+- If a route references an `AIServiceBackend` in another namespace, update dashboards and alerts that filter on `gen_ai_backend`. The label now uses the backend's namespace.
+
+### 5. Upgrade Agent Router
+
+```shell
+helm upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm \
+  --version v1.3.0 \
+  --namespace envoy-ai-gateway-system
+
+helm upgrade -i aieg oci://docker.io/envoyproxy/ai-gateway-helm \
+  --version v1.3.0 \
+  --namespace envoy-ai-gateway-system
+```
+
+The controller pod restarts because its arguments and environment changed. If you're upgrading from v1.2.0 rather than v1.2.1, Gateway pods that serve MCPRoutes also roll once.
+
+## 📦 Dependencies Versions
+
+<Dependencies dependencies={mainRelease.dependencies} />
+
+## ⏩ Patch Releases
+
+{patchReleases.map((release, index) => (
+  <PatchRelease
+    key={index}
+    version={release.version}
+    date={release.date}
+    type={release.type}
+    tags={release.tags}
+    overview={release.overview}
+    features={release.features}
+    bugFixes={release.bugFixes}
+  />
+))}
+
+## 🙏 Acknowledgements
+
+v1.3 came from 34 contributors. Special thanks to:
+
+- **Hrushikesh Patil**, **Ayush Sawant**, **Fernando Escolar**, and **Gavrish Prabhu**, who took QuotaPolicy end to end with dynamic limits, cross-namespace targets, long windows, live updates, accurate charging, and quota-aware failover.
+- **Sivanantham**, who built the OpenAI Files API.
+- **hustxiayang** and **Mike Toldov**, who added the Decisions API, Claude Sonnet 5.5 thinking, and a run of translator fixes.
+- **junfeiliu531**, who added OpenAI workload identity federation.
+- **zirain** and **Gerrit van Doorn**, who improved InferencePool routing.
+- **Ignasi Barrera** and **Aishwarya Raimule**, who continued hardening MCP and its OAuth support.
+- Everyone who reported bugs, reviewed PRs, and joined the community meetings.
+
+## 🔮 What's Next
+
+Work already in flight for upcoming releases:
+
+- **Service-wide quotas**, enforcing `serviceQuota` across all models on a backend.
+- **Quota-aware failover on released Envoy versions**, once `host_allowlist` ships in an Envoy Gateway release.
+- **Weighted InferencePool routing** with Envoy Gateway v1.11.
+- **The stateless 2026-07-28 MCP specification**, switched on end to end.
+- **Removing `cache_creation_input_tokens`** from translated OpenAI-format responses.
+
+The roadmap is community-driven. [Join us](https://github.com/theagentrouter/agent-router) and help shape it.
+
+</ReleaseSeriesLayout>
