@@ -40,6 +40,7 @@ const (
 	GenAIOperationTokenize             GenAIOperation = "tokenize"
 	GenAIOperationResponsesInputTokens GenAIOperation = "responses_input_tokens"
 	GenAIOperationCountTokens          GenAIOperation = "count_tokens"
+	GenAIOperationGenerateContent      GenAIOperation = "generate_content"
 
 	// Provider names according to the Semantic Conventions for Generative AI Metrics.
 	// See: https://opentelemetry.io/docs/specs/semconv/attributes-registry/gen-ai/
@@ -48,6 +49,7 @@ const (
 	genaiProviderAWSBedrock   = "aws.bedrock"
 	genaiProviderAWSAnthropic = "aws.anthropic"
 	genaiProviderGCPVertexAI  = "gcp.vertex_ai"
+	genaiProviderGoogleGemini = "gcp.gemini"
 	genaiProviderGCPAnthropic = "gcp.anthropic"
 	genaiProviderAnthropic    = "anthropic"
 	genaiProviderCohere       = "cohere"

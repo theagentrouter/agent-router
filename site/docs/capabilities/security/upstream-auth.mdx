@@ -65,6 +65,8 @@ Learn more about connecting to [AWS Bedrock](/docs/getting-started/connect-provi
 
 For providers that support long lived access credentials, the Agent Router control plane supports a manual credential management process. In these cases the credentials, like API keys, are stored in Kubernetes secrets and managed by the AI Gateway administrator. Agent Router will use the credentials from the secret to authenticate with the upstream service, attaching them to each request by securely retrieving them from the secret and attaching them to the request.
 
+For the Gemini Developer API, set the policy type to `GoogleAPIKey` and reference the Secret through `googleAPIKey.secretRef`. Store the key under `apiKey` in the Secret. The gateway sends it in the `x-goog-api-key` header.
+
 :::info
 Learn more about connecting to [OpenAI](/docs/getting-started/connect-providers/openai) and adding your API key to the secret. You can use the same approach for other providers that support long lived credentials.
 :::

@@ -404,6 +404,19 @@ spec:
                             x-kubernetes-list-map-keys:
                             - name
                             x-kubernetes-list-type: map
+                          pathPrefix:
+                            description: PathPrefix matches complete path segments
+                              after the gateway's root prefix.
+                            maxLength: 1024
+                            pattern: ^/(?:[-A-Za-z0-9/._~!$&'()*+,;=:@]|[%][0-9a-fA-F]{2})*$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: pathPrefix must not contain empty or dot segments
+                              rule: '!self.contains(''//'') && !self.contains(''/./'')
+                                && !self.contains(''/../'') && !self.endsWith(''/.'')
+                                && !self.endsWith(''/..'')'
+                            - message: pathPrefix must not contain an encoded slash
+                              rule: '!self.contains(''%2f'') && !self.contains(''%2F'')'
                         type: object
                       maxItems: 128
                       type: array
@@ -927,6 +940,19 @@ spec:
                             x-kubernetes-list-map-keys:
                             - name
                             x-kubernetes-list-type: map
+                          pathPrefix:
+                            description: PathPrefix matches complete path segments
+                              after the gateway's root prefix.
+                            maxLength: 1024
+                            pattern: ^/(?:[-A-Za-z0-9/._~!$&'()*+,;=:@]|[%][0-9a-fA-F]{2})*$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: pathPrefix must not contain empty or dot segments
+                              rule: '!self.contains(''//'') && !self.contains(''/./'')
+                                && !self.contains(''/../'') && !self.endsWith(''/.'')
+                                && !self.endsWith(''/..'')'
+                            - message: pathPrefix must not contain an encoded slash
+                              rule: '!self.contains(''%2f'') && !self.contains(''%2F'')'
                         type: object
                       maxItems: 128
                       type: array

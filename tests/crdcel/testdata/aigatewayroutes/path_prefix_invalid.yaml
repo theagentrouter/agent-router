@@ -1,0 +1,18 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: path-prefix-invalid
+  namespace: default
+spec:
+  parentRefs:
+    - name: gateway
+  rules:
+    - matches:
+        - pathPrefix: /gemini/../models
+      backendRefs:
+        - name: example-backend

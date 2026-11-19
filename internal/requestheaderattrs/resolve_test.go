@@ -30,6 +30,16 @@ func TestResolveAll(t *testing.T) {
 			expectedLog:  map[string]string{"agent-session-id": "session.id"},
 		},
 		{
+			name:            "google API key is excluded from every telemetry sink",
+			base:            ptr.To("x-goog-api-key:credential,x-tenant-id:tenant.id"),
+			span:            ptr.To("X-Goog-Api-Key:span.secret"),
+			metrics:         ptr.To("x-goog-api-key:metrics.secret"),
+			log:             ptr.To("x-goog-api-key:log.secret"),
+			expectedSpan:    map[string]string{"x-tenant-id": "tenant.id"},
+			expectedMetrics: map[string]string{"x-tenant-id": "tenant.id"},
+			expectedLog:     map[string]string{"x-tenant-id": "tenant.id"},
+		},
+		{
 			name:            "base merges into metrics and span/log",
 			base:            ptr.To("x-tenant-id:tenant.id"),
 			expectedMetrics: map[string]string{"x-tenant-id": "tenant.id"},

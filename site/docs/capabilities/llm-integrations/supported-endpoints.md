@@ -4,11 +4,11 @@ title: Supported API Endpoints
 sidebar_position: 9
 ---
 
-The Agent Router provides OpenAI-compatible API endpoints as well as the Anthropic-compatible API for routing and managing LLM/AI traffic. This page documents which OpenAI API endpoints and Anthropic-compatible API endpoints are currently supported and their capabilities.
+The Agent Router provides OpenAI-compatible, Anthropic-compatible, and native Gemini API endpoints for routing and managing LLM/AI traffic.
 
 ## Overview
 
-The Agent Router acts as a proxy that accepts OpenAI-compatible and Anthropic-compatible requests and routes them to various AI providers. While it maintains compatibility with the OpenAI API specification, it currently supports a subset of the full OpenAI API.
+The Agent Router accepts the requests listed below and routes them to the corresponding AI providers.
 
 ## Supported Endpoints
 
@@ -144,6 +144,23 @@ curl -H "Content-Type: application/json" \
 {
   "input_tokens": 14
 }
+```
+
+### Gemini Generate Content
+
+- `POST /gemini/v1beta/models/{model}:generateContent`
+- `POST /gemini/v1beta/models/{model}:streamGenerateContent`
+
+These endpoints forward the Gemini Developer API format to a `GoogleAIStudio` backend. The gateway routes using the model in the path, applies `modelNameOverride` to the upstream path when configured, and uses the `GoogleAPIKey` backend security policy for provider authentication.
+
+In the Gemini route, set `matches[].pathPrefix` to `/gemini/v1beta/models`. This allows the same model name to be used by a separate OpenAI-compatible route. If you customize the Gemini endpoint prefix, set the path match accordingly. The controller prepends the gateway's `rootPrefix` to the match value.
+
+The gateway forwards native request, response, and upstream error bodies as received. Streaming preserves the provider format, including Server-Sent Events with `?alt=sse` and JSON arrays. Usage metrics include cached and reasoning tokens when the provider reports them.
+
+```sh
+curl -H "Content-Type: application/json" \
+  -d '{"contents":[{"parts":[{"text":"Hello"}]}]}' \
+  "$GATEWAY_URL/gemini/v1beta/models/gemini-3.5-flash-lite:generateContent"
 ```
 
 ### Completions
@@ -696,7 +713,7 @@ The following table summarizes which providers support which endpoints:
 | [OpenAI](https://platform.openai.com/docs/api-reference)                                              |        ✅        |     ✅      |     ✅     |        ❌        |         ✅         |      ❌      |   ❌   |     ❌     |    ❌    |  ✅   | OpenAI does not offer a tokenize REST API                                                                            |
 | [AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/APIReference/)                               |        ✅        |     🚧      |     ✅     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via API translation (embeddings: Titan models only)                                                                  |
 | [Azure OpenAI](https://learn.microsoft.com/en-us/azure/ai-services/openai/reference)                  |        ✅        |     🚧      |     ✅     |        ❌        |         ⚠️         |      ❌      |   ❌   |     ❌     |    ❌    |  ⚠️   | Via API translation or via [OpenAI-compatible API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/latest) |
-| [Google Gemini](https://ai.google.dev/gemini-api/docs/openai)                                         |        ✅        |     ⚠️      |     ✅     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [Google Gemini](https://ai.google.dev/gemini-api/docs/openai)                                         |        ✅        |     ⚠️      |     ✅     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API and native Gemini generation                                                               |
 | [Groq](https://console.groq.com/docs/openai)                                                          |        ✅        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
 | [Grok](https://docs.x.ai/docs/api-reference)                                                          |        ✅        |     ⚠️      |     ❌     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
 | [Together AI](https://docs.together.ai/docs/openai-api-compatibility)                                 |        ⚠️        |     ⚠️      |     ⚠️     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
@@ -730,6 +747,7 @@ By default, the gateway registers provider endpoints under these prefixes:
 - Cohere: `/cohere`
 - Anthropic: `/anthropic`
 - TypeSafe: `/typesafe`
+- Gemini: `/gemini`
 
 You can override them via Helm using values under `endpointConfig`:
 
@@ -741,6 +759,7 @@ endpointConfig:
   cohere: "/cohere"
   anthropic: "/anthropic"
   typesafe: "/typesafe"
+  gemini: "/gemini"
   # rootPrefix applies to all routes; final paths are <rootPrefix><providerPrefix>/...
   # endpointConfig:
   #   rootPrefix: "/"

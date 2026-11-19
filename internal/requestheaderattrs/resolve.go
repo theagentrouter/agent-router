@@ -7,6 +7,7 @@ package requestheaderattrs
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
@@ -65,6 +66,11 @@ func parseOptional(v *string, def string) (map[string]string, error) {
 	attrs, err := internalapi.ParseRequestHeaderAttributeMapping(m)
 	if err != nil {
 		return nil, fmt.Errorf("%s", m)
+	}
+	for name := range attrs {
+		if strings.EqualFold(name, internalapi.GoogleAPIKeyHeader) {
+			delete(attrs, name)
+		}
 	}
 	return attrs, nil
 }

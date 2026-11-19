@@ -160,7 +160,7 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 	fs.StringVar(&flags.endpointPrefixes,
 		"endpointPrefixes",
 		"",
-		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe.",
+		"Comma-separated key-value pairs for endpoint prefixes. Format: openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe,gemini:/gemini.",
 	)
 	fs.IntVar(&flags.maxRecvMsgSize,
 		"maxRecvMsgSize",
@@ -342,6 +342,7 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	tokenizeMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationTokenize)
 	responsesInputTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationResponsesInputTokens)
 	countTokensMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationCountTokens)
+	geminiMetricsFactory := metrics.NewMetricsFactory(meter, metricsRequestHeaderAttributes, metrics.GenAIOperationGenerateContent)
 	mcpMetrics := metrics.NewMCP(meter, metricsRequestHeaderAttributes)
 
 	extproc.LogRequestHeaderAttributes = logRequestHeaderAttributes
@@ -383,6 +384,9 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 		tokenizeMetricsFactory, tracing.TokenizeTracer(), endpointspec.TokenizeEndpointSpec{}))
 	server.Register(path.Join(flags.rootPrefix, endpointPrefixes.Anthropic, "/v1/messages/count_tokens"), extproc.NewFactory(
 		countTokensMetricsFactory, tracing.CountTokensTracer(), endpointspec.MessagesCountTokensEndpointSpec{}))
+	geminiModelsPrefix := path.Join(flags.rootPrefix, endpointPrefixes.Gemini, "/v1beta/models")
+	server.RegisterPrefix(geminiModelsPrefix, extproc.NewGeminiGenerateContentFactory(
+		geminiModelsPrefix, geminiMetricsFactory, tracing.GeminiGenerateContentTracer()))
 
 	// The codec built from the flags is only used when the filter config does not carry its own
 	// file id encryption config. The controller delivers the seeds through the filter config so

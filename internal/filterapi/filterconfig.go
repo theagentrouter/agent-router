@@ -200,6 +200,9 @@ const (
 	// APISchemaGCPVertexAI represents the Google Cloud Gemini API schema.
 	// Used for Gemini models hosted on Google Cloud Vertex AI.
 	APISchemaGCPVertexAI APISchemaName = "GCPVertexAI"
+
+	// APISchemaGoogleAIStudio represents the Gemini Developer API.
+	APISchemaGoogleAIStudio APISchemaName = "GoogleAIStudio"
 	// APISchemaGCPAnthropic represents the Google Cloud Anthropic API schema.
 	// Used for Claude models hosted on Google Cloud Vertex AI.
 	APISchemaGCPAnthropic APISchemaName = "GCPAnthropic"
@@ -250,6 +253,8 @@ type BackendAuth struct {
 	AzureAPIKey *AzureAPIKeyAuth `json:"azureAPIKey,omitempty"`
 	// AnthropicAPIKey is the Anthropic API key.
 	AnthropicAPIKey *AnthropicAPIKeyAuth `json:"anthropicAPIKey,omitempty"`
+	// GoogleAPIKey is the Google API key.
+	GoogleAPIKey *GoogleAPIKeyAuth `json:"googleAPIKey,omitempty"`
 	// AzureAuth specifies the location of Azure access token file.
 	AzureAuth *AzureAuth `json:"azure,omitempty"`
 	// GCPAuth specifies the location of GCP credential file.
@@ -320,6 +325,16 @@ type AzureAPIKeyAuth struct {
 
 // LogValue implements slog.LogValuer for AzureAPIKeyAuth to redact sensitive information.
 func (a AzureAPIKeyAuth) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("key", "[REDACTED]"))
+}
+
+// GoogleAPIKeyAuth holds the key used in the x-goog-api-key header.
+type GoogleAPIKeyAuth struct {
+	Key string `json:"key"`
+}
+
+// LogValue implements [slog.LogValuer].
+func (a GoogleAPIKeyAuth) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("key", "[REDACTED]"))
 }
 

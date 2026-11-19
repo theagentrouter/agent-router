@@ -351,9 +351,14 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 		}
 		var matches []gwapiv1.HTTPRouteMatch
 		for j := range rule.Matches {
+			match := &rule.Matches[j]
+			matchPath := &gwapiv1.HTTPPathMatch{Value: &c.rootPrefix}
+			if match.PathPrefix != nil {
+				matchPath.Value = ptr.To(strings.TrimRight(c.rootPrefix, "/") + *match.PathPrefix)
+			}
 			matches = append(matches, gwapiv1.HTTPRouteMatch{
-				Headers: rule.Matches[j].Headers,
-				Path:    &gwapiv1.HTTPPathMatch{Value: &c.rootPrefix},
+				Headers: match.Headers,
+				Path:    matchPath,
 			})
 		}
 		rules = append(rules, gwapiv1.HTTPRouteRule{

@@ -8,6 +8,7 @@ package backendauth
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 )
@@ -48,6 +49,9 @@ func NewHandler(ctx context.Context, config *filterapi.BackendAuth) (filterapi.B
 	case config.OpenAIAuth != nil:
 		inner, err = newOpenAIHandler(config.OpenAIAuth)
 		applyFn = makeOpenAIApplyFn(config.OpenAIAuth.Organization, config.OpenAIAuth.Project)
+	case config.GoogleAPIKey != nil:
+		inner = &googleAPIKeyHandler{apiKey: strings.TrimSpace(config.GoogleAPIKey.Key)}
+		applyFn = applyGoogleAPIKeyCredential
 	case config.AnthropicAPIKey != nil:
 		inner, err = newAnthropicAPIKeyHandler(config.AnthropicAPIKey)
 		applyFn = applyAnthropicCredential
