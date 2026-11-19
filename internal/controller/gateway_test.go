@@ -1273,6 +1273,15 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			},
 		},
 		{
+			ObjectMeta: metav1.ObjectMeta{Name: "azure-managed-identity", Namespace: namespace},
+			Spec: aigv1b1.BackendSecurityPolicySpec{
+				Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
+				AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
+					ManagedIdentity: &aigv1b1.AzureManagedIdentity{ClientID: "some-client-id"},
+				},
+			},
+		},
+		{
 			ObjectMeta: metav1.ObjectMeta{Name: "gcp-sa-key-file", Namespace: namespace},
 			Spec: aigv1b1.BackendSecurityPolicySpec{
 				Type: aigv1b1.BackendSecurityPolicyTypeGCPCredentials,
@@ -1395,6 +1404,15 @@ func TestGatewayController_bspToFilterAPIBackendAuth(t *testing.T) {
 			bspName: "azure-oidc",
 			exp: &filterapi.BackendAuth{
 				AzureAuth: &filterapi.AzureAuth{AccessToken: "thisisazurecredentials"},
+			},
+		},
+		{
+			bspName: "azure-managed-identity",
+			exp: &filterapi.BackendAuth{
+				AzureAuth: &filterapi.AzureAuth{
+					ManagedIdentity: &filterapi.AzureManagedIdentityAuth{ClientID: "some-client-id"},
+					// AccessToken is empty - the extproc obtains tokens with its own managed identity.
+				},
 			},
 		},
 		{
