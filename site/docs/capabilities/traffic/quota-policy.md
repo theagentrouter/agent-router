@@ -153,9 +153,8 @@ spec:
 ```
 
 As with any other backend, `perModelQuotas[].modelName` must match the `modelNameOverride` of the
-InferencePool backendRef on the route (see [Per-Model Quotas](#per-model-quotas)). InferencePool
-routes often leave `modelNameOverride` unset, so set it explicitly on the pool's backendRef.
-Otherwise the quota is not applied.
+pool's backendRef. If the backendRef has no `modelNameOverride`, `modelName` is matched against the
+request's model name instead.
 
 Keep the following in mind:
 
@@ -163,11 +162,8 @@ Keep the following in mind:
   with that name also puts the pool under that quota.
 - A cross-namespace `ReferenceGrant` that allows `QuotaPolicy` to reference an `AIServiceBackend`
   also covers the same-named InferencePool in that namespace.
-- Quota-aware failover does not apply to InferencePools. InferencePool clusters delegate endpoint
-  selection to the endpoint picker, so Envoy cannot exclude a pool whose quota is used up. If a pool
-  is the only backend in a route rule, requests are rejected with `429` once its quota is used up.
-  If the rule also contains other backends that still have quota left, the rate limit service can
-  allow the request, and Envoy may still send it to the pool that has run out.
+- An InferencePool rule has only one backend, so there is no failover: once the pool's quota is
+  used up, requests are rejected with `429`.
 
 :::tip Prerequisites
 Quota enforcement requires two components that are not deployed by the AI Gateway Helm chart today:
