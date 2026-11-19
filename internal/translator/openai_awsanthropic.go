@@ -49,6 +49,13 @@ type openAIToAWSAnthropicTranslatorV1ChatCompletion struct {
 	streamParser      *anthropicStreamParser
 	requestModel      internalapi.RequestModel
 	bufferedBody      []byte
+	// automaticCachePoints adds prompt cache breakpoints to requests that do not set any.
+	automaticCachePoints bool
+}
+
+// SetAutomaticCachePoints implements [CachePointSetter].
+func (o *openAIToAWSAnthropicTranslatorV1ChatCompletion) SetAutomaticCachePoints(enabled bool) {
+	o.automaticCachePoints = enabled
 }
 
 // RequestBody implements [OpenAIChatCompletionTranslator.RequestBody] for AWS Anthropic.
@@ -74,6 +81,9 @@ func (o *openAIToAWSAnthropicTranslatorV1ChatCompletion) RequestBody(_ []byte, o
 	params, err := buildAnthropicParams(openAIReq, filterapi.APISchemaAWSAnthropic, o.modelNameOverride)
 	if err != nil {
 		return
+	}
+	if o.automaticCachePoints {
+		addAutomaticCachePoints(params)
 	}
 
 	body, err := json.Marshal(params)

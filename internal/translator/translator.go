@@ -127,6 +127,13 @@ type HeaderValueFilterSetter interface {
 	SetHeaderValueFilter(name, mode string, values []string)
 }
 
+// CachePointSetter is an optional interface for translators that can add prompt cache breakpoints
+// to a request that does not set any. It is called with the backend's setting once the backend is
+// selected, before RequestBody.
+type CachePointSetter interface {
+	SetAutomaticCachePoints(enabled bool)
+}
+
 // ResponseRedactor is an optional interface that translators can implement
 // to support response body redaction for debug logging.
 type ResponseRedactor interface {

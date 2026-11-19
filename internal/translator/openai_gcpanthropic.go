@@ -47,6 +47,8 @@ type openAIToGCPAnthropicTranslatorV1ChatCompletion struct {
 	modelNameOverride internalapi.ModelNameOverride
 	streamParser      *anthropicStreamParser
 	requestModel      internalapi.RequestModel
+	// automaticCachePoints adds prompt cache breakpoints to requests that do not set any.
+	automaticCachePoints bool
 	// Redaction configuration for debug logging
 	debugLogEnabled bool
 	enableRedaction bool
@@ -60,6 +62,9 @@ func (o *openAIToGCPAnthropicTranslatorV1ChatCompletion) RequestBody(_ []byte, o
 	params, err := buildAnthropicParams(openAIReq, filterapi.APISchemaGCPAnthropic, o.modelNameOverride)
 	if err != nil {
 		return
+	}
+	if o.automaticCachePoints {
+		addAutomaticCachePoints(params)
 	}
 
 	body, err := json.Marshal(params)
@@ -98,6 +103,11 @@ func (o *openAIToGCPAnthropicTranslatorV1ChatCompletion) RequestBody(_ []byte, o
 	newBody = body
 	newHeaders = []internalapi.Header{{pathHeaderName, path}, {contentLengthHeaderName, strconv.Itoa(len(newBody))}}
 	return
+}
+
+// SetAutomaticCachePoints implements [CachePointSetter].
+func (o *openAIToGCPAnthropicTranslatorV1ChatCompletion) SetAutomaticCachePoints(enabled bool) {
+	o.automaticCachePoints = enabled
 }
 
 // ResponseError implements [OpenAIChatCompletionTranslator.ResponseError].

@@ -109,6 +109,16 @@ func TestAIServiceBackends(t *testing.T) {
 			name:   "header-value-filters-unsupported-schema.yaml",
 			expErr: "headerValueFilters is only honored by GCPAnthropic and AWSAnthropic backends",
 		},
+		{name: "prompt-caching-gcpanthropic.yaml"},
+		{name: "prompt-caching-awsanthropic.yaml"},
+		{
+			name:   "prompt-caching-unsupported-schema.yaml",
+			expErr: "promptCaching is only honored by GCPAnthropic and AWSAnthropic backends",
+		},
+		{
+			name:   "prompt-caching-unknown-mode.yaml",
+			expErr: `spec.promptCaching.cachePoints: Unsupported value: "Always"`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := testdata.ReadFile(path.Join("testdata/aiservicebackends", tc.name))

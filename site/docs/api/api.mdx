@@ -3232,6 +3232,8 @@ MCPRouteList contains a list of MCPRoute.
 - [MCPToolFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolfilter)
 - [OpenAISubjectToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-openaisubjecttoken)
 - [OpenAIWorkloadIdentityFederationConfig](#github-com-envoyproxy-ai-gateway-api-v1beta1-openaiworkloadidentityfederationconfig)
+- [PromptCachePointsMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-promptcachepointsmode)
+- [PromptCaching](#github-com-envoyproxy-ai-gateway-api-v1beta1-promptcaching)
 - [ProtectedResourceMetadata](#github-com-envoyproxy-ai-gateway-api-v1beta1-protectedresourcemetadata)
 - [ToolCall](#github-com-envoyproxy-ai-gateway-api-v1beta1-toolcall)
 - [VersionedAPISchema](#github-com-envoyproxy-ai-gateway-api-v1beta1-versionedapischema)
@@ -3474,6 +3476,11 @@ AIServiceBackendSpec details the AIServiceBackend configuration.
   type="[HTTPHeaderValueFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefilter) array"
   required="false"
   description="HeaderValueFilters filter individual values out of multi-valued request headers before sending<br />the request to this backend, so that one value an upstream provider does not accept does not<br />fail the whole request. At most one filter per header name.<br />Only GCPAnthropic and AWSAnthropic backends honor this, and today only for the<br />`anthropic-beta` header — a filter naming any other header is accepted but has no effect.<br />Setting it on a backend with any other schema is rejected."
+/><ApiField
+  name="promptCaching"
+  type="[PromptCaching](#github-com-envoyproxy-ai-gateway-api-v1beta1-promptcaching)"
+  required="false"
+  description="PromptCaching configures how the gateway marks prompt cache breakpoints in requests sent to<br />this backend.<br />Only GCPAnthropic and AWSAnthropic backends honor this, and today only for requests in the<br />OpenAI chat completions format. Setting it on a backend with any other schema is rejected."
 />
 
 
@@ -5369,6 +5376,52 @@ https://developers.openai.com/api/reference/workload-identity-federation
   type="[OpenAISubjectToken](#github-com-envoyproxy-ai-gateway-api-v1beta1-openaisubjecttoken)"
   required="true"
   description="SubjectToken specifies where the subject token is obtained from. The subject token must be a JWT."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-promptcachepointsmode">PromptCachePointsMode</a>
+
+**Underlying type:** string
+
+**Appears in:**
+- [PromptCaching](#github-com-envoyproxy-ai-gateway-api-v1beta1-promptcaching)
+
+PromptCachePointsMode specifies whether the gateway adds prompt cache breakpoints to requests.
+
+
+
+##### Possible Values
+
+<ApiField
+  name="None"
+  type="enum"
+  required="false"
+  description="PromptCachePointsModeNone adds no breakpoints. Breakpoints set by the client are forwarded.<br />"
+/><ApiField
+  name="Automatic"
+  type="enum"
+  required="false"
+  description="PromptCachePointsModeAutomatic adds breakpoints to requests that do not set any.<br />"
+/>
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-promptcaching">PromptCaching</a>
+
+
+
+**Appears in:**
+- [AIServiceBackendSpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-aiservicebackendspec)
+
+PromptCaching configures how the gateway marks prompt cache breakpoints in requests to a backend.
+
+##### Fields
+
+
+
+<ApiField
+  name="cachePoints"
+  type="[PromptCachePointsMode](#github-com-envoyproxy-ai-gateway-api-v1beta1-promptcachepointsmode)"
+  required="false"
+  defaultValue="None"
+  description="CachePoints selects whether the gateway adds cache breakpoints to requests. Defaults to None.<br />With None, requests are forwarded with only the breakpoints the client set.<br />With Automatic, a request that has no `cache_control` on any tool, system prompt or message<br />content gets an ephemeral breakpoint at the end of the tools, at the end of the system<br />prompt and on the last content block of the last user turn, skipping any of the three the<br />request does not have. That is at most three breakpoints, within the provider's limit of four.<br />A request that already sets a breakpoint anywhere is forwarded unchanged.<br />Cache writes are billed above the regular input token price, so Automatic pays off when<br />requests repeat a long prefix, as multi-turn conversations and agent loops do."
 />
 
 

@@ -538,6 +538,34 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              promptCaching:
+                description: |-
+                  PromptCaching configures how the gateway marks prompt cache breakpoints in requests sent to
+                  this backend.
+
+                  Only GCPAnthropic and AWSAnthropic backends honor this, and today only for requests in the
+                  OpenAI chat completions format. Setting it on a backend with any other schema is rejected.
+                properties:
+                  cachePoints:
+                    default: None
+                    description: |-
+                      CachePoints selects whether the gateway adds cache breakpoints to requests. Defaults to None.
+
+                      With None, requests are forwarded with only the breakpoints the client set.
+
+                      With Automatic, a request that has no `cache_control` on any tool, system prompt or message
+                      content gets an ephemeral breakpoint at the end of the tools, at the end of the system
+                      prompt and on the last content block of the last user turn, skipping any of the three the
+                      request does not have. That is at most three breakpoints, within the provider's limit of four.
+                      A request that already sets a breakpoint anywhere is forwarded unchanged.
+
+                      Cache writes are billed above the regular input token price, so Automatic pays off when
+                      requests repeat a long prefix, as multi-turn conversations and agent loops do.
+                    enum:
+                    - None
+                    - Automatic
+                    type: string
+                type: object
               schema:
                 description: |-
                   APISchema specifies the API schema of the output format of requests from
@@ -582,6 +610,10 @@ spec:
             - message: headerValueFilters is only honored by GCPAnthropic and AWSAnthropic
                 backends
               rule: '!has(self.headerValueFilters) || self.schema.name == ''GCPAnthropic''
+                || self.schema.name == ''AWSAnthropic'''
+            - message: promptCaching is only honored by GCPAnthropic and AWSAnthropic
+                backends
+              rule: '!has(self.promptCaching) || self.schema.name == ''GCPAnthropic''
                 || self.schema.name == ''AWSAnthropic'''
           status:
             description: Status defines the status details of the AIServiceBackend.

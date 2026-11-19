@@ -795,6 +795,10 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 		}
 	}
 
+	if cachePointSetter, ok := u.translator.(translator.CachePointSetter); ok {
+		cachePointSetter.SetAutomaticCachePoints(backend.Backend.AutomaticCachePoints)
+	}
+
 	switch redactor := u.translator.(type) {
 	case translator.ResponseRedactor:
 		redactor.SetRedactionConfig(u.parent.debugLogEnabled, u.parent.enableRedaction, u.logger)
