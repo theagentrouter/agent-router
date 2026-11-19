@@ -44,18 +44,26 @@ func TestGeminiNativeGeneration(t *testing.T) {
 		{"JSON array error", "streamGenerateContent", "", "application/json", "[" + partialResponse + "," + streamError + "]", http.StatusOK, true},
 		{"retry", "generateContent", "", "application/json", responseBody, http.StatusOK, false},
 	}
-	backend := func(name, model, key string) filterapi.Backend {
+	backend := func(name, model, key string, fallbackToConfigured bool) filterapi.Backend {
 		return filterapi.Backend{
 			Name: name, ModelNameOverride: model, Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaGoogleAIStudio},
-			Auth: &filterapi.BackendAuth{GoogleAPIKey: &filterapi.GoogleAPIKeyAuth{Key: key}},
+			Auth: &filterapi.BackendAuth{
+				GoogleAPIKey: &filterapi.GoogleAPIKeyAuth{Key: key},
+				CredentialOverride: &filterapi.CredentialOverride{
+					HeaderName:           "authorization",
+					FallbackToConfigured: fallbackToConfigured,
+					InputHeadersToRemove: []string{"authorization"},
+				},
+			},
+			HeaderMutation: &filterapi.HTTPHeaderMutation{Remove: []string{"authorization"}},
 		}
 	}
 	config, err := yaml.Marshal(&filterapi.Config{
 		Version: version.Parse(),
 		Backends: []filterapi.Backend{
 			testUpstreamModelNameOverride,
-			backend("testupstream-openai-5xx", "primary-gemini", "primary-configured-key"),
-			backend("testupstream-openai", "fallback-gemini", "fallback-configured-key"),
+			backend("testupstream-openai-5xx", "primary-gemini", "primary-configured-key", true),
+			backend("testupstream-openai", "fallback-gemini", "fallback-configured-key", false),
 		},
 	})
 	require.NoError(t, err)
@@ -144,7 +152,10 @@ func TestGeminiNativeGeneration(t *testing.T) {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, strings.NewReader(requestBody))
 			require.NoError(t, err)
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer client-token")
+			const overrideKey = "test-upstream-override"
+			if tc.name == "retry" {
+				req.Header.Set("Authorization", overrideKey)
+			}
 			req.Header.Set("x-goog-api-key", "client-header-key")
 			req.Header.Set("x-goog-user-project", "client-project")
 			req.Header.Set("x-ai-eg-model", "spoofed-model")
@@ -165,9 +176,11 @@ func TestGeminiNativeGeneration(t *testing.T) {
 			require.Equal(t, tc.status, resp.StatusCode, string(body))
 			require.Equal(t, tc.format, resp.Header.Get("Content-Type"))
 			require.Equal(t, tc.response, string(body))
-			assertAttempt(t, "primary-gemini", tc.action, tc.query, "primary-configured-key")
 			if tc.name == "retry" {
-				assertAttempt(t, "fallback-gemini", tc.action, tc.query, "fallback-configured-key")
+				assertAttempt(t, "primary-gemini", tc.action, tc.query, overrideKey)
+				assertAttempt(t, "fallback-gemini", tc.action, tc.query, overrideKey)
+			} else {
+				assertAttempt(t, "primary-gemini", tc.action, tc.query, "primary-configured-key")
 			}
 			require.Empty(t, attempts)
 			span := collector.TakeSpan()
