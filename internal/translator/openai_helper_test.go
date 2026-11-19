@@ -575,6 +575,8 @@ func TestOpenAIFinishReasonToAnthropic(t *testing.T) {
 		{openai.ChatCompletionChoicesFinishReasonLength, anthropic.StopReasonMaxTokens},
 		{openai.ChatCompletionChoicesFinishReasonToolCalls, anthropic.StopReasonToolUse},
 		{openai.ChatCompletionChoicesFinishReasonContentFilter, anthropic.StopReasonRefusal},
+		{openai.ChatCompletionChoicesFinishReasonPauseTurn, anthropic.StopReasonPauseTurn},
+		{openai.ChatCompletionChoicesFinishReasonContextWindowExceeded, anthropic.StopReasonModelContextWindowExceeded},
 		{"function_call", anthropic.StopReasonEndTurn},
 		{"", anthropic.StopReasonEndTurn},
 	}

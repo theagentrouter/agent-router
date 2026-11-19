@@ -506,6 +506,10 @@ func openAIFinishReasonToAnthropic(reason openai.ChatCompletionChoicesFinishReas
 		return anthropic.StopReasonToolUse
 	case openai.ChatCompletionChoicesFinishReasonContentFilter:
 		return anthropic.StopReasonRefusal
+	case openai.ChatCompletionChoicesFinishReasonPauseTurn:
+		return anthropic.StopReasonPauseTurn
+	case openai.ChatCompletionChoicesFinishReasonContextWindowExceeded:
+		return anthropic.StopReasonModelContextWindowExceeded
 	default:
 		return anthropic.StopReasonEndTurn
 	}
