@@ -358,7 +358,13 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) extractToolCallsFromGemi
 		}
 
 		// Convert function call arguments to JSON string.
-		args, err := argsMarshaller(part.FunctionCall.Args)
+		// Gemini omits args for a tool without parameters; a nil map would
+		// marshal to JSON null, not the empty object clients expect.
+		functionArgs := part.FunctionCall.Args
+		if functionArgs == nil {
+			functionArgs = map[string]any{}
+		}
+		args, err := argsMarshaller(functionArgs)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to marshal function arguments: %w", err)
 		}
