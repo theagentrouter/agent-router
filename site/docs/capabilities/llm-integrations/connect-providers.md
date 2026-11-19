@@ -66,6 +66,46 @@ Different providers require different schema configurations:
 Many providers offer OpenAI-compatible APIs, which allows them to use the OpenAI schema configuration with provider-specific version paths.
 :::
 
+#### Responses Through Chat Completions
+
+For `OpenAI`, `AWSOpenAI`, or `AzureOpenAI` backends that only support Chat Completions, set `schema.responsesTranslation` to `ChatCompletions`:
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: chat-only-backend
+spec:
+  schema:
+    name: OpenAI
+    prefix: v1
+    responsesTranslation: ChatCompletions
+  backendRef:
+    name: chat-only-backend
+    kind: Backend
+    group: gateway.envoyproxy.io
+```
+
+Clients continue calling `POST /v1/responses`. Agent Router converts requests to the backend's Chat Completions API and converts responses back, including streaming events and function calls. Model overrides, custom OpenAI prefixes, and Azure API versions still use their existing configuration.
+
+Leaving this field unset, or setting it to `Responses`, keeps the native Responses API for these schemas. There is no automatic detection or retry to another API. This setting does not change other incoming endpoints, such as `/v1/chat/completions`.
+
+The bridge supports only the features available through the selected Chat Completions backend. Hosted tools, `previous_response_id`, `conversation`, background execution, reusable `prompt` references, `store: true`, file inputs, file-ID images, and reasoning-item replay are rejected. Send prior messages and tool results explicitly in `input` for multi-turn conversations. Image URL inputs are supported only in user messages.
+
+Reasoning text is returned separately from the visible answer, as reasoning output items and streaming events. Model refusals are preserved as refusal content parts. `include` and `top_logprobs` requests are not supported by the bridge and are rejected.
+
+Automatic truncation, `context_management`, reasoning-summary controls (`reasoning.summary` and `reasoning.generate_summary`), and `stream_options.include_obfuscation: true` are also rejected. Bridged streams do not include obfuscation padding. Provider in-stream errors are translated before the response stream is closed.
+
+Presence and frequency penalties, `text.verbosity`, and `service_tier` are forwarded to the Chat Completions backend. Support for these controls depends on the selected provider and model. Returned Responses objects include the requested penalties and the service tier reported by the backend, which can differ from the requested tier.
+
+The bridge forwards `user` and includes it with the requested tool configuration in returned Responses objects. `safety_identifier`, `prompt_cache_key`, and `prompt_cache_retention` are not supported and are rejected.
+
+For Gemini Flash models that support thinking levels, `reasoning.effort: minimal` selects minimal thinking.
+
+For `AWSAnthropic` and `GCPAnthropic`, `text.format.type: json_object` is rejected. JSON schema output is accepted only for models supported by the selected backend, using the configured model override when present. See [Anthropic structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
+
+`AWSAnthropic`, `GCPAnthropic`, and `GCPVertexAI` already use the bridge for Responses requests and do not need this setting.
+
 ### BackendSecurityPolicy
 
 The `BackendSecurityPolicy` resource configures authentication credentials needed to access upstream AI services securely.

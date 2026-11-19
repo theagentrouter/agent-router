@@ -165,6 +165,8 @@ type VersionedAPISchema struct {
 	Version string `json:"version,omitempty"`
 	// Prefix is the prefix of the API schema. Optional. Used for OpenAI and Anthropic schemas.
 	Prefix string `json:"prefix,omitempty"`
+	// ResponsesTranslation selects Responses or ChatCompletions for incoming Responses requests.
+	ResponsesTranslation string `json:"responsesTranslation,omitempty"`
 }
 
 // OpenAIPrefix returns the OpenAI API prefix for the VersionedAPISchema.

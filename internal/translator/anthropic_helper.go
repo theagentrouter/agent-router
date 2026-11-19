@@ -92,7 +92,7 @@ func anthropicToOpenAIFinishReason(stopReason anthropic.StopReason) (openai.Chat
 	// TODO: "pause_turn" Used with server tools like web search when Claude needs to pause a long-running operation.
 	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
 		return openai.ChatCompletionChoicesFinishReasonStop, nil
-	case anthropic.StopReasonMaxTokens: // Claude stopped because it reached the max_tokens limit specified in your request.
+	case anthropic.StopReasonMaxTokens, anthropic.StopReasonModelContextWindowExceeded:
 		// TODO: do we want to return an error? see: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use#handling-the-max-tokens-stop-reason
 		return openai.ChatCompletionChoicesFinishReasonLength, nil
 	case anthropic.StopReasonToolUse:
@@ -781,7 +781,10 @@ func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema fil
 	if modelNameOverride != "" {
 		featureCheckModel = modelNameOverride
 	}
-	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil && outputConfigAvailable(apiSchema, featureCheckModel) {
+	if format := openAIReq.ResponseFormat; format != nil && (format.OfJSONObject != nil || (format.OfJSONSchema != nil && !outputConfigAvailable(apiSchema, featureCheckModel))) {
+		return nil, fmt.Errorf("%w: requested response format is not supported by Anthropic model %q on %s", internalapi.ErrInvalidRequestBody, featureCheckModel, apiSchema)
+	}
+	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil {
 		// Validate that the OpenAI JSON schema is an object while retaining its
 		// original bytes. Anthropic's SDK sorts map keys when marshaling, which
 		// would otherwise change the property order seen by Claude.
@@ -912,11 +915,14 @@ func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error
 	chunk, err := p.parseAndHandleEvent(eventBlock)
 	if err != nil {
 		var streamErr *anthropicStreamError
-		if errors.As(err, &streamErr) && streamErr.Type == overloadedErrorType {
-			if serializeErr := serializeOpenAIOverloadedStreamError(streamErr.Message, buf); serializeErr != nil {
+		if errors.As(err, &streamErr) {
+			if serializeErr := serializeOpenAIStreamError(streamErr, buf); serializeErr != nil {
 				return serializeErr
 			}
-			return &StreamOverloadedError{Err: streamErr}
+			if streamErr.Type == overloadedErrorType {
+				return &StreamOverloadedError{Err: streamErr}
+			}
+			return &StreamResponseError{Err: streamErr}
 		}
 		return err
 	}
@@ -929,15 +935,14 @@ func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error
 	return nil
 }
 
-// serializeOpenAIOverloadedStreamError writes an OpenAI-style SSE error event for a mid-stream overload.
-func serializeOpenAIOverloadedStreamError(message string, buf *[]byte) error {
+func serializeOpenAIStreamError(streamErr *anthropicStreamError, buf *[]byte) error {
 	errorBytes, err := json.Marshal(struct {
 		Error openai.ErrorType `json:"error"`
 	}{
-		Error: openai.ErrorType{Type: overloadedErrorType, Message: message},
+		Error: openai.ErrorType{Type: streamErr.Type, Message: streamErr.Message},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to marshal overloaded stream error: %w", err)
+		return fmt.Errorf("failed to marshal stream error: %w", err)
 	}
 
 	*buf = append(*buf, sseDataPrefixSpace...)
@@ -1268,16 +1273,14 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 			return nil, fmt.Errorf("unmarshal content_block_delta: %w", err)
 		}
 		switch event.Delta.Type {
-		case string(constant.ValueOf[constant.TextDelta]()), string(constant.ValueOf[constant.ThinkingDelta]()):
-			// Treat thinking_delta just like a text_delta, but read the field
-			// that belongs to the variant: RawContentBlockDeltaUnion.Text is
-			// only populated for text_delta, and .Thinking only for
-			// thinking_delta.
+		case string(constant.ValueOf[constant.TextDelta]()):
 			text := event.Delta.Text
-			if event.Delta.Type == string(constant.ValueOf[constant.ThinkingDelta]()) {
-				text = event.Delta.Thinking
-			}
 			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &text}
+			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
+		case string(constant.ValueOf[constant.ThinkingDelta]()):
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{
+				ReasoningContent: &openai.StreamReasoningContent{Text: event.Delta.Thinking},
+			}
 			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
 		case string(constant.ValueOf[constant.InputJSONDelta]()):
 			tool, ok := p.activeToolCalls[p.toolIndex]
@@ -1460,6 +1463,10 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 				}
 			}
 		}
+	}
+	if anthropicResp.StopReason == anthropic.StopReasonRefusal {
+		choice.Message.Refusal = choice.Message.Content
+		choice.Message.Content = nil
 	}
 	openAIResp.Choices = append(openAIResp.Choices, choice)
 	return openAIResp, tokenUsage, nil

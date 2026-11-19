@@ -314,7 +314,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) parseGCPStreamingChunks(
 
 	// Process all complete chunks (all but the last part).
 	for _, part := range parts {
-		part = bytes.TrimSpace(part)
+		part = bytes.TrimLeft(part, " \t\r\n")
 		if len(part) == 0 {
 			continue
 		}
@@ -705,6 +705,10 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) RedactBody(resp *openai.
 // that has been converted to OpenAI format.
 func redactGCPResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) openai.ChatCompletionResponseChoiceMessage {
 	redactedMsg := *msg
+	if msg.Refusal != nil {
+		refusal := redaction.RedactString(*msg.Refusal)
+		redactedMsg.Refusal = &refusal
+	}
 
 	// Redact message content (AI-generated text)
 	if msg.Content != nil {

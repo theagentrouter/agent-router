@@ -268,6 +268,10 @@ func (o *openAIToOpenAITranslatorV1ChatCompletion) RedactBody(resp *openai.ChatC
 // redactResponseMessage redacts sensitive content from a chat completion response message.
 func redactResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) openai.ChatCompletionResponseChoiceMessage {
 	redactedMsg := *msg
+	if msg.Refusal != nil {
+		refusal := redaction.RedactString(*msg.Refusal)
+		redactedMsg.Refusal = &refusal
+	}
 
 	// Redact message content (AI-generated text)
 	if msg.Content != nil {

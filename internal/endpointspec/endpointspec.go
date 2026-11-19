@@ -393,13 +393,42 @@ func (ResponsesEndpointSpec) ParseMultipartBody([]byte, string, bool) (internala
 
 // GetTranslator implements [EndpointSpec.GetTranslator].
 func (ResponsesEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, modelNameOverride string) (translator.OpenAIResponsesTranslator, error) {
+	if mode := schema.ResponsesTranslation; mode != "" {
+		if mode != "Responses" && mode != "ChatCompletions" {
+			return nil, fmt.Errorf("%w: unsupported responsesTranslation: %s", internalapi.ErrInvalidRequestBody, mode)
+		}
+		if schema.Name != filterapi.APISchemaOpenAI && schema.Name != filterapi.APISchemaAWSOpenAI && schema.Name != filterapi.APISchemaAzureOpenAI {
+			return nil, fmt.Errorf("%w: responsesTranslation is only supported for OpenAI, AWSOpenAI, and AzureOpenAI", internalapi.ErrInvalidRequestBody)
+		}
+	}
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
+		if schema.ResponsesTranslation == "ChatCompletions" {
+			return translator.NewResponsesOpenAIToChatCompletionTranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+		}
 		return translator.NewResponsesOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	case filterapi.APISchemaAWSOpenAI:
+		if schema.ResponsesTranslation == "ChatCompletions" {
+			return translator.NewResponsesViaChatCompletionTranslator(translator.NewChatCompletionOpenAIToAWSOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride)), nil
+		}
 		return translator.NewResponsesOpenAIToAWSOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+	case filterapi.APISchemaAWSAnthropic:
+		return translator.NewResponsesViaChatCompletionTranslator(
+			translator.NewChatCompletionOpenAIToAWSAnthropicTranslator(schema.Version, modelNameOverride),
+		), nil
 	case filterapi.APISchemaAzureOpenAI:
+		if schema.ResponsesTranslation == "ChatCompletions" {
+			return translator.NewResponsesViaChatCompletionTranslator(translator.NewChatCompletionOpenAIToAzureOpenAITranslator(schema.Version, modelNameOverride)), nil
+		}
 		return translator.NewResponsesOpenAIToAzureOpenAITranslator(schema.Version, modelNameOverride), nil
+	case filterapi.APISchemaGCPVertexAI:
+		return translator.NewResponsesViaChatCompletionTranslator(
+			translator.NewChatCompletionOpenAIToGCPVertexAITranslator(modelNameOverride),
+		), nil
+	case filterapi.APISchemaGCPAnthropic:
+		return translator.NewResponsesViaChatCompletionTranslator(
+			translator.NewChatCompletionOpenAIToGCPAnthropicTranslator(schema.Version, modelNameOverride),
+		), nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}

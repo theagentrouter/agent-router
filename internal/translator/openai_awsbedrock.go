@@ -743,6 +743,10 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) RedactBody(resp *openai.C
 // that has been converted to OpenAI format.
 func redactAWSBedrockResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) openai.ChatCompletionResponseChoiceMessage {
 	redactedMsg := *msg
+	if msg.Refusal != nil {
+		refusal := redaction.RedactString(*msg.Refusal)
+		redactedMsg.Refusal = &refusal
+	}
 
 	// Redact message content (AI-generated text)
 	if msg.Content != nil {

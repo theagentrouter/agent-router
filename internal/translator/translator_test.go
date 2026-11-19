@@ -20,3 +20,11 @@ func TestStreamOverloadedError(t *testing.T) {
 
 	require.EqualError(t, &StreamOverloadedError{}, "upstream overloaded mid-stream")
 }
+
+func TestStreamResponseError(t *testing.T) {
+	cause := errors.New("api_error")
+	err := &StreamResponseError{Err: cause}
+	require.ErrorIs(t, err, cause)
+	require.EqualError(t, err, "upstream failed mid-stream: api_error")
+	require.EqualError(t, &StreamResponseError{}, "upstream failed mid-stream")
+}

@@ -2700,6 +2700,11 @@ the ai-gateway, but by the vendor via proper versioning.
   type="string"
   required="false"
   description="Prefix is the prefix for the API.<br />When the name is set to `OpenAI`, `chat completions` API endpoint will be `$\{this_field\}/chat/completions`.<br />When the name is set to `Anthropic`, the `messages` API endpoint will be `$\{this_field\}/messages`.<br />It can be with or without a leading slash (`/`).<br />This field is ignored for AWSAnthropic and GCPAnthropic.<br />This is especially useful when routing to a backend that has an OpenAI or Anthropic compatible API but has a different<br />prefix. For example, Gemini OpenAI compatible API (https://ai.google.dev/gemini-api/docs/openai) uses<br />`/v1beta/openai` prefix. Another example is that Cohere AI (https://docs.cohere.com/v2/docs/compatibility-api)<br />uses `/compatibility/v1` prefix. On the other hand, DeepSeek (https://api-docs.deepseek.com/) doesn't<br />use prefix, so you can leave this field unset.<br />See https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/supported-providers for details."
+/><ApiField
+  name="responsesTranslation"
+  type="string"
+  required="false"
+  description="ResponsesTranslation selects the backend API for incoming Responses requests on AIServiceBackend.<br />Defaults to Responses. Set ChatCompletions for backends that only support Chat Completions."
 />
 
 
@@ -5482,6 +5487,11 @@ the ai-gateway, but by the vendor via proper versioning.
   type="string"
   required="false"
   description="Prefix is the prefix for the API.<br />When the name is set to `OpenAI`, `chat completions` API endpoint will be `$\{this_field\}/chat/completions`.<br />When the name is set to `Anthropic`, the `messages` API endpoint will be `$\{this_field\}/messages`.<br />It can be with or without a leading slash (`/`).<br />This field is ignored for AWSAnthropic and GCPAnthropic.<br />This is especially useful when routing to a backend that has an OpenAI or Anthropic compatible API but has a different<br />prefix. For example, Gemini OpenAI compatible API (https://ai.google.dev/gemini-api/docs/openai) uses<br />`/v1beta/openai` prefix. Another example is that Cohere AI (https://docs.cohere.com/v2/docs/compatibility-api)<br />uses `/compatibility/v1` prefix. On the other hand, DeepSeek (https://api-docs.deepseek.com/) doesn't<br />use prefix, so you can leave this field unset.<br />See https://aigateway.envoyproxy.io/docs/capabilities/llm-integrations/supported-providers for details."
+/><ApiField
+  name="responsesTranslation"
+  type="string"
+  required="false"
+  description="ResponsesTranslation selects the backend API for incoming Responses requests on AIServiceBackend.<br />Defaults to Responses. Set ChatCompletions for backends that only support Chat Completions."
 />
 
 

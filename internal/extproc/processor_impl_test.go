@@ -371,34 +371,42 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseHeaders(t *testin
 func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T) {
 	const overloadEvent = "data: {\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"
 
-	t.Run("overload as first response event", func(t *testing.T) {
-		inBody := &extprocv3.HttpBody{Body: []byte("overload"), EndOfStream: true}
-		mm := &mockMetrics{}
-		mt := &mockTranslator{
-			t:               t,
-			expResponseBody: inBody,
-			retBodyMutation: []byte(overloadEvent),
-			retErr:          &translator.StreamOverloadedError{Err: errors.New("overloaded")},
-		}
-		p := &chatCompletionProcessorUpstreamFilter{
-			translator:      mt,
-			metrics:         mm,
-			parent:          &chatCompletionProcessorRouterFilter{stream: true},
-			responseHeaders: map[string]string{":status": "200"},
-		}
+	for _, tc := range []struct {
+		name, event string
+		err         error
+	}{
+		{"overload", overloadEvent, &translator.StreamOverloadedError{Err: errors.New("overloaded")}},
+		{"api error", "data: {\"error\":{\"type\":\"api_error\",\"message\":\"failed\"}}\n\n", &translator.StreamResponseError{Err: errors.New("failed")}},
+	} {
+		t.Run(tc.name+" as first response event", func(t *testing.T) {
+			inBody := &extprocv3.HttpBody{Body: []byte("overload"), EndOfStream: true}
+			mm := &mockMetrics{}
+			mt := &mockTranslator{
+				t:               t,
+				expResponseBody: inBody,
+				retBodyMutation: []byte(tc.event),
+				retErr:          tc.err,
+			}
+			p := &chatCompletionProcessorUpstreamFilter{
+				translator:      mt,
+				metrics:         mm,
+				parent:          &chatCompletionProcessorRouterFilter{stream: true},
+				responseHeaders: map[string]string{":status": "200"},
+			}
 
-		res, err := p.ProcessResponseBody(t.Context(), inBody)
-		require.NoError(t, err)
-		require.Nil(t, res.GetImmediateResponse())
-		require.Equal(t, overloadEvent, string(res.GetResponseBody().GetResponse().GetBodyMutation().GetBody()))
-		require.True(t, p.responseStreamTerminated)
-		mm.RequireRequestFailure(t)
+			res, err := p.ProcessResponseBody(t.Context(), inBody)
+			require.NoError(t, err)
+			require.Nil(t, res.GetImmediateResponse())
+			require.Equal(t, tc.event, string(res.GetResponseBody().GetResponse().GetBodyMutation().GetBody()))
+			require.True(t, p.responseStreamTerminated)
+			mm.RequireRequestFailure(t)
 
-		res, err = p.ProcessResponseBody(t.Context(), &extprocv3.HttpBody{Body: []byte("ignored"), EndOfStream: true})
-		require.NoError(t, err)
-		require.Empty(t, res.GetResponseBody().GetResponse().GetBodyMutation().GetBody())
-		mm.RequireRequestFailure(t)
-	})
+			res, err = p.ProcessResponseBody(t.Context(), &extprocv3.HttpBody{Body: []byte("ignored"), EndOfStream: true})
+			require.NoError(t, err)
+			require.Empty(t, res.GetResponseBody().GetResponse().GetBodyMutation().GetBody())
+			mm.RequireRequestFailure(t)
+		})
+	}
 
 	t.Run("overload after response content", func(t *testing.T) {
 		firstBody := &extprocv3.HttpBody{Body: []byte("first")}
@@ -721,7 +729,7 @@ func Test_chatCompletionProcessorUpstreamFilter_SetBackend(t *testing.T) {
 	immediateResp, ok := resp.Response.(*extprocv3.ProcessingResponse_ImmediateResponse)
 	require.True(t, ok)
 	require.Equal(t, typev3.StatusCode(422), immediateResp.ImmediateResponse.Status.Code)
-	require.JSONEq(t, `{"type":"error","error":{"type":"UnprocessableEntity","code":"422","message":"invalid request body: unsupported API schema: backend={some-schema v10.0 }"}}`,
+	require.JSONEq(t, `{"type":"error","error":{"type":"UnprocessableEntity","code":"422","message":"invalid request body: unsupported API schema: backend={some-schema v10.0  }"}}`,
 		string(immediateResp.ImmediateResponse.Body))
 	require.True(t, r.localReplyEmitted, "the gateway answered the request itself")
 	mm.RequireRequestFailure(t)
