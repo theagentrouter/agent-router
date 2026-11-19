@@ -554,7 +554,8 @@ func TestOpenAIResponseToAnthropic(t *testing.T) {
 			},
 		}
 		result := openAIResponseToAnthropic(resp, "test-model")
-		assert.Nil(t, result.Content)
+		require.NotNil(t, result.Content)
+		assert.Empty(t, result.Content)
 	})
 
 	t.Run("nil content not added to blocks", func(t *testing.T) {
@@ -567,7 +568,8 @@ func TestOpenAIResponseToAnthropic(t *testing.T) {
 			},
 		}
 		result := openAIResponseToAnthropic(resp, "test-model")
-		assert.Nil(t, result.Content)
+		require.NotNil(t, result.Content)
+		assert.Empty(t, result.Content)
 	})
 
 	t.Run("refusal becomes stop details and preserves partial content", func(t *testing.T) {
@@ -596,6 +598,31 @@ func TestOpenAIResponseToAnthropic(t *testing.T) {
 		assert.Nil(t, result.StopDetails.Category)
 		require.NotNil(t, result.StopDetails.Explanation)
 		assert.Equal(t, refusal, *result.StopDetails.Explanation)
+	})
+
+	t.Run("refusal-only response marshals content as empty array", func(t *testing.T) {
+		refusal := "I cannot help with that request."
+		resp := &openai.ChatCompletionResponse{
+			Choices: []openai.ChatCompletionResponseChoice{
+				{
+					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+					Message: openai.ChatCompletionResponseChoiceMessage{
+						Content: nil,
+						Refusal: &refusal,
+					},
+				},
+			},
+		}
+
+		result := openAIResponseToAnthropic(resp, "test-model")
+		require.NotNil(t, result.Content)
+		assert.Empty(t, result.Content)
+		require.NotNil(t, result.StopReason)
+		assert.Equal(t, anthropic.StopReasonRefusal, *result.StopReason)
+		encoded, err := json.Marshal(result)
+		require.NoError(t, err)
+		assert.Contains(t, string(encoded), `"content":[]`)
+		assert.NotContains(t, string(encoded), `"content":null`)
 	})
 
 	t.Run("content filter becomes refusal with null stop details fields", func(t *testing.T) {
@@ -701,7 +728,8 @@ func TestOpenAIResponseToAnthropic(t *testing.T) {
 			Usage: openai.Usage{PromptTokens: 5},
 		}
 		result := openAIResponseToAnthropic(resp, "gpt-4o")
-		assert.Nil(t, result.Content)
+		require.NotNil(t, result.Content)
+		assert.Empty(t, result.Content)
 		assert.Nil(t, result.StopReason)
 		assert.Equal(t, float64(5), result.Usage.InputTokens)
 	})
@@ -1212,7 +1240,7 @@ func TestBuildOpenAIChatCompletionRequest_ThinkingConfig(t *testing.T) {
 			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 			Thinking:  &anthropic.Thinking{BetweenTools: &anthropic.ThinkingBetweenTools{Type: "between_tools"}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.NotNil(t, req.Thinking)
 		require.NotNil(t, req.Thinking.OfBetweenTools)
 		assert.Equal(t, "between_tools", req.Thinking.OfBetweenTools.Type)

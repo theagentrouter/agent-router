@@ -434,7 +434,9 @@ func anthropicToolChoiceToOpenAI(tc anthropic.ToolChoice, hasTools bool) *openai
 
 // openAIResponseToAnthropic converts an OpenAI ChatCompletionResponse to an Anthropic MessagesResponse.
 func openAIResponseToAnthropic(resp *openai.ChatCompletionResponse, model string) *anthropic.MessagesResponse {
-	var content []anthropic.MessagesContentBlock
+	// Anthropic requires content to be an array, so start non-nil to marshal as [] rather than null
+	// when the response has no blocks (e.g. a refusal-only response with content null).
+	content := []anthropic.MessagesContentBlock{}
 	var stopReason *anthropic.StopReason
 	var stopDetails *anthropic.RefusalStopDetails
 
