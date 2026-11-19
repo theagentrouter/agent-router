@@ -620,6 +620,11 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 	}
 
 	newHeaders, newBody, tokenUsage, responseModel, err := u.translator.ResponseBody(u.responseHeaders, decodingResult.reader, body.EndOfStream, u.parent.span)
+	// Set before the error check so failed requests are still attributed to a model. An empty
+	// value must not clear a model already reported by an earlier streaming chunk.
+	if responseModel != "" {
+		u.metrics.SetResponseModel(responseModel)
+	}
 	if err != nil {
 		var streamErr *translator.StreamOverloadedError
 		if u.parent.stream && errors.As(err, &streamErr) && len(newBody) > 0 {
@@ -665,9 +670,6 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 
 	// Translator reports the latest cumulative token usage which we use to override existing costs.
 	u.costs.Override(tokenUsage)
-
-	// Set the response model for metrics
-	u.metrics.SetResponseModel(responseModel)
 
 	// Record metrics.
 	if u.parent.stream {
