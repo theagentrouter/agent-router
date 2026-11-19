@@ -128,7 +128,18 @@ make sure that these automated checks pass after you open a PR by following the 
   - The only exception to this rule is when you mistakenly pushed a non-signoff commit.
     In this case, you can amend the commit with the signoff line and force push.
 - Commits are squashed prior to merging a pull request, using the title and PR description
-  as commit message by default. Maintainers may request contributors to
+  as commit message by default. Maintainers and Reviewers may request contributors to
   edit the pull request title and description to ensure that it remains descriptive as a
-  commit message. Alternatively, maintainers may change the commit message directly at the time of merge.
-- If you have any questions during the review, please feel free to ask the maintainers listed in [MAINTAINERS.md](./MAINTAINERS.md).
+  commit message. Alternatively, whoever merges may change the commit message directly at the time of merge.
+- A pull request needs an approval from one Maintainer, or from two Reviewers. The full rules are in
+  [COMMUNITY_ROLES.md](./COMMUNITY_ROLES.md#how-pull-requests-get-approved).
+- If you have any questions during the review, please feel free to ask the maintainers and reviewers listed in [MAINTAINERS.md](./MAINTAINERS.md).
+
+## Community roles
+
+The community has four roles: Contributor, Frequent Contributor, Reviewer, and Maintainer.
+[COMMUNITY_ROLES.md](./COMMUNITY_ROLES.md) describes what each role can do, its responsibilities,
+and how to move from one role to the next. It is adopted by the Technical Steering Committee under
+the project's [Technical Charter](./Technical_Charter.pdf) and is part of this contributing guide.
+
+The [OWNERS](./OWNERS) file lists the current Reviewers and Maintainers.

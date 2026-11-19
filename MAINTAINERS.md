@@ -1,7 +1,10 @@
 ## Maintainers
 
-The following people are responsible for maintaining the Envoy AI Gateway project.
+The following people are responsible for maintaining the Agent Router project.
 Please reach out to them for any questions, issues, or contributions related to the project.
+
+[COMMUNITY_ROLES.md](COMMUNITY_ROLES.md) describes the roles and how to grow into them.
+The [OWNERS](OWNERS) file is the source of truth for this list. When you change it, update both files.
 
 - Takeshi Yoneda ([@mathetake](https://github.com/mathetake))
   - Area: Everything
@@ -25,3 +28,15 @@ Please reach out to them for any questions, issues, or contributions related to 
   - [Kubeflow](https://github.com/kubeflow/kubeflow) Steering Committee member
 - Gavrish Prabhu ([@gavrissh](https://github.com/gavrissh))
   - Area: Control plane, Testing
+
+## Reviewers
+
+There are no Reviewers yet. See [COMMUNITY_ROLES.md](COMMUNITY_ROLES.md#reviewer) for how to become one.
+
+## Emeritus Maintainers
+
+None yet.
+
+## Emeritus Reviewers
+
+None yet.

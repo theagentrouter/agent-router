@@ -33,7 +33,11 @@ tool (
 	sigs.k8s.io/kind
 )
 
-require github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00
+require (
+	github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00
+	github.com/stretchr/testify v1.12.1
+	sigs.k8s.io/yaml v1.6.0
+)
 
 require (
 	4d63.com/gocheckcompilerdirectives v1.4.0 // indirect
@@ -310,7 +314,6 @@ require (
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
 	github.com/stbenjam/no-sprintf-host-port v0.3.1 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
-	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tetafro/godot v1.5.6 // indirect
 	github.com/tetratelabs/func-e v1.2.0 // indirect
@@ -398,5 +401,4 @@ require (
 	sigs.k8s.io/kustomize/kyaml v0.20.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
 )

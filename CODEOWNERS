@@ -1,1 +1,22 @@
-* @theagentrouter/agent-router-maintainers
+# See COMMUNITY_ROLES.md for what Maintainers and Reviewers can approve.
+# The last matching pattern wins, so the Maintainer-only paths below override this default.
+* @theagentrouter/agent-router-maintainers @theagentrouter/agent-router-reviewers
+
+# Maintainer-only: API surface.
+/api/ @theagentrouter/agent-router-maintainers
+
+# Maintainer-only: CI, repository automation, and the approval-policy check.
+/.github/ @theagentrouter/agent-router-maintainers
+/tools/approvalpolicy/ @theagentrouter/agent-router-maintainers
+
+# Maintainer-only: design proposals, which the TSC approves under the Technical Charter.
+/docs/proposals/ @theagentrouter/agent-router-maintainers
+
+# Maintainer-only: governance.
+/CODEOWNERS @theagentrouter/agent-router-maintainers
+/OWNERS @theagentrouter/agent-router-maintainers
+/MAINTAINERS.md @theagentrouter/agent-router-maintainers
+/COMMUNITY_ROLES.md @theagentrouter/agent-router-maintainers
+/CONTRIBUTING.md @theagentrouter/agent-router-maintainers
+/SECURITY.md @theagentrouter/agent-router-maintainers
+/Technical_Charter.pdf @theagentrouter/agent-router-maintainers

@@ -49,6 +49,8 @@ precommit: tidy spellcheck apigen codegen apidoc format lint editorconfig helm-t
 lint: ## This runs the linter on the codebase.
 	@echo "golangci-lint => ./..."
 	@$(GO_TOOL) golangci-lint run --build-tags==test_crdcel,test_controller,test_extproc,test_e2e ./...
+	@echo "golangci-lint => tools/approvalpolicy"
+	@cd tools && go tool golangci-lint run --config ../.golangci.yml ./approvalpolicy/...
 	@echo "actionlint => ./..."
 	@$(GO_TOOL) actionlint -shellcheck="" # Disabling shellcheck as it requires additional host dependencies.
 
@@ -188,6 +190,8 @@ test: ## Run the unit tests for the codebase. This doesn't run the integration t
 	@PKGS=$$(go list ./... | grep -v -E "tests/controller|tests/crdcel|/tests/e2e|tests/data-plane"); \
 	  echo "Running unit tests for packages: $$PKGS"; \
 	  go test $(GO_TEST_ARGS) $$PKGS
+	@echo "Running unit tests for tools/approvalpolicy"
+	@cd tools && go test -count=1 ./approvalpolicy/...
 
 # This runs the unit tests for the codebase with coverage check.
 .PHONY: test-coverage
