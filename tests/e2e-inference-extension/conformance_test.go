@@ -39,10 +39,10 @@ func TestGatewayAPIInferenceExtension(t *testing.T) {
 	options.ReportOutputPath = "./inference-extension-conformance-test-report.yaml"
 	options.Debug = false
 	options.Implementation = v1.Implementation{
-		Organization: "EnvoyProxy",
-		Project:      "Envoy AI Gateway",
-		URL:          "https://github.com/envoyproxy/ai-gateway",
-		Contact:      []string{"@envoy-ai-gateway/maintainers"},
+		Organization: "theagentrouter",
+		Project:      "Agent Router",
+		URL:          "https://github.com/theagentrouter/agent-router",
+		Contact:      []string{"@theagentrouter/agent-router-maintainers"},
 		Version:      implementationVersion(t),
 	}
 	options.ConformanceProfiles = []suite.ConformanceProfileName{gie.GatewayLayerProfileName}

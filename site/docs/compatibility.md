@@ -11,6 +11,7 @@ This document provides compatibility information for Agent Router releases with 
 | Agent Router | Envoy Gateway                  | Kubernetes | Gateway API | Inference Extension | Support Status |
 | ------------ | ------------------------------ | ---------- | ----------- | ------------------- | -------------- |
 | main         | v1.10.0+ (Envoy Proxy v1.40.x) | v1.32+     | v1.6.1      | v1.6.2              | Development    |
+| v1.3.x       | v1.10.0+ (Envoy Proxy v1.40.x) | v1.32+     | v1.6.1      | v1.6.2              | Supported      |
 | v1.2.x       | v1.9.2+ (Envoy Proxy v1.39.x)  | v1.32+     | v1.6.1      | v1.6.2              | Supported      |
 | v1.1.x       | v1.8.1+ (Envoy Proxy v1.38.x)  | v1.32+     | v1.5.x      | v1.6.0              | Supported      |
 | v1.0.x       | v1.8.1+ (Envoy Proxy v1.38.x)  | v1.32+     | v1.5.x      | v1.0.2              | Supported      |
