@@ -108,6 +108,63 @@ another namespace still requires its own route-to-backend `ReferenceGrant`. Gran
 controller service account the cross-namespace `get/list/watch` permissions it needs; a QuotaPolicy
 grant does not authorize routing traffic.
 
+### InferencePool Backends
+
+`targetRefs` only accepts `AIServiceBackend`, but a QuotaPolicy also applies to an `InferencePool`
+backendRef on an `AIGatewayRoute`. Quota is keyed by the backend's `namespace/name`, so a policy
+targeting an `AIServiceBackend` also applies to an `InferencePool` with the same namespace and name.
+
+To set a quota for an InferencePool, create an `AIServiceBackend` with the same name and namespace
+as the pool and target it from the QuotaPolicy. This `AIServiceBackend` only carries the quota
+identity: routes that reference the pool still send traffic to the pool, not to this backend's
+`backendRef`. The `AIServiceBackend` must exist. Without it, the QuotaPolicy is reported as
+`NotAccepted`, and the rate limit service gets no limits for the pool, so no quota is enforced.
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: vllm-llama3-8b-instruct # same name as the InferencePool
+  namespace: default # same namespace as the InferencePool
+spec:
+  schema:
+    name: OpenAI
+  backendRef: # required by the API; not used to route InferencePool traffic
+    name: vllm-llama3-8b-instruct
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: QuotaPolicy
+metadata:
+  name: pool-quota
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: vllm-llama3-8b-instruct
+  perModelQuotas:
+    - modelName: meta-llama/Llama-3.1-8B-Instruct
+      quota:
+        defaultBucket:
+          limit: 100000
+          duration: 1h
+```
+
+As with any other backend, `perModelQuotas[].modelName` must match the `modelNameOverride` of the
+pool's backendRef. If the backendRef has no `modelNameOverride`, `modelName` is matched against the
+request's model name instead.
+
+Keep the following in mind:
+
+- If a same-named `AIServiceBackend` with a QuotaPolicy already exists, adding an InferencePool
+  with that name also puts the pool under that quota.
+- A cross-namespace `ReferenceGrant` that allows `QuotaPolicy` to reference an `AIServiceBackend`
+  also covers the same-named InferencePool in that namespace.
+- An InferencePool rule has only one backend, so there is no failover: once the pool's quota is
+  used up, requests are rejected with `429`.
+
 :::tip Prerequisites
 Quota enforcement requires two components that are not deployed by the AI Gateway Helm chart today:
 

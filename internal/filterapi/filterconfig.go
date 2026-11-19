@@ -224,7 +224,9 @@ type Backend struct {
 	// Name of the backend including the route name as well as the route rule index.
 	Name string `json:"name"`
 	// AIServiceBackendName is the canonical namespace/name identity of the
-	// referenced AIServiceBackend. Name remains route-specific for routing.
+	// referenced AIServiceBackend or InferencePool. QuotaPolicy enforcement keys
+	// on this identity, so an InferencePool shares quota with the same-named
+	// AIServiceBackend. Name remains route-specific for routing.
 	AIServiceBackendName string                        `json:"aiServiceBackendName,omitempty"`
 	ModelNameOverride    internalapi.ModelNameOverride `json:"modelNameOverride"`
 	// Schema specifies the API schema of the output format of requests from.
