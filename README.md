@@ -160,6 +160,10 @@ Agent Router supports a wide range of AI providers, making it easy to integrate 
         <img src="site/static/img/providers/paxa-labs.svg" width="60" height="60" alt="Paxa Labs"/>
         <br><sub><b>Paxa Labs</b></sub>
       </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/wiro-ai.svg" width="60" height="60" alt="Wiro AI"/>
+        <br><sub><b>Wiro AI</b></sub>
+      </td>
     </tr>
   </table>
 </div>
