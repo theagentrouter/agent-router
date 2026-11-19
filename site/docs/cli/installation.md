@@ -58,7 +58,7 @@ This will display the help message for the `aigw` CLI like this:
 ```
 Usage: aigw <command> [flags]
 
-Envoy AI Gateway CLI
+Agent Router CLI
 
 Flags:
   -h, --help    Show context-sensitive help.
