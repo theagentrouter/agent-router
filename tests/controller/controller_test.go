@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -32,9 +33,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	gwaiev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/controller"
@@ -835,4 +841,213 @@ func TestSecretController(t *testing.T) {
 
 func defaultLogger() logr.Logger {
 	return logr.FromSlogHandler(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{}))
+}
+
+// TestMCPRouteController_ReferenceGrantRevocation wires the MCPRoute and ReferenceGrant controllers the
+// way StartControllers does and verifies against a real API server that a ReferenceGrant for a
+// cross-namespace apiKey.secretRef makes the MCPRoute Accepted, that deleting the grant removes the
+// backend's generated HTTPRoute, HTTPRouteFilter and credential Secret and marks the route NotAccepted,
+// and that a new grant restores them.
+func TestMCPRouteController_ReferenceGrantRevocation(t *testing.T) {
+	c, cfg, k := testsinternal.NewEnvTest(t)
+
+	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: ptr.To(true)}}
+	mgr, err := ctrl.NewManager(cfg, opt)
+	require.NoError(t, err)
+	require.NoError(t, controller.ApplyIndexing(t.Context(), mgr.GetFieldIndexer().IndexField))
+
+	gatewayCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	mcpRouteCh := internaltesting.NewControllerEventChan[*aigv1b1.MCPRoute]()
+	mcpRouteC := controller.NewMCPRouteController(mgr.GetClient(), k, defaultLogger(), gatewayCh.Ch)
+	require.NoError(t, controller.TypedControllerBuilderForCRD(mgr, &aigv1b1.MCPRoute{}).
+		Owns(&gwapiv1.HTTPRoute{}).
+		WatchesRawSource(source.Channel(mcpRouteCh.Ch, &handler.EnqueueRequestForObject{})).
+		Complete(mcpRouteC))
+	referenceGrantC := controller.NewReferenceGrantController(mgr.GetClient(), defaultLogger(),
+		make(chan event.GenericEvent, 100), make(chan event.GenericEvent, 100), nil, mcpRouteCh.Ch)
+	require.NoError(t, controller.TypedControllerBuilderForCRD(mgr, &gwapiv1b1.ReferenceGrant{}).Complete(referenceGrantC))
+	// Every MCPRoute reconcile sends a Gateway event; keep the channel drained so the controller never blocks.
+	go func() {
+		for {
+			select {
+			case <-t.Context().Done():
+				return
+			case <-gatewayCh.Ch:
+			}
+		}
+	}()
+
+	const routeNS, secretNS = "default", "shared"
+	require.NoError(t, c.Create(t.Context(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: secretNS}}))
+	require.NoError(t, c.Create(t.Context(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "some-secret", Namespace: secretNS},
+		StringData: map[string]string{"apiKey": "shared-value"},
+	}))
+	require.NoError(t, c.Create(t.Context(), &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: routeNS},
+		Spec: gwapiv1.GatewaySpec{
+			GatewayClassName: "gwclass",
+			Listeners:        []gwapiv1.Listener{{Name: "listener1", Port: 8080, Protocol: "http"}},
+		},
+	}))
+
+	go func() { require.NoError(t, mgr.Start(t.Context())) }()
+	require.True(t, mgr.GetCache().WaitForCacheSync(t.Context()))
+
+	route := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: routeNS},
+		Spec: aigv1b1.MCPRouteSpec{
+			ParentRefs: []gwapiv1.ParentReference{{Name: "gw"}},
+			BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+				BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc", Port: ptr.To(gwapiv1.PortNumber(80))},
+				SecurityPolicy: &aigv1b1.MCPBackendSecurityPolicy{APIKey: &aigv1b1.MCPBackendAPIKey{
+					SecretRef: &gwapiv1.SecretObjectReference{Name: "some-secret", Namespace: ptr.To(gwapiv1.Namespace(secretNS))},
+				}},
+			}},
+		},
+	}
+	require.NoError(t, c.Create(t.Context(), route))
+
+	httpRouteKey := client.ObjectKey{Name: internalapi.MCPPerBackendRefHTTPRoutePrefix + "route-svc", Namespace: routeNS}
+	filterKey := client.ObjectKey{Name: internalapi.MCPPerBackendHTTPRouteFilterPrefix + "route-svc", Namespace: routeNS}
+	credKey := client.ObjectKey{Name: internalapi.MCPPerBackendCredentialSecretPrefix + "route-svc", Namespace: routeNS}
+	mainRouteKey := client.ObjectKey{Name: internalapi.MCPMainHTTPRoutePrefix + "route", Namespace: routeNS}
+
+	// requireState waits until the route carries the condition and the backend's generated objects are
+	// all present with the referenced value, or all absent.
+	requireState := func(t *testing.T, condType, messageSubstring string, present bool) {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			var current aigv1b1.MCPRoute
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(route), &current); err != nil {
+				return false
+			}
+			if len(current.Status.Conditions) != 1 || current.Status.Conditions[0].Type != condType ||
+				!strings.Contains(current.Status.Conditions[0].Message, messageSubstring) {
+				t.Logf("conditions: %+v", current.Status.Conditions)
+				return false
+			}
+			var httpRoute gwapiv1.HTTPRoute
+			var filter egv1a1.HTTPRouteFilter
+			var cred corev1.Secret
+			routeErr := c.Get(t.Context(), httpRouteKey, &httpRoute)
+			filterErr := c.Get(t.Context(), filterKey, &filter)
+			credErr := c.Get(t.Context(), credKey, &cred)
+			if present {
+				return routeErr == nil && filterErr == nil && credErr == nil &&
+					string(cred.Data[egv1a1.InjectedCredentialKey]) == "Bearer shared-value"
+			}
+			return apierrors.IsNotFound(routeErr) && apierrors.IsNotFound(filterErr) && apierrors.IsNotFound(credErr)
+		}, 30*time.Second, 200*time.Millisecond)
+		var mainRoute gwapiv1.HTTPRoute
+		require.NoError(t, c.Get(t.Context(), mainRouteKey, &mainRoute), "the main HTTPRoute must stay")
+	}
+	newGrant := func() *gwapiv1b1.ReferenceGrant {
+		return &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "allow-mcproutes", Namespace: secretNS},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{Group: "aigateway.envoyproxy.io", Kind: "MCPRoute", Namespace: routeNS}},
+				To:   []gwapiv1b1.ReferenceGrantTo{{Group: "", Kind: "Secret", Name: ptr.To(gwapiv1b1.ObjectName("some-secret"))}},
+			},
+		}
+	}
+
+	t.Run("denied without a grant", func(t *testing.T) {
+		requireState(t, aigv1b1.ConditionTypeNotAccepted, "is not permitted", false)
+	})
+
+	t.Run("granted", func(t *testing.T) {
+		require.NoError(t, c.Create(t.Context(), newGrant()))
+		requireState(t, aigv1b1.ConditionTypeAccepted, "", true)
+	})
+
+	t.Run("revoked", func(t *testing.T) {
+		require.NoError(t, c.Delete(t.Context(), newGrant()))
+		requireState(t, aigv1b1.ConditionTypeNotAccepted, "is not permitted", false)
+		// The ReferenceGrant controller's finalizer releases the object once the routes were woken up.
+		require.Eventually(t, func() bool {
+			var current gwapiv1b1.ReferenceGrant
+			return apierrors.IsNotFound(c.Get(t.Context(), client.ObjectKeyFromObject(newGrant()), &current))
+		}, 30*time.Second, 200*time.Millisecond)
+	})
+
+	t.Run("granted again", func(t *testing.T) {
+		require.NoError(t, c.Create(t.Context(), newGrant()))
+		requireState(t, aigv1b1.ConditionTypeAccepted, "", true)
+	})
+}
+
+// TestMCPRouteController_UnwatchedGrantNamespaceIsAnError runs the MCPRoute controller on a cache that
+// watches only the route's namespace (as --watchNamespaces does) and references a Secret in a namespace
+// the cache does not cover. The controller cannot see the ReferenceGrant there; it must report that as an
+// error and not as a denial, because a denial deletes the backend's generated objects.
+func TestMCPRouteController_UnwatchedGrantNamespaceIsAnError(t *testing.T) {
+	c, cfg, k := testsinternal.NewEnvTest(t)
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme:         c.Scheme(),
+		LeaderElection: false,
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+		Controller:     config.Controller{SkipNameValidation: ptr.To(true)},
+		Cache:          cache.Options{DefaultNamespaces: map[string]cache.Config{"default": {}}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, controller.ApplyIndexing(t.Context(), mgr.GetFieldIndexer().IndexField))
+	gatewayCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	require.NoError(t, controller.TypedControllerBuilderForCRD(mgr, &aigv1b1.MCPRoute{}).
+		Owns(&gwapiv1.HTTPRoute{}).
+		Complete(controller.NewMCPRouteController(mgr.GetClient(), k, defaultLogger(), gatewayCh.Ch)))
+	go func() {
+		for {
+			select {
+			case <-t.Context().Done():
+				return
+			case <-gatewayCh.Ch:
+			}
+		}
+	}()
+	require.NoError(t, c.Create(t.Context(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "unwatched"}}))
+	require.NoError(t, c.Create(t.Context(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "some-secret", Namespace: "unwatched"},
+		StringData: map[string]string{"apiKey": "value"},
+	}))
+	require.NoError(t, c.Create(t.Context(), &gwapiv1b1.ReferenceGrant{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-mcproutes", Namespace: "unwatched"},
+		Spec: gwapiv1b1.ReferenceGrantSpec{
+			From: []gwapiv1b1.ReferenceGrantFrom{{Group: "aigateway.envoyproxy.io", Kind: "MCPRoute", Namespace: "default"}},
+			To:   []gwapiv1b1.ReferenceGrantTo{{Group: "", Kind: "Secret"}},
+		},
+	}))
+	require.NoError(t, c.Create(t.Context(), &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"},
+		Spec: gwapiv1.GatewaySpec{
+			GatewayClassName: "gwclass",
+			Listeners:        []gwapiv1.Listener{{Name: "listener1", Port: 8080, Protocol: "http"}},
+		},
+	}))
+	go func() { require.NoError(t, mgr.Start(t.Context())) }()
+	require.True(t, mgr.GetCache().WaitForCacheSync(t.Context()))
+
+	route := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "default"},
+		Spec: aigv1b1.MCPRouteSpec{
+			ParentRefs: []gwapiv1.ParentReference{{Name: "gw"}},
+			BackendRefs: []aigv1b1.MCPRouteBackendRef{{
+				BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc", Port: ptr.To(gwapiv1.PortNumber(80))},
+				SecurityPolicy: &aigv1b1.MCPBackendSecurityPolicy{APIKey: &aigv1b1.MCPBackendAPIKey{
+					SecretRef: &gwapiv1.SecretObjectReference{Name: "some-secret", Namespace: ptr.To(gwapiv1.Namespace("unwatched"))},
+				}},
+			}},
+		},
+	}
+	require.NoError(t, c.Create(t.Context(), route))
+	require.Eventually(t, func() bool {
+		var current aigv1b1.MCPRoute
+		if err := c.Get(t.Context(), client.ObjectKeyFromObject(route), &current); err != nil || len(current.Status.Conditions) != 1 {
+			return false
+		}
+		cond := current.Status.Conditions[0]
+		t.Logf("condition %s: %s", cond.Type, cond.Message)
+		return cond.Type == aigv1b1.ConditionTypeNotAccepted && strings.Contains(cond.Message, "unknown namespace for the cache") &&
+			!strings.Contains(cond.Message, "is not permitted")
+	}, 30*time.Second, 200*time.Millisecond)
 }

@@ -20,6 +20,8 @@ const (
 	backendSecurityPolicyKind = "BackendSecurityPolicy"
 	// quotaPolicyKind is the kind for QuotaPolicy.
 	quotaPolicyKind = "QuotaPolicy"
+	// mcpRouteKind is the kind for MCPRoute.
+	mcpRouteKind = "MCPRoute"
 	// secretGroup is the API group for the core Secret resource (the core group is the empty string).
 	secretGroup = ""
 	// secretKind is the kind for the core Secret resource.
@@ -165,6 +167,31 @@ func (v *referenceGrantValidator) validateSecretReference(
 		secretGroup, secretKind, secretNamespace, secretName)
 }
 
+// validateMCPRouteSecretReference validates that an MCPRoute can reference a core Secret (the
+// apiKey.secretRef of a backend's securityPolicy) in a different namespace by checking for a valid
+// ReferenceGrant allowing MCPRoute from routeNamespace to reference Secret in secretNamespace.
+//
+// Like validateSecretReference, this is a thin MCPRoute-specific entry point over validateReference.
+//
+// Parameters:
+//   - ctx: context for the operation
+//   - routeNamespace: namespace of the MCPRoute
+//   - secretNamespace: namespace of the referenced Secret
+//   - secretName: name of the Secret (optional, for the error message)
+//
+// Returns:
+//   - error: nil if the reference is valid (same namespace or valid ReferenceGrant exists), error otherwise
+func (v *referenceGrantValidator) validateMCPRouteSecretReference(
+	ctx context.Context,
+	routeNamespace string,
+	secretNamespace string,
+	secretName string,
+) error {
+	return v.validateReference(ctx,
+		aiServiceBackendGroup, mcpRouteKind, routeNamespace,
+		secretGroup, secretKind, secretNamespace, secretName)
+}
+
 // validateReference validates that a resource identified by fromGroup/fromKind in fromNamespace can
 // reference a target resource identified by targetGroup/targetKind in targetNamespace, by checking
 // for a valid ReferenceGrant. Same-namespace references are always allowed without a ReferenceGrant.
@@ -185,7 +212,11 @@ func (v *referenceGrantValidator) validateReference(
 
 	indexKey := getReferenceGrantIndexKey(targetNamespace, string(targetKind))
 	var referenceGrants gwapiv1b1.ReferenceGrantList
+	// The index key already names the namespace; listing in that namespace as well makes a cache that
+	// does not watch it (--watchNamespaces) return an error instead of an empty list, so a grant the
+	// controller cannot see is reported as such rather than as a denial.
 	if err := v.client.List(ctx, &referenceGrants,
+		client.InNamespace(targetNamespace),
 		client.MatchingFields{k8sClientIndexReferenceGrantToTargetKind: indexKey},
 	); err != nil {
 		return fmt.Errorf("failed to list ReferenceGrants in namespace %s for kind %s: %w",
