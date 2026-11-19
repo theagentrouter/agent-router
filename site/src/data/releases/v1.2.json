@@ -3,7 +3,7 @@
     "version": "v1.2",
     "title": "Agent Router v1.2.x",
     "subtitle": "First release as Agent Router: MCP security hardening, bare MCP tool names, caller-supplied MCP credentials, AWS OpenAI-compatible and TypeSafe backends, and Envoy Gateway v1.9.",
-    "badge": "Latest",
+    "badge": "Stable",
     "badgeType": "milestone"
   },
   "releases": [
@@ -355,6 +355,7 @@
     }
   ],
   "navigation": {
-    "previous": { "version": "v1.1.x Series", "path": "/release-notes/v1.1" }
+    "previous": { "version": "v1.1.x Series", "path": "/release-notes/v1.1" },
+    "next": { "version": "v1.3.x Series", "path": "/release-notes/v1.3" }
   }
 }
