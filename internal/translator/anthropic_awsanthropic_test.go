@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -652,4 +653,105 @@ event: message_stop
 data: {"type":"message_stop","amazon-bedrock-invocationMetrics":{"inputTokenCount":10,"outputTokenCount":15,"invocationLatency":1798,"firstByteLatency":1507}}
 
 `, string(results))
+}
+
+// The validation and missing messages bodies are what Bedrock returned for those requests on 2026-11-06.
+func TestAnthropicToAWSAnthropicTranslator_ResponseError(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, contentType, body string
+		wantType, wantMessage           string
+	}{
+		{
+			name: "validation", status: "400", contentType: "application/json",
+			body:     `{"message":"temperature: range: 0..1"}`,
+			wantType: "invalid_request_error", wantMessage: "temperature: range: 0..1",
+		},
+		{
+			name: "missing messages", status: "400", contentType: "application/json",
+			body:     `{"message":"'messages' must not be empty"}`,
+			wantType: "invalid_request_error", wantMessage: "'messages' must not be empty",
+		},
+		{
+			name: "throttled", status: "429", contentType: "application/json",
+			body:     `{"message":"Too many requests, please wait before trying again."}`,
+			wantType: "rate_limit_error", wantMessage: "Too many requests, please wait before trying again.",
+		},
+		{
+			name: "too large", status: "413", contentType: "application/json",
+			body:     `{"message":"Input is too long for requested model."}`,
+			wantType: "request_too_large", wantMessage: "Input is too long for requested model.",
+		},
+		{
+			name: "overloaded", status: "529", contentType: "application/json",
+			body:     `{"message":"Service is overloaded."}`,
+			wantType: "overloaded_error", wantMessage: "Service is overloaded.",
+		},
+		{
+			name: "malformed JSON", status: "400", contentType: "application/json",
+			body:     `{"message":`,
+			wantType: "invalid_request_error", wantMessage: `{"message":`,
+		},
+		{
+			name: "empty JSON", status: "502", contentType: "application/json",
+			body:     `{}`,
+			wantType: "internal_server_error", wantMessage: `{}`,
+		},
+		{
+			name: "non-JSON", status: "503", contentType: "text/plain",
+			body:     "Service Unavailable",
+			wantType: "service_unavailable_error", wantMessage: "Service Unavailable",
+		},
+		{
+			name: "non-JSON too large", status: "413", contentType: "text/plain",
+			body:     "Request Entity Too Large",
+			wantType: "request_too_large", wantMessage: "Request Entity Too Large",
+		},
+		{
+			name: "non-JSON overloaded", status: "529", contentType: "text/plain",
+			body:     "Overloaded",
+			wantType: "overloaded_error", wantMessage: "Overloaded",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			translator := NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+			headers, body, err := translator.ResponseError(
+				map[string]string{statusHeaderName: tc.status, contentTypeHeaderName: tc.contentType},
+				strings.NewReader(tc.body),
+			)
+			require.NoError(t, err)
+
+			var errResp anthropicschema.ErrorResponse
+			require.NoError(t, json.Unmarshal(body, &errResp))
+			assert.Equal(t, "error", errResp.Type)
+			assert.Equal(t, tc.wantType, errResp.Error.Type)
+			assert.Equal(t, tc.wantMessage, errResp.Error.Message)
+			assert.Contains(t, headers, internalapi.Header{contentTypeHeaderName, "application/json"})
+			assert.Contains(t, headers, internalapi.Header{contentLengthHeaderName, strconv.Itoa(len(body))})
+		})
+	}
+
+	for name, body := range map[string]string{
+		"anthropic error envelope passes through":                `{"type":"error","error":{"type":"invalid_request_error","message":"Invalid request format"}}`,
+		"anthropic error envelope without a type passes through": `{"type":"error","error":{"message":"Invalid request format"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			translator := NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+			headers, mutated, err := translator.ResponseError(
+				map[string]string{statusHeaderName: "400", contentTypeHeaderName: "application/json"},
+				strings.NewReader(body),
+			)
+			require.NoError(t, err)
+			assert.Nil(t, headers)
+			assert.Nil(t, mutated)
+		})
+	}
+
+	t.Run("read error", func(t *testing.T) {
+		translator := NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+		_, _, err := translator.ResponseError(
+			map[string]string{statusHeaderName: "400", contentTypeHeaderName: "application/json"},
+			alwaysErrReader{},
+		)
+		require.ErrorContains(t, err, "failed to read error body")
+	})
 }
