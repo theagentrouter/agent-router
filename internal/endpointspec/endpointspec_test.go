@@ -1795,9 +1795,38 @@ func TestCompletionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 		require.NotContains(t, out, marker)
 		require.Contains(t, out, "[REDACTED")
 	})
+
+	// Token IDs decode back to the prompt text, and RedactJSONTree keeps numbers, so token arrays must be collapsed as a whole.
+	for _, tc := range []struct{ name, prompt string }{
+		{"token array prompt", `[987654321,987654322]`},
+		{"nested token array prompt", `[[987654321],[987654322]]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, req, _, _, err := CompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","prompt":`+tc.prompt+`}`), false)
+			require.NoError(t, err)
+			redacted, err := CompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+			require.NoError(t, err)
+			out := mustMarshal(t, redacted)
+			require.NotContains(t, out, "987654321")
+			require.NotContains(t, out, "987654322")
+			require.Contains(t, out, redaction.RedactString(tc.prompt))
+			require.Contains(t, mustMarshal(t, req), "987654321", "original must not be mutated")
+		})
+	}
 }
 
 func TestEmbeddingsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("token array input", func(t *testing.T) {
+		_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(`{"model":"m","input":[[987654321],[987654322]]}`), false)
+		require.NoError(t, err)
+		redacted, err := EmbeddingsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, "987654321")
+		require.NotContains(t, out, "987654322")
+		require.Contains(t, out, redaction.RedactString(`[[987654321],[987654322]]`))
+	})
+
 	t.Run("completion input string", func(t *testing.T) {
 		const marker = "embed-this-marker"
 		_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(`{"model":"text-embedding-3-small","input":"`+marker+`"}`), false)

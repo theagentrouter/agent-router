@@ -297,11 +297,9 @@ func (CompletionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema
 
 // RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
 func (CompletionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.CompletionRequest) (redactedReq *openai.CompletionRequest, err error) {
-	// The prompt is user-supplied text (string / []string / token arrays). Its value is a
-	// bare interface{} populated by a custom unmarshaler, so redact it via the generic
-	// JSON-tree redactor rather than enumerating every union variant.
+	// The prompt is user-supplied text (string / []string) or token IDs ([]int64 / [][]int64), held in a bare interface{} populated by a custom unmarshaler.
 	redacted := *req
-	redacted.Prompt = openai.PromptUnion{Value: redactInterfaceValue(req.Prompt.Value)}
+	redacted.Prompt = openai.PromptUnion{Value: redactTextOrTokens(req.Prompt.Value)}
 	// User is an end-user identifier set by the application — redact it.
 	redacted.User = redaction.RedactString(req.User)
 	// Suffix is the text after the insertion point, so it is prompt content — redact it.
@@ -348,9 +346,9 @@ func (EmbeddingsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Embeddi
 	redacted := *req
 	switch {
 	case req.OfCompletion != nil:
-		// Input is user-supplied text (string / []string / objects) in a bare-any union.
+		// Input is user-supplied text (string / []string / objects) or token IDs in a bare-any union.
 		redactedOfCompletion := *req.OfCompletion
-		redactedOfCompletion.Input = openai.EmbeddingRequestInput{Value: redactInterfaceValue(req.OfCompletion.Input.Value)}
+		redactedOfCompletion.Input = openai.EmbeddingRequestInput{Value: redactTextOrTokens(req.OfCompletion.Input.Value)}
 		redactedOfCompletion.User = redactOptionalString(req.OfCompletion.User)
 		redactedOfCompletion.GCPVertexAIEmbeddingVendorFields = redactEmbeddingVendorFields(req.OfCompletion.GCPVertexAIEmbeddingVendorFields)
 		redacted.OfCompletion = &redactedOfCompletion
@@ -1184,6 +1182,15 @@ func redactInterfaceValue(v any) any {
 	var generic any
 	_ = json.Unmarshal(b, &generic)
 	return redaction.RedactJSONTree(generic)
+}
+
+// redactTextOrTokens redacts a prompt or input union that holds either text or token IDs. Token IDs decode back to the text with the model's public tokenizer, so a token array is collapsed into one placeholder; [redactInterfaceValue] would keep every number. Text shapes go through [redactInterfaceValue], which keeps the shape and redacts each string.
+func redactTextOrTokens(v any) any {
+	switch v.(type) {
+	case []int64, [][]int64:
+		return redactWholeValue(v)
+	}
+	return redactInterfaceValue(v)
 }
 
 // redactUnionField redacts a typed-struct field whose value is a JSON union
