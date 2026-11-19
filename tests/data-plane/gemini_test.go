@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
 	"sigs.k8s.io/yaml"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 	"github.com/envoyproxy/ai-gateway/internal/version"
 	"github.com/envoyproxy/ai-gateway/tests/internal/dataplaneenv"
 )
@@ -27,15 +29,20 @@ func TestGeminiNativeGeneration(t *testing.T) {
 	const requestBody = `{ "contents": [{"parts":[{"thoughtSignature":"opaque*signature"}]}], "cachedContent":"cachedContents/123" }`
 	const responseBody = `{"candidates":[{"content":{"parts":[{"thoughtSignature":"opaque*signature","text":"hello"}]}}],"usageMetadata":{"promptTokenCount":10,"cachedContentTokenCount":4,"candidatesTokenCount":5,"thoughtsTokenCount":3,"totalTokenCount":18}}`
 	const errorBody = `{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Invalid contents"}}`
+	const streamError = `{"error":{"code":503,"status":"UNAVAILABLE","message":"Service unavailable"}}`
+	const partialResponse = `{"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}`
 	cases := []struct {
 		name, action, query, format, response string
 		status                                int
+		streamFailure                         bool
 	}{
-		{"unary", "generateContent", "", "application/json", responseBody, http.StatusOK},
-		{"SSE", "streamGenerateContent", "alt=sse", "text/event-stream", "data: " + responseBody + "\n\n", http.StatusOK},
-		{"JSON array", "streamGenerateContent", "", "application/json", "[" + responseBody + "]", http.StatusOK},
-		{"provider error", "generateContent", "", "application/json", errorBody, http.StatusBadRequest},
-		{"retry", "generateContent", "", "application/json", responseBody, http.StatusOK},
+		{"unary", "generateContent", "", "application/json", responseBody, http.StatusOK, false},
+		{"SSE", "streamGenerateContent", "alt=sse", "text/event-stream", "data: " + responseBody + "\n\n", http.StatusOK, false},
+		{"JSON array", "streamGenerateContent", "", "application/json", "[" + responseBody + "]", http.StatusOK, false},
+		{"provider error", "generateContent", "", "application/json", errorBody, http.StatusBadRequest, false},
+		{"SSE error", "streamGenerateContent", "alt=sse", "text/event-stream", "data: " + partialResponse + "\n\ndata: " + streamError + "\n\n", http.StatusOK, true},
+		{"JSON array error", "streamGenerateContent", "", "application/json", "[" + partialResponse + "," + streamError + "]", http.StatusOK, true},
+		{"retry", "generateContent", "", "application/json", responseBody, http.StatusOK, false},
 	}
 	backend := func(name, model, key string) filterapi.Backend {
 		return filterapi.Backend{
@@ -59,6 +66,7 @@ func TestGeminiNativeGeneration(t *testing.T) {
 		err         error
 	}
 	attempts := make(chan attempt, len(cases)+1)
+	streamPrefixRead := make(chan struct{}, 1)
 	startUpstream := func(t testing.TB, _ io.Writer, ports map[string]int) {
 		lis, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", ports["upstream"])) //nolint:gosec
 		require.NoError(t, err)
@@ -80,7 +88,19 @@ func TestGeminiNativeGeneration(t *testing.T) {
 					return
 				}
 				w.WriteHeader(tc.status)
-				_, _ = io.WriteString(w, tc.response)
+				response := tc.response
+				if tc.streamFailure {
+					// Deliver the error object before the final framing byte.
+					_, _ = io.WriteString(w, response[:len(response)-1])
+					_ = http.NewResponseController(w).Flush()
+					select {
+					case <-streamPrefixRead:
+					case <-r.Context().Done():
+						return
+					}
+					response = response[len(response)-1:]
+				}
+				_, _ = io.WriteString(w, response)
 				return
 			}
 			http.Error(w, "unknown case", http.StatusInternalServerError)
@@ -88,8 +108,14 @@ func TestGeminiNativeGeneration(t *testing.T) {
 		t.Cleanup(func() { _ = server.Close() })
 		go func() { _ = server.Serve(lis) }()
 	}
+	collector := testotel.StartOTLPCollector()
+	t.Cleanup(collector.Close)
+	collector.SetEnv(t.Setenv)
+	t.Setenv("OTEL_METRICS_EXPORTER", "none")
+	t.Setenv("AI_GATEWAY_TRACING_SEMCONV", "openinference")
 	env := dataplaneenv.StartTestEnvironment(t, startUpstream, map[string]int{"upstream": 8080},
-		string(config), nil, envoyConfig, true, true, 120*time.Second)
+		string(config), nil, envoyConfig, true, true, 120*time.Second,
+		"-metricsRequestHeaderAttributes", "x-test-case:request.case")
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d/gemini/v1beta/models/native-gemini:", env.EnvoyListenerPort())
 	client := &http.Client{Timeout: eventuallyTimeout}
 	assertAttempt := func(t *testing.T, model, action, query, key string) {
@@ -126,8 +152,16 @@ func TestGeminiNativeGeneration(t *testing.T) {
 			resp, err := client.Do(req)
 			require.NoError(t, err)
 			defer func() { _ = resp.Body.Close() }()
-			body, err := io.ReadAll(resp.Body)
+			var body []byte
+			if tc.streamFailure {
+				body = make([]byte, len(tc.response)-1)
+				_, err = io.ReadFull(resp.Body, body)
+				require.NoError(t, err)
+				streamPrefixRead <- struct{}{}
+			}
+			tail, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
+			body = append(body, tail...)
 			require.Equal(t, tc.status, resp.StatusCode, string(body))
 			require.Equal(t, tc.format, resp.Header.Get("Content-Type"))
 			require.Equal(t, tc.response, string(body))
@@ -136,6 +170,12 @@ func TestGeminiNativeGeneration(t *testing.T) {
 				assertAttempt(t, "fallback-gemini", tc.action, tc.query, "fallback-configured-key")
 			}
 			require.Empty(t, attempts)
+			span := collector.TakeSpan()
+			require.NotNil(t, span)
+			if tc.streamFailure {
+				require.Equal(t, tracev1.Status_STATUS_CODE_ERROR, span.GetStatus().GetCode())
+				require.Contains(t, span.GetStatus().GetMessage(), "503")
+			}
 		})
 	}
 	t.Run("same model via OpenAI endpoint", func(t *testing.T) {
@@ -184,11 +224,26 @@ func TestGeminiNativeGeneration(t *testing.T) {
 		require.NoError(t, err)
 
 		sums := map[string]float64{}
+		streamCompletions := map[string]map[bool]float64{}
 		for line := range strings.SplitSeq(string(body), "\n") {
 			name, _, _ := strings.Cut(line, "{")
-			if !strings.HasPrefix(name, "gen_ai_client_token_usage") || !strings.HasSuffix(name, "_sum") ||
-				!strings.Contains(line, `gen_ai_operation_name="generate_content"`) ||
+			if !strings.Contains(line, `gen_ai_operation_name="generate_content"`) ||
 				!strings.Contains(line, `gen_ai_provider_name="gcp.gemini"`) {
+				continue
+			}
+			if name == "gen_ai_server_request_duration_seconds_count" {
+				_, label, _ := strings.Cut(line, `request_case="`)
+				caseName, _, _ := strings.Cut(label, `"`)
+				_, value, _ := strings.Cut(line, "} ")
+				count, err := strconv.ParseFloat(value, 64)
+				require.NoError(t, err)
+				if streamCompletions[caseName] == nil {
+					streamCompletions[caseName] = map[bool]float64{}
+				}
+				streamCompletions[caseName][strings.Contains(line, `error_type="`)] += count
+				continue
+			}
+			if !strings.HasPrefix(name, "gen_ai_client_token_usage") || !strings.HasSuffix(name, "_sum") {
 				continue
 			}
 			_, label, _ := strings.Cut(line, `gen_ai_token_type="`)
@@ -199,5 +254,10 @@ func TestGeminiNativeGeneration(t *testing.T) {
 			sums[tokenType] += count
 		}
 		require.Equal(t, map[string]float64{"input": 40, "output": 32, "cached_input": 16, "reasoning": 12}, sums)
+		for _, tc := range cases {
+			if tc.streamFailure {
+				require.Equal(t, map[bool]float64{true: 1}, streamCompletions[tc.name], tc.name)
+			}
+		}
 	})
 }

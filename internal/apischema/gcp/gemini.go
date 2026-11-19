@@ -81,6 +81,9 @@ type GeminiGenerateContentResponse struct {
 	ResponseID    string                                      `json:"responseId"`
 	ModelVersion  string                                      `json:"modelVersion"`
 	UsageMetadata *genai.GenerateContentResponseUsageMetadata `json:"usageMetadata"`
+	Error         *struct {
+		Code int `json:"code"`
+	} `json:"error,omitempty"`
 }
 
 // MergeGeminiUsage updates the reported counts with the metadata from the latest chunk.

@@ -125,6 +125,7 @@ type (
 		compressedBuf            []byte // accumulates raw compressed bytes across streaming chunks
 		decompressedOffset       int    // tracks decompressed bytes already returned
 		responseStreamTerminated bool   // a terminal SSE error was returned; discard any later upstream chunks
+		responseStreamFailed     bool   // a native error was recorded; continue forwarding provider bytes
 		translator               translator.Translator[ReqT, tracingapi.Span[RespT, RespChunkT]]
 		modelNameOverride        internalapi.ModelNameOverride
 		headerMutator            *headermutator.HeaderMutator
@@ -519,6 +520,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 	u.compressedBuf = nil
 	u.decompressedOffset = 0
 	u.responseStreamTerminated = false
+	u.responseStreamFailed = false
 	newHeaders, err := u.translator.ResponseHeaders(u.responseHeaders)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transform response headers: %w", err)
@@ -571,6 +573,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 
 	recordRequestCompletionErr := false
 	defer func() {
+		if u.responseStreamFailed && !recordRequestCompletionErr {
+			return
+		}
 		if err != nil || recordRequestCompletionErr {
 			u.metrics.RecordRequestCompletion(ctx, false, u.requestHeaders)
 			return
@@ -627,8 +632,20 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 
 	newHeaders, newBody, tokenUsage, responseModel, err := u.translator.ResponseBody(u.responseHeaders, decodingResult.reader, body.EndOfStream, u.parent.span)
 	if err != nil {
+		var nativeErr *translator.StreamResponseError
 		var streamErr *translator.StreamOverloadedError
-		if u.parent.stream && errors.As(err, &streamErr) && len(newBody) > 0 {
+		switch {
+		case u.parent.stream && errors.As(err, &nativeErr):
+			if !u.responseStreamFailed {
+				u.responseStreamFailed = true
+				recordRequestCompletionErr = true
+				if u.parent.span != nil {
+					u.parent.span.EndSpanOnError(nativeErr.StatusCode, nativeErr.Body)
+					u.parent.span = nil
+				}
+			}
+			err = nil
+		case u.parent.stream && errors.As(err, &streamErr) && len(newBody) > 0:
 			if u.logger != nil {
 				u.logger.Warn("upstream returned an overload error in the response stream")
 			}
@@ -650,8 +667,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 					},
 				},
 			}, nil
+		default:
+			return nil, fmt.Errorf("failed to transform response: %w", err)
 		}
-		return nil, fmt.Errorf("failed to transform response: %w", err)
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
 

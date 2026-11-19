@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"cmp"
 	"io"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -67,12 +68,16 @@ func (t *geminiGenerateContentTranslator) ResponseBody(headers map[string]string
 	if err != nil {
 		return nil, nil, metrics.TokenUsage{}, "", err
 	}
+	chunks := [][]byte{data}
 	if t.path.Streaming() {
-		for _, chunk := range t.stream.split(headers[contentTypeHeaderName], data, endOfStream) {
-			t.observe(chunk, span)
+		chunks = t.stream.split(headers[contentTypeHeaderName], data, endOfStream)
+	}
+	var streamErr error
+	for _, chunk := range chunks {
+		if failure := t.observe(chunk, span); failure != nil && streamErr == nil {
+			streamErr = failure
+			span = nil
 		}
-	} else {
-		t.observe(data, span)
 	}
 	var usage metrics.TokenUsage
 	if t.usage != nil {
@@ -83,18 +88,25 @@ func (t *geminiGenerateContentTranslator) ResponseBody(headers map[string]string
 		usage.SetCachedInputTokens(uint32(t.usage.CachedContentTokenCount)) //nolint:gosec // Token counts are nonnegative.
 		usage.SetReasoningTokens(uint32(t.usage.ThoughtsTokenCount))        //nolint:gosec // Token counts are nonnegative.
 	}
-	return nil, nil, usage, cmp.Or(t.responseModel, t.requestModel), nil
+	return nil, nil, usage, cmp.Or(t.responseModel, t.requestModel), streamErr
 }
 
-func (t *geminiGenerateContentTranslator) observe(data []byte, span tracingapi.GeminiGenerateContentSpan) {
+func (t *geminiGenerateContentTranslator) observe(data []byte, span tracingapi.GeminiGenerateContentSpan) *StreamResponseError {
 	var response gcp.GeminiGenerateContentResponse
 	if json.Unmarshal(data, &response) != nil {
-		return
+		return nil
+	}
+	if t.path.Streaming() && response.Error != nil {
+		status := response.Error.Code
+		if status < http.StatusBadRequest || status >= 600 {
+			status = http.StatusBadGateway
+		}
+		return &StreamResponseError{StatusCode: status, Body: data}
 	}
 	t.responseModel = cmp.Or(response.ModelVersion, t.responseModel)
 	t.usage = gcp.MergeGeminiUsage(t.usage, response.UsageMetadata)
 	if span == nil {
-		return
+		return nil
 	}
 	response.UsageMetadata = t.usage
 	response.ModelVersion = t.responseModel
@@ -103,6 +115,7 @@ func (t *geminiGenerateContentTranslator) observe(data []byte, span tracingapi.G
 	} else {
 		span.RecordResponse(&response)
 	}
+	return nil
 }
 
 func (t *geminiGenerateContentTranslator) ResponseError(map[string]string, io.Reader) ([]internalapi.Header, []byte, error) {
