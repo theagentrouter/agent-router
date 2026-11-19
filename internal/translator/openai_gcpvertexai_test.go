@@ -1377,8 +1377,27 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingResponseBody(t *
 				// The finish_reason chunk must contain "delta":{} to comply with the OpenAI streaming format.
 				require.Contains(t, bodyStr, `"delta":{}`)
 				require.Contains(t, bodyStr, `"finish_reason":"length"`)
+				require.NotContains(t, bodyStr, `native_finish_reason`)
 				// The usage chunk must have empty choices.
 				require.Contains(t, bodyStr, `"choices":[]`)
+			},
+		},
+		{
+			name:          "safety block maps to a standard finish_reason and exposes the native one",
+			gcpChunk:      `{"candidates":[{"finishReason":"SAFETY","safetyRatings":[{"category":"HARM_CATEGORY_HARASSMENT","probability":"HIGH","blocked":true}]}]}`,
+			expectedUsage: tokenUsageFrom(-1, -1, -1, -1, -1, -1),
+			assertBody: func(t *testing.T, bodyStr string) {
+				require.Contains(t, bodyStr, `"finish_reason":"content_filter"`)
+				require.Contains(t, bodyStr, `"native_finish_reason":"SAFETY"`)
+			},
+		},
+		{
+			name:          "malformed function call maps to stop and exposes the native reason",
+			gcpChunk:      `{"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"MALFORMED_FUNCTION_CALL"}]}`,
+			expectedUsage: tokenUsageFrom(-1, -1, -1, -1, -1, -1),
+			assertBody: func(t *testing.T, bodyStr string) {
+				require.Contains(t, bodyStr, `"finish_reason":"stop"`)
+				require.Contains(t, bodyStr, `"native_finish_reason":"MALFORMED_FUNCTION_CALL"`)
 			},
 		},
 	}
@@ -1401,6 +1420,63 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingResponseBody(t *
 			require.Equal(t, tt.expectedUsage, tokenUsage)
 			if tt.assertBody != nil {
 				tt.assertBody(t, bodyStr)
+			}
+		})
+	}
+}
+
+// TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingFinishReasonAfterToolCall covers the
+// split-chunk shape of newer Gemini models, where the functionCall and the terminal finish reason
+// arrive in different chunks. Only a raw STOP may be promoted to tool_calls; a failure reason that
+// is approximated to "stop" must stay "stop", otherwise the client would try to run a call that
+// does not exist.
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingFinishReasonAfterToolCall(t *testing.T) {
+	const toolCallChunk = `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"city":"NYC"}}}],"role":"model"}}]}`
+
+	tests := []struct {
+		name               string
+		terminalChunk      string
+		wantFinishReason   string
+		wantNativeFinish   string
+		wantNoNativeFinish bool
+	}{
+		{
+			name:               "terminal STOP after a streamed tool call is promoted to tool_calls",
+			terminalChunk:      `{"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"STOP"}]}`,
+			wantFinishReason:   `"finish_reason":"tool_calls"`,
+			wantNoNativeFinish: true,
+		},
+		{
+			name:             "terminal MALFORMED_FUNCTION_CALL after a streamed tool call stays stop",
+			terminalChunk:    `{"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"MALFORMED_FUNCTION_CALL"}]}`,
+			wantFinishReason: `"finish_reason":"stop"`,
+			wantNativeFinish: `"native_finish_reason":"MALFORMED_FUNCTION_CALL"`,
+		},
+		{
+			name:             "terminal OTHER after a streamed tool call stays stop",
+			terminalChunk:    `{"candidates":[{"finishReason":"OTHER"}]}`,
+			wantFinishReason: `"finish_reason":"stop"`,
+			wantNativeFinish: `"native_finish_reason":"OTHER"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+
+			_, firstBody, _, _, err := translator.handleStreamingResponse(bytes.NewReader([]byte(toolCallChunk)), false, nil)
+			require.NoError(t, err)
+			require.Contains(t, string(firstBody), `"tool_calls"`)
+			require.NotContains(t, string(firstBody), `"finish_reason"`)
+
+			_, secondBody, _, _, err := translator.handleStreamingResponse(bytes.NewReader([]byte(tt.terminalChunk)), false, nil)
+			require.NoError(t, err)
+			bodyStr := string(secondBody)
+			require.Contains(t, bodyStr, tt.wantFinishReason)
+			if tt.wantNoNativeFinish {
+				require.NotContains(t, bodyStr, `native_finish_reason`)
+			} else {
+				require.Contains(t, bodyStr, tt.wantNativeFinish)
 			}
 		})
 	}
