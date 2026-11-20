@@ -1,0 +1,108 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 1975
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: repro
+  namespace: default
+spec:
+  parentRefs:
+  - name: aigw-run
+    kind: Gateway
+    group: gateway.networking.k8s.io
+  rules:
+  - matches:
+    - headers:
+      - type: Exact
+        name: x-ai-eg-model
+        value: claude-sonnet-5-5
+    backendRefs:
+    - name: backend-a
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: backend-a
+  namespace: default
+spec:
+  endpoints:
+  - ip:
+      address: 127.0.0.1
+      port: 9101
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: backend-a
+  namespace: default
+spec:
+  schema:
+    name: Anthropic
+  backendRef:
+    name: backend-a
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: key-a
+  namespace: default
+type: Opaque
+stringData:
+  apiKey: key-for-backend-a
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: key-a
+  namespace: default
+spec:
+  targetRefs:
+  - group: aigateway.envoyproxy.io
+    kind: AIServiceBackend
+    name: backend-a
+  type: AnthropicAPIKey
+  anthropicAPIKey:
+    secretRef:
+      name: key-a
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: repro
+  namespace: default
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: repro
+  apiKeyAuth:
+    credentialRefs:
+    - kind: Secret
+      name: client-keys
+    extractFrom:
+    - headers:
+      - x-api-key
