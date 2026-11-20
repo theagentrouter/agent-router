@@ -21,11 +21,14 @@ import (
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	fake2 "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -939,6 +942,79 @@ func TestBackendSecurityPolicyController_RotateCredential_OpenAICredentials_OIDC
 	require.True(t, ok, "expected secret to have owner reference to BackendSecurityPolicy")
 }
 
+func TestBackendSecurityPolicyController_RotateCredential_OpenAICredentials_ServiceAccountToken(t *testing.T) {
+	var gotSubjectTokens []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		gotSubjectTokens = append(gotSubjectTokens, body["subject_token"])
+		w.Header().Add("Content-Type", "application/json")
+		if len(gotSubjectTokens) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error": {"message": "Invalid subject token.", "code": "invalid_subject_token"}}`))
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"access_token": "openai-access-token", "expires_at": %d}`, time.Now().Add(time.Hour).Unix())
+	}))
+	defer server.Close()
+	origTokenURL := tokenprovider.OpenAITokenExchangeURL
+	tokenprovider.OpenAITokenExchangeURL = server.URL
+	t.Cleanup(func() { tokenprovider.OpenAITokenExchangeURL = origTokenURL })
+
+	const bspNamespace = "team-a"
+	kube := fake2.NewClientset()
+	var tokenRequests []*authenticationv1.TokenRequest
+	kube.PrependReactor("create", "serviceaccounts", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		create := action.(k8stesting.CreateActionImpl)
+		require.Equal(t, "token", create.GetSubresource())
+		require.Equal(t, bspNamespace, create.GetNamespace())
+		require.Equal(t, "openai-federation", create.Name)
+		tokenRequests = append(tokenRequests, create.GetObject().(*authenticationv1.TokenRequest))
+		return true, &authenticationv1.TokenRequest{Status: authenticationv1.TokenRequestStatus{
+			Token:               fmt.Sprintf("sa-token-%d", len(tokenRequests)),
+			ExpirationTimestamp: metav1.NewTime(time.Now().Add(10 * time.Minute)),
+		}}, nil
+	})
+
+	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()
+	c := NewBackendSecurityPolicyController(cl, kube, ctrl.Log, nil, nil, DefaultPreRotationWindow)
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "openai-sa", Namespace: bspNamespace},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeOpenAICredentials,
+			OpenAICredentials: &aigv1b1.BackendSecurityPolicyOpenAICredentials{
+				WorkloadIdentityFederationConfig: aigv1b1.OpenAIWorkloadIdentityFederationConfig{
+					IdentityProviderID: "idp_123",
+					ServiceAccountID:   "sa_456",
+					SubjectToken: aigv1b1.OpenAISubjectToken{
+						ServiceAccountToken: &aigv1b1.BackendSecurityPolicyServiceAccountToken{
+							ServiceAccountName: "openai-federation",
+							Audience:           "https://api.openai.com/v1",
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+
+	_, err := c.rotateCredential(t.Context(), bsp)
+	require.ErrorContains(t, err, "invalid_subject_token")
+
+	res, err := c.rotateCredential(t.Context(), bsp)
+	require.NoError(t, err)
+	require.Greater(t, res.RequeueAfter, 50*time.Minute)
+
+	require.Equal(t, []string{"sa-token-1", "sa-token-2"}, gotSubjectTokens)
+	require.Len(t, tokenRequests, 2)
+	for _, req := range tokenRequests {
+		require.Equal(t, []string{"https://api.openai.com/v1"}, req.Spec.Audiences)
+	}
+	secret, err := rotators.LookupSecret(t.Context(), cl, bspNamespace, rotators.GetBSPSecretName("openai-sa"))
+	require.NoError(t, err)
+	require.Equal(t, "openai-access-token", string(secret.Data[rotators.OpenAIAccessTokenKey]))
+}
+
 func TestBackendSecurityPolicyController_Reconcile_OpenAICredentials_SPIFFEUnavailable(t *testing.T) {
 	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
 	cl := requireNewFakeClientWithIndexes(t)
@@ -986,7 +1062,7 @@ func TestBackendSecurityPolicyController_RotateCredential_OpenAICredentials_NoSu
 		},
 	}
 	_, err := c.rotateCredential(t.Context(), bsp)
-	require.EqualError(t, err, "one of spiffeJWTSVID or oidcExchangeToken must be defined, namespace default name openai-bsp")
+	require.EqualError(t, err, "one of spiffeJWTSVID, serviceAccountToken or oidcExchangeToken must be defined, namespace default name openai-bsp")
 }
 
 func TestNewBackendSecurityPolicyController_RotateCredentialAwsCredentialFile(t *testing.T) {
