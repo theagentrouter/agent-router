@@ -195,6 +195,94 @@ func testRecordRequestCompletion(t *testing.T) {
 	assert.Equal(t, 2*10*time.Millisecond.Seconds(), sum)
 }
 
+func TestRecordOnClose(t *testing.T) {
+	synctest.Test(t, testRecordOnClose)
+}
+
+func testRecordOnClose(t *testing.T) {
+	t.Helper()
+	var (
+		mr    = metric.NewManualReader()
+		meter = metric.NewMeterProvider(metric.WithReader(mr)).Meter("test")
+		pm    = NewMetricsFactory(meter, nil, GenAIOperationCompletion).NewMetrics().(*metricsImpl)
+		attrs = []attribute.KeyValue{
+			attribute.Key(genaiAttributeOperationName).String(string(GenAIOperationCompletion)),
+			attribute.Key(genaiAttributeProviderName).String("custom"),
+			attribute.Key(genaiAttributeOriginalModel).String("test-model"),
+			attribute.Key(genaiAttributeRequestModel).String("test-model"),
+			attribute.Key(genaiAttributeResponseModel).String("test-model"),
+			attribute.Key(genaiAttributeBackend).String("custom"),
+		}
+		attrsFailure = attribute.NewSet(append(attrs, attribute.Key(genaiAttributeErrorType).String(genaiErrorTypeFallback))...)
+	)
+
+	// A metrics instance that never started a request must emit nothing on Close.
+	pm.RecordRequestCompletionOnClose(t.Context(), nil)
+	pm.RecordTokenUsageOnClose(t.Context(), TokenUsage{}, nil)
+	assert.Zero(t, histogramDatapointCount(t, mr, genaiMetricServerRequestDuration, attrsFailure))
+
+	// An abandoned stream: one failed completion with the error-type attribute, and the
+	// partial usage seen so far.
+	pm.StartRequest(nil)
+	pm.SetOriginalModel("test-model")
+	pm.SetRequestModel("test-model")
+	pm.SetResponseModel("test-model")
+	pm.SetBackend(&filterapi.Backend{Name: "custom"})
+	time.Sleep(10 * time.Millisecond)
+	usage := TokenUsage{}
+	usage.SetOutputTokens(34)
+	pm.RecordTokenUsageOnClose(t.Context(), usage, nil)
+	pm.RecordRequestCompletionOnClose(t.Context(), nil)
+	count, _ := testotel.GetHistogramValues(t, mr, genaiMetricServerRequestDuration, attrsFailure)
+	assert.Equal(t, uint64(1), count)
+	tuAttrs := attribute.NewSet(append(attrs, attribute.Key(genaiAttributeTokenType).String(genaiTokenTypeOutput))...)
+	tuCount, tuSum := testotel.GetHistogramValues(t, mr, genaiMetricClientTokenUsage, tuAttrs)
+	assert.Equal(t, uint64(1), tuCount)
+	assert.Equal(t, 34.0, tuSum)
+
+	// Idempotency: a second Close (or a Close after a late-arriving normal record) emits nothing.
+	pm.RecordRequestCompletionOnClose(t.Context(), nil)
+	pm.RecordTokenUsageOnClose(t.Context(), usage, nil)
+	count, _ = testotel.GetHistogramValues(t, mr, genaiMetricServerRequestDuration, attrsFailure)
+	assert.Equal(t, uint64(1), count)
+	tuCount, _ = testotel.GetHistogramValues(t, mr, genaiMetricClientTokenUsage, tuAttrs)
+	assert.Equal(t, uint64(1), tuCount)
+
+	// A request that completed normally must not re-emit on Close.
+	pm2 := NewMetricsFactory(meter, nil, GenAIOperationCompletion).NewMetrics().(*metricsImpl)
+	pm2.StartRequest(nil)
+	pm2.SetOriginalModel("test-model")
+	pm2.SetRequestModel("test-model")
+	pm2.SetResponseModel("test-model")
+	pm2.SetBackend(&filterapi.Backend{Name: "custom"})
+	pm2.RecordRequestCompletion(t.Context(), true, nil)
+	pm2.RecordRequestCompletionOnClose(t.Context(), nil)
+	attrsSuccess := attribute.NewSet(attrs...)
+	sCount, _ := testotel.GetHistogramValues(t, mr, genaiMetricServerRequestDuration, attrsSuccess)
+	assert.Equal(t, uint64(1), sCount) // the success record, and nothing from Close
+}
+
+// histogramDatapointCount returns the datapoint count for the exact attribute set, or zero
+// when no datapoint exists at all (unlike testotel.GetHistogramValues, which requires exactly one).
+func histogramDatapointCount(t *testing.T, mr *metric.ManualReader, name string, attrs attribute.Set) uint64 {
+	t.Helper()
+	var data metricdata.ResourceMetrics
+	require.NoError(t, mr.Collect(t.Context(), &data))
+	for _, sm := range data.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			for _, dp := range m.Data.(metricdata.Histogram[float64]).DataPoints {
+				if dp.Attributes.Equals(&attrs) {
+					return dp.Count
+				}
+			}
+		}
+	}
+	return 0
+}
+
 func TestGetTimeToFirstTokenMsAndGetInterTokenLatencyMs(t *testing.T) {
 	t.Parallel()
 	c := metricsImpl{timeToFirstToken: 1 * time.Second, interTokenLatencySec: 2}
