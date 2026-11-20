@@ -40,6 +40,103 @@ func failIf5xx(t *testing.T, resp *http.Response, was5xx *bool) {
 	}
 }
 
+func TestGuardrailsWithTestUpstream(t *testing.T) {
+	configBytes, err := yaml.Marshal(&filterapi.Config{
+		Version:  version.Parse(),
+		Backends: []filterapi.Backend{testUpstreamOpenAIBackend},
+		Guardrails: []filterapi.Guardrail{
+			{
+				Name: "e2e-request-guardrail", Phase: filterapi.GuardrailPhaseRequest,
+				Provider: filterapi.GuardrailProvider{
+					Type: filterapi.GuardrailProviderTypeRegex, Pattern: "E2E_REQUEST_GUARDRAIL", Message: "request blocked by e2e guardrail",
+				},
+			},
+			{
+				Name: "e2e-response-guardrail", Phase: filterapi.GuardrailPhaseResponse,
+				Provider: filterapi.GuardrailProvider{
+					Type: filterapi.GuardrailProviderTypeRegex, Pattern: "E2E_RESPONSE_GUARDRAIL", Message: "response blocked by e2e guardrail",
+				},
+			},
+			{
+				Name: "e2e-monitor-guardrail", Phase: filterapi.GuardrailPhaseRequest,
+				Provider: filterapi.GuardrailProvider{
+					Type: filterapi.GuardrailProviderTypeRegex, Pattern: "E2E_MONITOR_GUARDRAIL", Action: filterapi.GuardrailActionMonitor,
+				},
+			},
+			{
+				Name: "e2e-request-mask", Phase: filterapi.GuardrailPhaseRequest,
+				Provider: filterapi.GuardrailProvider{
+					Type: filterapi.GuardrailProviderTypeRegex, Pattern: `mask-me@example\.com`, Action: filterapi.GuardrailActionMask, MaskReplacement: "[EMAIL]",
+				},
+			},
+			{
+				Name: "e2e-response-mask", Phase: filterapi.GuardrailPhaseResponse,
+				Provider: filterapi.GuardrailProvider{
+					Type: filterapi.GuardrailProviderTypeRegex, Pattern: `mask-response@example\.com`, Action: filterapi.GuardrailActionMask, MaskReplacement: "[EMAIL]",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	env := startTestEnvironment(t, string(configBytes), true, false)
+	endpoint := fmt.Sprintf("http://localhost:%d/v1/chat/completions", env.EnvoyListenerPort())
+
+	for _, test := range []struct {
+		name, requestBody, responseBody, wantBody, wantUpstreamBody string
+		wantStatus                                                  int
+	}{
+		{
+			name: "request", requestBody: `{"model":"something","messages":[{"role":"user","content":"E2E_REQUEST_GUARDRAIL"}]}`,
+			wantBody:   `{"type":"error","error":{"type":"GuardrailViolation","code":"403","message":"request blocked by e2e guardrail"}}`,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "response", requestBody: `{"model":"something","messages":[{"role":"user","content":"hello"}]}`,
+			responseBody: `{"id":"guardrail-test","object":"chat.completion","created":123,"model":"something","choices":[{"index":0,"message":{"role":"assistant","content":"E2E_RESPONSE_GUARDRAIL"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`,
+			wantBody:     `{"type":"error","error":{"type":"GuardrailViolation","code":"403","message":"response blocked by e2e guardrail"}}`,
+			wantStatus:   http.StatusForbidden,
+		},
+		{
+			name: "monitor", requestBody: `{"model":"something","messages":[{"role":"user","content":"E2E_MONITOR_GUARDRAIL"}]}`,
+			responseBody: `{"id":"monitor","object":"chat.completion","created":123,"model":"something","choices":[{"index":0,"message":{"role":"assistant","content":"safe"},"finish_reason":"stop"}]}`,
+			wantBody:     `{"id":"monitor","object":"chat.completion","created":123,"model":"something","choices":[{"index":0,"message":{"role":"assistant","content":"safe"},"finish_reason":"stop"}]}`,
+			wantStatus:   http.StatusOK,
+		},
+		{
+			name: "request mask", requestBody: `{"model":"something","messages":[{"role":"user","content":"email mask-me@example.com"}]}`,
+			wantUpstreamBody: `{"model":"something","messages":[{"role":"user","content":"email [EMAIL]"}]}`,
+			responseBody:     `{"id":"request-mask","object":"chat.completion","created":123,"model":"something","choices":[{"index":0,"message":{"role":"assistant","content":"safe"},"finish_reason":"stop"}]}`,
+			wantBody:         `{"id":"request-mask","object":"chat.completion","created":123,"model":"something","choices":[{"index":0,"message":{"role":"assistant","content":"safe"},"finish_reason":"stop"}]}`,
+			wantStatus:       http.StatusOK,
+		},
+		{
+			name: "response mask", requestBody: `{"model":"something","messages":[{"role":"user","content":"hello"}]}`,
+			responseBody: `{"id":"response-mask","object":"chat.completion","created":123,"model":"something","choices":[{"index":0,"message":{"role":"assistant","content":"email mask-response@example.com"},"finish_reason":"stop"}]}`,
+			wantBody:     `{"id":"response-mask","object":"chat.completion","created":123,"model":"something","choices":[{"index":0,"message":{"role":"assistant","content":"email [EMAIL]"},"finish_reason":"stop"}]}`,
+			wantStatus:   http.StatusOK,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint, strings.NewReader(test.requestBody))
+			require.NoError(t, err)
+			req.Header.Set("x-test-backend", "openai")
+			if test.responseBody != "" {
+				req.Header.Set(testupstreamlib.ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(test.responseBody)))
+			}
+			if test.wantUpstreamBody != "" {
+				req.Header.Set(testupstreamlib.ExpectedRequestBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(test.wantUpstreamBody)))
+			}
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.Equal(t, test.wantStatus, resp.StatusCode, "response body: %s", body)
+			require.JSONEq(t, test.wantBody, string(body))
+		})
+	}
+}
+
 // TestWithTestUpstream tests the end-to-end flow of the external processor with Envoy and the test upstream.
 //
 // This does not require any environment variables to be set as it relies on the test upstream.
