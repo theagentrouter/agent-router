@@ -151,9 +151,13 @@ func anthropicThinkingToOpenAI(t *anthropic.Thinking) *openai.ThinkingUnion {
 func anthropicMessagesToOpenAI(body *anthropic.MessagesRequest) []openai.ChatCompletionMessageParamUnion {
 	var messages []openai.ChatCompletionMessageParamUnion
 
+	// Promote role: "system" messages from the messages array before converting, so clients that
+	// send system prompts as messages do not have them silently dropped.
+	sourceMessages, systemPrompt := promoteAnthropicSystemMessagesToParam(body)
+
 	// Prepend the system prompt as an OpenAI system message.
-	if body.System != nil {
-		systemText := anthropicSystemPromptToText(body.System)
+	if systemPrompt != nil {
+		systemText := anthropicSystemPromptToText(systemPrompt)
 		if systemText != "" {
 			messages = append(messages, openai.ChatCompletionMessageParamUnion{
 				OfSystem: &openai.ChatCompletionSystemMessageParam{
@@ -164,7 +168,7 @@ func anthropicMessagesToOpenAI(body *anthropic.MessagesRequest) []openai.ChatCom
 		}
 	}
 
-	for _, msg := range body.Messages {
+	for _, msg := range sourceMessages {
 		switch msg.Role {
 		case anthropic.MessageRoleUser:
 			messages = appendAnthropicUserMessage(messages, msg)

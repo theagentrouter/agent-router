@@ -121,6 +121,59 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 		require.NotNil(t, req.Messages[1].OfUser)
 	})
 
+	t.Run("inline system message is promoted", func(t *testing.T) {
+		body := &anthropic.MessagesRequest{
+			Model: "claude-3",
+			Messages: []anthropic.MessageParam{
+				{Role: "system", Content: anthropic.MessageContent{Text: "You are helpful."}},
+				{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}},
+			},
+		}
+		req := buildOpenAIChatCompletionRequest(body, "")
+		require.Len(t, req.Messages, 2)
+		require.NotNil(t, req.Messages[0].OfSystem)
+		assert.Equal(t, "You are helpful.", req.Messages[0].OfSystem.Content.Value)
+		require.NotNil(t, req.Messages[1].OfUser)
+		assert.Equal(t, "Hi", req.Messages[1].OfUser.Content.Value)
+	})
+
+	t.Run("inline system content blocks are promoted", func(t *testing.T) {
+		body := &anthropic.MessagesRequest{
+			Model: "claude-3",
+			Messages: []anthropic.MessageParam{
+				{
+					Role: "system",
+					Content: anthropic.MessageContent{Array: []anthropic.ContentBlockParam{
+						{Text: &anthropic.TextBlockParam{Type: "text", Text: "Be precise. "}},
+						{Text: &anthropic.TextBlockParam{Type: "text", Text: "Be concise."}},
+					}},
+				},
+				{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}},
+			},
+		}
+		req := buildOpenAIChatCompletionRequest(body, "")
+		require.Len(t, req.Messages, 2)
+		require.NotNil(t, req.Messages[0].OfSystem)
+		assert.Equal(t, "Be precise. Be concise.", req.Messages[0].OfSystem.Content.Value)
+		require.NotNil(t, req.Messages[1].OfUser)
+	})
+
+	t.Run("top-level and inline system prompts are merged", func(t *testing.T) {
+		body := &anthropic.MessagesRequest{
+			Model:  "claude-3",
+			System: &anthropic.SystemPrompt{Text: "You are helpful. "},
+			Messages: []anthropic.MessageParam{
+				{Role: "system", Content: anthropic.MessageContent{Text: "Be concise."}},
+				{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}},
+			},
+		}
+		req := buildOpenAIChatCompletionRequest(body, "")
+		require.Len(t, req.Messages, 2)
+		require.NotNil(t, req.Messages[0].OfSystem)
+		assert.Equal(t, "You are helpful. Be concise.", req.Messages[0].OfSystem.Content.Value)
+		require.NotNil(t, req.Messages[1].OfUser)
+	})
+
 	t.Run("empty system prompt not prepended", func(t *testing.T) {
 		body := &anthropic.MessagesRequest{
 			Model:  "claude-3",
