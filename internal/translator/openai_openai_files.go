@@ -7,21 +7,42 @@ package translator
 
 import (
 	"io"
+	"path"
+	"strings"
 
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
-// Every method here is a no-op: the files processor (internal/extproc) keeps its own
-// canonical native-id-substituted path/body on the way upstream and re-encodes ids on the raw
-// response on the way back, so the translators can only focus on the OpenAI to/from provider API mapping.
+// The files processor (internal/extproc) substitutes native ids on the way upstream and re-encodes
+// ids on the raw response on the way back. The OpenAI translators only rewrite ":path" so that the
+// backend's configured OpenAI prefix (AIServiceBackend schema prefix) is applied; bodies and responses pass through unchanged.
 type (
-	openAIFileUploadTranslator   struct{}
-	openAIFileRetrieveTranslator struct{}
-	openAIFileContentTranslator  struct{}
-	openAIFileDeleteTranslator   struct{}
-	openAIFileListTranslator     struct{}
+	openAIFileUploadTranslator   struct{ filesPath string }
+	openAIFileRetrieveTranslator struct{ filesPath string }
+	openAIFileContentTranslator  struct{ filesPath string }
+	openAIFileDeleteTranslator   struct{ filesPath string }
+	openAIFileListTranslator     struct{ filesPath string }
 )
+
+// openAIFilesPath returns the upstream files collection path for the given OpenAI prefix,
+// e.g. "/v1/files" for "v1".
+func openAIFilesPath(prefix string) string {
+	return path.Join("/", prefix, "files")
+}
+
+// requestQuery returns the query string (including the leading "?") of a request path, or "".
+func requestQuery(p string) string {
+	if i := strings.IndexByte(p, '?'); i != -1 {
+		return p[i:]
+	}
+	return ""
+}
+
+// pathHeader returns the ":path" header for the upstream request.
+func pathHeader(p string) []internalapi.Header {
+	return []internalapi.Header{{pathHeaderName, p}}
+}
 
 var (
 	_ FilesTranslator = (*openAIFileUploadTranslator)(nil)
@@ -33,13 +54,12 @@ var (
 
 // --- upload: POST /v1/files ---
 
-// RequestBody implements [Translator.RequestBody]. Returning a nil body keeps the processor's
-// canonical (native-id-substituted) request unchanged; returning nil headers leaves :path/:method
-// as the processor set them.
-func (*openAIFileUploadTranslator) RequestBody(_ []byte, _ *FilesRequest, _ bool) (
+// RequestBody implements [Translator.RequestBody]. It sets ":path" to the prefixed upstream path
+// (keeping the native-substituted query); a nil body keeps the processor's request body unchanged.
+func (t *openAIFileUploadTranslator) RequestBody(_ []byte, req *FilesRequest, _ bool) (
 	newHeaders []internalapi.Header, mutatedBody []byte, err error,
 ) {
-	return nil, nil, nil
+	return pathHeader(t.filesPath + requestQuery(req.Path)), nil, nil
 }
 
 // ResponseHeaders implements [Translator.ResponseHeaders]. The OpenAI response headers need no
@@ -72,13 +92,12 @@ func (*openAIFileUploadTranslator) ResponseError(_ map[string]string, _ io.Reade
 
 // --- retrieve: GET /v1/files/{id} (and the schema gate for /v1/files/{id}/content) ---
 
-// RequestBody implements [Translator.RequestBody]. Returning a nil body keeps the processor's
-// canonical (native-id-substituted) request unchanged; returning nil headers leaves :path/:method
-// as the processor set them.
-func (*openAIFileRetrieveTranslator) RequestBody(_ []byte, _ *FilesRequest, _ bool) (
+// RequestBody implements [Translator.RequestBody]. It sets ":path" to the prefixed upstream path
+// (keeping the native-substituted query); a nil body keeps the processor's request body unchanged.
+func (t *openAIFileRetrieveTranslator) RequestBody(_ []byte, req *FilesRequest, _ bool) (
 	newHeaders []internalapi.Header, mutatedBody []byte, err error,
 ) {
-	return nil, nil, nil
+	return pathHeader(t.filesPath + "/" + req.NativeID + requestQuery(req.Path)), nil, nil
 }
 
 // ResponseHeaders implements [Translator.ResponseHeaders]. The OpenAI response headers need no
@@ -111,13 +130,12 @@ func (*openAIFileRetrieveTranslator) ResponseError(_ map[string]string, _ io.Rea
 
 // --- content: GET /v1/files/{id}/content ---
 
-// RequestBody implements [Translator.RequestBody]. Returning a nil body keeps the processor's
-// canonical (native-id-substituted) request unchanged; returning nil headers leaves :path/:method
-// as the processor set them.
-func (*openAIFileContentTranslator) RequestBody(_ []byte, _ *FilesRequest, _ bool) (
+// RequestBody implements [Translator.RequestBody]. It sets ":path" to the prefixed upstream path
+// (keeping the native-substituted query); a nil body keeps the processor's request body unchanged.
+func (t *openAIFileContentTranslator) RequestBody(_ []byte, req *FilesRequest, _ bool) (
 	newHeaders []internalapi.Header, mutatedBody []byte, err error,
 ) {
-	return nil, nil, nil
+	return pathHeader(t.filesPath + "/" + req.NativeID + "/content" + requestQuery(req.Path)), nil, nil
 }
 
 // ResponseHeaders implements [Translator.ResponseHeaders]. The OpenAI response headers need no
@@ -150,13 +168,12 @@ func (*openAIFileContentTranslator) ResponseError(_ map[string]string, _ io.Read
 
 // --- delete: DELETE /v1/files/{id} ---
 
-// RequestBody implements [Translator.RequestBody]. Returning a nil body keeps the processor's
-// canonical (native-id-substituted) request unchanged; returning nil headers leaves :path/:method
-// as the processor set them.
-func (*openAIFileDeleteTranslator) RequestBody(_ []byte, _ *FilesRequest, _ bool) (
+// RequestBody implements [Translator.RequestBody]. It sets ":path" to the prefixed upstream path
+// (keeping the native-substituted query); a nil body keeps the processor's request body unchanged.
+func (t *openAIFileDeleteTranslator) RequestBody(_ []byte, req *FilesRequest, _ bool) (
 	newHeaders []internalapi.Header, mutatedBody []byte, err error,
 ) {
-	return nil, nil, nil
+	return pathHeader(t.filesPath + "/" + req.NativeID + requestQuery(req.Path)), nil, nil
 }
 
 // ResponseHeaders implements [Translator.ResponseHeaders]. The OpenAI response headers need no
@@ -189,13 +206,12 @@ func (*openAIFileDeleteTranslator) ResponseError(_ map[string]string, _ io.Reade
 
 // --- list: GET /v1/files ---
 
-// RequestBody implements [Translator.RequestBody]. Returning a nil body keeps the processor's
-// canonical (native-cursor-substituted) request unchanged; returning nil headers leaves :path/:method
-// as the processor set them.
-func (*openAIFileListTranslator) RequestBody(_ []byte, _ *FilesRequest, _ bool) (
+// RequestBody implements [Translator.RequestBody]. It sets ":path" to the prefixed upstream path
+// (keeping the native-substituted query); a nil body keeps the processor's request body unchanged.
+func (t *openAIFileListTranslator) RequestBody(_ []byte, req *FilesRequest, _ bool) (
 	newHeaders []internalapi.Header, mutatedBody []byte, err error,
 ) {
-	return nil, nil, nil
+	return pathHeader(t.filesPath + requestQuery(req.Path)), nil, nil
 }
 
 // ResponseHeaders implements [Translator.ResponseHeaders]. The OpenAI response headers need no

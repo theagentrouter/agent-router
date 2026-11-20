@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/idcodec"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 )
@@ -1307,4 +1308,42 @@ func TestServer_ProcessorForPath_Prefix(t *testing.T) {
 	p, err := s.processorForPath(map[string]string{":path": "/v1/files"}, true, slog.Default())
 	require.ErrorIs(t, err, errNoProcessor)
 	require.Nil(t, p)
+}
+
+func TestServer_ProcessorForPath_FilesAndBatches(t *testing.T) {
+	s, err := NewServer(slog.Default(), false)
+	require.NoError(t, err)
+	s.config = &filterapi.RuntimeConfig{}
+	codec, err := idcodec.NewCodec("server-test-seed", 4096, "", 0)
+	require.NoError(t, err)
+	s.RegisterPrefix("/root/v1/files", NewFilesProcessorFactory(codec))
+	s.RegisterPrefix("/root/v1/batches", NewBatchesProcessorFactory(codec))
+
+	for _, tc := range []struct {
+		path     string
+		wantType Processor
+	}{
+		{"/root/v1/files", &filesProcessor{}},
+		{"/root/v1/files/file-x/content", &filesProcessor{}},
+		{"/root/v1/batches", &batchesProcessor{}},
+		{"/root/v1/batches?model=m&limit=2", &batchesProcessor{}},
+		{"/root/v1/batches/batch-x", &batchesProcessor{}},
+		{"/root/v1/batches/batch-x/cancel", &batchesProcessor{}},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			p, pErr := s.processorForPath(map[string]string{":path": tc.path}, false, slog.Default())
+			require.NoError(t, pErr)
+			require.IsType(t, tc.wantType, p)
+		})
+	}
+
+	// Upstream filter resolves the batches processor from the original (gateway) path.
+	p, err := s.processorForPath(map[string]string{
+		":path": "/root/v1/batches/batch_native", originalPathHeader: "/root/v1/batches/batch-gw",
+	}, true, slog.Default())
+	require.NoError(t, err)
+	require.IsType(t, &batchesProcessor{}, p)
+
+	_, err = s.processorForPath(map[string]string{":path": "/root/v1/batchesx"}, false, slog.Default())
+	require.ErrorIs(t, err, errNoProcessor)
 }
