@@ -649,32 +649,34 @@ func TestRedactBody(t *testing.T) {
 		require.NotContains(t, redacted.Choices[0].Message.Audio.Transcript, "audio transcript")
 	})
 
-	t.Run("redacts reasoning", func(t *testing.T) {
+	t.Run("redacts both reasoning fields", func(t *testing.T) {
 		translator := &openAIToOpenAITranslatorV1ChatCompletion{}
-
+		const reasoningContent = "private preferred thought"
+		const reasoning = "private fallback thought"
 		resp := &openai.ChatCompletionResponse{
-			ID:    "chatcmpl-abc",
-			Model: "qwen3",
-			Choices: []openai.ChatCompletionResponseChoice{
-				{
-					Index: 0,
-					Message: openai.ChatCompletionResponseChoiceMessage{
-						Role:      "assistant",
-						Reasoning: ptr.To("The user's secret is 12345, so"),
-					},
+			Choices: []openai.ChatCompletionResponseChoice{{
+				Message: openai.ChatCompletionResponseChoiceMessage{
+					Role:             "assistant",
+					ReasoningContent: &openai.ReasoningContentUnion{Value: reasoningContent},
+					Reasoning:        ptr.To(reasoning),
 				},
-			},
+			}},
 		}
 
 		redacted := translator.RedactBody(resp)
+		wire, err := json.Marshal(redacted)
+		require.NoError(t, err)
+		require.NotContains(t, string(wire), reasoningContent)
+		require.NotContains(t, string(wire), reasoning)
+		message := redacted.Choices[0].Message
+		require.NotNil(t, message.ReasoningContent)
+		require.NotNil(t, message.Reasoning)
+		require.Contains(t, message.ReasoningContent.Value, "[REDACTED")
+		require.Contains(t, *message.Reasoning, "[REDACTED")
 
-		// Verify original is not modified
-		require.Equal(t, "The user's secret is 12345, so", *resp.Choices[0].Message.Reasoning)
-
-		// Verify redacted copy has redacted reasoning
-		require.NotNil(t, redacted.Choices[0].Message.Reasoning)
-		require.Contains(t, *redacted.Choices[0].Message.Reasoning, "[REDACTED")
-		require.NotContains(t, *redacted.Choices[0].Message.Reasoning, "12345")
+		original := resp.Choices[0].Message
+		require.Equal(t, reasoningContent, original.ReasoningContent.Value)
+		require.Equal(t, reasoning, *original.Reasoning)
 	})
 
 	t.Run("handles nil response", func(t *testing.T) {

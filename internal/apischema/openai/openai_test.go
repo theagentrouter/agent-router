@@ -516,6 +516,37 @@ func TestModelListMarshal(t *testing.T) {
 	require.Equal(t, time.Time(model.Created).Unix(), time.Time(out.Data[0].Created).Unix())
 }
 
+func TestChatCompletionAssistantReasoningContent(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field string
+		want  string
+	}{
+		{name: "string", field: `,"reasoning_content":"prior \u0074hought"`, want: "prior thought"},
+		{name: "Anthropic response object", field: `,"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"prior thought","signature":"signed"}}}`},
+		{name: "array", field: `,"reasoning_content":["ignored"]`},
+		{name: "null", field: `,"reasoning_content":null`},
+		{name: "absent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var message ChatCompletionMessageParamUnion
+			raw := `{"role":"assistant","content":"answer"` + tc.field + `}`
+			require.NoError(t, json.Unmarshal([]byte(raw), &message))
+			require.NotNil(t, message.OfAssistant)
+			require.Equal(t, "answer", message.OfAssistant.Content.Value)
+			require.Equal(t, tc.want, message.OfAssistant.ReasoningContent)
+
+			wire, err := json.Marshal(message)
+			require.NoError(t, err)
+			if tc.want == "" {
+				require.JSONEq(t, `{"role":"assistant","content":"answer"}`, string(wire))
+			} else {
+				require.JSONEq(t, `{"role":"assistant","content":"answer","reasoning_content":"prior thought"}`, string(wire))
+			}
+		})
+	}
+}
+
 func TestChatCompletionMessageParamUnionMarshal(t *testing.T) {
 	testCases := []struct {
 		name     string

@@ -490,7 +490,7 @@ func appendThinkingBlocks(content []anthropic.MessagesContentBlock, msg *openai.
 		}
 	}
 
-	// Fall back to Reasoning (used by vLLM >= v0.30.0, which renamed reasoning_content to reasoning).
+	// Fall back to Reasoning (used by vLLM >= v0.16.0, which no longer emits reasoning_content).
 	if msg.Reasoning != nil && *msg.Reasoning != "" {
 		content = append(content, anthropic.MessagesContentBlock{
 			Thinking: &anthropic.ThinkingBlock{Type: "thinking", Thinking: *msg.Reasoning},
@@ -776,7 +776,7 @@ func (s *openAIStreamToAnthropicState) handleChunk(chunk *openai.ChatCompletionR
 
 	if delta != nil {
 		// Handle reasoning/thinking content (must come before text).
-		// reasoning_content takes precedence; vLLM (>= v0.30.0) emits the same data as `reasoning`.
+		// reasoning_content takes precedence; vLLM (>= v0.16.0) emits the same data as `reasoning`.
 		rc := delta.ReasoningContent
 		if (rc == nil || (rc.Text == "" && rc.Signature == "")) && delta.Reasoning != nil && *delta.Reasoning != "" {
 			rc = &openai.StreamReasoningContent{Text: *delta.Reasoning}

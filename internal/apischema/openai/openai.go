@@ -655,6 +655,27 @@ type ChatCompletionAssistantMessageParam struct {
 	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
 }
 
+func (m *ChatCompletionAssistantMessageParam) UnmarshalJSON(data []byte) error {
+	type assistantMessage ChatCompletionAssistantMessageParam
+	var decoded assistantMessage
+	wire := struct {
+		*assistantMessage
+		ReasoningContent json.RawMessage `json:"reasoning_content"`
+	}{assistantMessage: &decoded}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	// Previously, request parsing ignored this field. Keep accepting echoed
+	// response objects and other shapes while retaining plain-string reasoning.
+	if len(wire.ReasoningContent) > 0 && wire.ReasoningContent[0] == '"' {
+		if err := json.Unmarshal(wire.ReasoningContent, &decoded.ReasoningContent); err != nil {
+			return err
+		}
+	}
+	*m = ChatCompletionAssistantMessageParam(decoded)
+	return nil
+}
+
 // ChatCompletionMessageToolCallType The type of the tool. Currently, only `function` is supported.
 type ChatCompletionMessageToolCallType string
 
@@ -1542,7 +1563,7 @@ type ChatCompletionResponseChoiceMessage struct {
 	ReasoningContent *ReasoningContentUnion `json:"reasoning_content,omitempty"`
 
 	// Reasoning is an alias of ReasoningContent emitted as a plain string by some OpenAI-compatible
-	// backends, notably vLLM (>= v0.30.0) which renamed reasoning_content to reasoning, and OpenRouter.
+	// backends, including OpenRouter and vLLM, which stopped emitting reasoning_content in v0.16.0.
 	// When both are populated, ReasoningContent takes precedence.
 	Reasoning *string `json:"reasoning,omitempty"`
 
@@ -1725,7 +1746,7 @@ type ChatCompletionResponseChunkChoiceDelta struct {
 	// ReasoningContent serializes as a plain string; see StreamReasoningContent.
 	ReasoningContent *StreamReasoningContent `json:"reasoning_content,omitempty"`
 	// Reasoning is an alias of ReasoningContent emitted as a plain string by some OpenAI-compatible
-	// backends, notably vLLM (>= v0.30.0) which renamed reasoning_content to reasoning.
+	// backends, including vLLM, which stopped emitting reasoning_content in v0.16.0.
 	// When both are populated, ReasoningContent takes precedence.
 	Reasoning *string `json:"reasoning,omitempty"`
 	// ThinkingBlocks carries provider-specific reasoning metadata (signatures, redacted

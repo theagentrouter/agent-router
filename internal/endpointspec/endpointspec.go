@@ -785,6 +785,7 @@ func redactUserMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCo
 func redactAssistantMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfAssistant
 	redactedMsg.Content = redactStringOrAssistantRoleContentUnion(msg.OfAssistant.Content)
+	redactedMsg.ReasoningContent = redaction.RedactString(msg.OfAssistant.ReasoningContent)
 	// Redact tool call arguments (may contain data derived from user messages).
 	// Function name is kept — it is the tool API name, not user data.
 	if len(msg.OfAssistant.ToolCalls) > 0 {

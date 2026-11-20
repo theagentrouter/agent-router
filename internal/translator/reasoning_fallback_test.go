@@ -15,34 +15,6 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
-func TestOpenAIResponseReasoningFallback(t *testing.T) {
-	for _, tc := range []struct{ name, fields, want string }{
-		{"absent", ``, `[{"type":"thinking","thinking":"fallback"}]`},
-		{"null", `"reasoning_content":null,`, `[{"type":"thinking","thinking":"fallback"}]`},
-		{"empty string", `"reasoning_content":"",`, `[{"type":"thinking","thinking":"fallback"}]`},
-		{"empty object", `"reasoning_content":{},`, `[{"type":"thinking","thinking":"fallback"}]`},
-		{"empty structured content", `"reasoning_content":{"reasoningContent":{}},`, `[{"type":"thinking","thinking":"fallback"}]`},
-		{"empty reasoning text", `"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"","signature":""}}},`, `[{"type":"thinking","thinking":"fallback"}]`},
-		{"plain content wins", `"reasoning_content":"preferred",`, `[{"type":"thinking","thinking":"preferred"}]`},
-		{"signed content wins", `"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"preferred","signature":"sig"}}},`, `[{"type":"thinking","thinking":"preferred","signature":"sig"}]`},
-		{"signature only preserved", `"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"","signature":"sig"}}},`, `[{"type":"thinking","thinking":"","signature":"sig"}]`},
-		{"redacted content preserved", `"reasoning_content":{"reasoningContent":{"redactedContent":"c2VjcmV0"}},`, `[{"type":"redacted_thinking","data":"secret"}]`},
-		{"structured blocks win", `"thinking_blocks":[{"type":"thinking","thinking":"structured","signature":"sig"}],"reasoning_content":"preferred",`, `[{"type":"thinking","thinking":"structured","signature":"sig"}]`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var resp openai.ChatCompletionResponse
-			require.NoError(t, json.Unmarshal([]byte(`{"choices":[{"message":{"role":"assistant",`+tc.fields+`"reasoning":"fallback","content":"answer"}}]}`), &resp))
-			result := openAIResponseToAnthropic(&resp, "model")
-			require.Len(t, result.Content, 2)
-			require.NotNil(t, result.Content[1].Text)
-			require.Equal(t, "answer", result.Content[1].Text.Text)
-			got, err := json.Marshal(result.Content[:1])
-			require.NoError(t, err)
-			require.JSONEq(t, tc.want, string(got))
-		})
-	}
-}
-
 func TestAnthropicAssistantThinkingPreservation(t *testing.T) {
 	for _, tc := range []struct {
 		name, blocks, wantReasoning string
@@ -70,21 +42,4 @@ func TestAnthropicAssistantThinkingPreservation(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestRedactBothReasoningFields(t *testing.T) {
-	var msg openai.ChatCompletionResponseChoiceMessage
-	input := `{"role":"assistant","reasoning_content":"private preferred thought","reasoning":"private fallback thought"}`
-	require.NoError(t, json.Unmarshal([]byte(input), &msg))
-	got := redactResponseMessage(&msg)
-	encoded, err := json.Marshal(got)
-	require.NoError(t, err)
-	require.NotContains(t, string(encoded), "private preferred thought")
-	require.NotContains(t, string(encoded), "private fallback thought")
-	require.NotNil(t, got.ReasoningContent)
-	require.NotNil(t, got.Reasoning)
-	require.Contains(t, *got.Reasoning, "[REDACTED")
-	original, err := json.Marshal(msg)
-	require.NoError(t, err)
-	require.JSONEq(t, input, string(original))
 }

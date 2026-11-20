@@ -1518,83 +1518,37 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingBlocks(t *testing.T)
 	assert.True(t, hasSignatureDelta, "expected a signature_delta event")
 }
 
-func TestOpenAIResponseToAnthropic_ReasoningField(t *testing.T) {
-	// vLLM >= v0.30.0 emits choices[].message.reasoning (plain string) instead of reasoning_content.
-	content := "The answer is 42."
-	reasoning := "vLLM reasoning step by step..."
-	resp := &openai.ChatCompletionResponse{
-		Choices: []openai.ChatCompletionResponseChoice{
-			{
-				FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
-				Message: openai.ChatCompletionResponseChoiceMessage{
-					Content:   &content,
-					Role:      "assistant",
-					Reasoning: &reasoning,
-				},
-			},
-		},
+// vLLM v0.16.0 and later emit reasoning without reasoning_content.
+func TestOpenAIResponseReasoningFallback(t *testing.T) {
+	for _, tc := range []struct{ name, fields, want string }{
+		{"absent", ``, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"null", `"reasoning_content":null,`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"empty string", `"reasoning_content":"",`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"empty object", `"reasoning_content":{},`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"empty structured content", `"reasoning_content":{"reasoningContent":{}},`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"empty reasoning text", `"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"","signature":""}}},`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"plain content wins", `"reasoning_content":"preferred",`, `[{"type":"thinking","thinking":"preferred"}]`},
+		{"signed content wins", `"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"preferred","signature":"sig"}}},`, `[{"type":"thinking","thinking":"preferred","signature":"sig"}]`},
+		{"signature only preserved", `"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"","signature":"sig"}}},`, `[{"type":"thinking","thinking":"","signature":"sig"}]`},
+		{"redacted content preserved", `"reasoning_content":{"reasoningContent":{"redactedContent":"c2VjcmV0"}},`, `[{"type":"redacted_thinking","data":"secret"}]`},
+		{"structured blocks win", `"thinking_blocks":[{"type":"thinking","thinking":"structured","signature":"sig"}],"reasoning_content":"preferred",`, `[{"type":"thinking","thinking":"structured","signature":"sig"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp openai.ChatCompletionResponse
+			require.NoError(t, json.Unmarshal([]byte(`{"choices":[{"message":{"role":"assistant",`+tc.fields+`"reasoning":"fallback","content":"answer"}}]}`), &resp))
+			result := openAIResponseToAnthropic(&resp, "model")
+			require.Len(t, result.Content, 2)
+			require.NotNil(t, result.Content[1].Text)
+			require.Equal(t, "answer", result.Content[1].Text.Text)
+			got, err := json.Marshal(result.Content[:1])
+			require.NoError(t, err)
+			require.JSONEq(t, tc.want, string(got))
+		})
 	}
-	result := openAIResponseToAnthropic(resp, "qwen3")
-
-	require.Len(t, result.Content, 2)
-	require.NotNil(t, result.Content[0].Thinking)
-	assert.Equal(t, "thinking", result.Content[0].Thinking.Type)
-	assert.Equal(t, "vLLM reasoning step by step...", result.Content[0].Thinking.Thinking)
-	require.NotNil(t, result.Content[1].Text)
-	assert.Equal(t, "The answer is 42.", result.Content[1].Text.Text)
-}
-
-func TestOpenAIResponseToAnthropic_ReasoningContentPrecedenceOverReasoning(t *testing.T) {
-	content := "Answer."
-	reasoning := "from reasoning"
-
-	t.Run("non-empty reasoning_content takes precedence over reasoning", func(t *testing.T) {
-		resp := &openai.ChatCompletionResponse{
-			Choices: []openai.ChatCompletionResponseChoice{
-				{
-					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
-					Message: openai.ChatCompletionResponseChoiceMessage{
-						Content: &content,
-						Role:    "assistant",
-						ReasoningContent: &openai.ReasoningContentUnion{
-							Value: "from reasoning_content",
-						},
-						Reasoning: &reasoning,
-					},
-				},
-			},
-		}
-		result := openAIResponseToAnthropic(resp, "model")
-		require.Len(t, result.Content, 2)
-		require.NotNil(t, result.Content[0].Thinking)
-		assert.Equal(t, "from reasoning_content", result.Content[0].Thinking.Thinking)
-	})
-
-	t.Run("empty string reasoning_content falls back to reasoning", func(t *testing.T) {
-		resp := &openai.ChatCompletionResponse{
-			Choices: []openai.ChatCompletionResponseChoice{
-				{
-					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
-					Message: openai.ChatCompletionResponseChoiceMessage{
-						Content: &content,
-						Role:    "assistant",
-						ReasoningContent: &openai.ReasoningContentUnion{
-							Value: "",
-						},
-						Reasoning: &reasoning,
-					},
-				},
-			},
-		}
-		result := openAIResponseToAnthropic(resp, "model")
-		require.Len(t, result.Content, 2)
-		require.NotNil(t, result.Content[0].Thinking)
-		assert.Equal(t, "from reasoning", result.Content[0].Thinking.Thinking)
-	})
 }
 
 func TestOpenAIStreamToAnthropicState_ProcessBuffer_VLLMReasoningDelta(t *testing.T) {
-	// vLLM >= v0.30.0 streams reasoning via delta.reasoning instead of delta.reasoning_content.
+	// vLLM >= v0.16.0 streams reasoning via delta.reasoning instead of delta.reasoning_content.
 	state := &openAIStreamToAnthropicState{
 		activeTools:  make(map[int64]*streamToolCall),
 		requestModel: "qwen3",
