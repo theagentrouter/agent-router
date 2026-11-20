@@ -1153,11 +1153,8 @@ func (c *GatewayController) injectQuotaPolicyCostExpressions(
 			if len(routeModels) > 0 && !routeModels[*pmq.ModelName] {
 				continue
 			}
-			expr := "total_tokens"
-			if pmq.Quota.CostExpression != nil {
-				expr = *pmq.Quota.CostExpression
-			}
-			if _, err := llmcostcel.NewProgram(expr); err != nil {
+			expr, err := quotaCostExpression(&pmq.Quota)
+			if err != nil {
 				c.logger.Error(err, "invalid QuotaPolicy cost expression, skipping",
 					"policy", qp.Name, "model", *pmq.ModelName, "expression", expr)
 				continue

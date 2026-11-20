@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	rlsconfv3 "github.com/envoyproxy/go-control-plane/ratelimit/config/ratelimit/v3"
@@ -27,6 +28,7 @@ import (
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/llmcostcel"
 	"github.com/envoyproxy/ai-gateway/internal/ratelimit/runner"
 	"github.com/envoyproxy/ai-gateway/internal/ratelimit/translator"
 )
@@ -127,23 +129,67 @@ func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Req
 	// Deletion has a separate full-sweep fallback because the deleted object no
 	// longer contains its target references.
 
+	// An invalid cost expression is reported in the status but not returned: only a change to the
+	// policy can fix it, so retrying would repeat the same work without ever succeeding.
+	costErr := validateQuotaCostExpressions(&quotaPolicy)
 	err = c.syncQuotaPolicy(ctx, &quotaPolicy)
-	if err != nil {
+	var statusErr error
+	if notAcceptedErr := errors.Join(err, costErr); notAcceptedErr != nil {
 		reason := "ReconciliationFailed"
 		var referenceErr *ReferenceNotPermittedError
-		if errors.As(err, &referenceErr) {
+		if errors.As(notAcceptedErr, &referenceErr) {
 			reason = aigv1a1.ConditionReasonRefNotPermitted
 		}
-		c.updateQuotaPolicyStatus(ctx, &quotaPolicy, aigv1a1.ConditionTypeNotAccepted, reason, err.Error())
+		statusErr = c.updateQuotaPolicyStatus(ctx, &quotaPolicy, aigv1a1.ConditionTypeNotAccepted, reason, notAcceptedErr.Error())
 	} else {
-		c.updateQuotaPolicyStatus(ctx, &quotaPolicy, aigv1a1.ConditionTypeAccepted, "ReconciliationSucceeded", "QuotaPolicy reconciled successfully")
+		statusErr = c.updateQuotaPolicyStatus(ctx, &quotaPolicy, aigv1a1.ConditionTypeAccepted, "ReconciliationSucceeded", "QuotaPolicy reconciled successfully")
 	}
 	c.notifyAIGatewayRoutes(ctx, &quotaPolicy)
 	if notifyErr := c.notifyQuotaPolicyRoutesForKeys(ctx, previousTargetKeys); notifyErr != nil {
 		c.logger.Error(notifyErr, "failed to notify AIGatewayRoutes for previous QuotaPolicy targets",
 			"policy", cacheKey)
 	}
-	return ctrl.Result{}, err
+	return ctrl.Result{}, errors.Join(err, statusErr)
+}
+
+// defaultQuotaCostExpression is the cost expression of a per-model quota that does not set one.
+const defaultQuotaCostExpression = "total_tokens"
+
+// quotaCostExpression returns the cost expression of a per-model quota, and an error if it is not a
+// valid one. The QuotaPolicy status and the cost injected into the filter config both rely on it, so
+// an expression that the injection skips is reported in the status of its policy.
+func quotaCostExpression(quota *aigv1a1.QuotaDefinition) (string, error) {
+	expr := defaultQuotaCostExpression
+	if quota.CostExpression != nil {
+		expr = *quota.CostExpression
+	}
+	_, err := llmcostcel.NewProgram(expr)
+	return expr, err
+}
+
+// maxQuotaCostExpressionErrorLength bounds the error reported for one cost expression. The CEL error
+// quotes the expression, so without a bound one long expression would crowd the other models out of
+// the status message.
+const maxQuotaCostExpressionErrorLength = 512
+
+// validateQuotaCostExpressions returns an error naming each per-model quota of the policy whose cost
+// expression is invalid.
+func validateQuotaCostExpressions(policy *aigv1a1.QuotaPolicy) error {
+	var errs []error
+	for i := range policy.Spec.PerModelQuotas {
+		pmq := &policy.Spec.PerModelQuotas[i]
+		if pmq.ModelName == nil {
+			continue
+		}
+		if _, err := quotaCostExpression(&pmq.Quota); err != nil {
+			msg := err.Error()
+			if len(msg) > maxQuotaCostExpressionErrorLength {
+				msg = strings.ToValidUTF8(msg[:maxQuotaCostExpressionErrorLength], "") + "..."
+			}
+			errs = append(errs, fmt.Errorf("invalid costExpression for model %q: %s", *pmq.ModelName, msg))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func conditionStatus(conditionType string) metav1.ConditionStatus {
@@ -363,8 +409,18 @@ func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, polic
 	}
 }
 
+// maxConditionMessageLength is the longest condition message the API server accepts. A longer one makes
+// the whole status update fail, which would leave the previous condition in place.
+const maxConditionMessageLength = 32768
+
 // updateQuotaPolicyStatus updates the status of the QuotaPolicy.
-func (c *QuotaPolicyController) updateQuotaPolicyStatus(ctx context.Context, policy *aigv1a1.QuotaPolicy, conditionType, reason, message string) {
+//
+// A returned error makes controller-runtime requeue the policy, because no other event would
+// trigger the reconcile that writes the status again.
+func (c *QuotaPolicyController) updateQuotaPolicyStatus(ctx context.Context, policy *aigv1a1.QuotaPolicy, conditionType, reason, message string) error {
+	if len(message) > maxConditionMessageLength {
+		message = strings.ToValidUTF8(message[:maxConditionMessageLength], "")
+	}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: policy.Name, Namespace: policy.Namespace}, policy); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -382,9 +438,9 @@ func (c *QuotaPolicyController) updateQuotaPolicyStatus(ctx context.Context, pol
 		return c.client.Status().Update(ctx, policy)
 	})
 	if err != nil {
-		c.logger.Error(err, "failed to update QuotaPolicy status",
-			"namespace", policy.Namespace, "name", policy.Name)
+		return fmt.Errorf("failed to update QuotaPolicy status: %w", err)
 	}
+	return nil
 }
 
 // TargetNamespace resolves the namespace of a QuotaPolicy target reference.

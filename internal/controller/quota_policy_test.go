@@ -8,10 +8,13 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	fake2 "k8s.io/client-go/kubernetes/fake"
@@ -920,4 +923,292 @@ func TestTargetNamespace(t *testing.T) {
 
 func ptrTo[T any](v T) *T {
 	return &v
+}
+
+func TestQuotaPolicyController_Reconcile_InvalidCostExpression(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	rateLimitRunner := newTestRunner(t)
+	c := NewQuotaPolicyController(fakeClient, fake2.NewClientset(), ctrl.Log, rateLimitRunner, make(chan event.GenericEvent, 100))
+	namespace := "default"
+
+	// Create an AIServiceBackend.
+	backend := &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "backend-invalid-cost", Namespace: namespace},
+		Spec: aigv1b1.AIServiceBackendSpec{
+			BackendRef: gwapiv1a2.BackendObjectReference{
+				Name: "some-service",
+				Port: ptrTo[gwapiv1a2.PortNumber](8080),
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), backend))
+
+	localTarget := gwapiv1a2.NamespacedPolicyTargetReference{
+		Kind:  "AIServiceBackend",
+		Group: "aigateway.envoyproxy.io",
+		Name:  gwapiv1a2.ObjectName(backend.Name),
+	}
+	perModelQuota := func(modelName, costExpression *string) aigv1a1.PerModelQuota {
+		return aigv1a1.PerModelQuota{
+			ModelName: modelName,
+			Quota: aigv1a1.QuotaDefinition{
+				CostExpression: costExpression,
+				DefaultBucket:  aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
+			},
+		}
+	}
+	createPolicy := func(t *testing.T, name string, target gwapiv1a2.NamespacedPolicyTargetReference, quotas ...aigv1a1.PerModelQuota) {
+		t.Helper()
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1a1.QuotaPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Spec: aigv1a1.QuotaPolicySpec{
+				TargetRefs:     []gwapiv1a2.NamespacedPolicyTargetReference{target},
+				PerModelQuotas: quotas,
+			},
+		}))
+	}
+	// reconcilePolicy reconciles the QuotaPolicy and returns the resulting condition and the error.
+	reconcilePolicy := func(t *testing.T, name string) (metav1.Condition, error) {
+		t.Helper()
+		key := types.NamespacedName{Namespace: namespace, Name: name}
+		_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: key})
+		var updatedQP aigv1a1.QuotaPolicy
+		require.NoError(t, fakeClient.Get(t.Context(), key, &updatedQP))
+		require.Len(t, updatedQP.Status.Conditions, 1)
+		return updatedQP.Status.Conditions[0], err
+	}
+
+	t.Run("reported in the status without failing the reconcile", func(t *testing.T) {
+		const name = "qp-invalid-cost"
+		createPolicy(t, name, localTarget,
+			perModelQuota(ptrTo("model-ok"), ptrTo("input_tokens + output_tokens")),
+			perModelQuota(ptrTo("model-bad"), ptrTo("total_tokens +")),
+		)
+
+		// The error is not returned: only a change to the policy can fix the expression.
+		condition, err := reconcilePolicy(t, name)
+		require.NoError(t, err)
+		require.Equal(t, aigv1a1.ConditionTypeNotAccepted, condition.Type)
+		require.Equal(t, metav1.ConditionFalse, condition.Status)
+		require.Equal(t, "ReconciliationFailed", condition.Reason)
+		require.Contains(t, condition.Message, `invalid costExpression for model "model-bad": cannot compile CEL expression`)
+		require.NotContains(t, condition.Message, "model-ok")
+
+		// The rate limit config of both models is still served.
+		c.mu.RLock()
+		configs := c.configCache[NamespacedNameKey(namespace, name)]
+		c.mu.RUnlock()
+		require.Len(t, configs, 1)
+		require.Len(t, configs[0].Descriptors, 1)
+		require.Len(t, configs[0].Descriptors[0].Descriptors, 2)
+
+		// Fixing the expression makes the policy accepted.
+		var qp aigv1a1.QuotaPolicy
+		require.NoError(t, fakeClient.Get(t.Context(), types.NamespacedName{Namespace: namespace, Name: name}, &qp))
+		qp.Spec.PerModelQuotas[1].Quota.CostExpression = ptrTo("total_tokens * 2u")
+		require.NoError(t, fakeClient.Update(t.Context(), &qp))
+		condition, err = reconcilePolicy(t, name)
+		require.NoError(t, err)
+		require.Equal(t, aigv1a1.ConditionTypeAccepted, condition.Type)
+	})
+
+	for _, tc := range []struct {
+		name           string
+		modelName      *string
+		costExpression *string
+		// expErr is the part of the CEL error expected in the message. Empty means the policy is accepted.
+		expErr string
+	}{
+		{name: "unset uses the default", modelName: ptrTo("model"), costExpression: nil},
+		{name: "valid", modelName: ptrTo("model"), costExpression: ptrTo("total_tokens * 2u")},
+		{name: "quota without a model name is skipped", modelName: nil, costExpression: ptrTo("total_tokens +")},
+		{name: "empty", modelName: ptrTo("model"), costExpression: ptrTo(""), expErr: "cannot compile CEL expression"},
+		{name: "undeclared variable", modelName: ptrTo("model"), costExpression: ptrTo("prompt_tokens + completion_tokens"), expErr: "undeclared reference to 'prompt_tokens'"},
+		{name: "literal without the u suffix", modelName: ptrTo("model"), costExpression: ptrTo("total_tokens * 2"), expErr: "found no matching overload"},
+		{name: "result is not an integer", modelName: ptrTo("model"), costExpression: ptrTo("double(total_tokens) * 0.5"), expErr: "CEL expression result is not an integer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name := "qp-" + strings.ReplaceAll(tc.name, " ", "-")
+			createPolicy(t, name, localTarget, perModelQuota(tc.modelName, tc.costExpression))
+
+			condition, err := reconcilePolicy(t, name)
+			require.NoError(t, err)
+			if tc.expErr == "" {
+				require.Equal(t, aigv1a1.ConditionTypeAccepted, condition.Type)
+				return
+			}
+			require.Equal(t, aigv1a1.ConditionTypeNotAccepted, condition.Type)
+			require.Contains(t, condition.Message, `invalid costExpression for model "model": `)
+			require.Contains(t, condition.Message, tc.expErr)
+		})
+	}
+
+	t.Run("message is bounded", func(t *testing.T) {
+		// The CEL error quotes the expression. 512 is the bound for one expression and 32768 is the
+		// longest condition message the API server accepts.
+		longExpression := ptrTo(strings.Repeat("total_tokens + ", 20) + "+")
+
+		const single = "qp-long-cost"
+		createPolicy(t, single, localTarget, perModelQuota(ptrTo("model"), longExpression))
+		condition, err := reconcilePolicy(t, single)
+		require.NoError(t, err)
+		require.Equal(t, aigv1a1.ConditionTypeNotAccepted, condition.Type)
+		require.Len(t, condition.Message, len(`invalid costExpression for model "model": `)+512+len("..."))
+
+		const many = "qp-many-long-costs"
+		quotas := make([]aigv1a1.PerModelQuota, 128)
+		for i := range quotas {
+			quotas[i] = perModelQuota(ptrTo(fmt.Sprintf("model-%03d", i)), longExpression)
+		}
+		createPolicy(t, many, localTarget, quotas...)
+		condition, err = reconcilePolicy(t, many)
+		require.NoError(t, err)
+		require.Equal(t, aigv1a1.ConditionTypeNotAccepted, condition.Type)
+		require.Contains(t, condition.Message, `invalid costExpression for model "model-000": `)
+		require.Len(t, condition.Message, 32768)
+
+		// A character that straddles a bound is dropped rather than cut in half. The two expressions differ
+		// by one byte, so the bound for one expression falls inside a two-byte character of exactly one of them.
+		var lengths []int
+		for i, padding := range []string{"", " "} {
+			name := fmt.Sprintf("qp-multibyte-cost-%d", i)
+			createPolicy(t, name, localTarget, perModelQuota(ptrTo("model"), ptrTo(padding+`"`+strings.Repeat("é", 400)+`" +`)))
+			condition, err = reconcilePolicy(t, name)
+			require.NoError(t, err)
+			lengths = append(lengths, len(condition.Message)-len(`invalid costExpression for model "model": `)-len("..."))
+		}
+		require.ElementsMatch(t, []int{511, 512}, lengths)
+
+		// The bound of the whole message falls inside a two-byte character of this model name.
+		const multibyteModel = "qp-multibyte-model"
+		createPolicy(t, multibyteModel, localTarget, perModelQuota(ptrTo("m"+strings.Repeat("é", 20000)), ptrTo("total_tokens +")))
+		condition, err = reconcilePolicy(t, multibyteModel)
+		require.NoError(t, err)
+		require.Len(t, condition.Message, 32767)
+	})
+
+	t.Run("unauthorized target keeps its reason", func(t *testing.T) {
+		const name = "qp-unauthorized-invalid-cost"
+		remoteTarget := localTarget
+		remoteTarget.Name = "provider"
+		remoteTarget.Namespace = ptrTo(gwapiv1a2.Namespace("providers"))
+		createPolicy(t, name, remoteTarget, perModelQuota(ptrTo("model"), ptrTo("total_tokens +")))
+
+		// The unauthorized target is still returned, so that a later ReferenceGrant is picked up.
+		condition, err := reconcilePolicy(t, name)
+		require.Error(t, err)
+		require.NotContains(t, err.Error(), "invalid costExpression")
+		require.Equal(t, aigv1a1.ConditionTypeNotAccepted, condition.Type)
+		require.Equal(t, aigv1a1.ConditionReasonRefNotPermitted, condition.Reason)
+		require.Contains(t, condition.Message, "is not permitted")
+		require.Contains(t, condition.Message, `invalid costExpression for model "model": `)
+	})
+}
+
+func TestQuotaPolicyController_Reconcile_StatusUpdateError(t *testing.T) {
+	rateLimitRunner := newTestRunner(t)
+	namespace := "default"
+	const policyName = "qp-status-error"
+
+	for _, tc := range []struct {
+		name           string
+		costExpression string
+		// statusUpdateErr is returned by the status update. secondGetErr is returned by the second read of
+		// the policy: Reconcile reads the policy once, so the second read is the one before the status update.
+		statusUpdateErr, secondGetErr error
+		// expErr is the error expected from Reconcile. Empty means that it succeeds.
+		expErr string
+	}{
+		{
+			name:            "accepted policy",
+			costExpression:  "total_tokens * 2u",
+			statusUpdateErr: errors.New("status update failed"),
+			expErr:          "failed to update QuotaPolicy status: status update failed",
+		},
+		{
+			name:            "invalid cost expression",
+			costExpression:  "total_tokens +",
+			statusUpdateErr: errors.New("status update failed"),
+			expErr:          "failed to update QuotaPolicy status: status update failed",
+		},
+		{
+			name:           "policy cannot be read",
+			costExpression: "total_tokens * 2u",
+			secondGetErr:   errors.New("get failed"),
+			expErr:         "failed to update QuotaPolicy status: get failed",
+		},
+		{
+			name:           "policy deleted in the meantime",
+			costExpression: "total_tokens * 2u",
+			secondGetErr:   apierrors.NewNotFound(aigv1a1.Resource("quotapolicies"), policyName),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+			policyGets := 0
+			fakeClient := interceptor.NewClient(inner.(client.WithWatch), interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, isPolicy := obj.(*aigv1a1.QuotaPolicy); isPolicy && tc.secondGetErr != nil {
+						if policyGets++; policyGets == 2 {
+							return tc.secondGetErr
+						}
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+				SubResourceUpdate: func(ctx context.Context, cl client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+					if tc.statusUpdateErr != nil {
+						return tc.statusUpdateErr
+					}
+					return cl.SubResource(subResourceName).Update(ctx, obj, opts...)
+				},
+			})
+			c := NewQuotaPolicyController(fakeClient, fake2.NewClientset(), ctrl.Log, rateLimitRunner, make(chan event.GenericEvent, 100))
+
+			// Create an AIServiceBackend.
+			backend := &aigv1b1.AIServiceBackend{
+				ObjectMeta: metav1.ObjectMeta{Name: "backend-status-error", Namespace: namespace},
+				Spec: aigv1b1.AIServiceBackendSpec{
+					BackendRef: gwapiv1a2.BackendObjectReference{
+						Name: "some-service",
+						Port: ptrTo[gwapiv1a2.PortNumber](8080),
+					},
+				},
+			}
+			require.NoError(t, fakeClient.Create(t.Context(), backend))
+
+			// Create a QuotaPolicy targeting the backend.
+			qp := &aigv1a1.QuotaPolicy{
+				ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: namespace},
+				Spec: aigv1a1.QuotaPolicySpec{
+					TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{
+						{
+							Kind:  "AIServiceBackend",
+							Group: "aigateway.envoyproxy.io",
+							Name:  gwapiv1a2.ObjectName(backend.Name),
+						},
+					},
+					PerModelQuotas: []aigv1a1.PerModelQuota{
+						{
+							ModelName: ptrTo("model"),
+							Quota: aigv1a1.QuotaDefinition{
+								CostExpression: ptrTo(tc.costExpression),
+								DefaultBucket:  aigv1a1.QuotaValue{Limit: 100, Duration: "1m"},
+							},
+						},
+					},
+				},
+			}
+			require.NoError(t, fakeClient.Create(t.Context(), qp))
+
+			_, err := c.Reconcile(t.Context(), reconcile.Request{
+				NamespacedName: types.NamespacedName{Namespace: namespace, Name: policyName},
+			})
+			if tc.expErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			// Reconcile should fail so that the status update is retried: nothing else would write it again.
+			require.EqualError(t, err, tc.expErr)
+		})
+	}
 }
