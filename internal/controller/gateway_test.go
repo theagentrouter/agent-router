@@ -546,7 +546,7 @@ func TestGatewayController_reconcileFilterConfigSecret(t *testing.T) {
 
 		catProg, err := llmcostcel.NewProgram(wantLLMRequestCosts[6].CEL)
 		require.NoError(t, err)
-		catVal, err := llmcostcel.EvaluateProgram(catProg, "model", "foo.default", "ns/route2", 3, 0, 0, 4, 7, 0)
+		catVal, err := llmcostcel.EvaluateProgram(catProg, "model", "foo.default", "ns/route2", 3, 0, 0, 4, 7, 0, 0)
 		require.NoError(t, err)
 		require.Equal(t, uint64(7), catVal)
 
@@ -984,12 +984,12 @@ func TestGatewayController_reconcileFilterConfigSecret_RouteLevelLLMRequestCostA
 
 	freeProg, err := llmcostcel.NewProgram(wantLLMRequestCosts[0].CEL)
 	require.NoError(t, err)
-	val, err := llmcostcel.EvaluateProgram(freeProg, "model", "free-backend", "ns/free-model-route", 10, 0, 0, 5, 15, 0)
+	val, err := llmcostcel.EvaluateProgram(freeProg, "model", "free-backend", "ns/free-model-route", 10, 0, 0, 5, 15, 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0), val)
 	paidProg, err := llmcostcel.NewProgram(wantLLMRequestCosts[1].CEL)
 	require.NoError(t, err)
-	val, err = llmcostcel.EvaluateProgram(paidProg, "model", "paid-backend", "ns/paid-model-route", 10, 0, 0, 5, 15, 0)
+	val, err = llmcostcel.EvaluateProgram(paidProg, "model", "paid-backend", "ns/paid-model-route", 10, 0, 0, 5, 15, 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, uint64(15), val)
 }
@@ -1601,6 +1601,17 @@ func TestGatewayController_bspToFilterAPIBackendAuth_CrossNamespaceSecret(t *tes
 			cred: func(auth *filterapi.BackendAuth) string { return auth.AnthropicAPIKey.Key },
 		},
 		{
+			name:    "FalAPIKey",
+			dataKey: apiKeyInSecret,
+			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
+				return aigv1b1.BackendSecurityPolicySpec{
+					Type:      aigv1b1.BackendSecurityPolicyTypeFalAPIKey,
+					FalAPIKey: &aigv1b1.BackendSecurityPolicyFalAPIKey{SecretRef: ref},
+				}
+			},
+			cred: func(auth *filterapi.BackendAuth) string { return auth.FalAPIKey.Key },
+		},
+		{
 			name:    "AWSCredentialsFile",
 			dataKey: rotators.AwsCredentialsKey,
 			spec: func(ref *gwapiv1.SecretObjectReference) aigv1b1.BackendSecurityPolicySpec {
@@ -1730,6 +1741,18 @@ func TestResolveCredentialOverride(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, "x-aigw-anthropic-api-key", result.HeaderName)
+	})
+
+	t.Run("fromRequestHeaders default header for FalAPIKey", func(t *testing.T) {
+		result, err := resolveCredentialOverride(
+			aigv1b1.BackendSecurityPolicyTypeFalAPIKey,
+			&aigv1b1.BackendSecurityPolicyCredentialOverride{
+				FromRequestHeaders: &aigv1b1.CredentialOverrideFromRequestHeaders{},
+			},
+			true,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "x-aigw-fal-api-key", result.HeaderName)
 	})
 
 	t.Run("fromDynamicMetadata", func(t *testing.T) {

@@ -477,3 +477,30 @@ func TestTokenUsage_IsZero(t *testing.T) {
 	u.SetOutputTokens(1)
 	require.False(t, u.IsZero())
 }
+
+func TestTokenUsage_BillableUnits(t *testing.T) {
+	var u TokenUsage
+	v, ok := u.BillableUnits()
+	require.False(t, ok)
+	require.Zero(t, v)
+
+	u.SetBillableUnits(2)
+	v, ok = u.BillableUnits()
+	require.True(t, ok)
+	require.Equal(t, float64(2), v)
+	require.False(t, u.IsZero())
+
+	var costs TokenUsage
+	costs.Override(u)
+	v, ok = costs.BillableUnits()
+	require.True(t, ok)
+	require.Equal(t, float64(2), v)
+
+	// An update without billable units keeps the ones already recorded.
+	var tokensOnly TokenUsage
+	tokensOnly.SetInputTokens(5)
+	costs.Override(tokensOnly)
+	v, ok = costs.BillableUnits()
+	require.True(t, ok)
+	require.Equal(t, float64(2), v)
+}

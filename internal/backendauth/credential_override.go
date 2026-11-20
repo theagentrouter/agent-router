@@ -61,6 +61,13 @@ func applyAnthropicCredential(requestHeaders map[string]string, credential strin
 	return []internalapi.Header{{"x-api-key", credential}}, nil
 }
 
+// applyFalCredential sets Authorization: Key <credential>.
+func applyFalCredential(requestHeaders map[string]string, credential string) ([]internalapi.Header, error) {
+	v := "Key " + credential
+	requestHeaders["Authorization"] = v
+	return []internalapi.Header{{"Authorization", v}}, nil
+}
+
 // applyAzureAPIKeyCredential sets api-key: <credential>.
 func applyAzureAPIKeyCredential(requestHeaders map[string]string, credential string) ([]internalapi.Header, error) {
 	requestHeaders["api-key"] = credential

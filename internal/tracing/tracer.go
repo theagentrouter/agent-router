@@ -15,6 +15,7 @@ import (
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	falschema "github.com/envoyproxy/ai-gateway/internal/apischema/fal"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
@@ -45,6 +46,7 @@ var (
 	_ tracingapi.TranslationTracer          = (*translationTracer)(nil)
 	_ tracingapi.RerankTracer               = (*rerankTracer)(nil)
 	_ tracingapi.SystemOneTracer            = (*systemOneTracer)(nil)
+	_ tracingapi.FalTracer                  = (*falTracer)(nil)
 	_ tracingapi.ResponsesInputTokensTracer = (*responsesInputTokensTracer)(nil)
 	_ tracingapi.CountTokensTracer          = (*countTokensTracer)(nil)
 	_ tracingapi.TokenizeTracer             = (*tokenizeTracer)(nil)
@@ -62,6 +64,7 @@ type (
 	translationTracer          = requestTracerImpl[openai.TranslationRequest, openai.TranslationResponse, struct{}]
 	rerankTracer               = requestTracerImpl[cohereschema.RerankV2Request, cohereschema.RerankV2Response, struct{}]
 	systemOneTracer            = requestTracerImpl[typesafeschema.SystemOneRequest, typesafeschema.SystemOneResponse, struct{}]
+	falTracer                  = requestTracerImpl[falschema.Request, falschema.Response, struct{}]
 	responsesInputTokensTracer = requestTracerImpl[openai.ResponseRequest, openai.ResponsesInputTokensResponse, struct{}]
 	countTokensTracer          = requestTracerImpl[anthropicschema.CountTokensRequest, anthropicschema.CountTokensResponse, struct{}]
 	tokenizeTracer             = requestTracerImpl[tokenize.RequestUnion, tokenize.Response, struct{}]
@@ -249,6 +252,18 @@ func newSystemOneTracer(tracer trace.Tracer, propagator propagation.TextMapPropa
 		headerAttributes,
 		func(span trace.Span, recorder tracingapi.SystemOneRecorder) tracingapi.SystemOneSpan {
 			return &systemOneSpan{span: span, recorder: recorder}
+		},
+	)
+}
+
+func newFalTracer(tracer trace.Tracer, propagator propagation.TextMapPropagator, recorder tracingapi.FalRecorder, headerAttributes map[string]string) tracingapi.FalTracer {
+	return newRequestTracer(
+		tracer,
+		propagator,
+		recorder,
+		headerAttributes,
+		func(span trace.Span, recorder tracingapi.FalRecorder) tracingapi.FalSpan {
+			return &falSpan{span: span, recorder: recorder}
 		},
 	)
 }

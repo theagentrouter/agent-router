@@ -15,7 +15,7 @@ package v1alpha1
 type VersionedAPISchema struct {
 	// Name is the name of the API schema of the AIGatewayRoute or AIServiceBackend.
 	//
-	// +kubebuilder:validation:Enum=OpenAI;Cohere;AWSBedrock;AzureOpenAI;GCPVertexAI;GCPAnthropic;Anthropic;AWSAnthropic;AWSOpenAI;TypeSafe
+	// +kubebuilder:validation:Enum=OpenAI;Cohere;AWSBedrock;AzureOpenAI;GCPVertexAI;GCPAnthropic;Anthropic;AWSAnthropic;AWSOpenAI;TypeSafe;Fal
 	Name APISchema `json:"name"`
 
 	// Version is the version of the API schema.
@@ -96,6 +96,11 @@ const (
 	//
 	// https://docs.typesafe.ai/api.md
 	APISchemaTypeSafe APISchema = "TypeSafe"
+	// APISchemaFal is the native fal schema. Requests to the fal run and queue endpoints are passed
+	// through unchanged, and the model is the fal endpoint ID taken from the request path.
+	//
+	// https://docs.fal.ai/model-apis
+	APISchemaFal APISchema = "Fal"
 )
 
 const (
@@ -130,6 +135,7 @@ type LLMRequestCost struct {
 	//	* output_tokens: the number of output tokens. Type: unsigned integer.
 	//	* total_tokens: the total number of tokens. Type: unsigned integer.
 	//	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.
+	//	* billable_units: billing units the provider reports, in the provider's own unit (Cohere rerank: billed_units.search_units; fal: X-Fal-Billable-Units), or 0. Type: double. A cost expression must evaluate to an unsigned integer, so cast it, e.g. uint(billable_units), which truncates; the unit depends on the provider, so branch on backend.
 	//
 	// For example, the following expressions are valid:
 	//
@@ -138,6 +144,8 @@ type LLMRequestCost struct {
 	//	* "backend == 'bar.default' ?  (input_tokens - cached_input_tokens) + cached_input_tokens * 0.1 + cache_creation_input_tokens * 1.25 + output_tokens : total_tokens"
 	//	* "input_tokens + output_tokens + total_tokens"
 	//	* "input_tokens * output_tokens"
+	//	* "backend == 'rerank.default' ? uint(billable_units) : total_tokens"
+	//	* "backend == 'fal.default' ? uint(billable_units * 1000000.0) : total_tokens"
 	//
 	// +optional
 	CEL *string `json:"cel,omitempty"`
