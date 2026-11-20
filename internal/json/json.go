@@ -24,6 +24,8 @@ var (
 	NewEncoder = config.NewEncoder
 	// NewDecoder is equivalent to encoding/json.NewDecoder.
 	NewDecoder = config.NewDecoder
+	// Valid is equivalent to encoding/json.Valid.
+	Valid = sonicjson.Valid
 	// MarshalForDeterministicTesting marshals a value to JSON in a deterministic way for testing.
 	// The normal sonic configuration does not guarantee deterministic output in terms of field order.
 	// It panics if called outside of tests.
