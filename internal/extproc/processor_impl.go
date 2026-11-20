@@ -21,6 +21,7 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/google/cel-go/cel"
+	"golang.org/x/net/http/httpguts"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -259,6 +260,13 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 	// The decoded model aliases the request body; clone it so the header map, metrics, and
 	// other consumers that outlive the request don't retain the body.
 	originalModel = strings.Clone(originalModel)
+	// Control characters are not valid in the header value. httpguts applies the same rule as
+	// Envoy's codec, so SP and HTAB stay valid and only controls and DEL are refused.
+	if !httpguts.ValidHeaderFieldValue(originalModel) {
+		r.logger.Error("rejecting model name due to invalid characters")
+		return createUserFacingErrorResponse(400, "BadRequest",
+			"malformed request: model name contains invalid characters"), nil
+	}
 
 	// Use the request-scoped logger from context if available, otherwise fall back to processor logger
 	logger := loggerFromContext(ctx)
