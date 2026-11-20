@@ -69,6 +69,11 @@ var legacyProtocolVersions = []string{
 // newest first.
 var supportedProtocolVersions = append([]string{protocolVersion20260728}, legacyProtocolVersions...)
 
+// isModernProtocolVersion reports whether v is the 2026-07-28 modern protocol.
+func isModernProtocolVersion(v string) bool {
+	return v == protocolVersion20260728
+}
+
 // legacyOnlyMethods were removed by the 2026-07-28 spec (SEP-2575). Seeing one
 // on a modern request means the client is mixing eras.
 //

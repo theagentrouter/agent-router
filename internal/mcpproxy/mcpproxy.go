@@ -99,10 +99,22 @@ func NewMCPProxy(l *slog.Logger, mcpMetrics metrics.MCPMetrics, tracer tracingap
 			}
 			switch r.Method {
 			case http.MethodGet:
+				// Modern Streamable HTTP removed the GET session stream. Reject
+				// before the legacy handler so a 2026-07-28 client does not get
+				// a confusing "missing session ID" 400.
+				if isModernProtocolVersion(r.Header.Get(mcpProtocolVersionHeader)) {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
 				proxy.serveGET(w, r)
 			case http.MethodPost:
 				proxy.servePOST(w, r)
 			case http.MethodDelete:
+				// Modern Streamable HTTP removed DELETE session teardown.
+				if isModernProtocolVersion(r.Header.Get(mcpProtocolVersionHeader)) {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
 				proxy.serverDELETE(w, r)
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

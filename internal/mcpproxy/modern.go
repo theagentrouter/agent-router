@@ -329,34 +329,45 @@ func (m *mcpRequestContext) handleServerDiscover(ctx context.Context, w http.Res
 		return handlerResult{}, err
 	}
 
-	var results []*mcp.DiscoverResult
+	var (
+		mu      sync.Mutex
+		results []*mcp.DiscoverResult
+		wg      sync.WaitGroup
+	)
 	attempted, legacy := 0, 0
 	for _, backend := range selectedBackends {
 		attempted++
-		backendStartAt := time.Now()
-		result, err := m.discoverBackend(ctx, route, backend)
-		backendMetrics := m.metrics.WithBackend(backend.Name)
-		if err != nil {
-			m.l.Warn("server/discover failed for backend",
-				slog.String("backend", backend.Name),
-				slog.String("error", err.Error()))
-			backendMetrics.RecordMethodErrorCount(ctx, req.Method, nil, metrics.MCPStatusError)
-			backendMetrics.RecordRequestErrorDuration(ctx, backendStartAt, errorType(err), nil)
-			// Only a legacy-shaped rejection counts. A transport error, 5xx,
-			// or modern-only protocol error has not shown that this backend
-			// is pre-2026-07-28, and must not flip the whole route to -32022.
-			if errors.Is(err, errBackendNotModern) {
-				legacy++
+		wg.Go(func() {
+			backendStartAt := time.Now()
+			result, err := m.discoverBackend(ctx, route, backend)
+			backendMetrics := m.metrics.WithBackend(backend.Name)
+			if err != nil {
+				m.l.Warn("server/discover failed for backend",
+					slog.String("backend", backend.Name),
+					slog.String("error", err.Error()))
+				backendMetrics.RecordMethodErrorCount(ctx, req.Method, nil, metrics.MCPStatusError)
+				backendMetrics.RecordRequestErrorDuration(ctx, backendStartAt, errorType(err), nil)
+				// Only a legacy-shaped rejection counts. A transport error, 5xx,
+				// or modern-only protocol error has not shown that this backend
+				// is pre-2026-07-28, and must not flip the whole route to -32022.
+				if errors.Is(err, errBackendNotModern) {
+					mu.Lock()
+					legacy++
+					mu.Unlock()
+				}
+				return
 			}
-			continue
-		}
-		if span != nil {
-			span.RecordRouteToBackend(backend.Name, "", true)
-		}
-		backendMetrics.RecordMethodCount(ctx, req.Method, nil)
-		backendMetrics.RecordRequestDuration(ctx, backendStartAt, nil)
-		results = append(results, result)
+			backendMetrics.RecordMethodCount(ctx, req.Method, nil)
+			backendMetrics.RecordRequestDuration(ctx, backendStartAt, nil)
+			mu.Lock()
+			if span != nil {
+				span.RecordRouteToBackend(backend.Name, "", true)
+			}
+			results = append(results, result)
+			mu.Unlock()
+		})
 	}
+	wg.Wait()
 	// -32022 tells the client to fall back to legacy initialize. That claim is
 	// only true when every backend we contacted answered as a legacy server.
 	// One legacy rejection plus a crash, a 5xx, or a modern-only error leaves
@@ -1708,37 +1719,49 @@ func sendToAllModernBackendsAndAggregateResponses[T any](ctx context.Context, m 
 		m.l.Error(fmt.Sprintf("%s has no backends selected", req.Method), slog.String("route", route))
 		return nil, fmt.Errorf("%w: %s has no backends selected for route %s", errModernListNoBackends, req.Method, route)
 	}
-	responses := make([]broadCastResponse[T], 0, len(backends))
+	// Resolve shared forward-header state before concurrent sendModernRequest
+	// calls; applyForwardHeaders mutates mcpRequestContext when unresolved.
+	m.ensureForwardHeadersResolved(route)
+	var (
+		mu        sync.Mutex
+		responses = make([]broadCastResponse[T], 0, len(backends))
+		wg        sync.WaitGroup
+	)
 	for backendName, backend := range backends {
-		backendStartAt := time.Now()
-		backendMetrics := m.metrics.WithBackend(backendName)
-		resp, err := m.sendModernRequest(ctx, req, route, backend)
-		if err != nil {
-			m.l.Warn("modern list request failed for backend",
-				slog.String("method", req.Method),
-				slog.String("backend", backendName),
-				slog.String("error", err.Error()))
-			backendMetrics.RecordMethodErrorCount(ctx, req.Method, nil, metrics.MCPStatusError)
-			backendMetrics.RecordRequestErrorDuration(ctx, backendStartAt, errorType(err), nil)
-			continue
-		}
-		var result T
-		if err := json.Unmarshal(resp, &result); err != nil {
-			m.l.Warn("failed to unmarshal modern list response from backend",
-				slog.String("method", req.Method),
-				slog.String("backend", backendName),
-				slog.String("error", err.Error()))
-			backendMetrics.RecordMethodErrorCount(ctx, req.Method, nil, metrics.MCPStatusError)
-			backendMetrics.RecordRequestErrorDuration(ctx, backendStartAt, metrics.MCPErrorInternal, nil)
-			continue
-		}
-		if span != nil {
-			span.RecordRouteToBackend(backendName, "", true)
-		}
-		backendMetrics.RecordMethodCount(ctx, req.Method, nil)
-		backendMetrics.RecordRequestDuration(ctx, backendStartAt, nil)
-		responses = append(responses, broadCastResponse[T]{backendName: backendName, res: result})
+		wg.Go(func() {
+			backendStartAt := time.Now()
+			backendMetrics := m.metrics.WithBackend(backendName)
+			resp, err := m.sendModernRequest(ctx, req, route, backend)
+			if err != nil {
+				m.l.Warn("modern list request failed for backend",
+					slog.String("method", req.Method),
+					slog.String("backend", backendName),
+					slog.String("error", err.Error()))
+				backendMetrics.RecordMethodErrorCount(ctx, req.Method, nil, metrics.MCPStatusError)
+				backendMetrics.RecordRequestErrorDuration(ctx, backendStartAt, errorType(err), nil)
+				return
+			}
+			var result T
+			if err := json.Unmarshal(resp, &result); err != nil {
+				m.l.Warn("failed to unmarshal modern list response from backend",
+					slog.String("method", req.Method),
+					slog.String("backend", backendName),
+					slog.String("error", err.Error()))
+				backendMetrics.RecordMethodErrorCount(ctx, req.Method, nil, metrics.MCPStatusError)
+				backendMetrics.RecordRequestErrorDuration(ctx, backendStartAt, metrics.MCPErrorInternal, nil)
+				return
+			}
+			backendMetrics.RecordMethodCount(ctx, req.Method, nil)
+			backendMetrics.RecordRequestDuration(ctx, backendStartAt, nil)
+			mu.Lock()
+			if span != nil {
+				span.RecordRouteToBackend(backendName, "", true)
+			}
+			responses = append(responses, broadCastResponse[T]{backendName: backendName, res: result})
+			mu.Unlock()
+		})
 	}
+	wg.Wait()
 	if len(responses) == 0 {
 		m.l.Error(fmt.Sprintf("%s failed for all backends", req.Method), slog.String("route", route))
 		return nil, fmt.Errorf("%w: %s failed for all backends on route %s", errModernListNoBackends, req.Method, route)
@@ -2512,18 +2535,26 @@ func mergeCachingHintsFromBackends(results []mcp.Cacheable) (int, string) {
 	return ttlMs, cacheScope
 }
 
+// ensureForwardHeadersResolved extracts route/per-backend forward headers once.
+// Call before concurrent fan-out so applyForwardHeaders only reads shared state.
+func (m *mcpRequestContext) ensureForwardHeadersResolved(route filterapi.MCPRouteName) {
+	if m.forwardHeadersResolved {
+		return
+	}
+	if routeConfig := m.routes[route]; routeConfig != nil {
+		m.extraHeaders = extractForwardHeaders(m.requestHeaders, routeConfig.forwardHeaders)
+		m.perBackendExtraHeaders = m.extractPerBackendHeaders(routeConfig.backends)
+		m.forwardHeadersResolved = true
+	}
+}
+
 // applyForwardHeaders attaches the headers extracted for this request onto the
 // outbound backend call. resolveModernRouteBackends extracts them first; this
 // falls back to extracting from the current request when sendModernRequest is
-// invoked directly (tests).
+// invoked directly (tests). Must not race with concurrent callers unless
+// ensureForwardHeadersResolved (or resolveModernRouteBackends) ran first.
 func (m *mcpRequestContext) applyForwardHeaders(httpReq *http.Request, route filterapi.MCPRouteName, backend filterapi.MCPBackend) {
-	if !m.forwardHeadersResolved {
-		if routeConfig := m.routes[route]; routeConfig != nil {
-			m.extraHeaders = extractForwardHeaders(m.requestHeaders, routeConfig.forwardHeaders)
-			m.perBackendExtraHeaders = m.extractPerBackendHeaders(routeConfig.backends)
-			m.forwardHeadersResolved = true
-		}
-	}
+	m.ensureForwardHeadersResolved(route)
 	var perBackend map[string]string
 	if m.perBackendExtraHeaders != nil {
 		perBackend = m.perBackendExtraHeaders[backend.Name]

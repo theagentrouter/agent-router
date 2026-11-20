@@ -220,7 +220,7 @@ func TestModernMCP(t *testing.T) {
 					require.Contains(t, payload, subDumb)
 				case strings.Contains(payload, `"method":"notifications/resources/updated"`):
 					require.NotContains(t, payload, `"uri":"file:///`, "updated URI must be gateway-namespaced")
-					require.Greater(t, ackCount, 0, "resources/updated arrived before the merged acknowledgement")
+					require.Positive(t, ackCount, "resources/updated arrived before the merged acknowledgement")
 					if strings.Contains(payload, subDefault) {
 						sawUpdatedDef = true
 					}
