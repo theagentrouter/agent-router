@@ -127,7 +127,7 @@ If you encounter issues:
 
 To use more models, add more [AIGatewayRouteRule]s to the `openai.yaml` file with the [model alias] in the `value` field.
 
-For example, let's add [o1] as a chat completion model, and [text-embedding-ada-002](https://platform.openai.com/docs/models/text-embedding-ada-002) as embedding models:
+For example, let's add [gpt-5.6-sol] as a chat completion model, and [text-embedding-ada-002](https://platform.openai.com/docs/models/text-embedding-ada-002) as embedding models:
 
 ```yaml
 apiVersion: aigateway.envoyproxy.io/v1beta1
@@ -145,7 +145,7 @@ spec:
         - headers:
             - type: Exact
               name: x-ai-eg-model
-              value: o1
+              value: gpt-5.6-sol
     - matches:
         - headers:
             - type: Exact
@@ -163,4 +163,4 @@ After configuring OpenAI:
 
 [AIGatewayRouteRule]: ../../api/api.mdx#aigatewayrouterule
 [model alias]: https://platform.openai.com/docs/models#current-model-aliases
-[o1]: https://platform.openai.com/docs/models#o1
+[gpt-5.6-sol]: https://platform.openai.com/docs/models/gpt-5.6-sol
