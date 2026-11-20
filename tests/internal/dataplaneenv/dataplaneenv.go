@@ -76,6 +76,11 @@ func (e *TestEnvironment) ExtProcAdminPort() int {
 	return e.extProcAdminPort
 }
 
+// ExtProcConfig returns the filter config given to the external processor, with the test ports filled in.
+func (e *TestEnvironment) ExtProcConfig() string {
+	return e.extprocConfig
+}
+
 // StartTestEnvironment starts all required services and returns ports and a closer.
 //
 // If extProcInProcess is true, then this starts the extproc in-process by directly calling

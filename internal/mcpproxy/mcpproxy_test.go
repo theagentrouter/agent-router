@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -123,6 +124,101 @@ func TestMCPProxy_HTTPMethods(t *testing.T) {
 
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
 	require.Contains(t, rr.Body.String(), "method not allowed")
+}
+
+func TestMCPProxy_RequestBeforeFirstConfigLoad(t *testing.T) {
+	// The config bundle watcher tolerates an incomplete bundle on the initial load and retries on the next tick, so
+	// requests can arrive before any config is loaded. They must be answered with a 503, not a nil dereference.
+	sessionCrypto := NewPBKDF2AesGcmSessionCrypto("test", 100)
+	proxy, mux, err := NewMCPProxy(slog.Default(), stubMetrics{}, noopTracer, sessionCrypto, nil)
+	require.NoError(t, err)
+	// A session issued before a restart stays valid: the seed is the same, so it decrypts before any config is loaded.
+	sessionID, err := sessionCrypto.Encrypt("default/some-route@@backend1:" + base64.StdEncoding.EncodeToString([]byte("s1")))
+	require.NoError(t, err)
+
+	newRequest := func(method, body, sessionID string) *http.Request {
+		req := httptest.NewRequest(method, "/mcp", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set(internalapi.MCPRouteHeader, "default/some-route")
+		if sessionID != "" {
+			req.Header.Set(sessionIDHeader, sessionID)
+		}
+		return req
+	}
+	for _, tc := range []struct{ method, body, sessionID string }{
+		{method: http.MethodPost, body: `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`},
+		{method: http.MethodGet, sessionID: sessionID},
+		{method: http.MethodDelete, sessionID: sessionID},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, newRequest(tc.method, tc.body, tc.sessionID))
+			require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+			require.Contains(t, rr.Body.String(), "MCP proxy config is not loaded yet")
+		})
+	}
+	// The protected resource metadata document is served for any method, and waits for the config the same way.
+	newMetadataRequest := func(method string) *http.Request {
+		req := httptest.NewRequest(method, internalapi.OAuthProtectedResourceMetadataPath+"/mcp", nil)
+		req.Header.Set(internalapi.MCPRouteHeader, "default/some-route")
+		return req
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		t.Run("metadata "+method, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, newMetadataRequest(method))
+			require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+			require.Contains(t, rr.Body.String(), "MCP proxy config is not loaded yet")
+		})
+	}
+
+	// Once a config is loaded, requests reach the handlers again: serveGET rejects a GET without a session ID.
+	require.NoError(t, proxy.LoadConfig(t.Context(), &filterapi.Config{MCPConfig: &filterapi.MCPConfig{}}))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, newRequest(http.MethodGet, "", ""))
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "missing session ID")
+	// The metadata handler answers for itself now: the route isn't in the loaded config.
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, newMetadataRequest(http.MethodGet))
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
+	require.NotContains(t, rr.Body.String(), "MCP proxy config is not loaded yet")
+}
+
+func TestMCPProxy_ConfigLoadedConcurrently(t *testing.T) {
+	// The config bundle watcher loads the config on its own goroutine while requests arrive. A request with a session
+	// reads the config as soon as it gets past the not-loaded check.
+	sessionCrypto := NewPBKDF2AesGcmSessionCrypto("test", 100)
+	proxy, mux, err := NewMCPProxy(slog.Default(), stubMetrics{}, noopTracer, sessionCrypto, nil)
+	require.NoError(t, err)
+	sessionID, err := sessionCrypto.Encrypt("default/some-route@@backend1:" + base64.StdEncoding.EncodeToString([]byte("s1")))
+	require.NoError(t, err)
+	deleteSession := func() int {
+		req := httptest.NewRequest(http.MethodDelete, "/mcp", nil)
+		req.Header.Set(internalapi.MCPRouteHeader, "default/some-route")
+		req.Header.Set(sessionIDHeader, sessionID)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	// The protected resource metadata document is looked up in the same config.
+	getMetadata := func() {
+		req := httptest.NewRequest(http.MethodGet, internalapi.OAuthProtectedResourceMetadataPath+"/mcp", nil)
+		req.Header.Set(internalapi.MCPRouteHeader, "default/some-route")
+		mux.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	require.Equal(t, http.StatusServiceUnavailable, deleteSession())
+
+	loaded := make(chan error, 1)
+	go func() {
+		loaded <- proxy.LoadConfig(context.Background(), &filterapi.Config{MCPConfig: &filterapi.MCPConfig{}})
+	}()
+	require.Eventually(t, func() bool {
+		getMetadata()
+		return deleteSession() != http.StatusServiceUnavailable
+	}, 5*time.Second, time.Millisecond)
+	require.NoError(t, <-loaded)
 }
 
 func Test_applyLogHeaderMappings(t *testing.T) {
