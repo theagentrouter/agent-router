@@ -1104,6 +1104,35 @@ func TestChatCompletionResponse(t *testing.T) {
 	}
 }
 
+// TestChatCompletionResponse_mistralArrayContent reproduces
+// https://github.com/theagentrouter/agent-router/issues/2974: Mistral
+// reasoning models return choices[].message.content as an array of typed
+// parts instead of a string.
+func TestChatCompletionResponse_mistralArrayContent(t *testing.T) {
+	const body = `{
+  "choices": [{
+    "message": {
+      "role": "assistant",
+      "content": [
+        {"type": "thinking", "thinking": "...reasoning steps..."},
+        {"type": "text", "text": "...final answer..."}
+      ]
+    }
+  }]
+}`
+
+	var resp ChatCompletionResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &resp))
+	require.Len(t, resp.Choices, 1)
+
+	msg := resp.Choices[0].Message
+	require.Equal(t, "assistant", msg.Role)
+	require.NotNil(t, msg.Content)
+	require.Equal(t, "...final answer...", *msg.Content)
+	require.NotNil(t, msg.ReasoningContent)
+	require.Equal(t, "...reasoning steps...", msg.ReasoningContent.Value)
+}
+
 func TestChatCompletionRequest(t *testing.T) {
 	testCases := []struct {
 		name     string
