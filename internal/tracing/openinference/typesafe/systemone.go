@@ -57,7 +57,7 @@ func (r *SystemOneRecorder) RecordRequest(span trace.Span, req *typesafeschema.S
 
 // RecordResponseOnError implements the same method as defined in tracingapi.SystemOneRecorder.
 func (r *SystemOneRecorder) RecordResponseOnError(span trace.Span, statusCode int, body []byte) {
-	openinference.RecordResponseError(span, statusCode, string(body))
+	openinference.RecordResponseError(span, r.traceConfig, statusCode, string(body))
 }
 
 // RecordResponse implements the same method as defined in tracingapi.SystemOneRecorder.
