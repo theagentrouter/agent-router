@@ -560,6 +560,172 @@ func Test_chatCompletionProcessorUpstreamFilter_ProcessResponseBody(t *testing.T
 		mm.RequireRequestFailure(t)
 	})
 
+	// Verify failed (non-2xx) responses still emit dynamic metadata at end of
+	// stream so the access log can attribute them to backend/model/route. Token
+	// costs are 0 since no tokens were consumed. See issue #2440.
+	t.Run("non-2xx status emits dynamic metadata at end of stream", func(t *testing.T) {
+		inBody := &extprocv3.HttpBody{Body: []byte("error-body"), EndOfStream: true}
+		mm := &mockMetrics{}
+		mt := &mockTranslator{
+			t: t, expResponseBody: inBody,
+			retHeaderMutation: []internalapi.Header{{"foo", "bar"}},
+			retBodyMutation:   []byte("error-body"),
+		}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator: mt,
+			metrics:    mm,
+			parent: &chatCompletionProcessorRouterFilter{
+				config: &filterapi.RuntimeConfig{
+					RequestCosts: []filterapi.RuntimeRequestCost{
+						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Backend: "default/some_backend", Type: filterapi.LLMRequestCostTypeInputToken, MetadataKey: "input_token_usage"}},
+						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Backend: "default/some_backend", Type: filterapi.LLMRequestCostTypeOutputToken, MetadataKey: "output_token_usage"}},
+						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Backend: "default/some_backend", Type: filterapi.LLMRequestCostTypeReasoningToken, MetadataKey: "reasoning_token_usage"}},
+					},
+				},
+			},
+			requestHeaders:       map[string]string{internalapi.ModelNameHeaderKeyDefault: "ai_gateway_llm"},
+			responseHeaders:      map[string]string{":status": "500"},
+			backendName:          "some_backend",
+			aiServiceBackendName: "default/some_backend",
+			routeName:            "some_route",
+			modelNameOverride:    "ai_gateway_llm",
+		}
+		res, err := p.ProcessResponseBody(t.Context(), inBody)
+		require.NoError(t, err)
+		md := res.DynamicMetadata
+		require.NotNil(t, md, "error responses must emit dynamic metadata for access-log attribution")
+		fields := md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields
+		// backend_name is already on the stream from request headers processing.
+		require.NotContains(t, fields, "backend_name")
+		require.Equal(t, "default/some_backend", fields["ai_service_backend_name"].GetStringValue())
+		require.Equal(t, "ai_gateway_llm", fields["model_name_override"].GetStringValue())
+		require.Equal(t, "some_route", fields["route_name"].GetStringValue())
+		// Token costs are 0 on errors (no tokens consumed), but the keys exist so
+		// the access log reads 0 instead of null.
+		require.Contains(t, fields, "input_token_usage")
+		require.Equal(t, float64(0), fields["input_token_usage"].GetNumberValue())
+		require.Contains(t, fields, "output_token_usage")
+		require.Equal(t, float64(0), fields["output_token_usage"].GetNumberValue())
+		require.Contains(t, fields, "reasoning_token_usage")
+		require.Equal(t, float64(0), fields["reasoning_token_usage"].GetNumberValue())
+		// Error responses carry no model; response_model must be absent (not "").
+		_, ok := fields["response_model"]
+		require.False(t, ok)
+		mm.RequireRequestFailure(t)
+	})
+
+	// Metadata is only emitted at end of stream; a partial error chunk must not
+	// populate dynamic metadata yet.
+	t.Run("non-2xx status does not emit metadata before end of stream", func(t *testing.T) {
+		inBody := &extprocv3.HttpBody{Body: []byte("error-body"), EndOfStream: false}
+		mm := &mockMetrics{}
+		mt := &mockTranslator{
+			t: t, expResponseBody: inBody,
+			retHeaderMutation: []internalapi.Header{{"foo", "bar"}},
+			retBodyMutation:   []byte("error-body"),
+		}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator: mt,
+			metrics:    mm,
+			parent: &chatCompletionProcessorRouterFilter{
+				config: &filterapi.RuntimeConfig{
+					RequestCosts: []filterapi.RuntimeRequestCost{
+						{LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeOutputToken, MetadataKey: "output_token_usage"}},
+					},
+				},
+			},
+			requestHeaders:    map[string]string{internalapi.ModelNameHeaderKeyDefault: "ai_gateway_llm"},
+			responseHeaders:   map[string]string{":status": "500"},
+			backendName:       "some_backend",
+			routeName:         "some_route",
+			modelNameOverride: "ai_gateway_llm",
+		}
+		res, err := p.ProcessResponseBody(t.Context(), inBody)
+		require.NoError(t, err)
+		require.Nil(t, res.DynamicMetadata)
+	})
+
+	// GlobalRequestCosts (route-unscoped) are also emitted on error responses.
+	t.Run("non-2xx status emits global request costs", func(t *testing.T) {
+		inBody := &extprocv3.HttpBody{Body: []byte("error-body"), EndOfStream: true}
+		mm := &mockMetrics{}
+		mt := &mockTranslator{
+			t: t, expResponseBody: inBody,
+			retHeaderMutation: []internalapi.Header{{"foo", "bar"}},
+			retBodyMutation:   []byte("error-body"),
+		}
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator: mt,
+			metrics:    mm,
+			parent: &chatCompletionProcessorRouterFilter{
+				config: &filterapi.RuntimeConfig{
+					GlobalRequestCosts: []filterapi.RuntimeGlobalRequestCost{
+						{GlobalLLMRequestCost: &filterapi.GlobalLLMRequestCost{Type: filterapi.LLMRequestCostTypeOutputToken, MetadataKey: "g_output_token"}},
+						{GlobalLLMRequestCost: &filterapi.GlobalLLMRequestCost{Type: filterapi.LLMRequestCostTypeTotalToken, MetadataKey: "g_total_token"}},
+					},
+				},
+			},
+			requestHeaders:    map[string]string{internalapi.ModelNameHeaderKeyDefault: "ai_gateway_llm"},
+			responseHeaders:   map[string]string{":status": "500"},
+			backendName:       "some_backend",
+			routeName:         "some_route",
+			modelNameOverride: "ai_gateway_llm",
+		}
+		res, err := p.ProcessResponseBody(t.Context(), inBody)
+		require.NoError(t, err)
+		md := res.DynamicMetadata
+		require.NotNil(t, md)
+		fields := md.Fields[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().Fields
+		require.Equal(t, float64(0), fields["g_output_token"].GetNumberValue())
+		require.Equal(t, float64(0), fields["g_total_token"].GetNumberValue())
+		require.Equal(t, "some_backend", fields["ai_service_backend_name"].GetStringValue())
+		mm.RequireRequestFailure(t)
+	})
+
+	// If buildDynamicMetadata errors on the error path (e.g. a CEL cost expression
+	// that fails), the response must still succeed: metadata is skipped and a
+	// warning logged, rather than the error propagating and failing the response.
+	// On real error responses token costs are 0, but we pre-set non-zero costs
+	// here so the CEL unsigned-subtraction overflows and exercises the guard.
+	t.Run("non-2xx status skips metadata on CEL error", func(t *testing.T) {
+		inBody := &extprocv3.HttpBody{Body: []byte("error-body"), EndOfStream: true}
+		mm := &mockMetrics{}
+		mt := &mockTranslator{
+			t: t, expResponseBody: inBody,
+			retHeaderMutation: []internalapi.Header{{"foo", "bar"}},
+			retBodyMutation:   []byte("error-body"),
+		}
+		// input_tokens - output_tokens overflows (uint) when input < output.
+		// NewProgram sanity-checks at all-zero (0-0 = 0, OK), so this compiles.
+		celProg, err := llmcostcel.NewProgram("input_tokens - output_tokens")
+		require.NoError(t, err)
+		var costs metrics.TokenUsage
+		costs.SetInputTokens(1)
+		costs.SetOutputTokens(5) // 1 - 5 => unsigned overflow => CEL error
+		p := &chatCompletionProcessorUpstreamFilter{
+			translator: mt,
+			metrics:    mm,
+			logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+			parent: &chatCompletionProcessorRouterFilter{
+				config: &filterapi.RuntimeConfig{
+					RequestCosts: []filterapi.RuntimeRequestCost{
+						{CELProg: celProg, LLMRequestCost: &filterapi.LLMRequestCost{RouteName: "some_route", Type: filterapi.LLMRequestCostTypeCEL, MetadataKey: "cel_diff"}},
+					},
+				},
+			},
+			requestHeaders:    map[string]string{internalapi.ModelNameHeaderKeyDefault: "ai_gateway_llm"},
+			responseHeaders:   map[string]string{":status": "500"},
+			backendName:       "some_backend",
+			routeName:         "some_route",
+			modelNameOverride: "ai_gateway_llm",
+			costs:             costs,
+		}
+		res, procErr := p.ProcessResponseBody(t.Context(), inBody)
+		require.NoError(t, procErr, "CEL error must not fail the error response")
+		require.Nil(t, res.DynamicMetadata, "metadata is skipped when CEL evaluation errors")
+		mm.RequireRequestFailure(t)
+	})
+
 	// Verify the stale content-encoding header is removed when a compressed error body is replaced
 	// with the uncompressed translated error.
 	t.Run("non-2xx status removes content-encoding", func(t *testing.T) {

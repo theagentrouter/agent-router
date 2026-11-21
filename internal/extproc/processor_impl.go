@@ -607,7 +607,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 		}
 		// Mark so the deferred handler records failure.
 		recordRequestCompletionErr = true
-		return &extprocv3.ProcessingResponse{
+		resp := &extprocv3.ProcessingResponse{
 			Response: &extprocv3.ProcessingResponse_ResponseBody{
 				ResponseBody: &extprocv3.BodyResponse{
 					Response: &extprocv3.CommonResponse{
@@ -616,7 +616,35 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 					},
 				},
 			},
-		}, nil
+		}
+		// Emit dynamic metadata at end of stream so failed requests still carry
+		// ai_service_backend_name / model_name_override / route_name / token costs (0)
+		// in the access log. Backend identity and model are known from the request
+		// phase (SetBackend), so unlike token usage they do not depend on a successful
+		// response body. Token costs are 0 on errors (no tokens consumed), so the
+		// rate-limit stream-done hits_addend stays 0 — observability only, no token
+		// quota charge (verified by an e2e in tests/e2e/backend_quota_ratelimit_test.go).
+		// responseModel is empty because error responses carry no model.
+		//
+		// If a CEL cost expression fails to evaluate here, skip emitting metadata
+		// and log rather than failing the response: the access log simply stays
+		// null for this request, same as for any failed request without costs.
+		// (Note: llmcostcel.NewProgram sanity-checks each expression at all-zero
+		// token counts — the exact state of a failed request — so division-by-zero
+		// on zero tokens is already rejected at program creation; this guard is
+		// defensive against any other CEL runtime error.)
+		if body.EndOfStream && u.parent.config != nil &&
+			(len(u.parent.config.GlobalRequestCosts) > 0 || len(u.parent.config.RequestCosts) > 0) {
+			identity := resolveAIServiceBackendName(u.aiServiceBackendName, u.backendName)
+			metadata, mdErr := buildDynamicMetadataWithBackendIdentity(u.parent.config.GlobalRequestCosts, u.parent.config.RequestCosts, &u.costs, u.requestHeaders, u.backendName, identity, u.routeName, internalapi.ResponseModel(""))
+			if mdErr != nil {
+				u.logger.Warn("failed to build dynamic metadata for error response, skipping access-log metadata",
+					slog.Any("error", mdErr))
+			} else {
+				resp.DynamicMetadata = metadata
+			}
+		}
+		return resp, nil
 	}
 
 	newHeaders, newBody, tokenUsage, responseModel, err := u.translator.ResponseBody(u.responseHeaders, decodingResult.reader, body.EndOfStream, u.parent.span)
@@ -982,10 +1010,11 @@ func evalRuntimeRequestCost(rc *filterapi.RuntimeRequestCost, costs *metrics.Tok
 }
 
 // buildDynamicMetadata creates metadata for rate limiting and cost tracking.
-// This function is called by the upstream filter at the end of the stream (body.EndOfStream=true), and,
-// for streaming responses, also as soon as a chunk carries new usage so the access log still captures it
-// if the downstream client disconnects before EndOfStream is observed. It is not called for failed requests.
-// The metadata includes token usage costs and model information for downstream processing.
+// The upstream filter emits metadata at end of stream for successful and failed responses.
+// Streaming responses also emit metadata as soon as a chunk carries new usage so the access log
+// captures it if the downstream client disconnects before EndOfStream is observed.
+// Non-2xx responses have zero token usage and no response model, but still emit cost and
+// route/model metadata. backend_name is emitted separately during request headers processing.
 // Two-tier precedence: for each metadataKey, check route-scoped requestCosts first (matching RouteName == routeName).
 // If found, use it. Otherwise, fall back to globalRequestCosts. If neither exists, the key is not emitted.
 func buildDynamicMetadata(globalRequestCosts []filterapi.RuntimeGlobalRequestCost, requestCosts []filterapi.RuntimeRequestCost, costs *metrics.TokenUsage, requestHeaders map[string]string, backendName, routeName, responseModel string) (*structpb.Struct, error) {
