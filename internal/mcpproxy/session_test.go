@@ -11,11 +11,13 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,10 +26,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
+	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 )
 
 // stubMetrics implements metrics.MCPMetrics with no-ops.
@@ -48,6 +54,13 @@ func (stubMetrics) RecordClientCapabilities(context.Context, *mcpsdk.ClientCapab
 func (stubMetrics) RecordServerCapabilities(context.Context, *mcpsdk.ServerCapabilities, mcpsdk.Params) {
 }
 func (stubMetrics) RecordProgress(context.Context, mcpsdk.Params) {}
+
+func (stubMetrics) RecordNotificationStreamOpenAttempt(context.Context) {}
+func (stubMetrics) RecordNotificationStreamOpenOutcome(context.Context, metrics.MCPNotificationStreamOutcome) {
+}
+
+func (stubMetrics) RecordNotificationStreamEnd(context.Context, time.Time, metrics.MCPNotificationStreamEndReason) {
+}
 
 func TestEncodeCapabilityFlags(t *testing.T) {
 	t.Parallel()
@@ -1035,5 +1048,522 @@ func TestGetHeartbeatInterval(t *testing.T) {
 			}
 			require.Equal(t, tt.expected, getHeartbeatInterval(defaultInterval))
 		})
+	}
+}
+
+const (
+	streamAttemptsMetric = "mcp.notification_stream.open.attempts"
+	streamOutcomesMetric = "mcp.notification_stream.open.outcomes"
+	streamActiveMetric   = "mcp.notification_stream.active"
+	streamDurationMetric = "mcp.notification_stream.duration"
+)
+
+func backendAttrs(backend string) attribute.Set {
+	return attribute.NewSet(attribute.String("mcp.backend", backend))
+}
+
+func outcomeAttrs(backend string, outcome metrics.MCPNotificationStreamOutcome) attribute.Set {
+	return attribute.NewSet(
+		attribute.String("mcp.backend", backend),
+		attribute.String("mcp.notification_stream.outcome", string(outcome)),
+	)
+}
+
+func endReasonAttrs(backend string, reason metrics.MCPNotificationStreamEndReason) attribute.Set {
+	return attribute.NewSet(
+		attribute.String("mcp.backend", backend),
+		attribute.String("mcp.notification_stream.end_reason", string(reason)),
+	)
+}
+
+// lookupStreamMetric returns the value of a sum metric, or the count of a histogram, for the given
+// attributes. Unlike the testotel helpers it does not fail when the data point does not exist yet,
+// so it can be used for polling and for asserting absence.
+func lookupStreamMetric(t *testing.T, mr *sdkmetric.ManualReader, name string, attrs attribute.Set) (float64, bool) {
+	t.Helper()
+	var data metricdata.ResourceMetrics
+	require.NoError(t, mr.Collect(t.Context(), &data))
+	for _, sm := range data.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			switch d := m.Data.(type) {
+			case metricdata.Sum[float64]:
+				for _, dp := range d.DataPoints {
+					if dp.Attributes.Equals(&attrs) {
+						return dp.Value, true
+					}
+				}
+			case metricdata.Histogram[float64]:
+				for _, dp := range d.DataPoints {
+					if dp.Attributes.Equals(&attrs) {
+						return float64(dp.Count), true
+					}
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+// totalStreamOutcomes returns the number of open outcomes recorded for the backend across all outcome values.
+func totalStreamOutcomes(t *testing.T, mr *sdkmetric.ManualReader, backend string) float64 {
+	t.Helper()
+	var data metricdata.ResourceMetrics
+	require.NoError(t, mr.Collect(t.Context(), &data))
+	var total float64
+	for _, sm := range data.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != streamOutcomesMetric {
+				continue
+			}
+			for _, dp := range m.Data.(metricdata.Sum[float64]).DataPoints {
+				if v, ok := dp.Attributes.Value("mcp.backend"); ok && v.AsString() == backend {
+					total += dp.Value
+				}
+			}
+		}
+	}
+	return total
+}
+
+func requireStreamMetricEventually(t *testing.T, mr *sdkmetric.ManualReader, name string, attrs attribute.Set, want float64) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		v, ok := lookupStreamMetric(t, mr, name, attrs)
+		return ok && v == want
+	}, 5*time.Second, 10*time.Millisecond, "%s %v never reached %v", name, attrs.ToSlice(), want)
+}
+
+// newNotificationStreamTestProxy returns a proxy that records metrics into the returned reader
+// and sends backend requests to a test server running handler. The request context seen by
+// handler is also cancelled at test cleanup, so handlers that hold the response until the
+// request is cancelled cannot block server shutdown even if the client never cancels.
+func newNotificationStreamTestProxy(t *testing.T, handler http.HandlerFunc) (*mcpRequestContext, *sdkmetric.ManualReader) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		go func() {
+			select {
+			case <-release:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		handler(w, r.WithContext(ctx))
+	}))
+	t.Cleanup(func() {
+		close(release)
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+	mr := sdkmetric.NewManualReader()
+	proxy := newTestMCPProxyWithOTEL(mr, noopTracer)
+	proxy.backendListenerAddr = srv.URL
+	return proxy, mr
+}
+
+// openNotificationStream opens the legacy GET notification stream to backend1.
+func openNotificationStream(ctx context.Context, proxy *mcpRequestContext) error {
+	s := &session{reqCtx: proxy}
+	return s.sendRequestPerBackend(ctx, make(chan *backendEvent, 10), "route1", filterapi.MCPBackend{Name: "backend1"},
+		&compositeSessionEntry{sessionID: "sess1"}, http.MethodGet, nil, nil)
+}
+
+// runInBackground runs fn with a cancellable context. The returned wait function returns fn's
+// result, failing the test if fn does not return within 5s. Only an actual completion is cached,
+// so cleanup still cancels and then joins the worker with a bounded wait after an earlier timeout.
+func runInBackground(t *testing.T, fn func(context.Context) error) (cancel context.CancelFunc, wait func() error) {
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- fn(ctx) }()
+	var (
+		finished bool
+		result   error
+	)
+	wait = func() error {
+		if finished {
+			return result
+		}
+		select {
+		case result = <-done:
+			finished = true
+		case <-time.After(5 * time.Second):
+			t.Error("background worker did not return within 5s")
+		}
+		return result
+	}
+	t.Cleanup(func() {
+		cancel()
+		_ = wait()
+	})
+	return cancel, wait
+}
+
+func sseTestEvent(t *testing.T) string {
+	id, _ := jsonrpc.MakeID("1")
+	msg, err := jsonrpc.EncodeMessage(&jsonrpc.Request{Method: "a1", ID: id})
+	require.NoError(t, err)
+	return "event: a1\ndata: " + string(msg) + "\n\n"
+}
+
+func TestStreamNotifications_Metrics_HealthyAndRejectedBackends(t *testing.T) {
+	originalHeartbeatInterval := heartbeatInterval
+	heartbeatInterval = 20 * time.Millisecond
+	t.Cleanup(func() { heartbeatInterval = originalHeartbeatInterval })
+
+	event := sseTestEvent(t)
+	proxy, mr := newNotificationStreamTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(internalapi.MCPBackendHeader) == "backend2" {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		// backend1 keeps a healthy stream open until the client goes away.
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(event))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	s := &session{
+		reqCtx: proxy,
+		perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+			"backend1": {backendName: "backend1", sessionID: "s1"},
+			"backend2": {backendName: "backend2", sessionID: "s2"},
+		},
+		route: "test-route",
+	}
+	cancel, wait := runInBackground(t, func(ctx context.Context) error {
+		return s.streamNotifications(ctx, httptest.NewRecorder(), proxy.toolChangeSignaler)
+	})
+
+	requireStreamMetricEventually(t, mr, streamActiveMetric, backendAttrs("backend1"), 1)
+	requireStreamMetricEventually(t, mr, streamOutcomesMetric, outcomeAttrs("backend2", metrics.MCPNotificationStreamOutcomeUnsupported), 1)
+	for _, b := range []string{"backend1", "backend2"} {
+		require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamAttemptsMetric, backendAttrs(b)))
+		require.Equal(t, float64(1), totalStreamOutcomes(t, mr, b))
+	}
+	require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamOutcomesMetric,
+		outcomeAttrs("backend1", metrics.MCPNotificationStreamOutcomeOpened)))
+	// The rejected backend never opened a stream, so it has no active streams.
+	_, ok := lookupStreamMetric(t, mr, streamActiveMetric, backendAttrs("backend2"))
+	require.False(t, ok)
+
+	cancel()
+	require.ErrorIs(t, wait(), context.Canceled)
+	requireStreamMetricEventually(t, mr, streamDurationMetric, endReasonAttrs("backend1", metrics.MCPNotificationStreamEndReasonCancelled), 1)
+	require.Equal(t, float64(0), testotel.GetCounterValue(t, mr, streamActiveMetric, backendAttrs("backend1")))
+}
+
+func TestStreamNotifications_Metrics_AllBackendStreamsEndWhileHeartbeatsContinue(t *testing.T) {
+	originalHeartbeatInterval := heartbeatInterval
+	heartbeatInterval = 20 * time.Millisecond
+	t.Cleanup(func() { heartbeatInterval = originalHeartbeatInterval })
+
+	event := sseTestEvent(t)
+	// Every backend sends one event and closes its stream normally.
+	proxy, mr := newNotificationStreamTestProxy(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(event))
+	})
+	s := &session{
+		reqCtx: proxy,
+		perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+			"backend1": {backendName: "backend1", sessionID: "s1"},
+			"backend2": {backendName: "backend2", sessionID: "s2"},
+		},
+		route: "test-route",
+	}
+	rr := &lockedRecorder{rec: httptest.NewRecorder()}
+	cancel, wait := runInBackground(t, func(ctx context.Context) error {
+		return s.streamNotifications(ctx, rr, proxy.toolChangeSignaler)
+	})
+
+	backends := []string{"backend1", "backend2"}
+	for _, b := range backends {
+		requireStreamMetricEventually(t, mr, streamDurationMetric, endReasonAttrs(b, metrics.MCPNotificationStreamEndReasonEOF), 1)
+	}
+	// All backend streams have ended, but the client stream stays open and keeps receiving heartbeats.
+	heartbeatsAfterEnd := rr.count(`"method":"ping"`)
+	require.Eventually(t, func() bool {
+		return rr.count(`"method":"ping"`) > heartbeatsAfterEnd
+	}, 5*time.Second, 10*time.Millisecond)
+
+	for _, b := range backends {
+		require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamAttemptsMetric, backendAttrs(b)))
+		require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamOutcomesMetric,
+			outcomeAttrs(b, metrics.MCPNotificationStreamOutcomeOpened)))
+		require.Equal(t, float64(0), testotel.GetCounterValue(t, mr, streamActiveMetric, backendAttrs(b)))
+	}
+
+	cancel()
+	require.ErrorIs(t, wait(), context.Canceled, "streamNotifications must only return on cancellation")
+}
+
+// lockedRecorder is an http.ResponseWriter that can be read while streamNotifications writes to it.
+type lockedRecorder struct {
+	mu  sync.Mutex
+	rec *httptest.ResponseRecorder
+}
+
+func (l *lockedRecorder) Header() http.Header {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.rec.Header()
+}
+
+func (l *lockedRecorder) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.rec.Write(b)
+}
+
+func (l *lockedRecorder) WriteHeader(code int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.rec.WriteHeader(code)
+}
+
+func (l *lockedRecorder) count(substr string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Count(l.rec.Body.String(), substr)
+}
+
+func TestSendRequestPerBackend_NotificationStreamOpenOutcomes(t *testing.T) {
+	id, _ := jsonrpc.MakeID("1")
+	ping, _ := jsonrpc.EncodeMessage(&jsonrpc.Request{Method: "ping", ID: id})
+	tests := []struct {
+		name                  string
+		status                int
+		contentType, encoding string
+		contentLength, body   string
+		want                  metrics.MCPNotificationStreamOutcome
+	}{
+		{name: "202", status: http.StatusAccepted, want: metrics.MCPNotificationStreamOutcomeUnsupported},
+		{name: "204", status: http.StatusNoContent, want: metrics.MCPNotificationStreamOutcomeUnsupported},
+		{name: "405", status: http.StatusMethodNotAllowed, want: metrics.MCPNotificationStreamOutcomeUnsupported},
+		{name: "404", status: http.StatusNotFound, want: metrics.MCPNotificationStreamOutcomeHTTP4xx},
+		{name: "500", status: http.StatusInternalServerError, want: metrics.MCPNotificationStreamOutcomeHTTP5xx},
+		{name: "503", status: http.StatusServiceUnavailable, want: metrics.MCPNotificationStreamOutcomeHTTP5xx},
+		{name: "201", status: http.StatusCreated, want: metrics.MCPNotificationStreamOutcomeHTTPOther},
+		{
+			name: "single JSON-RPC message instead of a stream", status: http.StatusOK,
+			contentType: "application/json", body: string(ping), want: metrics.MCPNotificationStreamOutcomeUnsupported,
+		},
+		{
+			name: "truncated JSON body", status: http.StatusOK, contentType: "application/json",
+			contentLength: "100", body: `{"jsonrpc":`, want: metrics.MCPNotificationStreamOutcomeTransportError,
+		},
+		{
+			name: "204 with gzip encoding and empty body", status: http.StatusNoContent,
+			encoding: "gzip", want: metrics.MCPNotificationStreamOutcomeUnsupported,
+		},
+		{
+			name: "503 with invalid gzip body", status: http.StatusServiceUnavailable,
+			encoding: "gzip", body: "not gzip", want: metrics.MCPNotificationStreamOutcomeHTTP5xx,
+		},
+		{
+			name: "200 with invalid gzip body", status: http.StatusOK, contentType: "text/event-stream",
+			encoding: "gzip", body: "not gzip", want: metrics.MCPNotificationStreamOutcomeTransportError,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proxy, mr := newNotificationStreamTestProxy(t, func(w http.ResponseWriter, _ *http.Request) {
+				for k, v := range map[string]string{"Content-Type": tc.contentType, "Content-Encoding": tc.encoding, "Content-Length": tc.contentLength} {
+					if v != "" {
+						w.Header().Set(k, v)
+					}
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			_ = openNotificationStream(t.Context(), proxy)
+
+			require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamAttemptsMetric, backendAttrs("backend1")))
+			require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamOutcomesMetric, outcomeAttrs("backend1", tc.want)))
+			require.Equal(t, float64(1), totalStreamOutcomes(t, mr, "backend1"), "exactly one outcome per attempt")
+			_, ok := lookupStreamMetric(t, mr, streamActiveMetric, backendAttrs("backend1"))
+			require.False(t, ok, "a stream that never opened must not be counted as active")
+		})
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestSendRequestPerBackend_NotificationStreamTransportError(t *testing.T) {
+	mr := sdkmetric.NewManualReader()
+	proxy := newTestMCPProxyWithOTEL(mr, noopTracer)
+	proxy.client = http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connection refused")
+	})}
+
+	require.Error(t, openNotificationStream(t.Context(), proxy))
+	require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamOutcomesMetric,
+		outcomeAttrs("backend1", metrics.MCPNotificationStreamOutcomeTransportError)))
+}
+
+func TestSendRequestPerBackend_NotificationStreamEndReasons(t *testing.T) {
+	event := sseTestEvent(t)
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+		wantErr bool
+		want    metrics.MCPNotificationStreamEndReason
+	}{
+		{
+			name: "valid final event without trailing blank line",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte(strings.TrimSuffix(event, "\n\n")))
+			},
+			want: metrics.MCPNotificationStreamEndReasonEOF,
+		},
+		{
+			name: "malformed final event without trailing blank line",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte(event + "data: {invalid json}"))
+			},
+			want: metrics.MCPNotificationStreamEndReasonError,
+		},
+		{
+			name: "malformed complete event",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte("data: {invalid json}\n\n"))
+			},
+			wantErr: true,
+			want:    metrics.MCPNotificationStreamEndReasonError,
+		},
+		{
+			name: "connection cut mid-chunk",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				conn, buf, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+				_, _ = buf.WriteString("20\r\nevent: a1\n")
+				_ = buf.Flush()
+			},
+			want: metrics.MCPNotificationStreamEndReasonError,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proxy, mr := newNotificationStreamTestProxy(t, tc.handler)
+			err := openNotificationStream(t.Context(), proxy)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamOutcomesMetric,
+				outcomeAttrs("backend1", metrics.MCPNotificationStreamOutcomeOpened)))
+			count, _ := testotel.GetHistogramValues(t, mr, streamDurationMetric, endReasonAttrs("backend1", tc.want))
+			require.Equal(t, uint64(1), count)
+			require.Equal(t, float64(0), testotel.GetCounterValue(t, mr, streamActiveMetric, backendAttrs("backend1")))
+		})
+	}
+}
+
+func TestSendRequestPerBackend_NotificationStreamCancellation(t *testing.T) {
+	t.Run("before open", func(t *testing.T) {
+		entered := make(chan struct{})
+		proxy, mr := newNotificationStreamTestProxy(t, func(_ http.ResponseWriter, r *http.Request) {
+			close(entered)
+			<-r.Context().Done() // Withhold the response, so the stream never opens.
+		})
+		cancel, wait := runInBackground(t, func(ctx context.Context) error { return openNotificationStream(ctx, proxy) })
+
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "backend request was not received")
+		}
+		// The attempt is counted while the response is still withheld.
+		require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamAttemptsMetric, backendAttrs("backend1")))
+		require.Equal(t, float64(0), totalStreamOutcomes(t, mr, "backend1"))
+
+		cancel()
+		require.NoError(t, wait())
+		require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamOutcomesMetric,
+			outcomeAttrs("backend1", metrics.MCPNotificationStreamOutcomeCancelled)))
+		_, ok := lookupStreamMetric(t, mr, streamActiveMetric, backendAttrs("backend1"))
+		require.False(t, ok)
+	})
+
+	t.Run("after open", func(t *testing.T) {
+		proxy, mr := newNotificationStreamTestProxy(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		})
+		cancel, wait := runInBackground(t, func(ctx context.Context) error { return openNotificationStream(ctx, proxy) })
+
+		requireStreamMetricEventually(t, mr, streamActiveMetric, backendAttrs("backend1"), 1)
+		const minLifetime = 50 * time.Millisecond
+		time.Sleep(minLifetime)
+		cancel()
+		require.NoError(t, wait())
+
+		require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, streamOutcomesMetric,
+			outcomeAttrs("backend1", metrics.MCPNotificationStreamOutcomeOpened)))
+		count, sum := testotel.GetHistogramValues(t, mr, streamDurationMetric,
+			endReasonAttrs("backend1", metrics.MCPNotificationStreamEndReasonCancelled))
+		require.Equal(t, uint64(1), count)
+		// The lifetime is measured from when the stream opened.
+		require.GreaterOrEqual(t, sum, minLifetime.Seconds())
+		require.Less(t, sum, 60.0)
+		require.Equal(t, float64(0), testotel.GetCounterValue(t, mr, streamActiveMetric, backendAttrs("backend1")))
+	})
+}
+
+func TestIsCleanEOF(t *testing.T) {
+	bad := errors.New("bad frame")
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "EOF", err: io.EOF, want: true},
+		{name: "wrapped EOF", err: fmt.Errorf("read: %w", io.EOF), want: true},
+		{name: "EOF joined with nil", err: errors.Join(io.EOF, nil), want: true},
+		{name: "EOF joined with parse error", err: errors.Join(io.EOF, bad), want: false},
+		{name: "wrapped join with parse error", err: fmt.Errorf("read: %w", errors.Join(io.EOF, bad)), want: false},
+		{name: "unexpected EOF", err: io.ErrUnexpectedEOF, want: false},
+		{name: "other error", err: bad, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isCleanEOF(tc.err))
+		})
+	}
+}
+
+func TestSendRequestPerBackend_POSTDoesNotRecordNotificationStreamMetrics(t *testing.T) {
+	proxy, mr := newNotificationStreamTestProxy(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{}}\n\n"))
+	})
+	s := &session{reqCtx: proxy}
+	id, _ := jsonrpc.MakeID("1")
+	err := s.sendRequestPerBackend(t.Context(), make(chan *backendEvent, 1), "route1", filterapi.MCPBackend{Name: "backend1"},
+		&compositeSessionEntry{sessionID: "sess1"}, http.MethodPost, &jsonrpc.Request{Method: "tools/list", ID: id}, nil)
+	require.NoError(t, err)
+
+	var data metricdata.ResourceMetrics
+	require.NoError(t, mr.Collect(t.Context(), &data))
+	for _, sm := range data.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			require.NotContains(t, m.Name, "mcp.notification_stream.")
+		}
 	}
 }
