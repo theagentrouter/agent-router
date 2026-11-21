@@ -1038,7 +1038,7 @@ func TestOpenAIStreamToAnthropicState_handleChunk_ZeroLen(t *testing.T) {
 }
 
 func TestAppendAnthropicAssistantMessage_ThinkingPlusText(t *testing.T) {
-	// thinking + text → structured content array with both blocks
+	// thinking + text → message-level reasoning_content + thinking_blocks + plain string content
 	msg := anthropic.MessageParam{
 		Role: anthropic.MessageRoleAssistant,
 		Content: anthropic.MessageContent{
@@ -1053,26 +1053,18 @@ func TestAppendAnthropicAssistantMessage_ThinkingPlusText(t *testing.T) {
 	require.NotNil(t, msgs[0].OfAssistant)
 
 	assistantMsg := msgs[0].OfAssistant
-	// Content should be a structured array, not a plain string.
-	contentArray, ok := assistantMsg.Content.Value.([]openai.ChatCompletionAssistantMessageParamContent)
-	require.True(t, ok, "expected structured content array, got %T", assistantMsg.Content.Value)
-	require.Len(t, contentArray, 2)
-
-	// First block: thinking
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeThinking, contentArray[0].Type)
-	require.NotNil(t, contentArray[0].Text)
-	assert.Equal(t, "I should write a simple example.", *contentArray[0].Text)
-	require.NotNil(t, contentArray[0].Signature)
-	assert.Equal(t, "sig_abc123", *contentArray[0].Signature)
-
-	// Second block: text
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeText, contentArray[1].Type)
-	require.NotNil(t, contentArray[1].Text)
-	assert.Equal(t, "Sure! Here is the code.", *contentArray[1].Text)
+	assert.Equal(t, "I should write a simple example.", assistantMsg.ReasoningContent)
+	require.Len(t, assistantMsg.ThinkingBlocks, 1)
+	assert.Equal(t, openai.ThinkingBlock{
+		Type:      "thinking",
+		Thinking:  "I should write a simple example.",
+		Signature: "sig_abc123",
+	}, assistantMsg.ThinkingBlocks[0])
+	assert.Equal(t, "Sure! Here is the code.", assistantMsg.Content.Value)
 }
 
 func TestAppendAnthropicAssistantMessage_ThinkingOnly(t *testing.T) {
-	// thinking-only block → content array with just thinking, no text
+	// thinking-only block → reasoning_content + thinking_blocks, nil text content
 	msg := anthropic.MessageParam{
 		Role: anthropic.MessageRoleAssistant,
 		Content: anthropic.MessageContent{
@@ -1086,15 +1078,18 @@ func TestAppendAnthropicAssistantMessage_ThinkingOnly(t *testing.T) {
 	require.NotNil(t, msgs[0].OfAssistant)
 
 	assistantMsg := msgs[0].OfAssistant
-	contentArray, ok := assistantMsg.Content.Value.([]openai.ChatCompletionAssistantMessageParamContent)
-	require.True(t, ok, "expected structured content array, got %T", assistantMsg.Content.Value)
-	require.Len(t, contentArray, 1)
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeThinking, contentArray[0].Type)
-	assert.Equal(t, "Just thinking...", *contentArray[0].Text)
+	assert.Equal(t, "Just thinking...", assistantMsg.ReasoningContent)
+	require.Len(t, assistantMsg.ThinkingBlocks, 1)
+	assert.Equal(t, openai.ThinkingBlock{
+		Type:      "thinking",
+		Thinking:  "Just thinking...",
+		Signature: "sig_xyz",
+	}, assistantMsg.ThinkingBlocks[0])
+	assert.Nil(t, assistantMsg.Content.Value)
 }
 
 func TestAppendAnthropicAssistantMessage_ThinkingPlusToolUse(t *testing.T) {
-	// thinking + tool_use → content array with thinking + tool_calls
+	// thinking + tool_use → reasoning_content + thinking_blocks + tool_calls
 	msg := anthropic.MessageParam{
 		Role: anthropic.MessageRoleAssistant,
 		Content: anthropic.MessageContent{
@@ -1109,11 +1104,14 @@ func TestAppendAnthropicAssistantMessage_ThinkingPlusToolUse(t *testing.T) {
 	require.NotNil(t, msgs[0].OfAssistant)
 
 	assistantMsg := msgs[0].OfAssistant
-	// Should have thinking in content array
-	contentArray, ok := assistantMsg.Content.Value.([]openai.ChatCompletionAssistantMessageParamContent)
-	require.True(t, ok, "expected structured content array, got %T", assistantMsg.Content.Value)
-	require.Len(t, contentArray, 1)
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeThinking, contentArray[0].Type)
+	assert.Equal(t, "I need to call the calculator.", assistantMsg.ReasoningContent)
+	require.Len(t, assistantMsg.ThinkingBlocks, 1)
+	assert.Equal(t, openai.ThinkingBlock{
+		Type:      "thinking",
+		Thinking:  "I need to call the calculator.",
+		Signature: "sig_tool",
+	}, assistantMsg.ThinkingBlocks[0])
+	assert.Nil(t, assistantMsg.Content.Value)
 
 	// Should have tool calls
 	require.Len(t, assistantMsg.ToolCalls, 1)
@@ -1121,7 +1119,7 @@ func TestAppendAnthropicAssistantMessage_ThinkingPlusToolUse(t *testing.T) {
 }
 
 func TestAppendAnthropicAssistantMessage_MultipleThinkingBlocks(t *testing.T) {
-	// multiple thinking blocks → all preserved in order
+	// multiple thinking blocks → joined into reasoning_content and all preserved in order in thinking_blocks
 	msg := anthropic.MessageParam{
 		Role: anthropic.MessageRoleAssistant,
 		Content: anthropic.MessageContent{
@@ -1136,19 +1134,16 @@ func TestAppendAnthropicAssistantMessage_MultipleThinkingBlocks(t *testing.T) {
 	require.Len(t, msgs, 1)
 	require.NotNil(t, msgs[0].OfAssistant)
 
-	contentArray, ok := msgs[0].OfAssistant.Content.Value.([]openai.ChatCompletionAssistantMessageParamContent)
-	require.True(t, ok)
-	require.Len(t, contentArray, 3)
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeThinking, contentArray[0].Type)
-	assert.Equal(t, "First thought.", *contentArray[0].Text)
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeThinking, contentArray[1].Type)
-	assert.Equal(t, "Second thought.", *contentArray[1].Text)
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeText, contentArray[2].Type)
-	assert.Equal(t, "Done.", *contentArray[2].Text)
+	assistantMsg := msgs[0].OfAssistant
+	assert.Equal(t, "First thought.Second thought.", assistantMsg.ReasoningContent)
+	require.Len(t, assistantMsg.ThinkingBlocks, 2)
+	assert.Equal(t, openai.ThinkingBlock{Type: "thinking", Thinking: "First thought.", Signature: "s1"}, assistantMsg.ThinkingBlocks[0])
+	assert.Equal(t, openai.ThinkingBlock{Type: "thinking", Thinking: "Second thought.", Signature: "s2"}, assistantMsg.ThinkingBlocks[1])
+	assert.Equal(t, "Done.", assistantMsg.Content.Value)
 }
 
 func TestAppendAnthropicAssistantMessage_RedactedThinking(t *testing.T) {
-	// redacted_thinking block → content with type "redacted_thinking"
+	// redacted_thinking block → thinking_blocks entry with type "redacted_thinking" and data
 	msg := anthropic.MessageParam{
 		Role: anthropic.MessageRoleAssistant,
 		Content: anthropic.MessageContent{
@@ -1163,13 +1158,12 @@ func TestAppendAnthropicAssistantMessage_RedactedThinking(t *testing.T) {
 	require.Len(t, msgs, 1)
 	require.NotNil(t, msgs[0].OfAssistant)
 
-	contentArray, ok := msgs[0].OfAssistant.Content.Value.([]openai.ChatCompletionAssistantMessageParamContent)
-	require.True(t, ok)
-	require.Len(t, contentArray, 3)
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeThinking, contentArray[0].Type)
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeRedactedThinking, contentArray[1].Type)
-	require.NotNil(t, contentArray[1].RedactedContent)
-	assert.Equal(t, openai.ChatCompletionAssistantMessageParamContentTypeText, contentArray[2].Type)
+	assistantMsg := msgs[0].OfAssistant
+	assert.Equal(t, "Thinking...", assistantMsg.ReasoningContent)
+	require.Len(t, assistantMsg.ThinkingBlocks, 2)
+	assert.Equal(t, openai.ThinkingBlock{Type: "thinking", Thinking: "Thinking...", Signature: "sig_think"}, assistantMsg.ThinkingBlocks[0])
+	assert.Equal(t, openai.ThinkingBlock{Type: "redacted_thinking", Data: "BASE64_OPAQUE_DATA"}, assistantMsg.ThinkingBlocks[1])
+	assert.Equal(t, "Hi!", assistantMsg.Content.Value)
 }
 
 func TestAppendAnthropicAssistantMessage_NoThinkingUnchanged(t *testing.T) {
@@ -1714,4 +1708,109 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingBlocks(t *testing.T)
 	assert.True(t, hasThinkingBlock, "expected a thinking content_block_start")
 	assert.True(t, hasThinkingDelta, "expected a thinking_delta event")
 	assert.True(t, hasSignatureDelta, "expected a signature_delta event")
+}
+
+// vLLM v0.16.0 and later emit reasoning without reasoning_content.
+func TestOpenAIResponseReasoningFallback(t *testing.T) {
+	for _, tc := range []struct{ name, fields, want string }{
+		{"absent", ``, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"null", `"reasoning_content":null,`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"empty string", `"reasoning_content":"",`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"empty object", `"reasoning_content":{},`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"empty structured content", `"reasoning_content":{"reasoningContent":{}},`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"empty reasoning text", `"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"","signature":""}}},`, `[{"type":"thinking","thinking":"fallback"}]`},
+		{"plain content wins", `"reasoning_content":"preferred",`, `[{"type":"thinking","thinking":"preferred"}]`},
+		{"signed content wins", `"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"preferred","signature":"sig"}}},`, `[{"type":"thinking","thinking":"preferred","signature":"sig"}]`},
+		{"signature only preserved", `"reasoning_content":{"reasoningContent":{"reasoningText":{"text":"","signature":"sig"}}},`, `[{"type":"thinking","thinking":"","signature":"sig"}]`},
+		{"redacted content preserved", `"reasoning_content":{"reasoningContent":{"redactedContent":"c2VjcmV0"}},`, `[{"type":"redacted_thinking","data":"secret"}]`},
+		{"structured blocks win", `"thinking_blocks":[{"type":"thinking","thinking":"structured","signature":"sig"}],"reasoning_content":"preferred",`, `[{"type":"thinking","thinking":"structured","signature":"sig"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp openai.ChatCompletionResponse
+			require.NoError(t, json.Unmarshal([]byte(`{"choices":[{"message":{"role":"assistant",`+tc.fields+`"reasoning":"fallback","content":"answer"}}]}`), &resp))
+			result := openAIResponseToAnthropic(&resp, "model")
+			require.Len(t, result.Content, 2)
+			require.NotNil(t, result.Content[1].Text)
+			require.Equal(t, "answer", result.Content[1].Text.Text)
+			got, err := json.Marshal(result.Content[:1])
+			require.NoError(t, err)
+			require.JSONEq(t, tc.want, string(got))
+		})
+	}
+}
+
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_VLLMReasoningDelta(t *testing.T) {
+	// vLLM >= v0.16.0 streams reasoning via delta.reasoning instead of delta.reasoning_content.
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "qwen3",
+	}
+
+	input := `data: {"id":"chatcmpl-vllm","choices":[{"index":0,"delta":{"role":"assistant","reasoning":"First step. "}}],"model":"qwen3"}` + "\n\n" +
+		`data: {"id":"chatcmpl-vllm","choices":[{"index":0,"delta":{"reasoning":"Second step."},"finish_reason":null}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-vllm","choices":[{"index":0,"delta":{"content":"Final answer."}}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-vllm","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-vllm","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	state.buffer.WriteString(input)
+
+	var out []byte
+	err := state.processBuffer(&out, true)
+	require.NoError(t, err)
+
+	events := parseSSEEventsFromBytes(out)
+
+	var blockStartTypes []string
+	var thinkingDeltas []string
+	for _, e := range events {
+		if e.eventType == "content_block_start" {
+			if bytes.Contains([]byte(e.data), []byte(`"thinking"`)) {
+				blockStartTypes = append(blockStartTypes, "thinking")
+			} else if bytes.Contains([]byte(e.data), []byte(`"text"`)) {
+				blockStartTypes = append(blockStartTypes, "text")
+			}
+		}
+		if e.eventType == "content_block_delta" && bytes.Contains([]byte(e.data), []byte(`"thinking_delta"`)) {
+			thinkingDeltas = append(thinkingDeltas, e.data)
+		}
+	}
+	assert.Equal(t, []string{"thinking", "text"}, blockStartTypes)
+	require.Len(t, thinkingDeltas, 2)
+	assert.Contains(t, thinkingDeltas[0], `"First step. "`)
+	assert.Contains(t, thinkingDeltas[1], `"Second step."`)
+}
+
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_ReasoningPrecedence(t *testing.T) {
+	// When both delta.reasoning_content and delta.reasoning are present on a chunk,
+	// reasoning_content must win and reasoning must not be emitted twice.
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "qwen3",
+	}
+
+	input := `data: {"id":"chatcmpl-both","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"from reasoning_content","reasoning":"from reasoning"}}],"model":"qwen3"}` + "\n\n" +
+		`data: {"id":"chatcmpl-both","choices":[{"index":0,"delta":{"reasoning_content":"","reasoning":"fallback to reasoning"}}],"model":"qwen3"}` + "\n\n" +
+		`data: {"id":"chatcmpl-both","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		`data: {"id":"chatcmpl-both","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	state.buffer.WriteString(input)
+
+	var out []byte
+	err := state.processBuffer(&out, true)
+	require.NoError(t, err)
+
+	events := parseSSEEventsFromBytes(out)
+
+	var thinkingDeltas []string
+	for _, e := range events {
+		if e.eventType == "content_block_delta" && bytes.Contains([]byte(e.data), []byte(`"thinking_delta"`)) {
+			thinkingDeltas = append(thinkingDeltas, e.data)
+		}
+	}
+	require.Len(t, thinkingDeltas, 2)
+	assert.Contains(t, thinkingDeltas[0], `"from reasoning_content"`)
+	assert.NotContains(t, thinkingDeltas[0], `"from reasoning"`)
+	assert.Contains(t, thinkingDeltas[1], `"fallback to reasoning"`)
 }

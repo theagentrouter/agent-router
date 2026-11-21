@@ -991,6 +991,7 @@ func redactUserMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCo
 func redactAssistantMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfAssistant
 	redactedMsg.Content = redactStringOrAssistantRoleContentUnion(msg.OfAssistant.Content)
+	redactedMsg.ReasoningContent = redaction.RedactString(msg.OfAssistant.ReasoningContent)
 	// Name identifies the participant; Refusal is model-generated text, redacted like refusal content parts.
 	redactedMsg.Name = redaction.RedactString(msg.OfAssistant.Name)
 	redactedMsg.Refusal = redaction.RedactString(msg.OfAssistant.Refusal)

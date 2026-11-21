@@ -943,7 +943,37 @@ func TestAnthropicToOpenAITranslator_RequestBody_MultiTurnWithThinking(t *testin
 	messages, ok := req["messages"].([]any)
 	require.True(t, ok)
 	// 3 user + 2 assistant = 5 messages
-	assert.Len(t, messages, 5)
+	require.Len(t, messages, 5)
+
+	// Assistant messages must carry message-level reasoning_content and thinking_blocks (for vLLM
+	// and other OpenAI-compatible reasoning backends) with plain string content.
+	assistant1, ok := messages[1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "assistant", assistant1["role"])
+	assert.Equal(t, "Answer for turn 1.", assistant1["content"])
+	assert.Equal(t, "Reasoning for turn 1.", assistant1["reasoning_content"])
+	tb1, ok := assistant1["thinking_blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, tb1, 1)
+	assert.Equal(t, map[string]any{
+		"type":      "thinking",
+		"thinking":  "Reasoning for turn 1.",
+		"signature": "s_t1",
+	}, tb1[0])
+
+	assistant2, ok := messages[3].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "assistant", assistant2["role"])
+	assert.Equal(t, "Answer for turn 2.", assistant2["content"])
+	assert.Equal(t, "Reasoning for turn 2.", assistant2["reasoning_content"])
+	tb2, ok := assistant2["thinking_blocks"].([]any)
+	require.True(t, ok)
+	require.Len(t, tb2, 1)
+	assert.Equal(t, map[string]any{
+		"type":      "thinking",
+		"thinking":  "Reasoning for turn 2.",
+		"signature": "s_t2",
+	}, tb2[0])
 }
 
 func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming_Thinking(t *testing.T) {
@@ -995,6 +1025,26 @@ func TestAnthropicToOpenAITranslator_ResponseBody_NonStreaming_Thinking(t *testi
 	assert.Equal(t, "sig_calc", anthropicResp.Content[0].Thinking.Signature)
 	require.NotNil(t, anthropicResp.Content[1].Text)
 	assert.Equal(t, "The answer is 42.", anthropicResp.Content[1].Text.Text)
+
+	t.Run("vLLM reasoning field in non-streaming response JSON", func(t *testing.T) {
+		vllmJSON := `{"id":"chatcmpl-vllm","model":"qwen3","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","reasoning":"vLLM thinking text","content":"The answer is 42."}}],"usage":{"prompt_tokens":10,"completion_tokens":20}}`
+		_, vllmBody, _, _, err := translator.ResponseBody(
+			map[string]string{"content-type": "application/json"},
+			strings.NewReader(vllmJSON),
+			true,
+			nil,
+		)
+		require.NoError(t, err)
+
+		var vllmResp anthropic.MessagesResponse
+		require.NoError(t, json.Unmarshal(vllmBody, &vllmResp))
+		require.Len(t, vllmResp.Content, 2)
+		require.NotNil(t, vllmResp.Content[0].Thinking)
+		assert.Equal(t, "thinking", vllmResp.Content[0].Thinking.Type)
+		assert.Equal(t, "vLLM thinking text", vllmResp.Content[0].Thinking.Thinking)
+		require.NotNil(t, vllmResp.Content[1].Text)
+		assert.Equal(t, "The answer is 42.", vllmResp.Content[1].Text.Text)
+	})
 }
 
 func TestAnthropicToOpenAITranslator_ResponseBody_Streaming_Thinking(t *testing.T) {

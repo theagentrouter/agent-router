@@ -857,6 +857,24 @@ func TestChatCompletionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T
 		require.Contains(t, redacted.Messages[0].OfAssistant.ToolCalls[0].Function.Arguments, "[REDACTED LENGTH=")
 	})
 
+	t.Run("redact_assistant_reasoning", func(t *testing.T) {
+		const reasoning = "prior assistant reasoning"
+		req := &openai.ChatCompletionRequest{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+					Role:             "assistant",
+					Content:          openai.StringOrAssistantRoleContentUnion{Value: "answer"},
+					ReasoningContent: reasoning,
+				}},
+			},
+		}
+		redacted, err := spec.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.Contains(t, redacted.Messages[0].OfAssistant.ReasoningContent, "[REDACTED LENGTH=")
+		require.NotContains(t, redacted.Messages[0].OfAssistant.ReasoningContent, reasoning)
+		require.Equal(t, reasoning, req.Messages[0].OfAssistant.ReasoningContent)
+	})
+
 	t.Run("redact_tools", func(t *testing.T) {
 		req := &openai.ChatCompletionRequest{
 			Model: "gpt-4o",
