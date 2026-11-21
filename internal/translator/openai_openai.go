@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/tidwall/sjson"
+	"google.golang.org/genai"
+	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -298,6 +300,8 @@ func redactResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) open
 	if msg.ReasoningContent != nil {
 		redactedMsg.ReasoningContent = redactReasoningContent(msg.ReasoningContent)
 	}
+	redactedMsg.ThinkingBlocks = redactThinkingBlocks(msg.ThinkingBlocks)
+	redactRefusalAndSources(msg, &redactedMsg)
 
 	// Redact reasoning from backends that name the field "reasoning" (vLLM)
 	if msg.Reasoning != nil {
@@ -306,6 +310,67 @@ func redactResponseMessage(msg *openai.ChatCompletionResponseChoiceMessage) open
 	}
 
 	return redactedMsg
+}
+
+// redactRefusalAndSources redacts the refusal text, URL citations and grounding metadata of msg into out. The refusal is model-generated and can repeat the request; citation URLs and titles and the grounding search queries and retrieved chunks come from searches driven by the request. Every chat completion message redactor calls this so a field a provider starts populating later is not logged by one translator and redacted by another.
+func redactRefusalAndSources(msg, out *openai.ChatCompletionResponseChoiceMessage) {
+	if msg.Refusal != nil {
+		out.Refusal = ptr.To(redaction.RedactString(*msg.Refusal))
+	}
+	if msg.Annotations != nil {
+		annotations := make([]openai.Annotation, len(*msg.Annotations))
+		for i, a := range *msg.Annotations {
+			annotations[i] = a
+			if a.URLCitation != nil {
+				citation := *a.URLCitation
+				citation.URL = redaction.RedactString(citation.URL)
+				citation.Title = redaction.RedactString(citation.Title)
+				annotations[i].URLCitation = &citation
+			}
+		}
+		out.Annotations = &annotations
+	}
+	if msg.GroundingMetadata != nil {
+		out.GroundingMetadata = redactGroundingMetadata(msg.GroundingMetadata)
+	}
+}
+
+// redactGroundingMetadata redacts every string in the grounding metadata, keeping its shape, scores and indices. It round-trips through JSON because GroundingMetadata is a deep tree of SDK types; if the redacted tree does not decode back (a []byte field cannot hold a placeholder), it returns nil so nothing unredacted is logged.
+func redactGroundingMetadata(gm *genai.GroundingMetadata) *genai.GroundingMetadata {
+	b, err := json.Marshal(gm)
+	if err != nil {
+		return nil
+	}
+	var generic any
+	if err = json.Unmarshal(b, &generic); err != nil {
+		return nil
+	}
+	redacted, err := json.Marshal(redaction.RedactJSONTree(generic))
+	if err != nil {
+		return nil
+	}
+	var out genai.GroundingMetadata
+	if err = json.Unmarshal(redacted, &out); err != nil {
+		return nil
+	}
+	return &out
+}
+
+// redactThinkingBlocks redacts the text, signature and encrypted data of each thinking block. Translators copy the model's reasoning into ThinkingBlocks as well as ReasoningContent, so redacting only ReasoningContent would still log the reasoning. Only the block type is kept.
+func redactThinkingBlocks(blocks []openai.ThinkingBlock) []openai.ThinkingBlock {
+	if len(blocks) == 0 {
+		return blocks
+	}
+	redacted := make([]openai.ThinkingBlock, len(blocks))
+	for i, tb := range blocks {
+		redacted[i] = openai.ThinkingBlock{
+			Type:      tb.Type,
+			Thinking:  redaction.RedactString(tb.Thinking),
+			Signature: redaction.RedactString(tb.Signature),
+			Data:      redaction.RedactString(tb.Data),
+		}
+	}
+	return redacted
 }
 
 // redactReasoningContent redacts sensitive content from reasoning content union.
@@ -322,20 +387,22 @@ func redactReasoningContent(rc *openai.ReasoningContentUnion) *openai.ReasoningC
 		}
 	// Handle ReasoningContent type (e.g., from AWS Bedrock)
 	case *openai.ReasoningContent:
-		if reasoningContent.ReasoningContent != nil {
-			if reasoningText := reasoningContent.ReasoningContent.ReasoningText; reasoningText != nil {
-				return &openai.ReasoningContentUnion{
-					Value: &openai.ReasoningContent{
-						ReasoningContent: &awsbedrock.ReasoningContentBlock{
-							ReasoningText: &awsbedrock.ReasoningTextBlock{
-								Text:      redaction.RedactString(reasoningText.Text),
-								Signature: reasoningText.Signature,
-							},
-						},
-					},
-				}
+		block := reasoningContent.ReasoningContent
+		if block == nil {
+			return rc
+		}
+		// The signature and the redacted content both carry the full reasoning in encrypted form, so they are redacted along with the text, matching redactThinkingBlocks.
+		redactedBlock := &awsbedrock.ReasoningContentBlock{}
+		if block.ReasoningText != nil {
+			redactedBlock.ReasoningText = &awsbedrock.ReasoningTextBlock{
+				Text:      redaction.RedactString(block.ReasoningText.Text),
+				Signature: redaction.RedactString(block.ReasoningText.Signature),
 			}
 		}
+		if len(block.RedactedContent) > 0 {
+			redactedBlock.RedactedContent = []byte(redaction.RedactString(string(block.RedactedContent)))
+		}
+		return &openai.ReasoningContentUnion{Value: &openai.ReasoningContent{ReasoningContent: redactedBlock}}
 	}
 
 	return rc

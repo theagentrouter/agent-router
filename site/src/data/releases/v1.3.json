@@ -9,7 +9,7 @@
   "releases": [
     {
       "version": "v1.3.0",
-      "date": "November 24, 2026",
+      "date": "November 18, 2026",
       "type": "minor",
       "tags": [
         { "text": "QuotaPolicy End-to-End", "type": "feature" },

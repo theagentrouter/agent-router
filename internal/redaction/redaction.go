@@ -56,6 +56,7 @@ func RedactString(s string) string {
 // "type" is a JSON-union discriminator (e.g. "message", "text", "image", "tool_use"), not user
 // data. Redacting it would make the redacted value fail to round-trip back into the typed union
 // during redaction, and discriminator values carry no sensitive content.
+// The exception is the "input" of a tool use block (tool_use, server_tool_use, mcp_tool_use): it holds the tool's arguments, where "type" is an ordinary argument, so it is redacted.
 //
 // It is intended for endpoint request fields whose values are untyped unions populated by custom
 // unmarshalers (e.g. prompt/input content), so that no sensitive nested string is missed when
@@ -66,25 +67,39 @@ func RedactString(s string) string {
 // RedactJSONTree does not mutate its input; it returns a new tree (slices/maps are copied as it
 // descends).
 func RedactJSONTree(v any) any {
+	return redactJSONTree(v, true)
+}
+
+// toolUseBlockTypes are the content block types whose "input" holds a tool's arguments. Inside those arguments "type" is an ordinary argument chosen by the caller or the model, not a discriminator, so it is redacted like any other value.
+var toolUseBlockTypes = map[string]bool{"tool_use": true, "server_tool_use": true, "mcp_tool_use": true}
+
+// redactJSONTree implements [RedactJSONTree]. keepType reports whether the value of a "type" key is kept as a union discriminator.
+func redactJSONTree(v any, keepType bool) any {
 	switch val := v.(type) {
 	case string:
 		return RedactString(val)
 	case []any:
 		out := make([]any, len(val))
 		for i, e := range val {
-			out[i] = RedactJSONTree(e)
+			out[i] = redactJSONTree(e, keepType)
 		}
 		return out
 	case map[string]any:
+		blockType, _ := val["type"].(string)
+		isToolUse := keepType && toolUseBlockTypes[blockType]
 		out := make(map[string]any, len(val))
 		for k, e := range val {
 			// Keys are structural (field/type names), not user data — keep them.
 			// A "type" key holds a JSON-union discriminator value, not user data — keep it.
-			if k == "type" {
+			if k == "type" && keepType {
 				out[k] = e
 				continue
 			}
-			out[k] = RedactJSONTree(e)
+			if k == "input" && isToolUse {
+				out[k] = redactJSONTree(e, false)
+				continue
+			}
+			out[k] = redactJSONTree(e, keepType)
 		}
 		return out
 	default:
