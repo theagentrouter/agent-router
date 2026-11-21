@@ -115,7 +115,7 @@ func verifyToolIntegrity(c *compiledToolIntegrity, tool *mcp.Tool) (ok, mismatch
 
 // toolIntegrityMismatch reports the name of the first tool in tools whose digest doesn't
 // match its configured expected digest under c, and whether any such tool was found. It is
-// used for [filterapi.ToolIntegrityActionDeny] handling, which cares only about whether the
+// used for [filterapi.ToolIntegrityActionDropAll] handling, which cares only about whether the
 // backend's response contains a digest-covered mismatch, not which of possibly several
 // tools mismatched.
 func toolIntegrityMismatch(c *compiledToolIntegrity, tools []*mcp.Tool) (name string, found bool) {

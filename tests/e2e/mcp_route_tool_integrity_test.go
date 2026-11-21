@@ -91,7 +91,7 @@ func requireLiveEchoToolDigest(t *testing.T) string {
 // TestMCPRouteToolIntegrity verifies opt-in content-digest verification of backend tool
 // definitions (#2736): a tool with a matching configured digest is exposed normally, a tool
 // with a configured digest that does not match is dropped (onMismatch: Drop) or takes its
-// whole backend down with it (onMismatch: Deny), and a tool with no configured digest passes
+// whole backend down with it (onMismatch: DropAll), and a tool with no configured digest passes
 // through unaffected either way.
 func TestMCPRouteToolIntegrity(t *testing.T) {
 	correctEchoDigest := requireLiveEchoToolDigest(t)
@@ -126,7 +126,7 @@ func TestMCPRouteToolIntegrity(t *testing.T) {
 		require.Contains(t, names, "mcp-backend-tool-integrity__countdown", "tool with no configured digest must pass through unaffected")
 	})
 
-	t.Run("onMismatch=Deny: any mismatch drops the entire backend's tools", func(t *testing.T) {
+	t.Run("onMismatch=DropAll: any mismatch drops the entire backend's tools", func(t *testing.T) {
 		sess := requireConnectMCP(t.Context(), t, client, fwd.Address()+"/mcp-tool-integrity-deny", nil)
 		t.Cleanup(func() { _ = sess.Close() })
 
@@ -198,7 +198,7 @@ spec:
       toolIntegrity:
         digests:
           sum: %q
-        onMismatch: Deny
+        onMismatch: DropAll
 ---
 apiVersion: apps/v1
 kind: Deployment

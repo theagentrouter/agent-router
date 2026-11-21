@@ -42,6 +42,16 @@ const (
 	mcpCapabilitiesNegotiated = "mcp.capabilities.negotiated"
 	// MCP Progress Notifications is a counter metric that records the total number of MCP progress notifications sent.
 	mpcProgressNotifications = "mcp.progress.notifications"
+	// MCP Tool Integrity Mismatch is a counter metric that records the total number of tools
+	// dropped (or backends entirely emptied) due to a content-digest mismatch, so operators
+	// can monitor and alert on unexpected backend tool changes instead of relying on logs
+	// alone.
+	//
+	// Dimensions:
+	// - mcp.backend
+	// - mcp.tool.name
+	// - mcp.tool_integrity.action
+	mcpToolIntegrityMismatch = "mcp.tool_integrity.mismatch"
 	// MCP JSON-RPC method name attribute.
 	mcpAttributeMethodName = "mcp.method.name"
 	// MCP status attribute, which is either "success" or "error". See mcpStatusType for all statuses.
@@ -54,6 +64,11 @@ const (
 	mcpAttributeCapabilitySide = "capability.side"
 	// MCP backend attribute, which identifies the upstream MCP backend that handled the request.
 	mcpAttributeBackend = "mcp.backend"
+	// MCP tool name attribute, used by mcpToolIntegrityMismatch.
+	mcpAttributeToolName = "mcp.tool.name"
+	// MCP tool integrity action attribute: the configured onMismatch behavior ("Drop" or
+	// "DropAll") that fired. Used by mcpToolIntegrityMismatch.
+	mcpAttributeToolIntegrityAction = "mcp.tool_integrity.action"
 )
 
 // MCPErrorType defines the type of error that occurred during an MCP request.
@@ -131,6 +146,11 @@ type MCPMetrics interface {
 	RecordServerCapabilities(ctx context.Context, capabilities *mcpsdk.ServerCapabilities, meta mcpsdk.Params)
 	// RecordProgress records a progress notification sent/received.
 	RecordProgress(ctx context.Context, meta mcpsdk.Params)
+	// RecordToolIntegrityMismatch records a tool's content digest failing to match its
+	// configured expected digest, so operators can monitor and alert on backend tool drift
+	// instead of relying on logs alone. action is the configured onMismatch behavior that
+	// fired as a result ("Drop" or "DropAll").
+	RecordToolIntegrityMismatch(ctx context.Context, tool string, action string)
 }
 
 type mcp struct {
@@ -139,6 +159,7 @@ type mcp struct {
 	initializationDuration        metric.Float64Histogram
 	capabilitiesNegotiated        metric.Float64Counter
 	progressNotifications         metric.Float64Counter
+	toolIntegrityMismatch         metric.Float64Counter
 	requestHeaderAttributeMapping map[string]string // maps HTTP headers to metric attribute names.
 	defaultAttributes             []attribute.KeyValue
 }
@@ -172,6 +193,11 @@ func NewMCP(meter metric.Meter, requestHeaderAttributeMapping map[string]string)
 			mpcProgressNotifications,
 			metric.WithDescription("Total number of MCP progress notifications sent"),
 		),
+		toolIntegrityMismatch: mustRegisterCounter(
+			meter,
+			mcpToolIntegrityMismatch,
+			metric.WithDescription("Total number of tools dropped due to a content-digest mismatch"),
+		),
 	}
 }
 
@@ -183,6 +209,7 @@ func (m *mcp) WithBackend(backend string) MCPMetrics {
 		initializationDuration:        m.initializationDuration,
 		capabilitiesNegotiated:        m.capabilitiesNegotiated,
 		progressNotifications:         m.progressNotifications,
+		toolIntegrityMismatch:         m.toolIntegrityMismatch,
 		requestHeaderAttributeMapping: m.requestHeaderAttributeMapping,
 		defaultAttributes: append(
 			slices.Clone(m.defaultAttributes),
@@ -201,6 +228,7 @@ func (m *mcp) WithRequestAttributes(req *http.Request) MCPMetrics {
 		initializationDuration:        m.initializationDuration,
 		capabilitiesNegotiated:        m.capabilitiesNegotiated,
 		progressNotifications:         m.progressNotifications,
+		toolIntegrityMismatch:         m.toolIntegrityMismatch,
 		requestHeaderAttributeMapping: m.requestHeaderAttributeMapping,
 	}
 
@@ -263,6 +291,14 @@ func (m *mcp) RecordInitializationDuration(ctx context.Context, startAt time.Tim
 // RecordProgress implements [MCPMetrics.RecordProgress].
 func (m *mcp) RecordProgress(ctx context.Context, params mcpsdk.Params) {
 	m.progressNotifications.Add(ctx, 1, m.withDefaultAttributes(params))
+}
+
+// RecordToolIntegrityMismatch implements [MCPMetrics.RecordToolIntegrityMismatch].
+func (m *mcp) RecordToolIntegrityMismatch(ctx context.Context, tool string, action string) {
+	m.toolIntegrityMismatch.Add(ctx, 1, m.withDefaultAttributes(nil,
+		attribute.Key(mcpAttributeToolName).String(tool),
+		attribute.Key(mcpAttributeToolIntegrityAction).String(action),
+	))
 }
 
 // RecordClientCapabilities implements [MCPMetrics.RecordClientCapabilities].

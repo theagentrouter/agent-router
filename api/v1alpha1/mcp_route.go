@@ -206,7 +206,7 @@ type MCPRouteBackendRef struct {
 // MCPToolIntegrityAction controls what happens to a tool whose observed content digest
 // does not match its configured expected digest.
 //
-// +kubebuilder:validation:Enum=Drop;Deny
+// +kubebuilder:validation:Enum=Drop;DropAll
 type MCPToolIntegrityAction string
 
 const (
@@ -215,10 +215,14 @@ const (
 	// is the default.
 	MCPToolIntegrityActionDrop MCPToolIntegrityAction = "Drop"
 
-	// MCPToolIntegrityActionDeny drops every tool from the backend the moment any one of
+	// MCPToolIntegrityActionDropAll drops every tool from the backend the moment any one of
 	// its digest-covered tools mismatches, treating an unexpected change as a signal that
 	// the whole backend may be compromised or misconfigured rather than an isolated issue.
-	MCPToolIntegrityActionDeny MCPToolIntegrityAction = "Deny"
+	// Named DropAll rather than Deny: this only ever omits tools from tools/list, the same
+	// mechanism as the per-tool Drop case -- it is not an authorization decision the way
+	// Deny is for MCPRouteAuthorization/MCPBackendSelector below, and naming it Deny here
+	// invited exactly that confusion in review.
+	MCPToolIntegrityActionDropAll MCPToolIntegrityAction = "DropAll"
 )
 
 // MCPToolIntegrityDigest is a 64-character lowercase hex-encoded SHA-256 digest.

@@ -214,13 +214,13 @@ func TestMergeToolsList_ToolIntegrityFiltering(t *testing.T) {
 		require.ElementsMatch(t, []string{"backend1__untracked-tool"}, names)
 	})
 
-	t.Run("OnMismatch=Deny drops every tool from the backend", func(t *testing.T) {
+	t.Run("OnMismatch=DropAll drops every tool from the backend", func(t *testing.T) {
 		proxy := newTestMCPProxy()
 		proxy.routes["test-route"].toolSelectors = nil
 		proxy.routes["test-route"].toolIntegrity = map[filterapi.MCPBackendName]*compiledToolIntegrity{
 			"backend1": compileToolIntegrity(&filterapi.MCPToolIntegrity{
 				Digests:    map[string]string{"trusted-tool": goodDigest},
-				OnMismatch: filterapi.ToolIntegrityActionDeny,
+				OnMismatch: filterapi.ToolIntegrityActionDropAll,
 			}),
 		}
 		session := &session{route: "test-route"}
@@ -237,6 +237,63 @@ func TestMergeToolsList_ToolIntegrityFiltering(t *testing.T) {
 		result := proxy.mergeToolsList(session, newResponses(tamperedTool()))
 		require.Len(t, result.Tools, 1)
 		require.Equal(t, "backend1__trusted-tool", result.Tools[0].Name)
+	})
+}
+
+// TestMergeToolsList_ToolIntegrityMismatchMetric verifies the mcp.tool_integrity.mismatch
+// counter fires for both OnMismatch actions (review feedback: logs alone don't let
+// operators monitor/alert on unexpected backend tool changes).
+func TestMergeToolsList_ToolIntegrityMismatchMetric(t *testing.T) {
+	goodTool := func() *mcp.Tool { return &mcp.Tool{Name: "trusted-tool", Description: "does something safe"} }
+	goodDigest, err := toolDigest(goodTool())
+	require.NoError(t, err)
+	tamperedTool := func() *mcp.Tool { return &mcp.Tool{Name: "trusted-tool", Description: "does something else entirely"} }
+	newResponses := func(tools ...*mcp.Tool) []broadCastResponse[mcp.ListToolsResult] {
+		return []broadCastResponse[mcp.ListToolsResult]{{backendName: "backend1", res: mcp.ListToolsResult{Tools: tools}}}
+	}
+
+	t.Run("OnMismatch=Drop records the metric for the mismatched tool", func(t *testing.T) {
+		mr := sdkmetric.NewManualReader()
+		proxy := newTestMCPProxyWithOTEL(mr, noopTracer)
+		proxy.routes["test-route"].toolSelectors = nil
+		proxy.routes["test-route"].toolIntegrity = map[filterapi.MCPBackendName]*compiledToolIntegrity{
+			"backend1": compileToolIntegrity(&filterapi.MCPToolIntegrity{
+				Digests:    map[string]string{"trusted-tool": goodDigest},
+				OnMismatch: filterapi.ToolIntegrityActionDrop,
+			}),
+		}
+		session := &session{route: "test-route"}
+
+		proxy.mergeToolsList(session, newResponses(tamperedTool()))
+
+		count := testotel.GetCounterValue(t, mr, "mcp.tool_integrity.mismatch", attribute.NewSet(
+			attribute.String("mcp.backend", "backend1"),
+			attribute.String("mcp.tool.name", "trusted-tool"),
+			attribute.String("mcp.tool_integrity.action", "Drop"),
+		))
+		require.Equal(t, 1.0, count)
+	})
+
+	t.Run("OnMismatch=DropAll records the metric for the tool that triggered it", func(t *testing.T) {
+		mr := sdkmetric.NewManualReader()
+		proxy := newTestMCPProxyWithOTEL(mr, noopTracer)
+		proxy.routes["test-route"].toolSelectors = nil
+		proxy.routes["test-route"].toolIntegrity = map[filterapi.MCPBackendName]*compiledToolIntegrity{
+			"backend1": compileToolIntegrity(&filterapi.MCPToolIntegrity{
+				Digests:    map[string]string{"trusted-tool": goodDigest},
+				OnMismatch: filterapi.ToolIntegrityActionDropAll,
+			}),
+		}
+		session := &session{route: "test-route"}
+
+		proxy.mergeToolsList(session, newResponses(tamperedTool()))
+
+		count := testotel.GetCounterValue(t, mr, "mcp.tool_integrity.mismatch", attribute.NewSet(
+			attribute.String("mcp.backend", "backend1"),
+			attribute.String("mcp.tool.name", "trusted-tool"),
+			attribute.String("mcp.tool_integrity.action", "DropAll"),
+		))
+		require.Equal(t, 1.0, count)
 	})
 }
 

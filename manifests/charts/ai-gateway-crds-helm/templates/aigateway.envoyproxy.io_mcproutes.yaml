@@ -285,7 +285,7 @@ spec:
                             expected digest. If not specified, defaults to Drop.
                           enum:
                           - Drop
-                          - Deny
+                          - DropAll
                           type: string
                       required:
                       - digests
@@ -6608,7 +6608,7 @@ spec:
                             expected digest. If not specified, defaults to Drop.
                           enum:
                           - Drop
-                          - Deny
+                          - DropAll
                           type: string
                       required:
                       - digests

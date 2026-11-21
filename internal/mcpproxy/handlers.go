@@ -442,16 +442,17 @@ func (m *mcpRequestContext) mergeToolsList(s *session, responses []broadCastResp
 	// before inclusion.
 	for _, r := range responses {
 		integrity := route.toolIntegrity[r.backendName]
-		// ToolIntegrityActionDeny is checked once per backend up front: any digest-covered
+		// ToolIntegrityActionDropAll is checked once per backend up front: any digest-covered
 		// mismatch is treated as a signal the whole backend's tool set is suspect, not just
 		// the one tool, so the entire response is dropped rather than filtered tool-by-tool.
-		if integrity != nil && integrity.onMismatch == filterapi.ToolIntegrityActionDeny {
+		if integrity != nil && integrity.onMismatch == filterapi.ToolIntegrityActionDropAll {
 			if badTool, mismatched := toolIntegrityMismatch(integrity, r.res.Tools); mismatched {
 				m.l.Warn("dropping all tools from backend: tool integrity mismatch",
 					slog.String("backend", r.backendName),
 					slog.String("tool", badTool),
 					slog.String("on_mismatch", string(integrity.onMismatch)),
 				)
+				m.metrics.WithBackend(r.backendName).RecordToolIntegrityMismatch(context.Background(), badTool, string(integrity.onMismatch))
 				continue
 			}
 		}
@@ -474,6 +475,7 @@ func (m *mcpRequestContext) mergeToolsList(s *session, responses []broadCastResp
 					if mismatched {
 						m.l.Warn("dropping tool: content digest mismatch",
 							slog.String("backend", r.backendName), slog.String("tool", tool.Name))
+						m.metrics.WithBackend(r.backendName).RecordToolIntegrityMismatch(context.Background(), tool.Name, string(integrity.onMismatch))
 					}
 					continue
 				}

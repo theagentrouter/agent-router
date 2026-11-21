@@ -95,9 +95,9 @@ const (
 	// refuses tools/call for it, without affecting the rest of the backend's tools.
 	ToolIntegrityActionDrop ToolIntegrityAction = "Drop"
 
-	// ToolIntegrityActionDeny drops every tool from the backend the moment any one of its
-	// digest-covered tools mismatches.
-	ToolIntegrityActionDeny ToolIntegrityAction = "Deny"
+	// ToolIntegrityActionDropAll drops every tool from the backend the moment any one of
+	// its digest-covered tools mismatches.
+	ToolIntegrityActionDropAll ToolIntegrityAction = "DropAll"
 )
 
 // MCPToolIntegrity configures opt-in content-digest verification of a backend's tool

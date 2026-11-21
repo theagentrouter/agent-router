@@ -47,7 +47,8 @@ func (stubMetrics) RecordClientCapabilities(context.Context, *mcpsdk.ClientCapab
 
 func (stubMetrics) RecordServerCapabilities(context.Context, *mcpsdk.ServerCapabilities, mcpsdk.Params) {
 }
-func (stubMetrics) RecordProgress(context.Context, mcpsdk.Params) {}
+func (stubMetrics) RecordProgress(context.Context, mcpsdk.Params)               {}
+func (stubMetrics) RecordToolIntegrityMismatch(context.Context, string, string) {}
 
 func TestEncodeCapabilityFlags(t *testing.T) {
 	t.Parallel()

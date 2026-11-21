@@ -36,9 +36,9 @@ func TestCompileToolIntegrity(t *testing.T) {
 	t.Run("preserves explicit OnMismatch", func(t *testing.T) {
 		c := compileToolIntegrity(&filterapi.MCPToolIntegrity{
 			Digests:    map[string]string{"tool-a": "abc"},
-			OnMismatch: filterapi.ToolIntegrityActionDeny,
+			OnMismatch: filterapi.ToolIntegrityActionDropAll,
 		})
-		require.Equal(t, filterapi.ToolIntegrityActionDeny, c.onMismatch)
+		require.Equal(t, filterapi.ToolIntegrityActionDropAll, c.onMismatch)
 	})
 }
 

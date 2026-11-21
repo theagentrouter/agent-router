@@ -2403,10 +2403,10 @@ does not match its configured expected digest.
   required="false"
   description="MCPToolIntegrityActionDrop silently omits the mismatched tool from tools/list and<br />refuses tools/call for it, without affecting the rest of the backend's tools. This<br />is the default.<br />"
 /><ApiField
-  name="Deny"
+  name="DropAll"
   type="enum"
   required="false"
-  description="MCPToolIntegrityActionDeny drops every tool from the backend the moment any one of<br />its digest-covered tools mismatches, treating an unexpected change as a signal that<br />the whole backend may be compromised or misconfigured rather than an isolated issue.<br />"
+  description="MCPToolIntegrityActionDropAll drops every tool from the backend the moment any one of<br />its digest-covered tools mismatches, treating an unexpected change as a signal that<br />the whole backend may be compromised or misconfigured rather than an isolated issue.<br />Named DropAll rather than Deny: this only ever omits tools from tools/list, the same<br />mechanism as the per-tool Drop case -- it is not an authorization decision the way<br />Deny is for MCPRouteAuthorization/MCPBackendSelector below, and naming it Deny here<br />invited exactly that confusion in review.<br />"
 />
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcptoolintegritydigest">MCPToolIntegrityDigest</a>
 
@@ -5359,10 +5359,10 @@ does not match its configured expected digest.
   required="false"
   description="MCPToolIntegrityActionDrop silently omits the mismatched tool from tools/list and<br />refuses tools/call for it, without affecting the rest of the backend's tools. This<br />is the default.<br />"
 /><ApiField
-  name="Deny"
+  name="DropAll"
   type="enum"
   required="false"
-  description="MCPToolIntegrityActionDeny drops every tool from the backend the moment any one of<br />its digest-covered tools mismatches, treating an unexpected change as a signal that<br />the whole backend may be compromised or misconfigured rather than an isolated issue.<br />"
+  description="MCPToolIntegrityActionDropAll drops every tool from the backend the moment any one of<br />its digest-covered tools mismatches, treating an unexpected change as a signal that<br />the whole backend may be compromised or misconfigured rather than an isolated issue.<br />Named DropAll rather than Deny: this only ever omits tools from tools/list, the same<br />mechanism as the per-tool Drop case -- it is not an authorization decision the way<br />Deny is for MCPRouteAuthorization/MCPBackendSelector below, and naming it Deny here<br />invited exactly that confusion in review.<br />"
 />
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-mcptoolintegritydigest">MCPToolIntegrityDigest</a>
 
