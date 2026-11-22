@@ -94,7 +94,7 @@ func TestOTELTracingWithConsoleExporter(t *testing.T) {
 	t.Log("Checking extProc container for OTEL environment variables")
 
 	// Get pod name from envoy-gateway-system namespace (where pods are created).
-	require.Eventually(t, func() bool {
+	require.Eventually(t, func() (matches bool) {
 		const egSelector = "gateway.envoyproxy.io/owning-gateway-name=envoy-ai-gateway-otel-test"
 		getPodsCmd := exec.CommandContext(ctx, "kubectl", "get", "pods", // #nosec G204
 			"-n", e2elib.EnvoyGatewayNamespace,
@@ -151,7 +151,10 @@ func TestOTELTracingWithConsoleExporter(t *testing.T) {
 		t.Logf("Container args in extProc container: %s", containerArgs)
 
 		defer func() {
-			// Deletes the pods to ensure they are recreated with the new configuration for the next iteration.
+			if matches {
+				return
+			}
+			// Recreate a mismatched pod so the next attempt can inspect the new configuration.
 			deletePodsCmd := e2elib.Kubectl(ctx, "delete", "pod", podName,
 				"-n", e2elib.EnvoyGatewayNamespace,
 				"--ignore-not-found=true")
@@ -208,7 +211,7 @@ func TestOTELTracingWithGatewayConfig(t *testing.T) {
 	t.Log("Checking extProc container for GatewayConfig OTEL environment variables")
 
 	// Get pod name from envoy-gateway-system namespace (where pods are created).
-	require.Eventually(t, func() bool {
+	require.Eventually(t, func() (matches bool) {
 		const egSelector = "gateway.envoyproxy.io/owning-gateway-name=production-ai-gateway"
 		getPodsCmd := exec.CommandContext(ctx, "kubectl", "get", "pods", // #nosec G204
 			"-n", e2elib.EnvoyGatewayNamespace,
@@ -265,7 +268,10 @@ func TestOTELTracingWithGatewayConfig(t *testing.T) {
 		t.Logf("Resources in extProc container: %s", resources)
 
 		defer func() {
-			// Deletes the pods to ensure they are recreated with the new configuration for the next iteration.
+			if matches {
+				return
+			}
+			// Recreate a mismatched pod so the next attempt can inspect the new configuration.
 			deletePodsCmd := e2elib.Kubectl(ctx, "delete", "pod", podName,
 				"-n", e2elib.EnvoyGatewayNamespace,
 				"--ignore-not-found=true")
