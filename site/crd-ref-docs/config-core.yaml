@@ -17,6 +17,12 @@ render:
     - name: APIKeyAuth
       package: github.com/envoyproxy/gateway/api/v1alpha1
       link: https://gateway.envoyproxy.io/docs/api/extension_types/#apikeyauth
+    - name: DynamicModule
+      package: github.com/envoyproxy/gateway/api/v1alpha1
+      link: https://gateway.envoyproxy.io/docs/api/extension_types/#dynamicmodule
+    - name: ExtensionBackend
+      package: github.com/envoyproxy/gateway/api/v1alpha1
+      link: https://gateway.envoyproxy.io/docs/api/extension_types/#extensionbackend
     - name: ExtProc
       package: github.com/envoyproxy/gateway/api/v1alpha1
       link: https://gateway.envoyproxy.io/docs/api/extension_types/#extproc
@@ -58,6 +64,9 @@ render:
     - name: LocalPolicyTargetReferenceWithSectionName
       package: sigs.k8s.io/gateway-api/apis/v1alpha2
       link: https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1alpha2.LocalPolicyTargetReferenceWithSectionName
+    - name: LocalPolicyTargetReferenceWithSectionName
+      package: sigs.k8s.io/gateway-api/apis/v1
+      link: https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.LocalPolicyTargetReferenceWithSectionName
     - name: Namespace
       package: sigs.k8s.io/gateway-api/apis/v1
       link: https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#namespace

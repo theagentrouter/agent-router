@@ -292,6 +292,43 @@ A raw token (`X-GitHub-PAT: ghp_...`) is copied onto `Authorization` unchanged, 
 
 `injectionPolicy` applies only to header injection. Do not combine `injectionPolicy: IfNotPresent` with `queryParam`. If the MCPRoute itself uses OAuth or API-key client authentication, do not forward inbound `Authorization` (that is the gateway token). Use a dedicated client header and `backendHeader` to map it onto the backend credential header.
 
+### Backend Extensions
+
+Run an Envoy Gateway [dynamic module](https://gateway.envoyproxy.io/docs/api/extension_types/#dynamicmodule) on the requests the gateway sends to an MCP backend, for example one that exchanges the client's token for one scoped to that backend, or one that checks tool calls. An `MCPBackendExtensionPolicy` takes the same `dynamicModule` and `backends` fields as Envoy Gateway's [EnvoyExtensionPolicy](https://gateway.envoyproxy.io/docs/api/extension_types/#envoyextensionpolicy) and attaches them to MCPRoute backends. The module must be registered in the `EnvoyProxy` (`spec.dynamicModules`):
+
+```yaml
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: MCPBackendExtensionPolicy
+metadata:
+  name: github-token-exchange
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: mcp-unified
+      sectionName: github # optional: one backend; omit for all backends of the MCPRoute
+  dynamicModule:
+    - name: token-exchange
+      config:
+        audience: github-mcp
+```
+
+The extensions run only on traffic to the selected backends, after the gateway has picked the backend for the request. They don't run on the client-facing request. Envoy Gateway validates and applies them: if it rejects one (for example, a dynamic module that isn't registered in the `EnvoyProxy`), requests to the affected backends fail instead of passing through without the extension.
+
+When several policies select the same backend, one takes effect: a policy that names the backend in `sectionName` wins over one that targets the whole MCPRoute, then the oldest, then the alphabetically first. To run several extensions on a backend, list them in one policy.
+
+The policy's status reports where it took effect, and why it didn't:
+
+```shell
+kubectl get mcpbackendextensionpolicy github-token-exchange -o jsonpath='{.status.conditions[0].message}'
+# MCPRoute mcp-unified: applied to backends: github
+```
+
+:::note
+The label `aigateway.envoyproxy.io/mcp-backend-extension-policy` and the annotation `gateway.envoyproxy.io/ai-gateway-mcp-backend-extension-policy` are reserved: Agent Router sets them on the HTTPRoutes it generates for MCPRoute backends, and any HTTPRoute that carries the label receives the policy's extensions.
+:::
+
 ### OAuth Authentication
 
 Protect your MCP Gateway with OAuth authentication following the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization):

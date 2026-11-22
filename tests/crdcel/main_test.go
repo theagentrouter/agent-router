@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	testsinternal "github.com/envoyproxy/ai-gateway/tests/internal"
 )
@@ -399,6 +400,69 @@ func TestMCPRoutes(t *testing.T) {
 			} else {
 				require.NoError(t, c.Create(ctx, mcpRoute))
 				require.NoError(t, c.Delete(ctx, mcpRoute))
+			}
+		})
+	}
+}
+
+func TestMCPBackendExtensionPolicies(t *testing.T) {
+	c, _, _ := testsinternal.NewEnvTest(t)
+	ctx := t.Context()
+
+	for _, tc := range []struct {
+		name   string
+		expErr string
+	}{
+		{name: "basic.yaml"},
+		{name: "section_name.yaml"},
+		{name: "dynamic_module.yaml"},
+		{name: "name_max_length.yaml"},
+		{
+			name:   "missing_dynamic_module.yaml",
+			expErr: "spec.dynamicModule: Required value",
+		},
+		{
+			name:   "empty_dynamic_module.yaml",
+			expErr: "spec.dynamicModule: Invalid value: 0: spec.dynamicModule in body should have at least 1 items",
+		},
+		{
+			name:   "no_target_refs.yaml",
+			expErr: "spec.targetRefs: Invalid value: 0: spec.targetRefs in body should have at least 1 items",
+		},
+		{
+			name:   "too_many_target_refs.yaml",
+			expErr: "spec.targetRefs: Too many: 17: must have at most 16 items",
+		},
+		{
+			name:   "target_ref_invalid_kind.yaml",
+			expErr: `spec.targetRefs: Invalid value: "array": targetRefs must reference MCPRoute resources`,
+		},
+		{
+			name:   "target_ref_invalid_group.yaml",
+			expErr: `spec.targetRefs: Invalid value: "array": targetRefs must reference MCPRoute resources`,
+		},
+		{
+			name:   "duplicate_backend_names.yaml",
+			expErr: "spec.backends[1]: Duplicate value",
+		},
+		{
+			name:   "name_too_long.yaml",
+			expErr: "name must be at most 239 characters, as the generated EnvoyExtensionPolicy name adds a 14-character prefix",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := testdata.ReadFile(path.Join("testdata/mcpbackendextensionpolicies", tc.name))
+			require.NoError(t, err)
+
+			policy := &aigv1a1.MCPBackendExtensionPolicy{}
+			err = yaml.UnmarshalStrict(data, policy)
+			require.NoError(t, err)
+
+			if tc.expErr != "" {
+				require.ErrorContains(t, c.Create(ctx, policy), tc.expErr)
+			} else {
+				require.NoError(t, c.Create(ctx, policy))
+				require.NoError(t, c.Delete(ctx, policy))
 			}
 		})
 	}

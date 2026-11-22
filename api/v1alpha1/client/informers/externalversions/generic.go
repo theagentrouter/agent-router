@@ -50,6 +50,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Aigateway().V1alpha1().BackendSecurityPolicies().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("gatewayconfigs"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Aigateway().V1alpha1().GatewayConfigs().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("mcpbackendextensionpolicies"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Aigateway().V1alpha1().MCPBackendExtensionPolicies().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("mcproutes"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Aigateway().V1alpha1().MCPRoutes().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("quotapolicies"):

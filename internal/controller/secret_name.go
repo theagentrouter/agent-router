@@ -15,6 +15,7 @@ import (
 const (
 	k8sObjectNameMaxLen = 253
 	k8sVolumeNameMaxLen = 63
+	k8sLabelValueMaxLen = 63
 )
 
 func shortStableHash(value string) string {

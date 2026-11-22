@@ -26,6 +26,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -245,12 +246,29 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	)
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.MCPRoute{}).
 		Owns(&gwapiv1.HTTPRoute{}).
+		Watches(&aigv1a1.MCPBackendExtensionPolicy{}, handler.EnqueueRequestsFromMapFunc(mcpBackendExtensionPolicyToMCPRoute),
+			builder.WithPredicates(mcpBackendExtensionPolicyTargetRefsChanged)).
 		WatchesRawSource(source.Channel(
 			mcpRouteEventChan,
 			&handler.EnqueueRequestForObject{},
 		)).
 		Complete(mcpRouteC); err != nil {
 		return fmt.Errorf("failed to create controller for MCPRoute: %w", err)
+	}
+
+	mcpBackendExtensionPolicyC := NewMCPBackendExtensionPolicyController(c, logger.WithName("mcp-backend-extension-policy"))
+	// Do not use TypedControllerBuilderForCRD for MCPBackendExtensionPolicy, as its generation filter applies to every
+	// watch and would drop Envoy Gateway's status updates on the owned EnvoyExtensionPolicy. It is set per watch
+	// instead, except on Owns.
+	generationChanged := builder.WithPredicates(predicate.GenerationChangedPredicate{})
+	if err = ctrl.NewControllerManagedBy(mgr).
+		For(&aigv1a1.MCPBackendExtensionPolicy{}, generationChanged).
+		Watches(&aigv1b1.MCPRoute{}, handler.EnqueueRequestsFromMapFunc(mcpBackendExtensionPolicyC.mcpRouteToMCPBackendExtensionPolicy), generationChanged).
+		Watches(&aigv1a1.MCPBackendExtensionPolicy{}, handler.EnqueueRequestsFromMapFunc(mcpBackendExtensionPolicyC.mcpBackendExtensionPolicyToSiblings),
+			builder.WithPredicates(mcpBackendExtensionPolicyTargetRefsChanged)).
+		Owns(&egv1a1.EnvoyExtensionPolicy{}).
+		Complete(mcpBackendExtensionPolicyC); err != nil {
+		return fmt.Errorf("failed to create controller for MCPBackendExtensionPolicy: %w", err)
 	}
 
 	// GatewayConfig controller for gateway-scoped configuration.
@@ -352,6 +370,9 @@ const (
 	// k8sClientIndexMCPRouteToOwnedHTTPRoute is the index name that maps from an MCPRoute to the
 	// HTTPRoutes it owns, enabling efficient lookup of child HTTPRoutes for orphan cleanup.
 	k8sClientIndexMCPRouteToOwnedHTTPRoute = "MCPRouteToOwnedHTTPRoute"
+	// k8sClientIndexMCPRouteToTargetingMCPBackendExtensionPolicy is the index name that maps from an MCPRoute
+	// to the MCPBackendExtensionPolicy whose targetRefs contains the MCPRoute.
+	k8sClientIndexMCPRouteToTargetingMCPBackendExtensionPolicy = "MCPRouteToTargetingMCPBackendExtensionPolicy"
 )
 
 // ApplyIndexing applies indexing to the given indexer. This is exported for testing purposes.
@@ -414,6 +435,11 @@ func ApplyIndexing(ctx context.Context, indexer func(ctx context.Context, obj cl
 		k8sClientIndexMCPRouteToOwnedHTTPRoute, httpRouteToOwnerMCPRouteIndexFunc)
 	if err != nil {
 		return fmt.Errorf("failed to create index from MCPRoute to owned HTTPRoutes: %w", err)
+	}
+	err = indexer(ctx, &aigv1a1.MCPBackendExtensionPolicy{},
+		k8sClientIndexMCPRouteToTargetingMCPBackendExtensionPolicy, mcpBackendExtensionPolicyTargetRefsIndexFunc)
+	if err != nil {
+		return fmt.Errorf("failed to create index from MCPRoute to MCPBackendExtensionPolicy: %w", err)
 	}
 	return nil
 }
@@ -596,6 +622,15 @@ func quotaPolicyTargetNamespaceIndexFunc(o client.Object) []string {
 		namespaces = append(namespaces, namespace)
 	}
 	return namespaces
+}
+
+func mcpBackendExtensionPolicyTargetRefsIndexFunc(o client.Object) []string {
+	mcpBackendExtensionPolicy := o.(*aigv1a1.MCPBackendExtensionPolicy)
+	var ret []string
+	for _, targetRef := range mcpBackendExtensionPolicy.Spec.TargetRefs {
+		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), mcpBackendExtensionPolicy.Namespace))
+	}
+	return ret
 }
 
 func getReferenceGrantIndexKey(namespace, kind string) string {

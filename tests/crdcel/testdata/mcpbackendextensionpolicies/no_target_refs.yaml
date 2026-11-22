@@ -1,0 +1,19 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# This should fail validation: at least one targetRef is required.
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: MCPBackendExtensionPolicy
+metadata:
+  name: no-target-refs
+  namespace: default
+spec:
+  targetRefs: []
+  dynamicModule:
+    - name: test-module
+      filterName: set_request_header
+      config:
+        name: x-ext
+        value: value
