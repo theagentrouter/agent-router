@@ -61,10 +61,12 @@ func TestOTELTracingWithConsoleExporter(t *testing.T) {
 		restoreCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
-		// Re-install AI Gateway with default settings.
-		_, _ = testsinternal.RunGoToolContext(ctx, "helm", "upgrade", "ai-eg", "--force",
-			helmChartPath,
-			"-n", "envoy-ai-gateway-system")
+		// Restore the release values from before the test, including suite-wide settings.
+		output, err := testsinternal.RunGoToolContext(restoreCtx, "helm", "rollback", "ai-eg",
+			"-n", "envoy-ai-gateway-system", "--wait", "--timeout", "90s")
+		if err != nil {
+			t.Errorf("Failed to restore the AI Gateway release: %v\n%s", err, output)
+		}
 
 		// Clean up the test manifest resources including namespace.
 		_ = e2elib.KubectlDeleteManifest(restoreCtx, manifest)
