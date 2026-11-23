@@ -16,7 +16,7 @@ import (
 )
 
 // catchAllModels matches every model name.
-const catchAllModels = ".*"
+const catchAllModels = autoconfig.AllModels
 
 // providerOption is a provider that can be configured in the interactive setup.
 type providerOption struct {
@@ -46,7 +46,7 @@ var interactiveProviders = []providerOption{
 	{
 		name: "anthropic", keyEnv: "ANTHROPIC_API_KEY", title: "Anthropic", schema: "Anthropic", baseURL: "https://api.anthropic.com/v1",
 		apiKey: true, keyHint: "https://console.anthropic.com/settings/keys",
-		models: "claude-.*", example: "claude-sonnet-4-5", path: "/anthropic/v1/messages",
+		models: autoconfig.ClaudeModels, example: "claude-sonnet-4-5", path: "/anthropic/v1/messages",
 	},
 	{
 		name: "tars", keyEnv: "TARS_API_KEY", title: "Tetrate Agent Router Service", schema: "OpenAI", baseURL: "https://api.router.tetrate.ai/v1",

@@ -21,7 +21,7 @@ import (
 //go:embed config.yaml.tmpl
 var configTemplate string
 
-// Backend represents a network backend endpoint (OpenAI or MCP server).
+// Backend represents a network backend endpoint (LLM provider, MCP server or telemetry collector).
 // Backends are rendered as Kubernetes Backend resources with optional TLS policy.
 type Backend struct {
 	Name        string // Backend resource name (e.g., "openai", "github")
@@ -30,24 +30,6 @@ type Backend struct {
 	Port        int    // Port number
 	NeedsTLS    bool   // Whether TLS is required for this backend.
 	IsTelemetry bool   // Whether this is a telemetry backend (e.g., OTLP collector).
-}
-
-// OpenAIConfig holds OpenAI-specific configuration for generating AIServiceBackend resources.
-// This is nil when no OpenAI configuration is present (MCP-only mode).
-type OpenAIConfig struct {
-	BackendName    string // References a Backend.Name (typically "openai")
-	SchemaName     string // Schema name: "OpenAI" or "AzureOpenAI"
-	Version        string // API version (OpenAI path prefix or Azure query param version)
-	OrganizationID string // Optional OpenAI-Organization header value
-	ProjectID      string // Optional OpenAI-Project header value
-}
-
-// AnthropicConfig holds Anthropic-specific configuration for generating AIServiceBackend resources.
-// This is nil when no Anthropic configuration is present.
-type AnthropicConfig struct {
-	BackendName string // References a Backend.Name (typically "anthropic")
-	SchemaName  string // Schema name: "Anthropic"
-	Version     string // API version (Anthropic path prefix)
 }
 
 // MCPBackendRef references a backend with MCP-specific routing configuration.
@@ -61,16 +43,14 @@ type MCPBackendRef struct {
 }
 
 // ConfigData holds all template data for generating the AI Gateway configuration.
-// It supports OpenAI-only, Anthropic-only, MCP-only, or combined configurations.
+// It supports LLM providers, MCP servers, or both.
 type ConfigData struct {
-	Backends       []Backend        // All backend endpoints (e.g. OpenAI, Anthropic, MCP, and OTEL)
-	OpenAI         *OpenAIConfig    // OpenAI-specific configuration (nil when not present)
-	Anthropic      *AnthropicConfig // Anthropic-specific configuration (nil when not present)
-	Providers      []Provider       // Multiple LLM providers routed by model name (used instead of OpenAI and Anthropic)
-	MCPBackendRefs []MCPBackendRef  // MCP routing configuration (nil/empty for OpenAI-only or Anthropic-only mode)
-	Debug          bool             // Enable debug logging for Envoy (the http and ext_proc components are capped at "info" to keep injected credential headers out of the debug log)
-	EnvoyVersion   string           // Explicitly configure the version of Envoy to use.
-	OTELLog        *otelLogConfig   // OpenTelemetry access log configuration (nil => file sink).
+	Backends       []Backend       // All backend endpoints (e.g. LLM providers, MCP, and OTEL)
+	Providers      []Provider      // LLM providers, routed by model name in the order they are listed
+	MCPBackendRefs []MCPBackendRef // MCP routing configuration (nil/empty when only routing to LLM providers)
+	Debug          bool            // Enable debug logging for Envoy (the http and ext_proc components are capped at "info" to keep injected credential headers out of the debug log)
+	EnvoyVersion   string          // Explicitly configure the version of Envoy to use.
+	OTELLog        *otelLogConfig  // OpenTelemetry access log configuration (nil => file sink).
 }
 
 // WriteConfig generates the AI Gateway configuration.
@@ -95,7 +75,7 @@ func yamlString(s string) (string, error) {
 	return string(b), err
 }
 
-// parsedURL holds parsed URL components for creating Backend, OpenAIConfig, and AnthropicConfig.
+// parsedURL holds parsed URL components for creating a Backend and Provider.
 type parsedURL struct {
 	hostname string
 	ip       string

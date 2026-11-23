@@ -10,20 +10,17 @@ import (
 	"os"
 )
 
-// PopulateAnthropicEnvConfig populates ConfigData with Anthropic backend configuration
-// from standard Anthropic SDK environment variables.
+// PopulateAnthropicEnvConfig adds an Anthropic provider to ConfigData, configured from
+// the standard Anthropic SDK environment variables, serving the models matched by modelMatch.
 //
 // This errs if ANTHROPIC_API_KEY is not set.
 //
 // See https://docs.anthropic.com/en/api/client-sdks
-func PopulateAnthropicEnvConfig(data *ConfigData) error {
+func PopulateAnthropicEnvConfig(data *ConfigData, modelMatch string) error {
 	if data == nil {
 		return fmt.Errorf("ConfigData cannot be nil")
 	}
-
-	// Check for Anthropic API key
-	anthropicAPIKey := os.Getenv("ANTHROPIC_API_KEY")
-	if anthropicAPIKey == "" {
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
 		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required")
 	}
 
@@ -32,31 +29,11 @@ func PopulateAnthropicEnvConfig(data *ConfigData) error {
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com/v1"
 	}
-
-	parsed, err := parseURL(baseURL)
-	if err != nil {
-		return err
+	p := &Provider{ //nolint:gosec // APIKeyEnv is the name of the variable, not a credential.
+		Name:       "anthropic",
+		SchemaName: "Anthropic",
+		ModelMatch: modelMatch,
+		APIKeyEnv:  "ANTHROPIC_API_KEY",
 	}
-
-	// Create Backend for Anthropic
-	backend := Backend{
-		Name:     "anthropic",
-		Hostname: parsed.hostname,
-		IP:       parsed.ip,
-		Port:     parsed.port,
-		NeedsTLS: parsed.needsTLS,
-	}
-
-	// Create AnthropicConfig referencing the backend
-	anthropicConfig := &AnthropicConfig{
-		BackendName: "anthropic",
-		SchemaName:  "Anthropic",
-		Version:     parsed.version,
-	}
-
-	// Add to ConfigData
-	data.Backends = append(data.Backends, backend)
-	data.Anthropic = anthropicConfig
-
-	return nil
+	return AddProvider(data, p, baseURL)
 }

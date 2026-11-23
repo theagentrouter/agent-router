@@ -124,6 +124,24 @@ When `AZURE_OPENAI_API_KEY` is set, the following environment variables are read
 | `OPENAI_ORG_ID`     | `org-...`  | Organization ID - adds `OpenAI-Organization` request header for billing and access control     |
 | `OPENAI_PROJECT_ID` | `proj_...` | Project ID - adds `OpenAI-Project` request header for project-level billing and access control |
 
+**Anthropic:**
+
+When `ANTHROPIC_API_KEY` is set, the following environment variables are read:
+
+| Variable             | Required | Example                        | Description                   |
+| -------------------- | -------- | ------------------------------ | ----------------------------- |
+| `ANTHROPIC_API_KEY`  | Yes      | `sk-ant-...`                   | API key for authentication    |
+| `ANTHROPIC_BASE_URL` | No       | `https://api.anthropic.com/v1` | Base URL of the Anthropic API |
+
+Anthropic models are served on the Anthropic Messages API, at
+`http://localhost:1975/anthropic/v1/messages`.
+
+**OpenAI and Anthropic together:**
+
+When both an OpenAI key (`OPENAI_API_KEY` or `AZURE_OPENAI_API_KEY`) and
+`ANTHROPIC_API_KEY` are set, `aigw` routes to both: `claude-*` models go to
+Anthropic, and every other model goes to OpenAI.
+
 ## Custom Configuration
 
 To run the AI Gateway with a custom configuration, provide the path to the configuration file as an argument to the `aigw run` command.
@@ -150,12 +168,12 @@ Next, let's say change the model matcher from `.*` (match all) to specifically m
 ```diff
 --- ollama.yaml
 +++ custom.yaml
-@@ -88,7 +88,7 @@
+@@ -135,7 +135,7 @@
          - headers:
              - type: RegularExpression
                name: x-ai-eg-model
--              value: .*
-+              value: deepseek-r1:1.5b
+-              value: ".*"
++              value: "deepseek-r1:1.5b"
 ```
 
 You can also use environment variable substitution (`envsubst`) to allow small
@@ -165,12 +183,12 @@ instead, to default the model to the `CHAT_MODEL` variable.
 ```diff
 --- ollama.yaml
 +++ custom.yaml
-@@ -88,7 +88,7 @@
+@@ -135,7 +135,7 @@
          - headers:
              - type: RegularExpression
                name: x-ai-eg-model
--              value: .*
-+              value: ${CHAT_MODEL:=deepseek-r1:1.5b}
+-              value: ".*"
++              value: "${CHAT_MODEL:=deepseek-r1:1.5b}"
 ```
 
 ### Run with the Custom Configuration

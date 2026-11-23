@@ -3,7 +3,7 @@
 # The full text of the Apache license is available in the LICENSE file at
 # the root of the repo.
 
-# Configuration for Envoy AI Gateway with multiple LLM providers, routed by model name
+# Configuration for Envoy AI Gateway with LLM providers, routed by model name
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:

@@ -8,6 +8,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,7 @@ func TestReadConfig(t *testing.T) {
 		envVars         map[string]string
 		expectHostnames []string
 		expectPort      string
+		expectInOrder   []string
 		expectError     string
 	}{
 		{
@@ -79,13 +81,14 @@ func TestReadConfig(t *testing.T) {
 			expectPort:      "443",
 		},
 		{
-			name: "OpenAI takes precedence when both are set",
+			name: "routes Claude models to Anthropic and the rest to OpenAI when both are set",
 			envVars: map[string]string{
 				"OPENAI_API_KEY":    "test-key",
 				"ANTHROPIC_API_KEY": "sk-ant-test123",
 			},
-			expectHostnames: []string{"api.openai.com"},
+			expectHostnames: []string{"api.openai.com", "api.anthropic.com"},
 			expectPort:      "443",
+			expectInOrder:   []string{`value: "claude-.*"`, "name: anthropic", `value: ".*"`, "name: openai"},
 		},
 		{
 			name: "configures OTEL access logs when OTLP endpoint is set",
@@ -114,6 +117,12 @@ func TestReadConfig(t *testing.T) {
 					require.Contains(t, config, "hostname: "+expectHostname)
 				}
 				require.Contains(t, config, "port: "+tt.expectPort)
+				rest := config
+				for _, want := range tt.expectInOrder {
+					i := strings.Index(rest, want)
+					require.GreaterOrEqual(t, i, 0, "%q not found in order", want)
+					rest = rest[i+len(want):]
+				}
 			}
 		})
 	}
