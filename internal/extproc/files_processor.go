@@ -631,18 +631,20 @@ func routeRuleBackendCount(config *filterapi.RuntimeConfig, composite string) in
 	return n
 }
 
-// routeRuleKey extracts the "route/<route>/rule/<i>" part of a composite per-route-rule backend name.
-func routeRuleKey(composite string) (string, bool) {
-	ri := strings.Index(composite, "/route/")
-	if ri == -1 {
-		return "", false
+type routeRuleID struct {
+	namespace string
+	rulePath  string // route/<route>/rule/<i>
+}
+
+// routeRuleKey groups all backend refs of one rule in one route namespace.
+func routeRuleKey(composite string) (routeRuleID, bool) {
+	namespace, rest, _ := strings.Cut(composite, "/")
+	backend, ruleAndRef, _ := strings.Cut(rest, "/")
+	ref := strings.LastIndex(ruleAndRef, "/ref/")
+	if namespace == "" || backend == "" || !strings.HasPrefix(ruleAndRef, "route/") || ref == -1 {
+		return routeRuleID{}, false
 	}
-	rest := composite[ri+1:]
-	ref := strings.LastIndex(rest, "/ref/")
-	if ref == -1 {
-		return "", false
-	}
-	return rest[:ref], true
+	return routeRuleID{namespace: namespace, rulePath: ruleAndRef[:ref]}, true
 }
 
 // rewrittenPath reconstructs the request path with the backend-native id in place of the

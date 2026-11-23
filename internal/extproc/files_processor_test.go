@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"testing"
 
@@ -684,10 +685,30 @@ func TestSetBackend_MultipleBackendsInRule_Error(t *testing.T) {
 	require.Equal(t, "cherry", routeProcessor.backend.name)
 }
 
+func TestSetBackend_UploadSameRouteNameInDifferentNamespaces(t *testing.T) {
+	schema := filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}
+	config := runtimeConfigWithSchema("team-a", "openai", "chat", schema)
+	teamB := runtimeConfigWithSchema("team-b", "openai", "chat", schema)
+	maps.Copy(config.Backends, teamB.Backends)
+
+	for _, namespace := range []string{"team-a", "team-b"} {
+		t.Run(namespace, func(t *testing.T) {
+			route := &filesProcessor{op: filesOpUpload, config: config, logger: slog.Default()}
+			upstream := &filesProcessor{isUpstreamFilter: true, logger: slog.Default()}
+			key := internalapi.PerRouteRuleRefBackendName(namespace, "openai", "chat", 0, 0)
+			require.NoError(t, upstream.SetBackend(t.Context(), config.Backends[key], "chat", route))
+			require.Equal(t, &backendKey{namespace: namespace, name: "openai"}, route.backend)
+		})
+	}
+}
+
 func TestRouteRuleKey(t *testing.T) {
-	k, ok := routeRuleKey(internalapi.PerRouteRuleRefBackendName("ns", "apple", "my-route", 2, 3))
+	k, ok := routeRuleKey(internalapi.PerRouteRuleRefBackendName("ns", "apple", "ref", 2, 3))
 	require.True(t, ok)
-	require.Equal(t, "route/my-route/rule/2", k)
+	require.Equal(t, routeRuleID{namespace: "ns", rulePath: "route/ref/rule/2"}, k)
+	other, ok := routeRuleKey(internalapi.PerRouteRuleRefBackendName("ns", "route", "ref", 2, 4))
+	require.True(t, ok)
+	require.Equal(t, k, other)
 	_, ok = routeRuleKey("testupstream-openai")
 	require.False(t, ok)
 }
