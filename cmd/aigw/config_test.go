@@ -104,7 +104,7 @@ func TestReadConfig(t *testing.T) {
 				t.Setenv(k, v)
 			}
 
-			config, err := readConfig(tt.path, tt.mcpServers, false)
+			config, err := readConfig(tt.path, tt.mcpServers, false, nil)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tt.expectError)
@@ -119,21 +119,21 @@ func TestReadConfig(t *testing.T) {
 	}
 
 	t.Run("error when file and no OPENAI_API_KEY", func(t *testing.T) {
-		_, err := readConfig("", nil, false)
+		_, err := readConfig("", nil, false, nil)
 		require.Error(t, err)
-		require.EqualError(t, err, "you must supply at least OPENAI_API_KEY, AZURE_OPENAI_API_KEY, ANTHROPIC_API_KEY, or a config file path")
+		require.ErrorIs(t, err, errNoConfig)
 	})
 
 	t.Run("includes ENVOY_VERSION in inline MCP autoconfig", func(t *testing.T) {
 		t.Setenv("ENVOY_VERSION", "1.2.3")
 
-		config, err := readConfig("", testMcpServers, false)
+		config, err := readConfig("", testMcpServers, false, nil)
 		require.NoError(t, err)
 		require.Contains(t, config, `envoyVersion: "1.2.3"`)
 	})
 
 	t.Run("error when file does not exist", func(t *testing.T) {
-		_, err := readConfig("/non/existent/file.yaml", nil, false)
+		_, err := readConfig("/non/existent/file.yaml", nil, false, nil)
 		require.Error(t, err)
 		require.EqualError(t, err, "error reading config: open /non/existent/file.yaml: no such file or directory")
 	})

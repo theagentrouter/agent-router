@@ -54,6 +54,9 @@
 {{- else if .Anthropic }}
 
 # Configuration for Envoy AI Gateway with Anthropic endpoint
+{{- else if .Providers }}
+
+# Configuration for Envoy AI Gateway with multiple LLM providers, routed by model name
 {{- end }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
@@ -258,6 +261,41 @@ spec:
       type: ReasoningToken
 ---
 {{- end }}
+{{- if .Providers }}
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  # Requests are routed to the first provider whose rule matches the model name.
+  rules:
+{{- range .Providers }}
+    - matches:
+        - headers:
+            - type: RegularExpression
+              name: x-ai-eg-model
+              value: {{ yamlString .ModelMatch }}
+      backendRefs:
+        - name: {{ .Name }}
+          namespace: default
+      timeouts:
+        request: 120s
+{{- end }}
+  # Configure the LLM request costs so they can be included in the Envoy access logs
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+{{- end }}
 {{- if .MCPBackendRefs }}
 apiVersion: aigateway.envoyproxy.io/v1alpha1
 kind: MCPRoute
@@ -375,6 +413,31 @@ spec:
     namespace: default
 ---
 {{- end }}
+{{- range .Providers }}
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: {{ .Name }}
+  namespace: default
+spec:
+  timeouts:
+    request: 3m
+  schema:
+    name: {{ .SchemaName }}
+{{- if .Version }}
+{{- if eq .SchemaName "AzureOpenAI" }}
+    version: "{{ .Version }}"
+{{- else }}
+    prefix: "{{ .Version }}"
+{{- end }}
+{{- end }}
+  backendRef:
+    name: {{ .Name }}
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+{{- end }}
 {{- range .Backends }}
 {{- if and .NeedsTLS (not .IsTelemetry) }}
 apiVersion: gateway.networking.k8s.io/v1alpha3
@@ -472,6 +535,50 @@ spec:
     secretRef:
       name: anthropic-apikey
 ---
+{{- end }}
+{{- range .Providers }}
+{{- if or .APIKey .APIKeyEnv }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Name }}-apikey
+  namespace: default
+type: Opaque
+stringData:
+{{- if .APIKeyEnv }}
+  apiKey: ${ {{- .APIKeyEnv -}} }
+{{- else }}
+  apiKey: {{ yamlString .APIKey }}
+{{- end }}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: {{ .Name }}-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: {{ .Name }}
+{{- if eq .SchemaName "AzureOpenAI" }}
+  type: AzureAPIKey
+  azureAPIKey:
+    secretRef:
+      name: {{ .Name }}-apikey
+{{- else if eq .SchemaName "Anthropic" }}
+  type: AnthropicAPIKey
+  anthropicAPIKey:
+    secretRef:
+      name: {{ .Name }}-apikey
+{{- else }}
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: {{ .Name }}-apikey
+{{- end }}
+---
+{{- end }}
 {{- end }}
 {{- range .MCPBackendRefs }}
 {{- if .APIKey }}

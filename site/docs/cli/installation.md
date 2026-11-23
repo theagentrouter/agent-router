@@ -4,6 +4,24 @@ title: Installation
 sidebar_position: 1
 ---
 
+## Install script
+
+The quickest way to install `aigw` on Linux (amd64, arm64) and macOS (Apple
+silicon) is the install script. It downloads the latest build of the `main`
+branch to `~/.local/bin` and pre-downloads Envoy:
+
+```shell
+curl -sSL https://theagentrouter.ai/install.sh | sh
+```
+
+Set `AIGW_VERSION` to `latest` to install the latest stable release instead, or
+to a release tag (for example `v1.3.0`) to install a specific release. Set
+`AIGW_INSTALL_DIR` to install somewhere else:
+
+```shell
+curl -sSL https://theagentrouter.ai/install.sh | AIGW_VERSION=v1.3.0 AIGW_INSTALL_DIR=/usr/local/bin sh
+```
+
 ## Official CLI binaries
 
 Each release includes the binaries for the `aigw` CLI build for different platforms.<br/>

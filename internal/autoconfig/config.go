@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+
+	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
 //go:embed config.yaml.tmpl
@@ -64,6 +66,7 @@ type ConfigData struct {
 	Backends       []Backend        // All backend endpoints (e.g. OpenAI, Anthropic, MCP, and OTEL)
 	OpenAI         *OpenAIConfig    // OpenAI-specific configuration (nil when not present)
 	Anthropic      *AnthropicConfig // Anthropic-specific configuration (nil when not present)
+	Providers      []Provider       // Multiple LLM providers routed by model name (used instead of OpenAI and Anthropic)
 	MCPBackendRefs []MCPBackendRef  // MCP routing configuration (nil/empty for OpenAI-only or Anthropic-only mode)
 	Debug          bool             // Enable debug logging for Envoy (the http and ext_proc components are capped at "info" to keep injected credential headers out of the debug log)
 	EnvoyVersion   string           // Explicitly configure the version of Envoy to use.
@@ -73,7 +76,7 @@ type ConfigData struct {
 // WriteConfig generates the AI Gateway configuration.
 func WriteConfig(data *ConfigData) (string, error) {
 	// Parse and execute template
-	tmpl, err := template.New("config").Parse(configTemplate)
+	tmpl, err := template.New("config").Funcs(template.FuncMap{"yamlString": yamlString}).Parse(configTemplate)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse template: %w", err)
 	}
@@ -84,6 +87,12 @@ func WriteConfig(data *ConfigData) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// yamlString renders s as a YAML double-quoted string. JSON strings are valid YAML.
+func yamlString(s string) (string, error) {
+	b, err := json.Marshal(s)
+	return string(b), err
 }
 
 // parsedURL holds parsed URL components for creating Backend, OpenAIConfig, and AnthropicConfig.

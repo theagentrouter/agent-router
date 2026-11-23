@@ -478,6 +478,18 @@ func Test_setEncryptionSeeds(t *testing.T) {
 		require.Equal(t, &filterapi.FileIDEncryption{Seed: "file-seed", Iterations: 5678}, cfg.FileIDEncryption)
 		require.Equal(t, &filterapi.MCPSessionEncryption{Seed: "mcp-seed", Iterations: 1234}, cfg.MCPConfig.SessionEncryption)
 	})
+	t.Run("fallback file id seed", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "")
+		seedCtx := &runCmdContext{fileIDEncryptionIterations: 5678, fileIDEncryptionSeed: "saved-seed"}
+		cfg := &filterapi.Config{}
+		seedCtx.setEncryptionSeeds(cfg)
+		require.Equal(t, &filterapi.FileIDEncryption{Seed: "saved-seed", Iterations: 5678}, cfg.FileIDEncryption)
+
+		// The environment takes precedence.
+		t.Setenv(fileIDEncryptionSeedEnvVar, "env-seed")
+		seedCtx.setEncryptionSeeds(cfg)
+		require.Equal(t, "env-seed", cfg.FileIDEncryption.Seed)
+	})
 	t.Run("no MCP config", func(t *testing.T) {
 		t.Setenv(mcpSessionEncryptionSeedEnvVar, "mcp-seed")
 		cfg := &filterapi.Config{}
@@ -503,4 +515,29 @@ func Test_mustStartExtProc_seedNotOnCommandLine(t *testing.T) {
 	require.NotContains(t, strings.Join(capturedArgs, " "), "file-seed")
 	cfg := requireExtProcConfigBundle(t, findFlagValue(capturedArgs, "--configBundlePath"))
 	require.Equal(t, "file-seed", cfg.FileIDEncryption.Seed)
+}
+
+func Test_fileIDSeedForRun(t *testing.T) {
+	seedPath := filepath.Join(t.TempDir(), fileIDEncryptionSeedFile)
+
+	seed, err := fileIDSeedForRun(seedPath, false, false)
+	require.NoError(t, err)
+	require.Empty(t, seed, "no setup and no saved seed: use the extproc default")
+
+	seed, err = fileIDSeedForRun(seedPath, true, false)
+	require.NoError(t, err)
+	require.NotEmpty(t, seed)
+	require.NoFileExists(t, seedPath, "the seed is only saved with the configuration")
+
+	saved, err := fileIDSeedForRun(seedPath, true, true)
+	require.NoError(t, err)
+	require.NotEmpty(t, saved)
+	info, err := os.Stat(seedPath)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	// Later runs with the saved configuration reuse the saved seed.
+	seed, err = fileIDSeedForRun(seedPath, false, false)
+	require.NoError(t, err)
+	require.Equal(t, saved, seed)
 }

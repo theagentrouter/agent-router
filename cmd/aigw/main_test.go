@@ -409,7 +409,7 @@ func TestCmdRun_Validate(t *testing.T) {
 			name:          "no config and no env vars",
 			path:          "",
 			envVars:       map[string]string{},
-			expectedError: "you must supply at least OPENAI_API_KEY, AZURE_OPENAI_API_KEY, ANTHROPIC_API_KEY, or a config file path",
+			expectedError: errNoConfig.Error(),
 		},
 		{
 			name:    "config path provided",

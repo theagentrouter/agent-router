@@ -18,7 +18,54 @@ Currently, `aigw run` supports Linux and macOS.
 
 ## Quick Start
 
-The simplest way to get started is to have `aigw` generate a configuration for
+### Interactive setup
+
+When no configuration file and no provider environment variables are set,
+`aigw run` starts an interactive setup in the terminal:
+
+```shell
+aigw run
+```
+
+1. Select the providers you want to use with the arrow keys and space:
+   OpenAI, Anthropic, Tetrate Agent Router Service, Azure OpenAI, Ollama, or any
+   other OpenAI-compatible API.
+2. Paste the API key of each provider (the input is masked), and the endpoint
+   for providers that need one.
+3. Choose whether to save the configuration.
+
+Requests are routed to each provider by model name: for example `gpt-*` models
+go to OpenAI and `claude-*` models to Anthropic. Only one provider can receive
+all the models that don't match any other provider. When you select several
+providers that can serve any model (such as Tetrate Agent Router Service and
+Ollama), the setup asks which model names to route to each of them. At the end,
+it prints the routing rules and a `curl` command to try them.
+
+If you save the configuration, it is written to `~/.config/aigw/config.yaml`
+(`$AIGW_CONFIG_HOME/config.yaml`), which `aigw run` uses by default from then on.
+Edit it to fine-tune the routing, or delete it to run the setup again.
+
+API keys are never written to the file. It reads them from environment variables
+instead, and the setup prints the ones to set for the next runs, for example in
+your shell profile:
+
+| Provider                     | Environment variable        |
+| ---------------------------- | --------------------------- |
+| OpenAI                       | `OPENAI_API_KEY`            |
+| Anthropic                    | `ANTHROPIC_API_KEY`         |
+| Tetrate Agent Router Service | `TARS_API_KEY`              |
+| Azure OpenAI                 | `AZURE_OPENAI_API_KEY`      |
+| Other OpenAI-compatible API  | `OPENAI_COMPATIBLE_API_KEY` |
+
+If a variable the saved configuration needs is not set, `aigw run` exits with an
+error naming it, rather than sending unauthenticated requests.
+
+The interactive setup needs a terminal. In scripts, containers and CI, configure
+`aigw run` with environment variables or a configuration file instead.
+
+### Auto-configuration from environment variables
+
+`aigw` can also generate a configuration for
 you using environment variables. `aigw` supports auto-configuration using the same
 environment variables as the OpenAI SDK, making it easy to integrate with existing
 tooling. Here are some examples:

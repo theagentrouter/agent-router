@@ -474,6 +474,46 @@ jobs:
             make helm-push HELM_CHART_VERSION=${DEV_VERSION#v} TAG=${DEV_VERSION}
           fi
 
+  aigw_main_release:
+    name: Publish aigw binaries from main
+    # Keeps the "latest-main" prerelease up to date with aigw binaries built from main, so that
+    # the install script (site/static/install.sh) can install the latest main without waiting for a release.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [ci-required]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release create/upload/edit and moving the tag require contents:write
+    env:
+      RELEASE_TAG: latest-main
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+        with:
+          fetch-depth: 0 # git describe needs the release tags to compute the version string
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+        with:
+          cache: false
+          go-version-file: go.mod
+      - name: Build CLI binaries
+        # Same platforms as the release workflow (no darwin/amd64, see release.yaml).
+        run: |
+          make build.aigw GOOS_LIST="linux" GOARCH_LIST="amd64 arm64"
+          make build.aigw GOOS_LIST="darwin" GOARCH_LIST="arm64"
+      - name: Publish the latest-main prerelease
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # Move the tag to the commit the binaries were built from.
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}" -f sha="$GITHUB_SHA" -F force=true
+          else
+            gh release create "$RELEASE_TAG" --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "Latest main" --notes "Rolling build of the main branch."
+          fi
+          gh release upload "$RELEASE_TAG" ./out/aigw-* --clobber
+          gh release edit "$RELEASE_TAG" --notes "Rolling build of the main branch, not a stable release.
+          Built from ${GITHUB_SHA} on $(date -u +%Y-%m-%dT%H:%M:%SZ).
+
+          Install it with: curl -sSL https://theagentrouter.ai/install.sh | sh"
+
   # Aggregate all the required jobs and make it easier to customize CI required jobs
   ci-required:
     runs-on: ubuntu-latest

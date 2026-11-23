@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	_ "embed"
 	"fmt"
 	"io"
@@ -36,6 +37,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"sigs.k8s.io/yaml"
 
+	"github.com/envoyproxy/ai-gateway/internal/autoconfig"
 	"github.com/envoyproxy/ai-gateway/internal/controller"
 	"github.com/envoyproxy/ai-gateway/internal/extensionserver"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -83,6 +85,8 @@ type runCmdContext struct {
 	mcpSessionEncryptionIterations int
 	// fileIDEncryptionIterations is the number of iterations for Files/Batch API id encryption key derivation.
 	fileIDEncryptionIterations int
+	// fileIDEncryptionSeed is the Files/Batch API id encryption seed used when the environment does not set one.
+	fileIDEncryptionSeed string
 }
 
 // run starts the AI Gateway locally for a given configuration.
@@ -156,8 +160,40 @@ func run(ctx context.Context, c *cmdRun, o *runOpts, stdout, stderr io.Writer) e
 	if err = proxyStdioMCPServers(ctx, debugLogger, c.mcpConfig); err != nil {
 		return fmt.Errorf("failed to proxy stdio for MCP servers: %w", err)
 	}
-	aiGatewayResourcesYaml, err := readConfig(o.configPath, c.mcpConfig, c.Debug)
+	setup := &interactiveSetup{}
+	setup.prompt = func(data *autoconfig.ConfigData) error {
+		restore, ok, rawErr := makeRaw(os.Stdin)
+		if rawErr != nil {
+			return rawErr
+		}
+		defer restore()
+		if !ok {
+			return errNoConfig
+		}
+		savePath := filepath.Join(o.ConfigHome, "config.yaml")
+		ui := &terminalUI{in: os.Stdin, out: stderr, styled: os.Getenv("NO_COLOR") == ""}
+		save, env, setupErr := runInteractiveSetup(ui, data, savePath)
+		if save {
+			setup.savePath = savePath
+		}
+		// The configuration references the API keys as environment variables: set them for
+		// this run, so they are substituted when the configuration is rendered.
+		for k, v := range env {
+			if setErr := os.Setenv(k, v); setErr != nil {
+				return fmt.Errorf("failed to set %s: %w", k, setErr)
+			}
+		}
+		setup.ran = setupErr == nil
+		return setupErr
+	}
+	aiGatewayResourcesYaml, err := readConfig(o.configPath, c.mcpConfig, c.Debug, setup)
 	if err != nil {
+		return err
+	}
+	// Configurations made by the interactive setup use their own random seed instead of the
+	// insecure default. It is saved with the configuration, so ids stay valid across runs.
+	seedPath := filepath.Join(o.ConfigHome, fileIDEncryptionSeedFile)
+	if runCtx.fileIDEncryptionSeed, err = fileIDSeedForRun(seedPath, setup.ran, setup.savePath != ""); err != nil {
 		return err
 	}
 	fakeClient, extProxDone, listenerPort, err := runCtx.writeEnvoyResourcesAndRunExtProc(ctx, aiGatewayResourcesYaml)
@@ -384,15 +420,46 @@ func (runCtx *runCmdContext) writeEnvoyResourcesAndRunExtProc(ctx context.Contex
 const (
 	// fileIDEncryptionSeedEnvVar sets the Files/Batch API id encryption seed for `aigw run`.
 	fileIDEncryptionSeedEnvVar = "AIGW_FILE_ID_ENCRYPTION_SEED"
+	// fileIDEncryptionSeedFile is where the interactive setup saves the Files/Batch API id encryption
+	// seed, in the config home next to the configuration it saves.
+	fileIDEncryptionSeedFile = "file-id-encryption-seed"
 	// mcpSessionEncryptionSeedEnvVar sets the MCP session encryption seed for `aigw run`.
 	mcpSessionEncryptionSeedEnvVar = "AIGW_MCP_SESSION_ENCRYPTION_SEED"
 )
+
+// fileIDSeedForRun returns the Files/Batch API id encryption seed to use when the environment does
+// not set one. It is read from seedPath when the interactive setup saved one there. When the setup
+// just ran, a random seed is generated, and saved to seedPath if the configuration was saved.
+// Otherwise it returns an empty seed, so the extproc uses its default.
+func fileIDSeedForRun(seedPath string, setupRan, setupSaved bool) (string, error) {
+	if raw, err := os.ReadFile(seedPath); err == nil {
+		if seed := strings.TrimSpace(string(raw)); seed != "" {
+			return seed, nil
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("failed to read %s: %w", seedPath, err)
+	}
+	if !setupRan {
+		return "", nil
+	}
+	seed := rand.Text()
+	if setupSaved {
+		if err := os.WriteFile(seedPath, []byte(seed+"\n"), 0o600); err != nil {
+			return "", fmt.Errorf("failed to save %s: %w", seedPath, err)
+		}
+	}
+	return seed, nil
+}
 
 // setEncryptionSeeds puts the encryption seeds from the environment into the filter config. They are
 // delivered through the config bundle rather than as extproc arguments, so they never appear on a
 // process command line. When unset, the extproc falls back to its default seeds.
 func (runCtx *runCmdContext) setEncryptionSeeds(filterCfg *filterapi.Config) {
-	if seed := os.Getenv(fileIDEncryptionSeedEnvVar); seed != "" {
+	seed := os.Getenv(fileIDEncryptionSeedEnvVar)
+	if seed == "" {
+		seed = runCtx.fileIDEncryptionSeed
+	}
+	if seed != "" {
 		filterCfg.FileIDEncryption = &filterapi.FileIDEncryption{Seed: seed, Iterations: runCtx.fileIDEncryptionIterations}
 	}
 	if seed := os.Getenv(mcpSessionEncryptionSeedEnvVar); seed != "" && filterCfg.MCPConfig != nil {
