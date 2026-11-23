@@ -7,7 +7,7 @@ sidebar_position: 11
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-The Envoy AI Gateway supports the OpenAI-compatible **Files API** (`/v1/files`), letting clients
+Agent Router supports the OpenAI-compatible **Files API** (`/v1/files`), letting clients
 upload, list, retrieve, download, and delete files through the gateway. Files are commonly used as
 inputs to other workflows such as the [Batch API](./batch-api.md) and fine-tuning.
 
