@@ -808,7 +808,7 @@ func TestOutputConfigAvailable(t *testing.T) {
 			model:     "claude-sonnet-4-6",
 			expected:  true,
 		},
-		// Newer models: supported on GCP Vertex AI, not on AWS Bedrock (InvokeModel).
+		// Additional model identifiers for Vertex AI and Bedrock.
 		{
 			name:      "claude-opus-4-7 supported on GCP",
 			apiSchema: filterapi.APISchemaGCPAnthropic,
@@ -864,10 +864,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-opus-5-5 not supported on AWS",
+			name:      "claude-opus-5-5 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-opus-5-5",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "claude-sonnet-5-5 supported on GCP",
@@ -876,10 +876,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-sonnet-5-5 not supported on AWS",
+			name:      "claude-sonnet-5-5 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-sonnet-5-5",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "claude-haiku-5-5 supported on GCP",
@@ -888,10 +888,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-haiku-5-5 not supported on AWS",
+			name:      "claude-haiku-5-5 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-haiku-5-5",
-			expected:  false,
+			expected:  true,
 		},
 		// Unsupported models on either backend.
 		{
