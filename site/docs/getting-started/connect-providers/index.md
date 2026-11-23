@@ -14,6 +14,7 @@ In this getting started guide you'll find quickstart setups to connect to the fo
 
 - [Tetrate Agent Router Service (TARS)](./tars.md) - Connect to Tetrate Agent Router Service's models
 - [Bitdeer AI](./bitdeer.md) - Connect to Bitdeer AI's OpenAI-compatible inference models
+- [Scaleway](./scaleway.md) - Connect to Scaleway Generative APIs
 - [Grokified](./grokified.md) - Connect to Grok models through Grokified's OpenAI-compatible API
 - [OpenAI](./openai.md) - Connect to OpenAI's GPT models
 - [Anthropic](./anthropic.md) - Connect to Anthropic's Claude models
@@ -45,6 +46,7 @@ Choose your provider to get started:
 
 - [Connect Tetrate Agent Router Service (TARS)](./tars.md)
 - [Connect Bitdeer AI](./bitdeer.md)
+- [Connect Scaleway](./scaleway.md)
 - [Connect Grokified](./grokified.md)
 - [Connect OpenAI](./openai.md)
 - [Connect Anthropic](./anthropic.md)

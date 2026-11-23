@@ -45,6 +45,28 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "Scaleway Generative APIs",
+			envVars: map[string]string{
+				"OPENAI_API_KEY":  "test-scaleway-key",
+				"OPENAI_BASE_URL": "https://api.scaleway.ai/11111111-2222-3333-4444-555555555555/v1",
+			},
+			expected: ConfigData{
+				Backends: []Backend{
+					{
+						Name:     "openai",
+						Hostname: "api.scaleway.ai",
+						Port:     443,
+						NeedsTLS: true,
+					},
+				},
+				OpenAI: &OpenAIConfig{
+					BackendName: "openai",
+					SchemaName:  "OpenAI",
+					Version:     "11111111-2222-3333-4444-555555555555/v1",
+				},
+			},
+		},
+		{
 			name: "Azure OpenAI",
 			envVars: map[string]string{
 				"AZURE_OPENAI_API_KEY":  "azure-key-123",
