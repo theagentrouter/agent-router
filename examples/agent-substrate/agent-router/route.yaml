@@ -1,0 +1,87 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: agent-router
+  namespace: agent-router-demo
+spec:
+  parentRefs:
+    - name: agent-router
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: Exact
+              name: x-ai-eg-model
+              value: demo-model
+      backendRefs:
+        - name: mock-llm
+  # Agent Router writes each response's token usage to dynamic metadata under
+  # io.envoy.ai_gateway/llm_total_token. The rate limit rule charges it.
+  llmRequestCosts:
+    - metadataKey: llm_total_token
+      type: TotalToken
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: mock-llm
+  namespace: agent-router-demo
+spec:
+  schema:
+    name: OpenAI
+  backendRef:
+    name: mock-llm
+    kind: Backend
+    group: gateway.envoyproxy.io
+  # Envoy Gateway forwards the verified actor JWT upstream. Drop it so it never
+  # reaches a model provider. The provider key below is set after this removal,
+  # so this is safe for every backend, and essential for providers that
+  # authenticate with another header (Anthropic's x-api-key, Azure's api-key),
+  # where the JWT would otherwise go to the provider.
+  headerMutation:
+    remove:
+      - authorization
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: mock-llm
+  namespace: agent-router-demo
+spec:
+  endpoints:
+    - fqdn:
+        hostname: mock-llm.agent-router-demo.svc.cluster.local
+        port: 80
+---
+# The provider credential lives here, not in the actor. Agent Router replaces
+# the request's Authorization header with this key on the way upstream.
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: mock-llm-apikey
+  namespace: agent-router-demo
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: mock-llm
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: mock-llm-apikey
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mock-llm-apikey
+  namespace: agent-router-demo
+type: Opaque
+stringData:
+  # Not a real key: the mock LLM only checks that it arrives.
+  apiKey: demo-provider-key

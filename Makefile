@@ -99,6 +99,8 @@ editorconfig:
 # This re-generates the CRDs for the API defined in the api directory.
 # Both v1alpha1 and v1beta1 are included for multi-version CRD support.
 # Object (deepcopy) generation runs separately per package to output to correct dirs.
+# CRD field descriptions are cut to 200 characters (maxDescLen=200) to keep the CRD chart's Helm release under
+# the 1 MiB Secret limit; the embedded Envoy Gateway types make the full schemas too large.
 .PHONY: apigen
 apigen: ## Generate CRDs for the API defined in the api directory.
 	@echo "apigen => ./api/v1alpha1/... (object)"
@@ -106,7 +108,7 @@ apigen: ## Generate CRDs for the API defined in the api directory.
 	@echo "apigen => ./api/v1beta1/... (object)"
 	@$(GO_TOOL) controller-gen object paths="./api/v1beta1/..." output:dir=./api/v1beta1
 	@echo "apigen => ./api/... (crd)"
-	@$(GO_TOOL) controller-gen crd paths="./api/v1alpha1/..." paths="./api/v1beta1/..." output:crd:dir=./manifests/charts/ai-gateway-crds-helm/templates
+	@$(GO_TOOL) controller-gen crd:maxDescLen=200 paths="./api/v1alpha1/..." paths="./api/v1beta1/..." output:crd:dir=./manifests/charts/ai-gateway-crds-helm/templates
 
 # This generates the API documentation for the API defined in the api directory.
 # Generates merged docs for all API versions (v1beta1 and v1alpha1).
@@ -294,7 +296,7 @@ build.%: ## Build a binary for the given command under the internal/cmd director
 		for goarch in $(GOARCH_LIST); do \
 			echo "-> Building $(COMMAND_NAME) for $$goos/$$goarch"; \
 			CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch go build -ldflags "$(GO_LDFLAGS)" \
-				-o $(OUTPUT_DIR)/$(COMMAND_NAME)-$$goos-$$goarch ./$(CMD_PATH_PREFIX)/$(COMMAND_NAME); \
+				-o $(OUTPUT_DIR)/$(COMMAND_NAME)-$$goos-$$goarch ./$(CMD_PATH_PREFIX)/$(COMMAND_NAME) || exit 1; \
 			echo "<- Built $(OUTPUT_DIR)/$(COMMAND_NAME)-$$goos-$$goarch"; \
 		done; \
 	done

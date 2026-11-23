@@ -20,6 +20,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
@@ -69,6 +70,13 @@ func accumulateAnthropicMessage(t *testing.T, sse []byte) anthropicsdk.Message {
 	return msg
 }
 
+func mustBuildOpenAIChatCompletionRequest(t *testing.T, body *anthropic.MessagesRequest, modelNameOverride string) *openai.ChatCompletionRequest {
+	t.Helper()
+	req, err := buildOpenAIChatCompletionRequest(body, modelNameOverride)
+	require.NoError(t, err)
+	return req
+}
+
 func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 	t.Run("basic model and message", func(t *testing.T) {
 		body := &anthropic.MessagesRequest{
@@ -78,7 +86,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 				{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hello"}},
 			},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		assert.Equal(t, "claude-3-haiku", req.Model)
 		require.NotNil(t, req.MaxCompletionTokens)
 		assert.Equal(t, int64(100), *req.MaxCompletionTokens)
@@ -93,7 +101,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 			Model:    "claude-3-haiku",
 			Messages: []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "gpt-4o")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "gpt-4o")
 		assert.Equal(t, "gpt-4o", req.Model)
 	})
 
@@ -105,7 +113,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 				{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}},
 			},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.Len(t, req.Messages, 2)
 		require.NotNil(t, req.Messages[0].OfSystem)
 		assert.Equal(t, openai.ChatMessageRoleSystem, req.Messages[0].OfSystem.Role)
@@ -174,7 +182,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 				{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}},
 			},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.Len(t, req.Messages, 1)
 		assert.Nil(t, req.Messages[0].OfSystem)
 	})
@@ -188,7 +196,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 				{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Bye"}},
 			},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.Len(t, req.Messages, 3)
 		assert.NotNil(t, req.Messages[0].OfUser)
 		assert.NotNil(t, req.Messages[1].OfAssistant)
@@ -203,10 +211,97 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 			Stream:   true,
 			Messages: []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		assert.True(t, req.Stream)
 		require.NotNil(t, req.StreamOptions)
 		assert.True(t, req.StreamOptions.IncludeUsage)
+	})
+
+	t.Run("output config maps to response format and reasoning effort", func(t *testing.T) {
+		schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
+		body := &anthropic.MessagesRequest{
+			Model: "claude-sonnet-4-5",
+			Messages: []anthropic.MessageParam{
+				{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Return an object"}},
+			},
+			OutputConfig: &anthropic.OutputConfig{
+				Effort: anthropic.OutputConfigEffortHigh,
+				Format: &anthropic.JSONOutputFormat{Type: "json_schema", Schema: schema},
+			},
+		}
+
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
+		require.Equal(t, openai.ReasoningEffortHigh, req.ReasoningEffort)
+		require.NotNil(t, req.ResponseFormat)
+		require.NotNil(t, req.ResponseFormat.OfJSONSchema)
+		assert.Equal(t, openai.ChatCompletionResponseFormatTypeJSONSchema, req.ResponseFormat.OfJSONSchema.Type)
+		assert.Equal(t, anthropicOutputFormatName, req.ResponseFormat.OfJSONSchema.JSONSchema.Name)
+		assert.Equal(t, schema, req.ResponseFormat.OfJSONSchema.JSONSchema.Schema)
+		assert.False(t, req.ResponseFormat.OfJSONSchema.JSONSchema.Strict)
+	})
+
+	t.Run("output config effort maps to reasoning effort", func(t *testing.T) {
+		tests := []struct {
+			effort anthropic.OutputConfigEffort
+			want   openai.ReasoningEffort
+		}{
+			{"", ""},
+			{anthropic.OutputConfigEffortLow, openai.ReasoningEffortLow},
+			{anthropic.OutputConfigEffortMedium, openai.ReasoningEffortMedium},
+			{anthropic.OutputConfigEffortHigh, openai.ReasoningEffortHigh},
+			{anthropic.OutputConfigEffortXhigh, openai.ReasoningEffortXhigh},
+			{anthropic.OutputConfigEffortMax, openai.ReasoningEffortMax},
+		}
+		for _, tt := range tests {
+			t.Run(string(tt.effort), func(t *testing.T) {
+				got, err := anthropicEffortToOpenAI(tt.effort)
+				require.NoError(t, err)
+				assert.Equal(t, tt.want, got)
+			})
+		}
+	})
+
+	t.Run("invalid output config is rejected", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			outputConfig *anthropic.OutputConfig
+			wantError    string
+		}{
+			{
+				name: "unsupported format type",
+				outputConfig: &anthropic.OutputConfig{
+					Format: &anthropic.JSONOutputFormat{Type: "text", Schema: json.RawMessage(`{}`)},
+				},
+				wantError: `unsupported output_config.format.type "text"`,
+			},
+			{
+				name: "missing schema",
+				outputConfig: &anthropic.OutputConfig{
+					Format: &anthropic.JSONOutputFormat{Type: "json_schema"},
+				},
+				wantError: "output_config.format.schema",
+			},
+			{
+				name: "non-object schema",
+				outputConfig: &anthropic.OutputConfig{
+					Format: &anthropic.JSONOutputFormat{Type: "json_schema", Schema: json.RawMessage(`[]`)},
+				},
+				wantError: "output_config.format.schema must be a JSON object",
+			},
+			{
+				name:         "unknown effort",
+				outputConfig: &anthropic.OutputConfig{Effort: "extreme"},
+				wantError:    `unsupported output_config.effort "extreme"`,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := buildOpenAIChatCompletionRequest(&anthropic.MessagesRequest{OutputConfig: tt.outputConfig}, "")
+				require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+				require.ErrorContains(t, err, tt.wantError)
+			})
+		}
 	})
 
 	t.Run("non-streaming has no stream_options", func(t *testing.T) {
@@ -214,7 +309,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 			Model:    "claude-3",
 			Messages: []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		assert.False(t, req.Stream)
 		assert.Nil(t, req.StreamOptions)
 	})
@@ -228,7 +323,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 			TopP:        &topP,
 			Messages:    []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.NotNil(t, req.Temperature)
 		assert.Equal(t, &temp, req.Temperature)
 		require.NotNil(t, req.TopP)
@@ -249,7 +344,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 				}},
 			},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.Len(t, req.Tools, 1)
 		assert.Equal(t, openai.ToolTypeFunction, req.Tools[0].Type)
 		require.NotNil(t, req.Tools[0].Function)
@@ -264,7 +359,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 			Messages:   []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 			ToolChoice: &tc,
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		assert.Nil(t, req.Tools)
 		assert.Nil(t, req.ToolChoice)
 	})
@@ -276,7 +371,7 @@ func TestBuildOpenAIChatCompletionRequest(t *testing.T) {
 			Tools:      []anthropic.ToolUnion{{Tool: &anthropic.Tool{Name: "search", InputSchema: json.RawMessage(`{"type":"object"}`)}}},
 			ToolChoice: ptr.To(anthropic.ToolChoice{Auto: &anthropic.ToolChoiceAuto{Type: "auto"}}),
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.NotNil(t, req.Tools)
 		require.NotNil(t, req.ToolChoice)
 		assert.Equal(t, string(openai.ToolChoiceTypeAuto), req.ToolChoice.Value)
@@ -512,7 +607,8 @@ func TestOpenAIResponseToAnthropic(t *testing.T) {
 			},
 		}
 		result := openAIResponseToAnthropic(resp, "test-model")
-		assert.Nil(t, result.Content)
+		require.NotNil(t, result.Content)
+		assert.Empty(t, result.Content)
 	})
 
 	t.Run("nil content not added to blocks", func(t *testing.T) {
@@ -525,7 +621,79 @@ func TestOpenAIResponseToAnthropic(t *testing.T) {
 			},
 		}
 		result := openAIResponseToAnthropic(resp, "test-model")
-		assert.Nil(t, result.Content)
+		require.NotNil(t, result.Content)
+		assert.Empty(t, result.Content)
+	})
+
+	t.Run("refusal becomes stop details and preserves partial content", func(t *testing.T) {
+		partialContent := `{"answer":"partial`
+		refusal := "I cannot help with that request."
+		resp := &openai.ChatCompletionResponse{
+			Choices: []openai.ChatCompletionResponseChoice{
+				{
+					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+					Message: openai.ChatCompletionResponseChoiceMessage{
+						Content: &partialContent,
+						Refusal: &refusal,
+					},
+				},
+			},
+		}
+
+		result := openAIResponseToAnthropic(resp, "test-model")
+		require.Len(t, result.Content, 1)
+		require.NotNil(t, result.Content[0].Text)
+		assert.Equal(t, partialContent, result.Content[0].Text.Text)
+		require.NotNil(t, result.StopReason)
+		assert.Equal(t, anthropic.StopReasonRefusal, *result.StopReason)
+		require.NotNil(t, result.StopDetails)
+		assert.Equal(t, anthropic.ConstantRefusalStopDetailsTypeRefusal("refusal"), result.StopDetails.Type)
+		assert.Nil(t, result.StopDetails.Category)
+		require.NotNil(t, result.StopDetails.Explanation)
+		assert.Equal(t, refusal, *result.StopDetails.Explanation)
+	})
+
+	t.Run("refusal-only response marshals content as empty array", func(t *testing.T) {
+		refusal := "I cannot help with that request."
+		resp := &openai.ChatCompletionResponse{
+			Choices: []openai.ChatCompletionResponseChoice{
+				{
+					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+					Message: openai.ChatCompletionResponseChoiceMessage{
+						Content: nil,
+						Refusal: &refusal,
+					},
+				},
+			},
+		}
+
+		result := openAIResponseToAnthropic(resp, "test-model")
+		require.NotNil(t, result.Content)
+		assert.Empty(t, result.Content)
+		require.NotNil(t, result.StopReason)
+		assert.Equal(t, anthropic.StopReasonRefusal, *result.StopReason)
+		encoded, err := json.Marshal(result)
+		require.NoError(t, err)
+		assert.Contains(t, string(encoded), `"content":[]`)
+		assert.NotContains(t, string(encoded), `"content":null`)
+	})
+
+	t.Run("content filter becomes refusal with null stop details fields", func(t *testing.T) {
+		resp := &openai.ChatCompletionResponse{
+			Choices: []openai.ChatCompletionResponseChoice{{
+				FinishReason: openai.ChatCompletionChoicesFinishReasonContentFilter,
+			}},
+		}
+
+		result := openAIResponseToAnthropic(resp, "test-model")
+		require.NotNil(t, result.StopReason)
+		assert.Equal(t, anthropic.StopReasonRefusal, *result.StopReason)
+		require.NotNil(t, result.StopDetails)
+		assert.Nil(t, result.StopDetails.Category)
+		assert.Nil(t, result.StopDetails.Explanation)
+		encoded, err := json.Marshal(result.StopDetails)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"type":"refusal","category":null,"explanation":null}`, string(encoded))
 	})
 
 	t.Run("tool call response", func(t *testing.T) {
@@ -613,7 +781,8 @@ func TestOpenAIResponseToAnthropic(t *testing.T) {
 			Usage: openai.Usage{PromptTokens: 5},
 		}
 		result := openAIResponseToAnthropic(resp, "gpt-4o")
-		assert.Nil(t, result.Content)
+		require.NotNil(t, result.Content)
+		assert.Empty(t, result.Content)
 		assert.Nil(t, result.StopReason)
 		assert.Equal(t, float64(5), result.Usage.InputTokens)
 	})
@@ -628,6 +797,8 @@ func TestOpenAIFinishReasonToAnthropic(t *testing.T) {
 		{openai.ChatCompletionChoicesFinishReasonLength, anthropic.StopReasonMaxTokens},
 		{openai.ChatCompletionChoicesFinishReasonToolCalls, anthropic.StopReasonToolUse},
 		{openai.ChatCompletionChoicesFinishReasonContentFilter, anthropic.StopReasonRefusal},
+		{openai.ChatCompletionChoicesFinishReasonPauseTurn, anthropic.StopReasonPauseTurn},
+		{openai.ChatCompletionChoicesFinishReasonContextWindowExceeded, anthropic.StopReasonModelContextWindowExceeded},
 		{"function_call", anthropic.StopReasonEndTurn},
 		{"", anthropic.StopReasonEndTurn},
 	}
@@ -697,6 +868,27 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_TextStreaming(t *testing.T) 
 
 	assert.Equal(t, "message_stop", events[6].eventType)
 	require.JSONEq(t, `{"type":"message_stop"}`, events[6].data)
+}
+
+func TestOpenAIStreamToAnthropicState_ProcessBuffer_RefusalStreaming(t *testing.T) {
+	state := &openAIStreamToAnthropicState{
+		activeTools:  make(map[int64]*streamToolCall),
+		requestModel: "gpt-4o",
+	}
+
+	state.buffer.WriteString("data: {\"id\":\"chatcmpl-refusal\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"partial output\"}}],\"model\":\"gpt-4o\"}\n\n" +
+		"data: {\"id\":\"chatcmpl-refusal\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":\"I cannot help\"}}],\"model\":\"gpt-4o\"}\n\n" +
+		"data: {\"id\":\"chatcmpl-refusal\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":\" with that request.\"},\"finish_reason\":\"stop\"}],\"model\":\"gpt-4o\"}\n\n" +
+		"data: {\"id\":\"chatcmpl-refusal\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n")
+
+	var out []byte
+	require.NoError(t, state.processBuffer(&out, true))
+
+	events := parseSSEEventsFromBytes(out)
+	require.Len(t, events, 6)
+	require.JSONEq(t, `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial output"}}`, events[2].data)
+	require.JSONEq(t, `{"type":"message_delta","delta":{"stop_reason":"refusal","stop_sequence":null,"stop_details":{"type":"refusal","category":null,"explanation":"I cannot help with that request."}},"usage":{"input_tokens":10,"output_tokens":5}}`, events[4].data)
+	assert.Equal(t, "message_stop", events[5].eventType)
 }
 
 // TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens is a regression test guarding
@@ -1061,7 +1253,7 @@ func TestBuildOpenAIChatCompletionRequest_ThinkingConfig(t *testing.T) {
 			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Think hard"}}},
 			Thinking:  &anthropic.Thinking{Enabled: &anthropic.ThinkingEnabled{Type: "enabled", BudgetTokens: 4096}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.NotNil(t, req.Thinking)
 		require.NotNil(t, req.Thinking.OfEnabled)
 		assert.Equal(t, "enabled", req.Thinking.OfEnabled.Type)
@@ -1075,7 +1267,7 @@ func TestBuildOpenAIChatCompletionRequest_ThinkingConfig(t *testing.T) {
 			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 			Thinking:  &anthropic.Thinking{Disabled: &anthropic.ThinkingDisabled{Type: "disabled"}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.NotNil(t, req.Thinking)
 		require.NotNil(t, req.Thinking.OfDisabled)
 		assert.Equal(t, "disabled", req.Thinking.OfDisabled.Type)
@@ -1088,7 +1280,7 @@ func TestBuildOpenAIChatCompletionRequest_ThinkingConfig(t *testing.T) {
 			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 			Thinking:  &anthropic.Thinking{Adaptive: &anthropic.ThinkingAdaptive{Type: "adaptive"}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.NotNil(t, req.Thinking)
 		require.NotNil(t, req.Thinking.OfAdaptive)
 		assert.Equal(t, "adaptive", req.Thinking.OfAdaptive.Type)
@@ -1101,7 +1293,7 @@ func TestBuildOpenAIChatCompletionRequest_ThinkingConfig(t *testing.T) {
 			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 			Thinking:  &anthropic.Thinking{BetweenTools: &anthropic.ThinkingBetweenTools{Type: "between_tools"}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		require.NotNil(t, req.Thinking)
 		require.NotNil(t, req.Thinking.OfBetweenTools)
 		assert.Equal(t, "between_tools", req.Thinking.OfBetweenTools.Type)
@@ -1113,7 +1305,7 @@ func TestBuildOpenAIChatCompletionRequest_ThinkingConfig(t *testing.T) {
 			MaxTokens: 100,
 			Messages:  []anthropic.MessageParam{{Role: anthropic.MessageRoleUser, Content: anthropic.MessageContent{Text: "Hi"}}},
 		}
-		req := buildOpenAIChatCompletionRequest(body, "")
+		req := mustBuildOpenAIChatCompletionRequest(t, body, "")
 		assert.Nil(t, req.Thinking)
 	})
 }
