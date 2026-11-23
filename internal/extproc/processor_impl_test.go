@@ -171,6 +171,10 @@ func Test_chatCompletionProcessorRouterFilter_ProcessRequestBody(t *testing.T) {
 			require.NotEqual(t, internalapi.EnvoyOriginalPathHeader, h.Header.Key,
 				"extproc must not set the reserved x-envoy-original-path header")
 		}
+		// The in-place request header map is updated for the extproc-owned header,
+		// while the reserved header is left exactly as the client sent it.
+		require.Equal(t, "/foo", headers[internalapi.OriginalPathHeader])
+		require.Equal(t, "/client-supplied", headers[internalapi.EnvoyOriginalPathHeader])
 	})
 
 	t.Run("model header overwrites pre-existing value", func(t *testing.T) {

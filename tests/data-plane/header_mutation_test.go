@@ -68,6 +68,7 @@ func TestExtProcHeaderMutationsNotRejected(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 
+	var found int
 	for _, line := range strings.Split(strings.TrimSpace(string(statsBody)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -78,5 +79,8 @@ func TestExtProcHeaderMutationsNotRejected(t *testing.T) {
 		count, convErr := strconv.Atoi(strings.TrimSpace(value))
 		require.NoError(t, convErr, "unexpected stats line: %q", line)
 		require.Zero(t, count, "ext_proc rejected a header mutation: %s", strings.TrimSpace(name))
+		found++
 	}
+	// Guard against a stat rename or prefix change making the loop above check nothing.
+	require.Positive(t, found, "no ext_proc.rejected_header_mutations counters found, stats body: %s", string(statsBody))
 }
