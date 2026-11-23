@@ -72,3 +72,21 @@ func TestRedactJSONTree(t *testing.T) {
 		require.Equal(t, RedactString("secret"), out["content"])
 	})
 }
+
+func TestRedactJSONTree_ToolUseInput(t *testing.T) {
+	in := map[string]any{
+		"type": "tool_use",
+		"name": "lookup",
+		"input": map[string]any{
+			"type":   "secret-type-argument",
+			"nested": map[string]any{"type": "secret-nested-type"},
+		},
+	}
+	out := RedactJSONTree(in).(map[string]any)
+	require.Equal(t, "tool_use", out["type"], "the block discriminator is kept")
+	require.Equal(t, map[string]any{
+		"type":   RedactString("secret-type-argument"),
+		"nested": map[string]any{"type": RedactString("secret-nested-type")},
+	}, out["input"], "a type key inside tool arguments is an argument, not a discriminator")
+	require.Equal(t, "secret-type-argument", in["input"].(map[string]any)["type"], "input not mutated")
+}

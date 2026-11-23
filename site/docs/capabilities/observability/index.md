@@ -13,4 +13,5 @@ The Agent Router provides specialized observability capabilities for AI and LLM 
 - **[GenAI Metrics](./metrics.md)** - Prometheus metrics following OpenTelemetry Gen AI semantic conventions for monitoring token usage, latency, and model performance.
 - **[GenAI Tracing](./tracing.md)** - OpenTelemetry integration with OpenInference semantic conventions for LLM request tracing and evaluation.
 - **[Access Logs with AI/LLM metadata](./accesslogs.md)** - AI metadata produced by the AI gateway (model name, token usage, etc.) can be included in the Envoy Access Logs.
+- **[Debug Log Redaction](./debug-log-redaction.md)** - Replace prompts and other caller data with placeholders in the external processor's debug logs.
 - **[Gateway Configuration](../gateway-config.md)** - Per-gateway configuration of the external processor container, including environment variables for tracing and resource requirements.
