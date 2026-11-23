@@ -24,6 +24,15 @@ const (
 	// StopReasonContentFiltered is a StopReason enum value.
 	StopReasonContentFiltered = "content_filtered"
 
+	// StopReasonMalformedModelOutput is a StopReason enum value.
+	StopReasonMalformedModelOutput = "malformed_model_output"
+
+	// StopReasonMalformedToolUse is a StopReason enum value.
+	StopReasonMalformedToolUse = "malformed_tool_use"
+
+	// StopReasonModelContextWindowExceeded is a StopReason enum value.
+	StopReasonModelContextWindowExceeded = "model_context_window_exceeded"
+
 	// ConversationRoleUser is a ConversationRole enum value.
 	ConversationRoleUser = "user"
 
