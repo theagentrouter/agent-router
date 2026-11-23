@@ -2975,7 +2975,10 @@ func TestBedrockStopReasonToOpenAIStopReason(t *testing.T) {
 		{"tool use", ptr.To(awsbedrock.StopReasonToolUse), openai.ChatCompletionChoicesFinishReasonToolCalls},
 		{"content filtered", ptr.To(awsbedrock.StopReasonContentFiltered), openai.ChatCompletionChoicesFinishReasonContentFilter},
 		{"guardrail intervened", ptr.To(awsbedrock.StopReasonGuardrailIntervened), openai.ChatCompletionChoicesFinishReasonContentFilter},
-		{"unknown stop reason", ptr.To("something_new"), openai.ChatCompletionChoicesFinishReasonStop},
+		{"model context window exceeded", ptr.To(awsbedrock.StopReasonModelContextWindowExceeded), openai.ChatCompletionChoicesFinishReasonContextWindowExceeded},
+		{"malformed tool use", ptr.To(awsbedrock.StopReasonMalformedToolUse), openai.ChatCompletionChoicesFinishReasonMalformedFunctionCall},
+		{"malformed model output", ptr.To(awsbedrock.StopReasonMalformedModelOutput), openai.ChatCompletionChoicesFinishReasonError},
+		{"unknown stop reason", ptr.To("something_new"), openai.ChatCompletionChoicesFinishReasonError},
 	}
 	translator := &openAIToAWSBedrockTranslatorV1ChatCompletion{}
 	for _, tt := range tests {

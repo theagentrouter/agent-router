@@ -334,7 +334,20 @@ func (a *anthropicToAnthropicTranslator) RedactAnthropicBody(resp *anthropic.Mes
 			redacted.Content[i] = redactAnthropicContent(&resp.Content[i])
 		}
 	}
+	redacted.StopDetails = redactRefusalStopDetails(resp.StopDetails)
 
+	return &redacted
+}
+
+// redactRefusalStopDetails redacts the explanation of a refusal, which is model-generated text that can repeat the request. The type and policy category are kept so the log still shows why the model refused.
+func redactRefusalStopDetails(details *anthropic.RefusalStopDetails) *anthropic.RefusalStopDetails {
+	if details == nil {
+		return nil
+	}
+	redacted := *details
+	if details.Explanation != nil {
+		redacted.Explanation = ptr.To(redaction.RedactString(*details.Explanation))
+	}
 	return &redacted
 }
 
@@ -346,6 +359,7 @@ func redactAnthropicContent(content *anthropic.MessagesContentBlock) anthropic.M
 	if content.Text != nil {
 		textCopy := *content.Text
 		textCopy.Text = redaction.RedactString(content.Text.Text)
+		textCopy.Citations = redactTextCitations(content.Text.Citations)
 		redactedContent.Text = &textCopy
 	}
 
@@ -366,7 +380,80 @@ func redactAnthropicContent(content *anthropic.MessagesContentBlock) anthropic.M
 		redactedContent.Tool = &toolCopy
 	}
 
+	// Redact server tool input: for web search it is the query, which is derived from the request.
+	if content.ServerToolUse != nil {
+		serverToolCopy := *content.ServerToolUse
+		serverToolCopy.Input = map[string]any{
+			"redacted": redaction.RedactString(fmt.Sprintf("%v", content.ServerToolUse.Input)),
+		}
+		redactedContent.ServerToolUse = &serverToolCopy
+	}
+
+	// Redact web search results: the page titles, URLs and content come from a search driven by the request. The error variant only carries an error code and is kept.
+	if content.WebSearchToolResult != nil {
+		resultCopy := *content.WebSearchToolResult
+		if results := content.WebSearchToolResult.Content.Results; results != nil {
+			resultCopy.Content.Results = make([]anthropic.WebSearchResult, len(results))
+			for i, r := range results {
+				r.Title = redaction.RedactString(r.Title)
+				r.URL = redaction.RedactString(r.URL)
+				r.EncryptedContent = redaction.RedactString(r.EncryptedContent)
+				resultCopy.Content.Results[i] = r
+			}
+		}
+		redactedContent.WebSearchToolResult = &resultCopy
+	}
+
 	// Note: tool_use_id and function names are metadata, not sensitive content
 
 	return redactedContent
+}
+
+// redactTextCitations redacts the cited text, titles, URLs and sources of text block citations. Cited text quotes the caller's documents or searched pages verbatim, and titles and URLs identify them. Locations, indices and the opaque encrypted index are kept.
+func redactTextCitations(citations []anthropic.TextCitation) []anthropic.TextCitation {
+	if citations == nil {
+		return nil
+	}
+	redactedCitations := make([]anthropic.TextCitation, len(citations))
+	for i, c := range citations {
+		switch {
+		case c.CharLocation != nil:
+			loc := *c.CharLocation
+			loc.CitedText = redaction.RedactString(loc.CitedText)
+			loc.DocumentTitle = redactOptionalString(loc.DocumentTitle)
+			c.CharLocation = &loc
+		case c.PageLocation != nil:
+			loc := *c.PageLocation
+			loc.CitedText = redaction.RedactString(loc.CitedText)
+			loc.DocumentTitle = redactOptionalString(loc.DocumentTitle)
+			c.PageLocation = &loc
+		case c.ContentBlockLocation != nil:
+			loc := *c.ContentBlockLocation
+			loc.CitedText = redaction.RedactString(loc.CitedText)
+			loc.DocumentTitle = redactOptionalString(loc.DocumentTitle)
+			c.ContentBlockLocation = &loc
+		case c.WebSearchResultLocation != nil:
+			loc := *c.WebSearchResultLocation
+			loc.CitedText = redaction.RedactString(loc.CitedText)
+			loc.Title = redaction.RedactString(loc.Title)
+			loc.URL = redaction.RedactString(loc.URL)
+			c.WebSearchResultLocation = &loc
+		case c.SearchResultLocation != nil:
+			loc := *c.SearchResultLocation
+			loc.CitedText = redaction.RedactString(loc.CitedText)
+			loc.Title = redaction.RedactString(loc.Title)
+			loc.Source = redaction.RedactString(loc.Source)
+			c.SearchResultLocation = &loc
+		}
+		redactedCitations[i] = c
+	}
+	return redactedCitations
+}
+
+// redactOptionalString redacts *s, keeping nil as nil.
+func redactOptionalString(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	return ptr.To(redaction.RedactString(*s))
 }
