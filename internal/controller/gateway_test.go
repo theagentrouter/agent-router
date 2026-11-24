@@ -175,6 +175,38 @@ func requireFilterConfigFromBundle(t *testing.T, kube kubernetes.Interface, name
 	return *cfg
 }
 
+func TestGatewayController_SkipsNonEnvoyGatewayClass(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	fakeKube := fake2.NewClientset()
+	c := newTestGatewayController(fakeClient, fakeKube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+	ctx := t.Context()
+
+	require.NoError(t, fakeClient.Create(ctx, &gwapiv1.GatewayClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "istio-waypoint"},
+		Spec:       gwapiv1.GatewayClassSpec{ControllerName: "istio.io/gateway-controller"},
+	}))
+	require.NoError(t, fakeClient.Create(ctx, &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "waypoint", Namespace: "ns"},
+		Spec:       gwapiv1.GatewaySpec{GatewayClassName: "istio-waypoint"},
+	}))
+	res, err := c.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Name: "waypoint", Namespace: "ns"}})
+	require.NoError(t, err)
+	require.Equal(t, ctrl.Result{}, res)
+
+	require.NoError(t, fakeClient.Create(ctx, &gwapiv1.GatewayClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy"},
+		Spec:       gwapiv1.GatewayClassSpec{ControllerName: envoyGatewayControllerName},
+	}))
+	require.NoError(t, fakeClient.Create(ctx, &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "serving", Namespace: "ns"},
+		Spec:       gwapiv1.GatewaySpec{GatewayClassName: "envoy"},
+	}))
+	res, err = c.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Name: "serving", Namespace: "ns"}})
+	require.NoError(t, err)
+	require.Equal(t, ctrl.Result{RequeueAfter: 5 * time.Second}, res)
+}
+
 func TestGatewayController_Reconcile(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexes(t)
 	fakeKube := fake2.NewClientset()

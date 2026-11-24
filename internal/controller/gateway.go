@@ -90,6 +90,28 @@ type GatewayController struct {
 	referenceGrantValidator *referenceGrantValidator
 }
 
+// envoyGatewayControllerName is the controllerName Envoy Gateway sets on its GatewayClass.
+const envoyGatewayControllerName gwapiv1.GatewayController = "gateway.envoyproxy.io/gatewayclass-controller"
+
+// implementedByEnvoyGateway reports whether gw is implemented by Envoy Gateway.
+// An empty class name or a missing GatewayClass returns true so a Gateway created
+// before its class keeps the existing reconcile path. A class whose controllerName
+// is not Envoy Gateway returns false.
+func (c *GatewayController) implementedByEnvoyGateway(ctx context.Context, gw *gwapiv1.Gateway) (bool, error) {
+	name := string(gw.Spec.GatewayClassName)
+	if name == "" {
+		return true, nil
+	}
+	var gc gwapiv1.GatewayClass
+	if err := c.client.Get(ctx, client.ObjectKey{Name: name}, &gc); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return gc.Spec.ControllerName == envoyGatewayControllerName, nil
+}
+
 // Reconcile implements the reconcile.Reconciler for gwapiv1.Gateway.
 func (c *GatewayController) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	gw := &gwapiv1.Gateway{}
@@ -98,6 +120,17 @@ func (c *GatewayController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+
+	// Gateways implemented by another controller (Istio waypoints, Traefik, Knative)
+	// never grow Envoy workloads. Requeueing them logs forever and fills the kubelet
+	// log buffer. A missing GatewayClass keeps the previous path.
+	implemented, err := c.implementedByEnvoyGateway(ctx, gw)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to resolve GatewayClass for gateway %s: %w", gw.Name, err)
+	}
+	if !implemented {
+		return ctrl.Result{}, nil
 	}
 
 	aiRoutes, err := listAIGatewayRoutesForGateway(ctx, c.client, nil, req.Name, req.Namespace)
