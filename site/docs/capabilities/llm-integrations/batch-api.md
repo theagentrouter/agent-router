@@ -4,7 +4,7 @@ title: Batch API
 sidebar_position: 12
 ---
 
-The Envoy AI Gateway supports the OpenAI-compatible **Batch API** (`/v1/batches`), letting clients
+Agent Router supports the OpenAI-compatible **Batch API** (`/v1/batches`), letting clients
 create, retrieve, list, and cancel asynchronous batch jobs through the gateway. A batch processes a
 JSONL input file, uploaded through the [Files API](./files-api.md), and writes its results to an
 output file that can be downloaded through the Files API.
