@@ -1009,12 +1009,10 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 		resp      *http.Response
 		rejection *backendJSONRPCError
 	}
-	var (
-		openTargets []struct {
-			backend filterapi.MCPBackend
-			uris    []string
-		}
-	)
+	var openTargets []struct {
+		backend filterapi.MCPBackend
+		uris    []string
+	}
 	for _, backend := range selected {
 		uris := perBackendURIs[backend.Name]
 		if len(uris) == 0 && !wantListChanged {
