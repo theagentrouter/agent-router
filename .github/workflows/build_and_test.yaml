@@ -556,6 +556,9 @@ jobs:
         run: |
           make build.aigw GOOS_LIST="linux" GOARCH_LIST="amd64 arm64"
           make build.aigw GOOS_LIST="darwin" GOARCH_LIST="arm64"
+      - name: Generate checksums
+        # Bare file names (no ./out/ prefix), so install.sh matches on the asset name.
+        run: cd ./out && sha256sum aigw-* | tee checksums.txt
       - name: Publish the latest-main prerelease
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -565,7 +568,10 @@ jobs:
             gh release create "$RELEASE_TAG" --prerelease --latest=false --target "$GITHUB_SHA" \
               --title "Latest main" --notes "Rolling build of the main branch."
           fi
+          # checksums.txt goes last: while the binaries are being replaced, install.sh fails on a
+          # checksum mismatch (and asks to retry) rather than installing a mix of old and new.
           gh release upload "$RELEASE_TAG" ./out/aigw-* --clobber
+          gh release upload "$RELEASE_TAG" ./out/checksums.txt --clobber
           gh release edit "$RELEASE_TAG" --notes "Rolling build of the main branch, not a stable release.
           Built from ${GITHUB_SHA} on $(date -u +%Y-%m-%dT%H:%M:%SZ).
 
