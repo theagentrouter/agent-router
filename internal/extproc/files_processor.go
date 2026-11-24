@@ -328,19 +328,37 @@ func (p *filesProcessor) ProcessResponseBody(_ context.Context, body *extprocv3.
 	if p.isUpstreamFilter {
 		return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseBody{}}, nil
 	}
-	if !p.isSuccessResponse() {
+	if p.op == filesOpContent && p.isSuccessResponse() {
+		// Raw file bytes with no ids to re-encode. They are passed to the translator as received,
+		// without decompressing a potentially large file in memory, so a pass-through keeps the
+		// original encoding.
+		return p.translateContentResponse(body.GetBody())
+	}
+	// Upstreams may compress the response. Every rewrite below works on the decoded body, so decode
+	// once and drop content-encoding when the body is replaced. A pass-through response keeps the
+	// original encoded body and headers.
+	raw, isEncoded, err := decodeResponseBody(body.GetBody(), p.responseHeaders["content-encoding"])
+	if err != nil {
+		p.logger.Error("failed to decode files response body", slog.String("error", err.Error()))
+		if !p.isSuccessResponse() {
+			// Keep the provider's error rather than masking it with a gateway error.
+			return passThroughResponseBody(), nil
+		}
+		return filesReEncodeError("failed to decode upstream files response"), nil
+	}
+	var resp *extprocv3.ProcessingResponse
+	switch {
+	case !p.isSuccessResponse():
 		// Errors have no file id to re-encode; let the translator convert them to OpenAI errors.
-		return p.translateResponseError(body.Body)
-	}
-	switch p.op {
-	case filesOpContent:
-		// Raw file bytes; no ids to re-encode.
-		return p.translateContentResponse(body.Body)
-	case filesOpList:
-		return p.reEncodeListResponse(body.Body), nil
+		if resp, err = p.translateResponseError(raw); err != nil {
+			return nil, err
+		}
+	case p.op == filesOpList:
+		resp = p.reEncodeListResponse(raw)
 	default: // upload, retrieve, delete
-		return p.reEncodeResponse(body.Body), nil
+		resp = p.reEncodeResponse(raw)
 	}
+	return withDecodedBody(resp, isEncoded), nil
 }
 
 // translateResponseError runs translator.ResponseError on a non-2xx response body.

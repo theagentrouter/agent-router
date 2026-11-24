@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -96,6 +97,35 @@ func requestHeadersResponse(headerMutation *extprocv3.HeaderMutation, clearRoute
 // unmodified.
 func passThroughResponseBody() *extprocv3.ProcessingResponse {
 	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseBody{}}
+}
+
+// decodeResponseBody returns the decompressed upstream response body and whether it was encoded.
+// Upstreams may compress responses (gzip or br) and Envoy does not decompress them before ext_proc,
+// so id rewriting must work on the decoded JSON.
+func decodeResponseBody(body []byte, contentEncoding string) ([]byte, bool, error) {
+	res, err := decodeContentIfNeeded(body, contentEncoding)
+	if err != nil {
+		return nil, false, err
+	}
+	if !res.isEncoded {
+		return body, false, nil
+	}
+	decoded, err := io.ReadAll(res.reader)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to decompress %s body: %w", contentEncoding, err)
+	}
+	return decoded, true, nil
+}
+
+// withDecodedBody removes content-encoding from a response whose body was replaced with a
+// decoded one. A pass-through response keeps the original (still encoded) body and headers.
+func withDecodedBody(resp *extprocv3.ProcessingResponse, isEncoded bool) *extprocv3.ProcessingResponse {
+	common := resp.GetResponseBody().GetResponse()
+	if common == nil {
+		return resp
+	}
+	common.HeaderMutation = removeContentEncodingIfNeeded(common.HeaderMutation, common.BodyMutation, isEncoded)
+	return resp
 }
 
 // bodyMutationResponse returns a response-body processing result that replaces the body with

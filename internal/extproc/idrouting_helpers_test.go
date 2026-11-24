@@ -6,20 +6,27 @@
 package extproc
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"testing"
 
+	"github.com/andybalholm/brotli"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/headermutator"
+	"github.com/envoyproxy/ai-gateway/internal/idcodec"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/translator"
 )
@@ -290,4 +297,160 @@ func TestBatches_SetBackend_StoresHeaderMutator(t *testing.T) {
 	b.Backend.HeaderMutation = credentialOverrideMutation
 	require.NoError(t, up.SetBackend(context.Background(), b, "route", rp))
 	require.NotNil(t, up.headerMutator)
+}
+
+// compressBody encodes body with the given content-encoding ("gzip" or "br").
+func compressBody(t *testing.T, encoding string, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	var w io.WriteCloser
+	switch encoding {
+	case "gzip":
+		w = gzip.NewWriter(&buf)
+	case "br":
+		w = brotli.NewWriter(&buf)
+	default:
+		t.Fatalf("unsupported encoding %q", encoding)
+	}
+	_, err := w.Write(body)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	return buf.Bytes()
+}
+
+// requireContentEncodingRemoved checks that the response replaced the body and dropped
+// content-encoding, since the rewritten body is sent uncompressed.
+func requireContentEncodingRemoved(t *testing.T, resp *extprocv3.ProcessingResponse) []byte {
+	t.Helper()
+	require.Nil(t, resp.GetImmediateResponse())
+	common := resp.GetResponseBody().GetResponse()
+	require.NotNil(t, common.GetBodyMutation())
+	require.Contains(t, common.GetHeaderMutation().GetRemoveHeaders(), "content-encoding")
+	body := common.GetBodyMutation().GetBody()
+	cl, ok := responseBodyHeaderValue(resp, "content-length")
+	require.True(t, ok)
+	require.Equal(t, strconv.Itoa(len(body)), cl)
+	return body
+}
+
+func TestDecodeResponseBody(t *testing.T) {
+	plain := []byte(`{"id":"x"}`)
+	for _, enc := range []string{"gzip", "br"} {
+		t.Run(enc, func(t *testing.T) {
+			got, isEncoded, err := decodeResponseBody(compressBody(t, enc, plain), enc)
+			require.NoError(t, err)
+			require.True(t, isEncoded)
+			require.Equal(t, plain, got)
+		})
+	}
+	t.Run("identity", func(t *testing.T) {
+		got, isEncoded, err := decodeResponseBody(plain, "")
+		require.NoError(t, err)
+		require.False(t, isEncoded)
+		require.Equal(t, plain, got)
+	})
+	t.Run("corrupt gzip", func(t *testing.T) {
+		_, _, err := decodeResponseBody([]byte("not gzip"), "gzip")
+		require.Error(t, err)
+	})
+	t.Run("truncated gzip", func(t *testing.T) {
+		gz := compressBody(t, "gzip", plain)
+		_, _, err := decodeResponseBody(gz[:len(gz)-4], "gzip")
+		require.Error(t, err)
+	})
+}
+
+func TestWithDecodedBody_PassThroughKeepsEncoding(t *testing.T) {
+	resp := withDecodedBody(passThroughResponseBody(), true)
+	require.Nil(t, resp.GetResponseBody().GetResponse())
+}
+
+func TestBatches_ResponseBody_CompressedUpstream(t *testing.T) {
+	raw := []byte(`{"id":"batch_1","object":"batch","input_file_id":"file-in","output_file_id":"file-out"}`)
+	listRaw := []byte(`{"object":"list","data":[{"id":"batch_1"}],"first_id":"batch_1","last_id":"batch_1","has_more":false}`)
+	for _, enc := range []string{"gzip", "br"} {
+		t.Run(enc+" retrieve", func(t *testing.T) {
+			codec := newTestCodec()
+			p := newResponseBatchesProcessor(codec, batchesOpRetrieve, "200")
+			p.responseHeaders["content-encoding"] = enc
+			resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: compressBody(t, enc, raw)})
+			require.NoError(t, err)
+			body := requireContentEncodingRemoved(t, resp)
+			decodeOrFail(t, codec, gjson.GetBytes(body, "id").String(), idcodec.KindBatch, "batch_1")
+			decodeOrFail(t, codec, gjson.GetBytes(body, "output_file_id").String(), idcodec.KindFile, "file-out")
+		})
+		t.Run(enc+" list", func(t *testing.T) {
+			codec := newTestCodec()
+			p := newResponseBatchesProcessor(codec, batchesOpList, "200")
+			p.responseHeaders["content-encoding"] = enc
+			resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: compressBody(t, enc, listRaw)})
+			require.NoError(t, err)
+			body := requireContentEncodingRemoved(t, resp)
+			decodeOrFail(t, codec, gjson.GetBytes(body, "data.0.id").String(), idcodec.KindBatch, "batch_1")
+			decodeOrFail(t, codec, gjson.GetBytes(body, "last_id").String(), idcodec.KindBatch, "batch_1")
+		})
+	}
+	t.Run("corrupt body is 502", func(t *testing.T) {
+		p := newResponseBatchesProcessor(newTestCodec(), batchesOpRetrieve, "200")
+		p.responseHeaders["content-encoding"] = "gzip"
+		resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: []byte("not gzip")})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadGateway, immediateStatus(resp))
+	})
+	t.Run("error response passes through encoded", func(t *testing.T) {
+		p := newResponseBatchesProcessor(newTestCodec(), batchesOpRetrieve, "404")
+		p.responseHeaders["content-encoding"] = "gzip"
+		resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: compressBody(t, "gzip", []byte(`{"error":{}}`))})
+		require.NoError(t, err)
+		require.Nil(t, resp.GetResponseBody().GetResponse())
+	})
+}
+
+func TestFiles_ResponseBody_CompressedUpstream(t *testing.T) {
+	newP := func(op filesOperation, status, enc string) (*filesProcessor, idcodec.Codec) {
+		codec := newTestCodec()
+		p := &filesProcessor{
+			op: op, codec: codec, logger: slog.Default(), routingModel: "m1",
+			backend:         &backendKey{namespace: "ns", name: "apple"},
+			responseHeaders: map[string]string{":status": status, "content-encoding": enc},
+		}
+		require.NoError(t, p.resolveTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}))
+		return p, codec
+	}
+	for _, enc := range []string{"gzip", "br"} {
+		t.Run(enc+" retrieve", func(t *testing.T) {
+			p, codec := newP(filesOpRetrieve, "200", enc)
+			raw := []byte(`{"id":"file-native","object":"file","purpose":"batch"}`)
+			resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: compressBody(t, enc, raw)})
+			require.NoError(t, err)
+			body := requireContentEncodingRemoved(t, resp)
+			decodeOrFail(t, codec, gjson.GetBytes(body, "id").String(), idcodec.KindFile, "file-native")
+		})
+		t.Run(enc+" list", func(t *testing.T) {
+			p, codec := newP(filesOpList, "200", enc)
+			raw := []byte(`{"object":"list","data":[{"id":"file-native"}],"has_more":false}`)
+			resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: compressBody(t, enc, raw)})
+			require.NoError(t, err)
+			body := requireContentEncodingRemoved(t, resp)
+			decodeOrFail(t, codec, gjson.GetBytes(body, "data.0.id").String(), idcodec.KindFile, "file-native")
+		})
+	}
+	t.Run("corrupt body is 502", func(t *testing.T) {
+		p, _ := newP(filesOpRetrieve, "200", "gzip")
+		resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: []byte("not gzip")})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadGateway, immediateStatus(resp))
+	})
+	t.Run("corrupt error body passes through", func(t *testing.T) {
+		p, _ := newP(filesOpRetrieve, "500", "gzip")
+		resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: []byte("not gzip")})
+		require.NoError(t, err)
+		require.Nil(t, resp.GetResponseBody().GetResponse())
+	})
+	t.Run("content download keeps encoding", func(t *testing.T) {
+		p, _ := newP(filesOpContent, "200", "gzip")
+		resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: compressBody(t, "gzip", []byte("raw file"))})
+		require.NoError(t, err)
+		require.Nil(t, resp.GetResponseBody().GetResponse())
+	})
 }

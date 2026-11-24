@@ -341,18 +341,25 @@ func (p *batchesProcessor) ProcessResponseHeaders(_ context.Context, headers *co
 	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseHeaders{}}, nil
 }
 
-// ProcessResponseBody implements [Processor.ProcessResponseBody]. Successful bodies get their
-// backend-native ids re-encoded into gateway ids; error bodies pass through unchanged.
+// ProcessResponseBody implements [Processor.ProcessResponseBody]. Successful bodies are decoded
+// per content-encoding and get their backend-native ids re-encoded into gateway ids; error bodies
+// pass through unchanged.
 func (p *batchesProcessor) ProcessResponseBody(_ context.Context, body *extprocv3.HttpBody) (*extprocv3.ProcessingResponse, error) {
 	if p.isUpstreamFilter || !isSuccessStatus(p.responseHeaders) {
 		return passThroughResponseBody(), nil
 	}
-	workingBody, errResp := p.translatedResponseBody(body.GetBody())
+	// Upstreams may compress the response. Every rewrite below works on the decoded JSON, so decode
+	// once and drop content-encoding when the body is replaced.
+	raw, isEncoded, err := decodeResponseBody(body.GetBody(), p.responseHeaders["content-encoding"])
+	if err != nil {
+		p.logger.Error("failed to decode batches response body", slog.String("error", err.Error()))
+		return batchesReEncodeError("failed to decode upstream batches response"), nil
+	}
+	workingBody, errResp := p.translatedResponseBody(raw)
 	if errResp != nil {
 		return errResp, nil
 	}
 	var newBody []byte
-	var err error
 	if p.op == batchesOpList {
 		newBody, err = p.reEncodeList(workingBody)
 	} else {
@@ -362,7 +369,7 @@ func (p *batchesProcessor) ProcessResponseBody(_ context.Context, body *extprocv
 		p.logger.Error("failed to re-encode batches response", slog.String("error", err.Error()))
 		return batchesReEncodeError(err.Error()), nil
 	}
-	return bodyMutationResponse(newBody), nil
+	return withDecodedBody(bodyMutationResponse(newBody), isEncoded), nil
 }
 
 // translatedResponseBody validates that the response can be re-encoded and runs the translator.
