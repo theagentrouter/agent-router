@@ -37,7 +37,7 @@ case "$(uname -m)" in
 esac
 
 if [ "$os" = "darwin" ] && [ "$arch" = "amd64" ]; then
-  fail "aigw binaries are not published for Intel Macs. Build from source with: go install github.com/envoyproxy/ai-gateway/cmd/aigw@latest"
+  fail "aigw binaries are not published for Intel Macs."
 fi
 
 asset="aigw-${os}-${arch}"
