@@ -169,7 +169,7 @@ func promptProvider(ui *terminalUI, opt *providerOption) (configuredProvider, er
 			return p, err
 		}
 		// Azure uses the model name as the deployment name, so at least one is needed for requests to work.
-		deployments, inputErr := requiredInput(ui, "Deployment names, comma-separated", "", false, nil)
+		deployments, inputErr := requiredInput(ui, "Deployment names, comma-separated", "", false, validList)
 		if inputErr != nil {
 			return p, inputErr
 		}
@@ -212,7 +212,7 @@ func assignModelRoutes(ui *terminalUI, providers []configuredProvider) error {
 		p := &providers[i]
 		ui.printf("\n  %s\n", ui.bold("Models for "+p.title))
 		ui.printf("    %s\n", ui.dim("Requests are routed by model name, and only one provider can receive all the other models."))
-		answer, err := requiredInput(ui, "Model names to route to "+p.title+", comma-separated", "", false, nil)
+		answer, err := requiredInput(ui, "Model names to route to "+p.title+", comma-separated", "", false, validList)
 		if err != nil {
 			return err
 		}
@@ -324,6 +324,14 @@ func requiredInput(ui *terminalUI, label, def string, secret bool, validate func
 func validURL(s string) error {
 	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
 		return fmt.Errorf("enter a URL starting with http:// or https://")
+	}
+	return nil
+}
+
+// validList rejects lists with no items, such as "," or " , ".
+func validList(s string) error {
+	if len(splitList(s)) == 0 {
+		return fmt.Errorf("enter at least one name")
 	}
 	return nil
 }

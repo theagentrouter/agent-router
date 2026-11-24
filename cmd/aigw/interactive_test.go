@@ -99,6 +99,7 @@ func TestRunInteractiveSetup(t *testing.T) {
 	t.Run("only the last catch-all provider gets the remaining models", func(t *testing.T) {
 		ui, _ := newTestUI(selectKeys(t, "tars", "ollama") +
 			"sk-tars" + keyEnter + keyEnter + keyEnter + // Ollama base URL and model defaults.
+			"," + keyEnter + // Rejected: no model names.
 			"gpt-5, gpt-5-mini" + keyEnter + "n" + keyEnter)
 		var data autoconfig.ConfigData
 		_, env, err := runInteractiveSetup(ui, &data, "/cfg/config.yaml")
@@ -116,6 +117,7 @@ func TestRunInteractiveSetup(t *testing.T) {
 			"example.com" + keyEnter + // Rejected: not a URL.
 			"https://example.openai.azure.com" + keyEnter + keyEnter +
 			keyEnter + // Rejected: a deployment is required.
+			" , " + keyEnter + // Rejected: no deployment names.
 			"my-gpt" + keyEnter +
 			keyEnter + // Rejected: the key is required.
 			"azure-key" + keyEnter + "n" + keyEnter)

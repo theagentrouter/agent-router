@@ -18,7 +18,9 @@ on:
 concurrency:
   # https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#example-using-concurrency-to-cancel-any-in-progress-job-or-run
   group: ${{ github.ref }}-${{ github.workflow }}-${{ github.actor }}-${{ github.event_name }}
-  cancel-in-progress: true
+  # Runs on main are not cancelled: aigw_main_release could be stopped halfway through updating
+  # the latest-main release, leaving missing assets. Queued runs are still replaced by newer ones.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -594,9 +596,16 @@ jobs:
           echo "$version"
           # The binary must be the one built from this commit, not a stale asset.
           case "$version" in
-            *"${GITHUB_SHA:0:7}"*) ;;
-            *) echo "::error::expected aigw built from ${GITHUB_SHA}, got: ${version}"; exit 1 ;;
+            *"${GITHUB_SHA:0:7}"*) exit 0 ;;
           esac
+          # A run for a newer commit may have published since: its own smoke test checks that release.
+          tag_sha="$(git ls-remote origin refs/tags/latest-main | cut -f1)"
+          if [ -n "$tag_sha" ] && [ "$tag_sha" != "$GITHUB_SHA" ]; then
+            echo "::notice::latest-main was updated to ${tag_sha} by a newer run; skipping the version check"
+            exit 0
+          fi
+          echo "::error::expected aigw built from ${GITHUB_SHA}, got: ${version}"
+          exit 1
 
   # Aggregate all the required jobs and make it easier to customize CI required jobs
   ci-required:
