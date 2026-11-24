@@ -23,8 +23,11 @@ curl -sSL https://theagentrouter.ai/install.sh | AIGW_VERSION=v1.3.0 AIGW_INSTAL
 ```
 
 The script needs `curl` or `wget`. It verifies the binary against the SHA-256
-checksums published with it (`checksums.txt`, or the digest GitHub reports for
-releases that predate it) and only installs it if they match. It downloads into
+checksum published with it (`checksums.txt`, or the digest GitHub reports for
+releases that predate it), using `sha256sum` or `shasum`, and does not install
+it if they differ. If no checksum can be found for the release, or neither
+`sha256sum` nor `shasum` is installed, it prints a warning and installs the
+binary without verifying it. It downloads into
 the install directory and moves the binary into place in one step, so an
 interrupted install never leaves a partial `aigw` behind. It never uses `sudo`:
 if the install directory is not writable, set `AIGW_INSTALL_DIR` to one that is.

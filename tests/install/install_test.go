@@ -89,7 +89,11 @@ esac
 `
 
 // systemTools are the external commands the script needs besides uname and curl.
-var systemTools = []string{"mktemp", "chmod", "mkdir", "mv", "rm", "cat", "awk", "sha256sum", "tr"}
+var systemTools = []string{"mktemp", "chmod", "mkdir", "mv", "rm", "cat", "awk", "tr"}
+
+// sha256Tools are the checksum utilities the script can use. Only the first one found is
+// needed: Linux has sha256sum, macOS only has shasum.
+var sha256Tools = []string{"sha256sum", "shasum"}
 
 type result struct {
 	err        error
@@ -145,6 +149,15 @@ func runInstall(t *testing.T, o options) result {
 		require.NoError(t, lookErr)
 		require.NoError(t, os.Symlink(p, filepath.Join(bin, tool)))
 	}
+	foundSHA256 := false
+	for _, tool := range sha256Tools {
+		if p, lookErr := exec.LookPath(tool); lookErr == nil {
+			require.NoError(t, os.Symlink(p, filepath.Join(bin, tool)))
+			foundSHA256 = true
+			break
+		}
+	}
+	require.True(t, foundSHA256, "one of %v is required", sha256Tools)
 
 	aigw := filepath.Join(t.TempDir(), "aigw")
 	writeExecutable(t, aigw, aigwStub)
