@@ -61,6 +61,17 @@ const (
 	processingBodyModeAnnotation = "aigateway.envoyproxy.io/processing-body-mode"
 	// allowModeOverrideAnnotation is the annotation key for configuring allow mode override
 	allowModeOverrideAnnotation = "aigateway.envoyproxy.io/allow-mode-override"
+	// endpointPickerKeepaliveAnnotation is the annotation key for enabling HTTP/2 keepalive
+	// (periodic PING frames) on the connections from Envoy to the endpoint picker.
+	endpointPickerKeepaliveAnnotation = "aigateway.envoyproxy.io/endpoint-picker-http2-keepalive"
+	// endpointPickerKeepaliveInterval is how often Envoy sends an HTTP/2 PING to the endpoint picker
+	// when keepalive is enabled. Envoy adds a random jitter (15% by default) that only makes the
+	// interval longer, so it never drops below the 10s minimum that an endpoint picker with a gRPC
+	// keepalive enforcement policy may require.
+	endpointPickerKeepaliveInterval = 15 * time.Second
+	// endpointPickerKeepaliveTimeout is how long Envoy waits for a PING response before closing the
+	// connection, so that requests stop going to an endpoint picker that is no longer reachable.
+	endpointPickerKeepaliveTimeout = 5 * time.Second
 )
 
 func (s *Server) constructInferencePoolsFrom(extensionResources []*egextension.ExtensionResource) []*gwaiev1.InferencePool {
@@ -166,15 +177,16 @@ func getInferencePoolsByMetadata(meta *corev3.Metadata) []*gwaiev1.InferencePool
 }
 
 // parseInferencePoolMetadataString parses a single InferencePool reference encoded by
-// buildEPPMetadata as "namespace/name/serviceName/port/bodyMode/allowModeOverride/appProtocol".
+// buildEPPMetadata as
+// "namespace/name/serviceName/port/bodyMode/allowModeOverride/endpointPickerKeepalive/appProtocol".
 // The appProtocol segment is last because its value can itself contain "/" (e.g.
 // "kubernetes.io/h2c"), and is empty when the pool doesn't set one.
 func parseInferencePoolMetadataString(metadata string) *gwaiev1.InferencePool {
-	result := strings.SplitN(metadata, "/", 7)
-	if len(result) != 7 {
+	result := strings.SplitN(metadata, "/", 8)
+	if len(result) != 8 {
 		return nil
 	}
-	appProtocol := gwaiev1.AppProtocol(result[6])
+	appProtocol := gwaiev1.AppProtocol(result[7])
 	ns := result[0]
 	name := result[1]
 	serviceName := result[2]
@@ -184,13 +196,15 @@ func parseInferencePoolMetadataString(metadata string) *gwaiev1.InferencePool {
 	}
 	processingBodyMode := result[4]
 	allowModeOverride := result[5]
+	endpointPickerKeepalive := result[6]
 	return &gwaiev1.InferencePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
 			Annotations: map[string]string{
-				processingBodyModeAnnotation: processingBodyMode,
-				allowModeOverrideAnnotation:  allowModeOverride,
+				processingBodyModeAnnotation:      processingBodyMode,
+				allowModeOverrideAnnotation:       allowModeOverride,
+				endpointPickerKeepaliveAnnotation: endpointPickerKeepalive,
 			},
 		},
 		Spec: gwaiev1.InferencePoolSpec{
@@ -246,6 +260,8 @@ func buildEPPMetadata(metadata *corev3.Metadata, inferencePools []*gwaiev1.Infer
 		processingBodyMode := getProcessingBodyModeStringFromAnnotations(inferencePool)
 		// Read allow mode override from annotations, default to false
 		allowModeOverride := getAllowModeOverrideStringFromAnnotations(inferencePool)
+		// Read endpoint picker HTTP/2 keepalive from annotations, default to false
+		endpointPickerKeepalive := getEndpointPickerKeepaliveStringFromAnnotations(inferencePool)
 		values = append(values, structpb.NewStringValue(
 			clusterRefInferencePool(
 				inferencePool.Namespace,
@@ -254,6 +270,7 @@ func buildEPPMetadata(metadata *corev3.Metadata, inferencePools []*gwaiev1.Infer
 				portForInferencePool(inferencePool),
 				processingBodyMode,
 				allowModeOverride,
+				endpointPickerKeepalive,
 				string(inferencePool.Spec.AppProtocol),
 			),
 		))
@@ -335,11 +352,22 @@ func buildExtProcClusterForInferencePoolEndpointPicker(pool *gwaiev1.InferencePo
 		},
 	}
 
+	http2ProtocolOptions := &corev3.Http2ProtocolOptions{}
+	if getEndpointPickerKeepaliveFromAnnotations(pool) {
+		// Send periodic HTTP/2 PINGs and close the connection when a PING isn't answered in time.
+		// Without this, Envoy can't tell that the endpoint picker went away without closing the
+		// connection (e.g. its node failed), and requests keep waiting on the dead connection.
+		http2ProtocolOptions.ConnectionKeepalive = &corev3.KeepaliveSettings{
+			Interval: durationpb.New(endpointPickerKeepaliveInterval),
+			Timeout:  durationpb.New(endpointPickerKeepaliveTimeout),
+		}
+	}
+
 	http2Opts := &upstreamsv3.HttpProtocolOptions{
 		UpstreamProtocolOptions: &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_{
 			ExplicitHttpConfig: &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig{
 				ProtocolConfig: &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{
-					Http2ProtocolOptions: &corev3.Http2ProtocolOptions{},
+					Http2ProtocolOptions: http2ProtocolOptions,
 				},
 			},
 		},
@@ -497,6 +525,44 @@ func getAllowModeOverrideStringFromAnnotations(pool *gwaiev1.InferencePool) stri
 	// Only encode the values getAllowModeOverrideFromAnnotations understands, so a raw annotation
 	// value can't add a "/" to the encoded metadata (see parseInferencePoolMetadataString).
 	if annotations[allowModeOverrideAnnotation] == "true" {
+		return "true"
+	}
+	return "false"
+}
+
+// getEndpointPickerKeepaliveFromAnnotations reads whether HTTP/2 keepalive to the endpoint picker
+// is enabled from InferencePool annotations.
+// Returns true for "true" and false for "false". Keepalive is disabled by default.
+// Unlike allowModeOverride, "false" is handled as its own case so that the default can later be
+// switched to enabled while "false" keeps meaning disabled.
+func getEndpointPickerKeepaliveFromAnnotations(pool *gwaiev1.InferencePool) bool {
+	annotations := pool.GetAnnotations()
+	if annotations == nil {
+		return false // default to disabled
+	}
+
+	value, exists := annotations[endpointPickerKeepaliveAnnotation]
+	if !exists {
+		return false // default to disabled
+	}
+
+	switch value {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		// Invalid value, default to disabled
+		return false
+	}
+}
+
+// getEndpointPickerKeepaliveStringFromAnnotations reads the endpoint picker keepalive setting from
+// InferencePool annotations, for encoding into the metadata.
+func getEndpointPickerKeepaliveStringFromAnnotations(pool *gwaiev1.InferencePool) string {
+	// Only encode the values getEndpointPickerKeepaliveFromAnnotations understands, so a raw annotation
+	// value can't add a "/" to the encoded metadata (see parseInferencePoolMetadataString).
+	if getEndpointPickerKeepaliveFromAnnotations(pool) {
 		return "true"
 	}
 	return "false"

@@ -852,7 +852,7 @@ func TestMaybeModifyClusterExtended(t *testing.T) {
 					internalapi.InternalEndpointMetadataNamespace: {
 						Fields: map[string]*structpb.Value{
 							"per_route_rule_inference_pool": structpb.NewListValue(&structpb.ListValue{
-								Values: []*structpb.Value{structpb.NewStringValue("test-ns/test-pool/test-epp/9002/duplex/false/")},
+								Values: []*structpb.Value{structpb.NewStringValue("test-ns/test-pool/test-epp/9002/duplex/false/false/")},
 							}),
 						},
 					},
@@ -1071,7 +1071,7 @@ func TestMaybeModifyListenerAndRoutes(t *testing.T) {
 					internalapi.InternalEndpointMetadataNamespace: {
 						Fields: map[string]*structpb.Value{
 							"per_route_rule_inference_pool": structpb.NewListValue(&structpb.ListValue{
-								Values: []*structpb.Value{structpb.NewStringValue("test-ns/test-pool/test-epp/9002/duplex/false/")},
+								Values: []*structpb.Value{structpb.NewStringValue("test-ns/test-pool/test-epp/9002/duplex/false/false/")},
 							}),
 						},
 					},
@@ -1519,7 +1519,7 @@ func TestPatchVirtualHostWithInferencePool(t *testing.T) {
 					Fields: map[string]*structpb.Value{
 						"per_route_rule_inference_pool": structpb.NewListValue(&structpb.ListValue{
 							Values: []*structpb.Value{structpb.NewStringValue(
-								fmt.Sprintf("%s/%s/test-epp/9002/duplex/false/", pool.Namespace, pool.Name),
+								fmt.Sprintf("%s/%s/test-epp/9002/duplex/false/false/", pool.Namespace, pool.Name),
 							)},
 						}),
 					},
@@ -2727,7 +2727,7 @@ func TestBuildClustersForInferencePoolEndpointPickers(t *testing.T) {
 				internalapi.InternalEndpointMetadataNamespace: {
 					Fields: map[string]*structpb.Value{
 						"per_route_rule_inference_pool": structpb.NewListValue(&structpb.ListValue{
-							Values: []*structpb.Value{structpb.NewStringValue("test-ns/test-pool/test-epp/9002/duplex/false/")},
+							Values: []*structpb.Value{structpb.NewStringValue("test-ns/test-pool/test-epp/9002/duplex/false/false/")},
 						}),
 					},
 				},
@@ -3373,5 +3373,106 @@ func TestSetEndpointMetadataUpstreamHost(t *testing.T) {
 		require.Equal(t, "aws-bedrock", m.Fields[internalapi.InternalMetadataBackendNameKey].GetStringValue())
 		require.Equal(t, "vpce-123.bedrock-runtime.us-east-1.vpce.amazonaws.com",
 			m.Fields[internalapi.InternalMetadataUpstreamHostKey].GetStringValue())
+	})
+}
+
+// http2OptionsOfEndpointPickerCluster returns the HTTP/2 protocol options of the given endpoint picker cluster.
+func http2OptionsOfEndpointPickerCluster(t *testing.T, cluster *clusterv3.Cluster) *corev3.Http2ProtocolOptions {
+	t.Helper()
+	anyOptions, ok := cluster.TypedExtensionProtocolOptions[httpProtocolOptionsKey]
+	require.True(t, ok)
+	options := &httpv3.HttpProtocolOptions{}
+	require.NoError(t, anyOptions.UnmarshalTo(options))
+	return options.GetExplicitHttpConfig().GetHttp2ProtocolOptions()
+}
+
+// TestGetEndpointPickerKeepaliveFromAnnotations tests reading the endpoint picker keepalive annotation.
+func TestGetEndpointPickerKeepaliveFromAnnotations(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		want        bool
+	}{
+		{
+			name:        "no annotations",
+			annotations: nil,
+			want:        false,
+		},
+		{
+			name:        "annotation set to true",
+			annotations: map[string]string{"aigateway.envoyproxy.io/endpoint-picker-http2-keepalive": "true"},
+			want:        true,
+		},
+		{
+			name:        "annotation set to false",
+			annotations: map[string]string{"aigateway.envoyproxy.io/endpoint-picker-http2-keepalive": "false"},
+			want:        false,
+		},
+		{
+			// Values are case-sensitive, like the other InferencePool annotations.
+			name:        "annotation set to invalid value",
+			annotations: map[string]string{"aigateway.envoyproxy.io/endpoint-picker-http2-keepalive": "True"},
+			want:        false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := &gwaiev1.InferencePool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-pool",
+					Namespace:   "test-ns",
+					Annotations: tc.annotations,
+				},
+			}
+			require.Equal(t, tc.want, getEndpointPickerKeepaliveFromAnnotations(pool))
+		})
+	}
+}
+
+// TestBuildExtProcClusterForInferencePoolEndpointPicker_Keepalive tests that the keepalive annotation
+// controls HTTP/2 keepalive on the endpoint picker cluster, and that keepalive is off without it.
+func TestBuildExtProcClusterForInferencePoolEndpointPicker_Keepalive(t *testing.T) {
+	newPool := func(annotations map[string]string) *gwaiev1.InferencePool {
+		return &gwaiev1.InferencePool{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "test-pool",
+				Namespace:   "test-ns",
+				Annotations: annotations,
+			},
+			Spec: gwaiev1.InferencePoolSpec{
+				TargetPorts:       []gwaiev1.Port{{Number: 8080}},
+				EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "test-epp"},
+			},
+		}
+	}
+
+	t.Run("disabled by default", func(t *testing.T) {
+		cluster, err := buildExtProcClusterForInferencePoolEndpointPicker(newPool(nil))
+		require.NoError(t, err)
+		http2Options := http2OptionsOfEndpointPickerCluster(t, cluster)
+		require.NotNil(t, http2Options)
+		require.Nil(t, http2Options.GetConnectionKeepalive())
+	})
+
+	t.Run("disabled by annotation", func(t *testing.T) {
+		cluster, err := buildExtProcClusterForInferencePoolEndpointPicker(newPool(map[string]string{
+			"aigateway.envoyproxy.io/endpoint-picker-http2-keepalive": "false",
+		}))
+		require.NoError(t, err)
+		require.Nil(t, http2OptionsOfEndpointPickerCluster(t, cluster).GetConnectionKeepalive())
+	})
+
+	t.Run("enabled by annotation", func(t *testing.T) {
+		cluster, err := buildExtProcClusterForInferencePoolEndpointPicker(newPool(map[string]string{
+			"aigateway.envoyproxy.io/endpoint-picker-http2-keepalive": "true",
+		}))
+		require.NoError(t, err)
+		keepalive := http2OptionsOfEndpointPickerCluster(t, cluster).GetConnectionKeepalive()
+		require.NotNil(t, keepalive)
+		require.Equal(t, 15*time.Second, keepalive.GetInterval().AsDuration())
+		require.Equal(t, 5*time.Second, keepalive.GetTimeout().AsDuration())
+		require.Nil(t, keepalive.GetIntervalJitter())
+		require.Nil(t, keepalive.GetConnectionIdleInterval())
 	})
 }

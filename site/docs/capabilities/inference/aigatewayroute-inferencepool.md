@@ -222,6 +222,54 @@ spec:
 - `"false"` (default): External processor cannot override the processing mode
 - `"true"`: External processor can override the processing mode
 
+### Endpoint Picker HTTP/2 Keepalive
+
+Configure whether Envoy sends HTTP/2 keepalive PINGs to the endpoint picker, so that it detects connections to an endpoint picker that went away without closing them:
+
+```yaml
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: my-pool
+  namespace: default
+  annotations:
+    # Enable HTTP/2 keepalive to the endpoint picker: "false" (default) or "true"
+    aigateway.envoyproxy.io/endpoint-picker-http2-keepalive: "true"
+spec:
+  # ... other configuration ...
+```
+
+**Available values:**
+
+- `"false"` (default): Keepalive is disabled
+- `"true"`: Envoy sends periodic HTTP/2 PINGs and closes connections that stop responding
+
+Read [Endpoint Picker Connection Keepalive](./httproute-inferencepool.md#endpoint-picker-connection-keepalive) before enabling it. It explains what happens without keepalive and which endpoint picker versions accept these PINGs.
+
+### Endpoint Picker HTTP/2 Keepalive
+
+Configure whether Envoy sends HTTP/2 keepalive PINGs to the endpoint picker, so that it detects connections to an endpoint picker that went away without closing them:
+
+```yaml
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: my-pool
+  namespace: default
+  annotations:
+    # Enable HTTP/2 keepalive to the endpoint picker: "false" (default) or "true"
+    aigateway.envoyproxy.io/endpoint-picker-http2-keepalive: "true"
+spec:
+  # ... other configuration ...
+```
+
+**Available values:**
+
+- `"false"` (default): Keepalive is disabled
+- `"true"`: Envoy sends periodic HTTP/2 PINGs and closes connections that stop responding
+
+Read [Endpoint Picker Connection Keepalive](./httproute-inferencepool.md#endpoint-picker-connection-keepalive) before enabling it. It explains what happens without keepalive and which endpoint picker versions accept these PINGs.
+
 ### Combined Configuration
 
 You can use both annotations together:

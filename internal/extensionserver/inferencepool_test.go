@@ -81,8 +81,8 @@ func TestBuildAndParseMetadata_RoundTrip(t *testing.T) {
 	require.Len(t, val.GetListValue().GetValues(), 1)
 	encodedStr := val.GetListValue().GetValues()[0].GetStringValue()
 
-	// Check encoded format: ns/name/svc/port/mode/override/appProtocol
-	assert.Equal(t, "test-ns/test-pool/test-picker/9090/buffered/true/", encodedStr)
+	// Check encoded format: ns/name/svc/port/mode/override/keepalive/appProtocol
+	assert.Equal(t, "test-ns/test-pool/test-picker/9090/buffered/true/false/", encodedStr)
 
 	// 2. Parse Metadata back to Pool
 	parsedPools := getInferencePoolsByMetadata(metadata)
@@ -100,6 +100,7 @@ func TestBuildAndParseMetadata_RoundTrip(t *testing.T) {
 	extractedOverride := parsedPool.Annotations[allowModeOverrideAnnotation]
 	assert.Equal(t, "buffered", extractedMode)
 	assert.Equal(t, "true", extractedOverride)
+	assert.Equal(t, "false", parsedPool.Annotations[endpointPickerKeepaliveAnnotation])
 	assert.Empty(t, parsedPool.Spec.AppProtocol)
 }
 
@@ -129,8 +130,9 @@ func TestBuildAndParseMetadata_AnnotationWithSlash(t *testing.T) {
 			Name:      "test-pool",
 			Namespace: "test-ns",
 			Annotations: map[string]string{
-				processingBodyModeAnnotation: "buffered/x",
-				allowModeOverrideAnnotation:  "true/x",
+				processingBodyModeAnnotation:      "buffered/x",
+				allowModeOverrideAnnotation:       "true/x",
+				endpointPickerKeepaliveAnnotation: "true/x",
 			},
 		},
 		Spec: gwaiev1.InferencePoolSpec{
@@ -146,6 +148,7 @@ func TestBuildAndParseMetadata_AnnotationWithSlash(t *testing.T) {
 	assert.Equal(t, gwaiev1.AppProtocolH2C, parsedPools[0].Spec.AppProtocol)
 	assert.Equal(t, "duplex", parsedPools[0].Annotations[processingBodyModeAnnotation])
 	assert.Equal(t, "false", parsedPools[0].Annotations[allowModeOverrideAnnotation])
+	assert.Equal(t, "false", parsedPools[0].Annotations[endpointPickerKeepaliveAnnotation])
 }
 
 // TestBuildAndParseMetadata_MultiPool verifies that metadata carrying multiple InferencePools
@@ -202,7 +205,7 @@ func TestGetInferencePoolsByMetadata_Malformed(t *testing.T) {
 			internalapi.InternalEndpointMetadataNamespace: {
 				Fields: map[string]*structpb.Value{
 					internalMetadataInferencePoolKey: structpb.NewListValue(&structpb.ListValue{
-						Values: []*structpb.Value{structpb.NewStringValue("ns/name/svc/not-a-port/duplex/false/")},
+						Values: []*structpb.Value{structpb.NewStringValue("ns/name/svc/not-a-port/duplex/false/false/")},
 					}),
 				},
 			},
@@ -229,4 +232,30 @@ func TestBuildHTTPFilterForInferencePool_Defaults(t *testing.T) {
 	assert.Equal(t, extprocv3.ProcessingMode_FULL_DUPLEX_STREAMED, filter.ProcessingMode.RequestBodyMode)
 	assert.Equal(t, extprocv3.ProcessingMode_FULL_DUPLEX_STREAMED, filter.ProcessingMode.ResponseBodyMode)
 	assert.False(t, filter.AllowModeOverride)
+}
+
+// TestBuildAndParseMetadata_EndpointPickerKeepalive ensures the keepalive annotation survives the
+// metadata round trip and reaches the endpoint picker cluster. The cluster is built from the pool
+// parsed out of the metadata, not from the original InferencePool, so an annotation that isn't
+// encoded into the metadata would be silently dropped.
+func TestBuildAndParseMetadata_EndpointPickerKeepalive(t *testing.T) {
+	pool := &gwaiev1.InferencePool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "test-pool",
+			Namespace:   "test-ns",
+			Annotations: map[string]string{endpointPickerKeepaliveAnnotation: "true"},
+		},
+		Spec: gwaiev1.InferencePoolSpec{
+			EndpointPickerRef: &gwaiev1.EndpointPickerRef{Name: "test-picker"},
+		},
+	}
+	metadata := &corev3.Metadata{}
+	buildEPPMetadata(metadata, []*gwaiev1.InferencePool{pool})
+	parsedPools := getInferencePoolsByMetadata(metadata)
+	require.Len(t, parsedPools, 1)
+	assert.Equal(t, "true", parsedPools[0].Annotations[endpointPickerKeepaliveAnnotation])
+
+	cluster, err := buildExtProcClusterForInferencePoolEndpointPicker(parsedPools[0])
+	require.NoError(t, err)
+	assert.NotNil(t, http2OptionsOfEndpointPickerCluster(t, cluster).GetConnectionKeepalive())
 }
