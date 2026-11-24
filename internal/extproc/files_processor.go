@@ -25,6 +25,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/headermutator"
 	"github.com/envoyproxy/ai-gateway/internal/idcodec"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -124,6 +125,9 @@ type filesProcessor struct {
 	routeProcessor *filesProcessor
 	// handler is the backend auth handler of the selected backend, set by SetBackend on the upstream filter.
 	handler filterapi.BackendAuthHandler
+	// headerMutator applies the selected backend's configured header mutation, set by SetBackend on
+	// the upstream filter.
+	headerMutator *headermutator.HeaderMutator
 }
 
 var _ Processor = (*filesProcessor)(nil)
@@ -546,6 +550,7 @@ func (p *filesProcessor) SetBackend(_ context.Context, backend *filterapi.Runtim
 	}
 	p.routeProcessor = rp
 	p.handler = backend.Handler
+	p.headerMutator = headermutator.NewHeaderMutator(backend.Backend.HeaderMutation, rp.requestHeaders)
 	return nil
 }
 
@@ -566,6 +571,7 @@ func (p *filesProcessor) translateUpstreamRequest(ctx context.Context) (*extproc
 		return nil, fmt.Errorf("failed to transform files request: %w", err)
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
+	applyBackendHeaderMutation(p.headerMutator, p.requestHeaders, headerMutation)
 	authBody := newBody
 	if authBody == nil {
 		authBody = rp.requestBody

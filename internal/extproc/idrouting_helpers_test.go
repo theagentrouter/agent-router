@@ -19,6 +19,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/headermutator"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/translator"
 )
@@ -203,4 +204,90 @@ func TestSetBackend_CrossNamespaceIdentity(t *testing.T) {
 		err := upstream.SetBackend(context.Background(), crossNamespaceBackend("ns-b", 1), "route", rp)
 		require.ErrorContains(t, err, "id belongs to backend ns-a/openai, but the request was routed to ns-b/openai")
 	})
+}
+
+// credentialOverrideAuthHandler mimics a credential-override handler: it reads the credential from
+// the x-aigw-api-key input header and sets Authorization from it.
+type credentialOverrideAuthHandler struct{}
+
+func (credentialOverrideAuthHandler) Do(_ context.Context, headers map[string]string, _ []byte) ([]internalapi.Header, error) {
+	key, ok := headers["x-aigw-api-key"]
+	if !ok {
+		return nil, backendauth.ErrCredentialMissing
+	}
+	return []internalapi.Header{{"Authorization", "Bearer " + key}}, nil
+}
+
+// credentialOverrideMutation is the backend header mutation the controller produces for a
+// credential override, plus one configured set header.
+var credentialOverrideMutation = &filterapi.HTTPHeaderMutation{
+	Set:    []filterapi.HTTPHeader{{Name: "x-team", Value: "a"}, {Name: "Authorization", Value: "Bearer configured"}},
+	Remove: []string{"x-aigw-api-key"},
+}
+
+// requireBackendHeaderMutationApplied checks that the credential input header is removed upstream,
+// the configured header is set, and Authorization is derived from the override credential rather
+// than overwritten by the configured set.
+func requireBackendHeaderMutationApplied(t *testing.T, resp *extprocv3.ProcessingResponse) {
+	t.Helper()
+	require.Nil(t, resp.GetImmediateResponse())
+	hm := resp.GetRequestHeaders().GetResponse().GetHeaderMutation()
+	require.Contains(t, hm.GetRemoveHeaders(), "x-aigw-api-key")
+	v, ok := overwriteHeaderValue(resp, "x-team")
+	require.True(t, ok)
+	require.Equal(t, "a", v)
+	// Auth is applied after the configured sets, so its Authorization is the last one set.
+	var last string
+	for _, h := range hm.GetSetHeaders() {
+		if h.GetHeader().GetKey() == "Authorization" {
+			last = string(h.GetHeader().GetRawValue())
+		}
+	}
+	require.Equal(t, "Bearer client-key", last)
+}
+
+func TestFiles_Upstream_AppliesBackendHeaderMutation(t *testing.T) {
+	rp := &filesProcessor{
+		logger:               slog.Default(),
+		op:                   filesOpRetrieve,
+		requestHeaders:       map[string]string{":path": "/v1/files/gw-id", "x-aigw-api-key": "client-key"},
+		filesRequestMetadata: translator.FilesRequest{NativeID: "native-1", Path: "/v1/files/native-1", Method: http.MethodGet},
+	}
+	up := &filesProcessor{
+		isUpstreamFilter: true,
+		logger:           slog.Default(),
+		requestHeaders:   map[string]string{":path": "/v1/files/gw-id", "x-aigw-api-key": "client-key"},
+	}
+	backend := &filterapi.RuntimeBackend{
+		Backend: &filterapi.Backend{
+			Name:                 internalapi.PerRouteRuleRefBackendName("ns", "apple", "route", 0, 0),
+			AIServiceBackendName: "ns/apple",
+			Schema:               filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
+			HeaderMutation:       credentialOverrideMutation,
+		},
+		Handler: credentialOverrideAuthHandler{},
+	}
+	require.NoError(t, up.SetBackend(context.Background(), backend, "route", rp))
+	resp, err := up.ProcessRequestHeaders(context.Background(), &corev3.HeaderMap{})
+	require.NoError(t, err)
+	requireBackendHeaderMutationApplied(t, resp)
+}
+
+func TestBatches_Upstream_AppliesBackendHeaderMutation(t *testing.T) {
+	up := newCreateUpstreamPair(t, &fakeBatchCreateTranslator{newBody: []byte(`{"x":1}`)}, "/v1/embeddings")
+	up.requestHeaders = map[string]string{":path": "/v1/batches", "x-aigw-api-key": "client-key"}
+	up.handler = credentialOverrideAuthHandler{}
+	up.headerMutator = headermutator.NewHeaderMutator(credentialOverrideMutation, up.requestHeaders)
+	resp, err := up.ProcessRequestHeaders(context.Background(), nil)
+	require.NoError(t, err)
+	requireBackendHeaderMutationApplied(t, resp)
+}
+
+func TestBatches_SetBackend_StoresHeaderMutator(t *testing.T) {
+	rp := &batchesProcessor{op: batchesOpList, logger: slog.Default(), requestHeaders: map[string]string{}}
+	up := &batchesProcessor{isUpstreamFilter: true, logger: slog.Default()}
+	b := openAIBackend("ns", "apple", 0)
+	b.Backend.HeaderMutation = credentialOverrideMutation
+	require.NoError(t, up.SetBackend(context.Background(), b, "route", rp))
+	require.NotNil(t, up.headerMutator)
 }

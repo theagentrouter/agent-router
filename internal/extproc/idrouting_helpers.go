@@ -19,6 +19,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/headermutator"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
@@ -173,6 +174,25 @@ func isSuccessStatus(responseHeaders map[string]string) bool {
 		return true
 	}
 	return code >= 200 && code < 300
+}
+
+// applyBackendHeaderMutation adds the selected backend's configured header sets and removes to
+// headerMutation, mirroring the generic upstream processor. It must run before
+// [applyUpstreamBackendAuth] so that auth headers win over configured sets. Removed headers stay in
+// requestHeaders, so credential-override input headers remain readable by the auth handler while
+// Envoy drops them before forwarding.
+func applyBackendHeaderMutation(mutator *headermutator.HeaderMutator, requestHeaders map[string]string, headerMutation *extprocv3.HeaderMutation) {
+	if mutator == nil || requestHeaders == nil {
+		return
+	}
+	sets, removes := mutator.Mutate(requestHeaders, false)
+	headerMutation.RemoveHeaders = append(headerMutation.RemoveHeaders, removes...)
+	for _, h := range sets {
+		headerMutation.SetHeaders = append(headerMutation.SetHeaders, &corev3.HeaderValueOption{
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			Header:       &corev3.HeaderValue{Key: h.Key(), RawValue: []byte(h.Value())},
+		})
+	}
 }
 
 // applyUpstreamBackendAuth runs the backend auth handler for an upstream id-routing request

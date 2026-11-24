@@ -22,6 +22,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/headermutator"
 	"github.com/envoyproxy/ai-gateway/internal/idcodec"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/translator"
@@ -108,6 +109,9 @@ type batchesProcessor struct {
 	routeProcessor *batchesProcessor
 	// handler is the backend auth handler of the selected backend, set by SetBackend on the upstream filter.
 	handler filterapi.BackendAuthHandler
+	// headerMutator applies the selected backend's configured header mutation, set by SetBackend on
+	// the upstream filter.
+	headerMutator *headermutator.HeaderMutator
 }
 
 var _ Processor = (*batchesProcessor)(nil)
@@ -163,6 +167,7 @@ func (p *batchesProcessor) translateUpstreamRequest(ctx context.Context) (*extpr
 		return nil, fmt.Errorf("failed to transform batches request: %w", err)
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
+	applyBackendHeaderMutation(p.headerMutator, p.requestHeaders, headerMutation)
 	authBody := newBody
 	if authBody == nil {
 		authBody = rp.requestBody
@@ -485,6 +490,7 @@ func (p *batchesProcessor) SetBackend(_ context.Context, backend *filterapi.Runt
 	rp.backend = &identity
 	p.routeProcessor = rp
 	p.handler = backend.Handler
+	p.headerMutator = headermutator.NewHeaderMutator(backend.Backend.HeaderMutation, rp.requestHeaders)
 
 	if err := rp.resolveTranslator(backend.Backend.Schema); err != nil {
 		return fmt.Errorf("batch API not supported for schema %s: %w", backend.Backend.Schema.Name, err)
