@@ -128,11 +128,21 @@ func withDecodedBody(resp *extprocv3.ProcessingResponse, isEncoded bool) *extpro
 	return resp
 }
 
+// setOverwriteHeader sets a gateway-owned header with OVERWRITE_IF_EXISTS_OR_ADD. The default
+// append action keeps a client-supplied value alongside ours, so after the route cache is cleared
+// Envoy could match on the client value (e.g. a different x-ai-eg-model) instead of the gateway's.
+func setOverwriteHeader(headers *extprocv3.HeaderMutation, key, value string) {
+	headers.SetHeaders = append(headers.SetHeaders, &corev3.HeaderValueOption{
+		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		Header:       &corev3.HeaderValue{Key: key, RawValue: []byte(value)},
+	})
+}
+
 // bodyMutationResponse returns a response-body processing result that replaces the body with
 // newBody and updates content-length accordingly.
 func bodyMutationResponse(newBody []byte) *extprocv3.ProcessingResponse {
 	headerMutation := &extprocv3.HeaderMutation{}
-	setHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
+	setOverwriteHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_ResponseBody{
 			ResponseBody: &extprocv3.BodyResponse{

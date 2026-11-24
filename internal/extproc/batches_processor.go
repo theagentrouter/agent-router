@@ -187,7 +187,7 @@ func (p *batchesProcessor) translateUpstreamRequest(ctx context.Context) (*extpr
 			},
 		}, nil
 	}
-	setHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
+	setOverwriteHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_RequestHeaders{
 			RequestHeaders: &extprocv3.HeadersResponse{
@@ -230,7 +230,7 @@ func (p *batchesProcessor) handleListRequestHeaders() (*extprocv3.ProcessingResp
 		return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error", "the 'model' query parameter is required"), nil
 	}
 	p.routeByModel(headerMutation, model)
-	setHeader(headerMutation, ":path", upstreamPath)
+	setOverwriteHeader(headerMutation, ":path", upstreamPath)
 	p.batchesRequestMetadata.Path = upstreamPath
 	p.batchesRequestMetadata.Model = model
 	_, p.batchesRequestMetadata.Query = splitQuery(upstreamPath)
@@ -251,7 +251,7 @@ func (p *batchesProcessor) handleIDBearingRequestHeaders(op batchesOperation, ga
 
 	headerMutation := p.newRequestHeaderMutation()
 	nativePath := p.rewrittenPath(op, decoded.NativeID)
-	setHeader(headerMutation, ":path", nativePath)
+	setOverwriteHeader(headerMutation, ":path", nativePath)
 	p.batchesRequestMetadata.NativeID = decoded.NativeID
 	p.batchesRequestMetadata.Path = nativePath
 	p.batchesRequestMetadata.Model = decoded.Model
@@ -265,14 +265,14 @@ func (p *batchesProcessor) handleIDBearingRequestHeaders(op batchesOperation, ga
 // request path in originalPathHeader, so the upstream filter resolves this processor.
 func (p *batchesProcessor) newRequestHeaderMutation() *extprocv3.HeaderMutation {
 	headerMutation := &extprocv3.HeaderMutation{}
-	setHeader(headerMutation, originalPathHeader, p.requestHeaders[":path"])
+	setOverwriteHeader(headerMutation, originalPathHeader, p.requestHeaders[":path"])
 	return headerMutation
 }
 
 // routeByModel records model as the routing model and sets the model header used for route matching.
 func (p *batchesProcessor) routeByModel(headerMutation *extprocv3.HeaderMutation, model string) {
 	p.routingModel = model
-	setHeader(headerMutation, internalapi.ModelNameHeaderKeyDefault, model)
+	setOverwriteHeader(headerMutation, internalapi.ModelNameHeaderKeyDefault, model)
 	p.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = model
 }
 
@@ -317,7 +317,7 @@ func (p *batchesProcessor) ProcessRequestBody(_ context.Context, rawBody *extpro
 	headerMutation := p.newRequestHeaderMutation()
 	p.routeByModel(headerMutation, decoded.Model)
 	p.batchesRequestMetadata.Model = decoded.Model
-	setHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
+	setOverwriteHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_RequestBody{RequestBody: &extprocv3.BodyResponse{
 			Response: &extprocv3.CommonResponse{

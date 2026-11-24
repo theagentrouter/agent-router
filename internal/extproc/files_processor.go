@@ -194,7 +194,7 @@ func (p *filesProcessor) handleListRequestHeaders() (*extprocv3.ProcessingRespon
 		return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error", "the 'model' query parameter is required"), nil
 	}
 	p.routeByModel(headerMutation, model)
-	setHeader(headerMutation, ":path", upstreamPath)
+	setOverwriteHeader(headerMutation, ":path", upstreamPath)
 	p.filesRequestMetadata.Path = upstreamPath
 	_, p.filesRequestMetadata.Query = splitQuery(upstreamPath)
 	return requestHeadersResponse(headerMutation, true), nil
@@ -215,7 +215,7 @@ func (p *filesProcessor) handleIDBearingRequestHeaders(op filesOperation, gatewa
 
 	headerMutation := p.newRequestHeaderMutation()
 	nativePath := p.rewrittenPath(op, decoded.NativeID)
-	setHeader(headerMutation, ":path", nativePath)
+	setOverwriteHeader(headerMutation, ":path", nativePath)
 	p.filesRequestMetadata.NativeID = decoded.NativeID
 	p.filesRequestMetadata.Path = nativePath
 	if decoded.Model != "" {
@@ -230,7 +230,7 @@ func (p *filesProcessor) handleIDBearingRequestHeaders(op filesOperation, gatewa
 // request-phase mutation emitted by the router filter starts from it.
 func (p *filesProcessor) newRequestHeaderMutation() *extprocv3.HeaderMutation {
 	headerMutation := &extprocv3.HeaderMutation{}
-	setHeader(headerMutation, originalPathHeader, p.requestHeaders[":path"])
+	setOverwriteHeader(headerMutation, originalPathHeader, p.requestHeaders[":path"])
 	return headerMutation
 }
 
@@ -238,7 +238,7 @@ func (p *filesProcessor) newRequestHeaderMutation() *extprocv3.HeaderMutation {
 // matching, both on the outgoing mutation and on the locally tracked request headers.
 func (p *filesProcessor) routeByModel(headerMutation *extprocv3.HeaderMutation, model string) {
 	p.routingModel = model
-	setHeader(headerMutation, internalapi.ModelNameHeaderKeyDefault, model)
+	setOverwriteHeader(headerMutation, internalapi.ModelNameHeaderKeyDefault, model)
 	p.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = model
 }
 
@@ -279,7 +279,7 @@ func (p *filesProcessor) ProcessRequestBody(_ context.Context, rawBody *extprocv
 		p.logger.Warn("failed to strip model field from upload body, forwarding as-is", slog.String("error", err.Error()))
 		p.requestBody = rawBody.Body
 	} else {
-		setHeader(headerMutation, "content-length", strconv.Itoa(len(stripped)))
+		setOverwriteHeader(headerMutation, "content-length", strconv.Itoa(len(stripped)))
 		common.BodyMutation = &extprocv3.BodyMutation{Mutation: &extprocv3.BodyMutation_Body{Body: stripped}}
 		p.requestBody = stripped
 	}
@@ -393,7 +393,7 @@ func translatedBodyResponse(newHeaders []internalapi.Header, newBody []byte) *ex
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
 	if newBody != nil {
-		setHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
+		setOverwriteHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
 	}
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_ResponseBody{
@@ -609,7 +609,7 @@ func (p *filesProcessor) translateUpstreamRequest(ctx context.Context) (*extproc
 			},
 		}, nil
 	}
-	setHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
+	setOverwriteHeader(headerMutation, "content-length", strconv.Itoa(len(newBody)))
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_RequestHeaders{
 			RequestHeaders: &extprocv3.HeadersResponse{

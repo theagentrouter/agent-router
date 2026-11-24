@@ -454,3 +454,112 @@ func TestFiles_ResponseBody_CompressedUpstream(t *testing.T) {
 		require.Nil(t, resp.GetResponseBody().GetResponse())
 	})
 }
+
+// requireOverwritten checks that every set of key in the header mutation of resp uses
+// OVERWRITE_IF_EXISTS_OR_ADD and that the (single) value is want. A client-supplied value must be
+// replaced, not appended to, or Envoy could route on it after the route cache is cleared.
+func requireOverwritten(t *testing.T, resp *extprocv3.ProcessingResponse, key, want string) {
+	t.Helper()
+	require.Nil(t, resp.GetImmediateResponse())
+	var hm *extprocv3.HeaderMutation
+	if rh := resp.GetRequestHeaders(); rh != nil {
+		hm = rh.GetResponse().GetHeaderMutation()
+	} else {
+		hm = resp.GetRequestBody().GetResponse().GetHeaderMutation()
+	}
+	var found int
+	for _, h := range hm.GetSetHeaders() {
+		if h.GetHeader().GetKey() != key {
+			continue
+		}
+		found++
+		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, h.GetAppendAction(), key)
+		require.Equal(t, want, string(h.GetHeader().GetRawValue()), key)
+	}
+	require.Equal(t, 1, found, "expected exactly one set of %s", key)
+}
+
+func TestSetOverwriteHeader(t *testing.T) {
+	hm := &extprocv3.HeaderMutation{}
+	setOverwriteHeader(hm, "k", "v")
+	require.Len(t, hm.GetSetHeaders(), 1)
+	require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, hm.GetSetHeaders()[0].GetAppendAction())
+	require.Equal(t, "v", string(hm.GetSetHeaders()[0].GetHeader().GetRawValue()))
+}
+
+func TestBatches_ClientModelHeaderIsOverwritten(t *testing.T) {
+	codec := newTestCodec()
+	withClientModel := func(p *batchesProcessor) *batchesProcessor {
+		p.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = "client-model"
+		return p
+	}
+	t.Run("retrieve", func(t *testing.T) {
+		id := encodeGatewayID(t, codec, idcodec.KindBatch, "ns", "apple", "m1", "batch_1")
+		p := withClientModel(newBatchesProcessorForPath(codec, http.MethodGet, "/v1/batches/"+id))
+		resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		requireOverwritten(t, resp, internalapi.ModelNameHeaderKeyDefault, "m1")
+		requireOverwritten(t, resp, ":path", "/v1/batches/batch_1")
+		requireOverwritten(t, resp, originalPathHeader, "/v1/batches/"+id)
+	})
+	t.Run("cancel", func(t *testing.T) {
+		id := encodeGatewayID(t, codec, idcodec.KindBatch, "ns", "apple", "m1", "batch_1")
+		p := withClientModel(newBatchesProcessorForPath(codec, http.MethodPost, "/v1/batches/"+id+"/cancel"))
+		resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		requireOverwritten(t, resp, internalapi.ModelNameHeaderKeyDefault, "m1")
+	})
+	t.Run("list", func(t *testing.T) {
+		p := withClientModel(newBatchesProcessorForPath(codec, http.MethodGet, "/v1/batches?model=m1"))
+		resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		requireOverwritten(t, resp, internalapi.ModelNameHeaderKeyDefault, "m1")
+		requireOverwritten(t, resp, ":path", "/v1/batches")
+	})
+	t.Run("create", func(t *testing.T) {
+		fileID := encodeGatewayID(t, codec, idcodec.KindFile, "ns", "apple", "m1", "file-native")
+		p := withClientModel(newBatchesProcessorForPath(codec, http.MethodPost, "/v1/batches"))
+		_, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		resp, err := p.ProcessRequestBody(context.Background(), &extprocv3.HttpBody{
+			Body: []byte(`{"input_file_id":"` + fileID + `","endpoint":"/v1/chat/completions","completion_window":"24h"}`),
+		})
+		require.NoError(t, err)
+		requireOverwritten(t, resp, internalapi.ModelNameHeaderKeyDefault, "m1")
+		requireOverwritten(t, resp, "content-length", strconv.Itoa(len(resp.GetRequestBody().GetResponse().GetBodyMutation().GetBody())))
+	})
+}
+
+func TestFiles_ClientModelHeaderIsOverwritten(t *testing.T) {
+	codec := newTestCodec()
+	withClientModel := func(p *filesProcessor) *filesProcessor {
+		p.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = "client-model"
+		return p
+	}
+	t.Run("retrieve", func(t *testing.T) {
+		id := encodeGatewayFileID(t, codec, "ns", "apple", "file-native")
+		p := withClientModel(newProcessorForPath(http.MethodGet, "/v1/files/"+id, nil))
+		resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		requireOverwritten(t, resp, internalapi.ModelNameHeaderKeyDefault, "m1")
+		requireOverwritten(t, resp, ":path", "/v1/files/file-native")
+		requireOverwritten(t, resp, originalPathHeader, "/v1/files/"+id)
+	})
+	t.Run("list", func(t *testing.T) {
+		p := withClientModel(newProcessorForPath(http.MethodGet, "/v1/files?model=m1", nil))
+		resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		requireOverwritten(t, resp, internalapi.ModelNameHeaderKeyDefault, "m1")
+	})
+	t.Run("upload", func(t *testing.T) {
+		body, ct := buildTestMultipartBody(t, map[string]string{"purpose": "batch", "model": "m1"}, "f.jsonl", []byte("{}"))
+		p := withClientModel(newProcessorForPath(http.MethodPost, "/v1/files", nil))
+		p.requestHeaders["content-type"] = ct
+		_, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		resp, err := p.ProcessRequestBody(context.Background(), &extprocv3.HttpBody{Body: body})
+		require.NoError(t, err)
+		requireOverwritten(t, resp, internalapi.ModelNameHeaderKeyDefault, "m1")
+		requireOverwritten(t, resp, "content-length", strconv.Itoa(len(resp.GetRequestBody().GetResponse().GetBodyMutation().GetBody())))
+	})
+}
