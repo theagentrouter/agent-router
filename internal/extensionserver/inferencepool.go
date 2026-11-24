@@ -176,17 +176,42 @@ func getInferencePoolsByMetadata(meta *corev3.Metadata) []*gwaiev1.InferencePool
 	return pools
 }
 
-// parseInferencePoolMetadataString parses a single InferencePool reference encoded by
-// buildEPPMetadata as
+// splitInferencePoolMetadataString splits an InferencePool reference encoded by buildEPPMetadata.
+// It returns the seven fields that every version of the format has, in the order
+// namespace/name/serviceName/port/bodyMode/allowModeOverride/appProtocol, the
+// endpointPickerKeepalive value, and whether the reference could be split.
+//
+// The current format has eight fields, with endpointPickerKeepalive before appProtocol:
 // "namespace/name/serviceName/port/bodyMode/allowModeOverride/endpointPickerKeepalive/appProtocol".
-// The appProtocol segment is last because its value can itself contain "/" (e.g.
-// "kubernetes.io/h2c"), and is empty when the pool doesn't set one.
+// The older seven-field format, written before endpointPickerKeepalive was added, is also
+// accepted, with endpointPickerKeepalive set to "false", so that metadata written by an older
+// controller keeps working during an upgrade. The two are told apart by the seventh field:
+// endpointPickerKeepalive is always "true" or "false", while in the older format that field is
+// appProtocol, a protocol name such as "http" or "kubernetes.io/h2c".
+// appProtocol is last in both formats because its value can itself contain "/".
+func splitInferencePoolMetadataString(metadata string) ([]string, string, bool) {
+	current := strings.SplitN(metadata, "/", 8)
+	if len(current) == 8 && (current[6] == "true" || current[6] == "false") {
+		sharedFields := []string{current[0], current[1], current[2], current[3], current[4], current[5], current[7]}
+		return sharedFields, current[6], true
+	}
+
+	older := strings.SplitN(metadata, "/", 7)
+	if len(older) == 7 {
+		return older, "false", true
+	}
+	return nil, "", false
+}
+
+// parseInferencePoolMetadataString parses a single InferencePool reference encoded by
+// buildEPPMetadata (see splitInferencePoolMetadataString for the format). appProtocol is
+// empty when the pool doesn't set one.
 func parseInferencePoolMetadataString(metadata string) *gwaiev1.InferencePool {
-	result := strings.SplitN(metadata, "/", 8)
-	if len(result) != 8 {
+	result, endpointPickerKeepalive, ok := splitInferencePoolMetadataString(metadata)
+	if !ok {
 		return nil
 	}
-	appProtocol := gwaiev1.AppProtocol(result[7])
+	appProtocol := gwaiev1.AppProtocol(result[6])
 	ns := result[0]
 	name := result[1]
 	serviceName := result[2]
@@ -196,7 +221,6 @@ func parseInferencePoolMetadataString(metadata string) *gwaiev1.InferencePool {
 	}
 	processingBodyMode := result[4]
 	allowModeOverride := result[5]
-	endpointPickerKeepalive := result[6]
 	return &gwaiev1.InferencePool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,

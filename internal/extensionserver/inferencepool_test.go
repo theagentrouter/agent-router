@@ -259,3 +259,59 @@ func TestBuildAndParseMetadata_EndpointPickerKeepalive(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, http2OptionsOfEndpointPickerCluster(t, cluster).GetConnectionKeepalive())
 }
+
+// TestParseInferencePoolMetadataString_SevenFieldFormat ensures metadata written before the
+// endpointPickerKeepalive field was added is still parsed, with keepalive disabled. An older
+// controller can write this format during an upgrade. The kubernetes.io/h2c case matters most:
+// its "/" gives the old string eight fields, so a length check alone would misread it.
+func TestParseInferencePoolMetadataString_SevenFieldFormat(t *testing.T) {
+	tests := []struct {
+		name        string
+		metadata    string
+		appProtocol gwaiev1.AppProtocol
+	}{
+		{
+			name:        "appProtocol unset",
+			metadata:    "test-ns/test-pool/test-picker/9002/buffered/true/",
+			appProtocol: "",
+		},
+		{
+			name:        "appProtocol http",
+			metadata:    "test-ns/test-pool/test-picker/9002/buffered/true/http",
+			appProtocol: gwaiev1.AppProtocol("http"),
+		},
+		{
+			name:        "appProtocol kubernetes.io/h2c",
+			metadata:    "test-ns/test-pool/test-picker/9002/buffered/true/kubernetes.io/h2c",
+			appProtocol: gwaiev1.AppProtocolH2C,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := parseInferencePoolMetadataString(tc.metadata)
+			require.NotNil(t, pool)
+			assert.Equal(t, "test-pool", pool.Name)
+			assert.Equal(t, "test-ns", pool.Namespace)
+			assert.Equal(t, "test-picker", string(pool.Spec.EndpointPickerRef.Name))
+			assert.Equal(t, gwaiev1.PortNumber(9002), pool.Spec.EndpointPickerRef.Port.Number)
+			assert.Equal(t, "buffered", pool.Annotations[processingBodyModeAnnotation])
+			assert.Equal(t, "true", pool.Annotations[allowModeOverrideAnnotation])
+			assert.Equal(t, "false", pool.Annotations[endpointPickerKeepaliveAnnotation])
+			assert.Equal(t, tc.appProtocol, pool.Spec.AppProtocol)
+
+			cluster, err := buildExtProcClusterForInferencePoolEndpointPicker(pool)
+			require.NoError(t, err)
+			assert.Nil(t, http2OptionsOfEndpointPickerCluster(t, cluster).GetConnectionKeepalive())
+		})
+	}
+}
+
+// TestParseInferencePoolMetadataString_EightFieldFormatWithH2C ensures the current format keeps
+// the "/" inside appProtocol together with an enabled keepalive field.
+func TestParseInferencePoolMetadataString_EightFieldFormatWithH2C(t *testing.T) {
+	pool := parseInferencePoolMetadataString("test-ns/test-pool/test-picker/9002/duplex/false/true/kubernetes.io/h2c")
+	require.NotNil(t, pool)
+	assert.Equal(t, gwaiev1.AppProtocolH2C, pool.Spec.AppProtocol)
+	assert.Equal(t, "true", pool.Annotations[endpointPickerKeepaliveAnnotation])
+}
