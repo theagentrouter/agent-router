@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -972,6 +973,53 @@ func TestSendModernRequestAndProxy_TerminalDoesNotWaitForEOF(t *testing.T) {
 	require.Equal(t, "application/json", rr.Header().Get("Content-Type"))
 	require.Contains(t, rr.Body.String(), `"ok":true`)
 	require.NotContains(t, rr.Body.String(), "data:")
+}
+
+func TestSendModernRequestAndProxy_ProgressThenTerminalDoesNotWaitForEOF(t *testing.T) {
+	// Progress commits the response to SSE; the gateway must still return once
+	// the terminal result is written even if the backend keeps the stream open.
+	hold := make(chan struct{})
+	entered := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"tok\",\"progress\":0.5}}\n\n"))
+		flusher.Flush()
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{\"ok\":true}}\n\n"))
+		flusher.Flush()
+		close(entered)
+		<-hold
+	}))
+	defer server.Close()
+	defer close(hold)
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+	proxy.requestHeaders = http.Header{}
+	req := modernReq(t, "tools/call", []byte(`{"name":"do-it"}`))
+	rr := httptest.NewRecorder()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := proxy.sendModernRequestAndProxy(context.Background(), rr, req, "test-route", proxy.routes["test-route"].backends["backend2"], handlerResult{}, nil, nil)
+		done <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("backend did not send progress+terminal")
+	}
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("gateway waited for the backend to close after progress+terminal")
+	}
+	require.Equal(t, "text/event-stream", rr.Header().Get("Content-Type"))
+	body := rr.Body.String()
+	require.Contains(t, body, "notifications/progress")
+	require.Contains(t, body, `"ok":true`)
 }
 
 func TestSendModernRequestAndProxy_SSETerminalOnlyStaysJSON(t *testing.T) {
@@ -2090,7 +2138,9 @@ func TestHandleSubscriptionsListen_AckBeforeNotifications(t *testing.T) {
 
 func TestHandleSubscriptionsListen_HeaderDeadlineEmitsPartialAck(t *testing.T) {
 	// A silent backend must not hold the status line or the ack until the
-	// client gives up. After the first keep-alive, emit what has arrived.
+	// client gives up. After the first keep-alive, emit the one gateway ack
+	// from what has arrived. Spec requires that ack to be the first message
+	// for this subscriptionId; late acks afterward are dropped by design.
 	prev := listenKeepAliveInterval
 	listenKeepAliveInterval = 30 * time.Millisecond
 	t.Cleanup(func() { listenKeepAliveInterval = prev })
@@ -2156,6 +2206,70 @@ func TestHandleSubscriptionsListen_HeaderDeadlineEmitsPartialAck(t *testing.T) {
 	require.Greater(t, changedAt, ackAt, "acknowledgement must precede list_changed, got:\n%s", body)
 
 	cancel()
+	<-done
+}
+
+func TestHandleSubscriptionsListen_OpensBackendsConcurrently(t *testing.T) {
+	// A backend that stalls before response headers must not prevent the other
+	// backend from being contacted or from delivering its ack/events. The
+	// header-deadline tick releases the partial ack while the slow Do is open.
+	prev := listenKeepAliveInterval
+	listenKeepAliveInterval = 30 * time.Millisecond
+	t.Cleanup(func() { listenKeepAliveInterval = prev })
+
+	stall := make(chan struct{})
+	var contacted atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contacted.Add(1)
+		backend := r.Header.Get(internalapi.MCPBackendHeader)
+		if backend == "backend1" {
+			select {
+			case <-stall:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		ack := `{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"notifications":{"toolsListChanged":true}}}`
+		changed := `{"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}`
+		_, _ = w.Write([]byte("event: message\ndata: " + ack + "\n\n"))
+		_, _ = w.Write([]byte("event: message\ndata: " + changed + "\n\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = server.URL
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	params, err := json.Marshal(map[string]any{
+		"notifications": map[string]any{"toolsListChanged": true},
+	})
+	require.NoError(t, err)
+
+	rr := &concurrentRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := modernReq(t, "subscriptions/listen", params)
+	done := make(chan struct{})
+	go func() {
+		_, _ = proxy.handleSubscriptionsListen(ctx, rr, newModernRequest("subscriptions/listen").WithContext(ctx), req, "test-route", nil)
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		return contacted.Load() >= 2 &&
+			strings.Contains(rr.bodyString(), `"method":"notifications/subscriptions/acknowledged"`) &&
+			strings.Contains(rr.bodyString(), `"method":"notifications/tools/list_changed"`)
+	}, 2*time.Second, 10*time.Millisecond)
+
+	cancel()
+	close(stall)
 	<-done
 }
 

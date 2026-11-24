@@ -1621,6 +1621,13 @@ func parseParamsAndMaybeStartSpan[paramType mcp.Params](ctx context.Context, m *
 	}
 
 	span := m.tracer.StartSpanAndInjectMeta(ctx, req, p, headers)
+	// StartSpanAndInjectMeta mutates p's _meta in place. Write it back onto the
+	// request so outbound forwarding (especially the modern path, which used to
+	// re-parse the original req.Params bytes) carries the gateway's traceparent
+	// instead of the client's original parent or an empty _meta.
+	if encoded, encErr := json.Marshal(p); encErr == nil {
+		req.Params = encoded
+	}
 	return span, nil
 }
 

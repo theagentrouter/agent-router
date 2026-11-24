@@ -998,78 +998,133 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 	// Fan out a per-backend listen request: only backends that own a subscribed
 	// URI (or that must receive list_changed opt-ins) are contacted, and each
 	// sees bare upstream URIs rather than gateway-namespaced ones.
+	// Opens run concurrently — m.client has no timeout, so a serial Do would let
+	// one stalled backend block contacting the rest and delay the merge loop /
+	// keep-alive ticker indefinitely. Forward headers are resolved once first
+	// (same pattern as list/discover fan-out).
+	m.ensureForwardHeadersResolved(route)
 	events := make(chan *sseEvent)
-	var wg sync.WaitGroup
-	var attempted, established int
-	// First structured non-200 rejection. Forwarded when no stream opens, so a
-	// 400/-32602 from the backend is not replaced by a generic 502/-32603.
-	var rejection *backendJSONRPCError
-	// Tracks per-backend accept/reject/ack so the merge loop can emit one
-	// gateway-level acknowledgement after every established stream responds.
-	fanout := newSubscriptionFanout()
+	type listenOpenResult struct {
+		backend   filterapi.MCPBackend
+		resp      *http.Response
+		rejection *backendJSONRPCError
+	}
+	var (
+		openTargets []struct {
+			backend filterapi.MCPBackend
+			uris    []string
+		}
+	)
 	for _, backend := range selected {
 		uris := perBackendURIs[backend.Name]
 		if len(uris) == 0 && !wantListChanged {
 			continue
 		}
-		attempted++
-		backendParams := buildBackendListenParams(&params, uris)
-		paramsBytes, marshalErr := json.Marshal(backendParams)
-		if marshalErr != nil {
-			continue
-		}
-		backendReq := &jsonrpc.Request{
-			Method: req.Method,
-			ID:     req.ID,
-			Params: paramsBytes,
-		}
-		body, encErr := jsonrpc.EncodeMessage(backendReq)
-		if encErr != nil {
-			continue
-		}
-		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, m.backendListenerAddr, bytes.NewReader(body))
-		if reqErr != nil {
-			continue
-		}
-		addMCPHeaders(httpReq, backendReq, modernParamsForHeaderMetadata(backendReq), route, backend.Name)
-		m.applyLogHeaderMappings(httpReq, backendReq)
-		m.applyOriginalPathHeaders(httpReq)
-		m.applyForwardHeaders(httpReq, route, backend)
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Accept", "text/event-stream")
-		httpReq.Header.Set(mcpProtocolVersionHeader, protocolVersion20260728)
-		httpReq.Header.Set(mcpMethodHeader, "subscriptions/listen")
-		httpReq.Header.Set(internalapi.MCPBackendHeader, backend.Name)
-		httpReq.Header.Set(internalapi.MCPRouteHeader, route)
-
-		resp, doErr := m.client.Do(httpReq)
-		if doErr != nil {
-			m.l.Warn("subscriptions/listen failed", slog.String("backend", backend.Name), slog.String("error", doErr.Error()))
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			statusErr := backendHTTPStatusError(resp)
-			_ = resp.Body.Close()
-			m.l.Warn("subscriptions/listen rejected by backend",
-				slog.String("backend", backend.Name),
-				slog.Int("status", resp.StatusCode),
-				slog.String("error", statusErr.Error()))
-			var structured *backendJSONRPCError
-			if errors.As(statusErr, &structured) && rejection == nil {
-				rejection = structured
+		openTargets = append(openTargets, struct {
+			backend filterapi.MCPBackend
+			uris    []string
+		}{backend: backend, uris: uris})
+	}
+	attempted := len(openTargets)
+	opens := make(chan listenOpenResult, attempted)
+	for _, target := range openTargets {
+		backend, uris := target.backend, target.uris
+		go func() {
+			backendParams := buildBackendListenParams(&params, uris)
+			paramsBytes, marshalErr := json.Marshal(backendParams)
+			if marshalErr != nil {
+				opens <- listenOpenResult{backend: backend}
+				return
 			}
-			continue
+			backendReq := &jsonrpc.Request{
+				Method: req.Method,
+				ID:     req.ID,
+				Params: paramsBytes,
+			}
+			body, encErr := jsonrpc.EncodeMessage(backendReq)
+			if encErr != nil {
+				opens <- listenOpenResult{backend: backend}
+				return
+			}
+			httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, m.backendListenerAddr, bytes.NewReader(body))
+			if reqErr != nil {
+				opens <- listenOpenResult{backend: backend}
+				return
+			}
+			addMCPHeaders(httpReq, backendReq, modernParamsForHeaderMetadata(backendReq), route, backend.Name)
+			m.applyLogHeaderMappings(httpReq, backendReq)
+			m.applyOriginalPathHeaders(httpReq)
+			m.applyForwardHeaders(httpReq, route, backend)
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Accept", "text/event-stream")
+			httpReq.Header.Set(mcpProtocolVersionHeader, protocolVersion20260728)
+			httpReq.Header.Set(mcpMethodHeader, "subscriptions/listen")
+			httpReq.Header.Set(internalapi.MCPBackendHeader, backend.Name)
+			httpReq.Header.Set(internalapi.MCPRouteHeader, route)
+
+			resp, doErr := m.client.Do(httpReq)
+			if doErr != nil {
+				m.l.Warn("subscriptions/listen failed", slog.String("backend", backend.Name), slog.String("error", doErr.Error()))
+				opens <- listenOpenResult{backend: backend}
+				return
+			}
+			if resp.StatusCode != http.StatusOK {
+				statusErr := backendHTTPStatusError(resp)
+				_ = resp.Body.Close()
+				m.l.Warn("subscriptions/listen rejected by backend",
+					slog.String("backend", backend.Name),
+					slog.Int("status", resp.StatusCode),
+					slog.String("error", statusErr.Error()))
+				var structured *backendJSONRPCError
+				if errors.As(statusErr, &structured) {
+					opens <- listenOpenResult{backend: backend, rejection: structured}
+					return
+				}
+				opens <- listenOpenResult{backend: backend}
+				return
+			}
+			opens <- listenOpenResult{backend: backend, resp: resp}
+		}()
+	}
+
+	// Tracks per-backend accept/reject/ack so the merge loop can emit one
+	// gateway-level acknowledgement after every established stream responds.
+	fanout := newSubscriptionFanout()
+	var (
+		readerWG    sync.WaitGroup
+		established int
+		opensLeft   = attempted
+		// First structured non-200 rejection. Forwarded when no stream opens, so a
+		// 400/-32602 from the backend is not replaced by a generic 502/-32603.
+		rejection *backendJSONRPCError
+		// closeEventsOnce ensures events is closed after every open attempt has
+		// finished and every accepted stream's reader has exited.
+		closeEventsOnce sync.Once
+	)
+	closeEventsWhenReady := func() {
+		if opensLeft != 0 {
+			return
 		}
+		closeEventsOnce.Do(func() {
+			go func() {
+				readerWG.Wait()
+				close(events)
+			}()
+		})
+	}
+	if attempted == 0 {
+		close(events)
+	}
+
+	startListenReader := func(backend filterapi.MCPBackend, resp *http.Response) {
 		established++
 		fanout.track(backend.Name)
 		if span != nil {
 			span.RecordRouteToBackend(backend.Name, "", true)
 		}
-		// Defer close immediately so bodyclose can see the cleanup path; the
-		// reader goroutine still drains the body until EOF or cancel.
-		defer resp.Body.Close()
 		backendName := backend.Name
-		wg.Go(func() {
+		readerWG.Go(func() {
+			defer resp.Body.Close()
 			parser := newSSEEventParser(resp.Body, backendName)
 			for {
 				event, err := parser.next()
@@ -1086,26 +1141,17 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 			}
 		})
 	}
-
-	// Close the events channel once all backend readers finish so the merge loop
-	// can drain and exit cleanly.
-	go func() {
-		wg.Wait()
-		close(events)
-	}()
-
-	if attempted > 0 && established == 0 {
-		if rejection != nil {
-			status := rejection.status
-			if status == 0 {
-				status = http.StatusBadGateway
-			}
-			writeBackendJSONRPCErrorWithStatus(w, req.ID, rejection.raw, status)
-			return handlerResult{}, rejection
+	handleListenOpen := func(open listenOpenResult) {
+		opensLeft--
+		if open.resp != nil {
+			startListenReader(open.backend, open.resp)
+			closeEventsWhenReady()
+			return
 		}
-		err := fmt.Errorf("subscriptions/listen: all %d backend(s) failed", attempted)
-		onRequestError(w, http.StatusBadGateway, int(jsonrpc.CodeInternalError), err.Error(), req.ID)
-		return handlerResult{}, err
+		if open.rejection != nil && rejection == nil {
+			rejection = open.rejection
+		}
+		closeEventsWhenReady()
 	}
 
 	// SSE headers stay unwritten until the merged acknowledgement (or, if none
@@ -1116,8 +1162,10 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 	// error; if every established stream does that, the client still gets a
 	// JSON-RPC error instead of a synthesized resultType:"complete".
 	headersSent := false
-	// Once set, stop waiting for every backend and emit the ack from whatever
-	// has arrived. A tick that beats the first ack must not drop that ack.
+	// Once set, stop waiting for every backend and emit the one gateway ack from
+	// whatever has arrived. The subscriptions spec requires that acknowledgement
+	// to be the first (and only) ack for this subscriptionId, so backends that
+	// ack after this point are dropped by design — see recordAck.
 	ackWaitExpired := false
 	flusher, _ := w.(http.Flusher)
 	writeListenHeaders := func() {
@@ -1151,14 +1199,22 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 		}
 	}
 	maybeWriteMergedAck := func() {
+		// Wait until every open attempt has settled so a fast backend's ack
+		// cannot be treated as "all established" while another Do is still in
+		// flight and has not yet been tracked.
+		if opensLeft > 0 {
+			return
+		}
 		params, ok := fanout.takeMergedAckIfReady()
 		if !ok {
 			return
 		}
 		writeAck(params)
 	}
-	// writeArrivedAck emits one acknowledgement from acks received so far,
-	// without waiting for backends that are still silent.
+	// writeArrivedAck emits the single gateway acknowledgement from acks
+	// received so far, without waiting for backends that are still silent.
+	// Used on the header deadline and when every stream has ended. Callers
+	// must not expect a second ack for late arrivals afterward.
 	writeArrivedAck := func() {
 		params, ok := fanout.takeMergedAckFromArrivals()
 		if !ok {
@@ -1167,24 +1223,52 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 		writeAck(params)
 	}
 
-	// Merge loop: forward rewritten, intent-filtered events to the client,
-	// sending periodic keep-alives while idle. Non-ack events are queued until
-	// the merged acknowledgement is written so it stays the first message.
-	// When all backends close (gracefully or otherwise), the gateway writes a
-	// completion result per the subscriptions spec before returning, unless
-	// every stream rejected the subscription.
+	// Merge loop: accept concurrent open results, forward rewritten events, and
+	// send keep-alives while idle. Non-ack events are queued until the merged
+	// acknowledgement is written so it stays the first message. When all
+	// backends close (gracefully or otherwise), the gateway writes a completion
+	// result per the subscriptions spec before returning, unless every stream
+	// rejected the subscription or every open failed.
 	keepAlive := time.NewTicker(listenKeepAliveInterval)
 	defer keepAlive.Stop()
 	done := ctx.Done()
+	opensCh := opens
+	if attempted == 0 {
+		opensCh = nil
+	}
+	writeAllOpensFailed := func() (handlerResult, error) {
+		if rejection != nil {
+			status := rejection.status
+			if status == 0 {
+				status = http.StatusBadGateway
+			}
+			writeBackendJSONRPCErrorWithStatus(w, req.ID, rejection.raw, status)
+			return handlerResult{}, rejection
+		}
+		err := fmt.Errorf("subscriptions/listen: all %d backend(s) failed", attempted)
+		onRequestError(w, http.StatusBadGateway, int(jsonrpc.CodeInternalError), err.Error(), req.ID)
+		return handlerResult{}, err
+	}
 	for {
 		select {
 		case <-done:
 			// Client disconnected — on Streamable HTTP this IS the
-			// cancellation signal per the spec. Upstream bodies are closed
-			// by deferred resp.Body.Close, tearing down backend streams.
+			// cancellation signal per the spec. Reader goroutines close their
+			// response bodies on exit, tearing down backend streams.
 			return handlerResult{}, nil
+		case open := <-opensCh:
+			handleListenOpen(open)
+			if opensLeft == 0 {
+				opensCh = nil
+				if attempted > 0 && established == 0 {
+					return writeAllOpensFailed()
+				}
+			}
 		case event, ok := <-events:
 			if !ok {
+				if attempted > 0 && established == 0 {
+					return writeAllOpensFailed()
+				}
 				if fanout.allEstablishedRejected(established) {
 					// Deliver anything already queued, then the terminal error.
 					if len(fanout.pending) > 0 {
@@ -1233,8 +1317,8 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 		case <-keepAlive.C:
 			if !headersSent {
 				// First tick with an open stream: release the status line and
-				// the ack from whatever has arrived, instead of waiting on a
-				// silent backend until the client times out.
+				// the one gateway ack from whatever has arrived. Late backend
+				// acks after this are dropped (spec: one ack, first message).
 				if established > 0 {
 					ackWaitExpired = true
 					writeListenHeaders()
@@ -1438,9 +1522,18 @@ func (f *subscriptionFanout) reject(backend filterapi.MCPBackendName, raw json.R
 
 // recordAck buffers a rewritten notifications/subscriptions/acknowledged
 // payload from one backend. Individual acks are not forwarded; the merge loop
-// emits a single union once every established stream has acked or rejected.
+// emits a single union once every established stream has acked or rejected,
+// or earlier from whatever has arrived when the header deadline fires.
+//
+// The 2026-07-28 subscriptions spec requires notifications/subscriptions/acknowledged
+// to be the first message on a subscription and does not define a second ack for
+// the same subscriptionId. Once the gateway has emitted that one ack (full or
+// deadline-partial), later backend acks are dropped by design.
 func (f *subscriptionFanout) recordAck(backend filterapi.MCPBackendName, rewrittenParams json.RawMessage) {
 	f.accept(backend)
+	if f.mergedAckEmitted {
+		return
+	}
 	if _, already := f.acked[backend]; already {
 		return
 	}
@@ -1958,7 +2051,11 @@ func (m *mcpRequestContext) streamModernSSE(
 			}
 			break
 		}
-		if sawTerminal && !sseStarted && !parser.hasPendingMessage() {
+		// Exit once the terminal response is in hand and the parser has nothing
+		// further buffered, even if progress already committed us to SSE. Waiting
+		// for backend EOF would leave the client response, span, and metrics open
+		// for as long as the backend keeps the stream alive after its result.
+		if sawTerminal && !parser.hasPendingMessage() {
 			break
 		}
 	}

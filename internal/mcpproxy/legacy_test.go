@@ -2347,6 +2347,9 @@ func Test_parseParamsAndMaybeStartSpan(t *testing.T) {
 	require.NotNil(t, s)
 	// Make sure that traceparent is not empty, that's span started.
 	require.NotEmpty(t, p.GetMeta()["traceparent"])
+	// Injected _meta must be written back onto req.Params so modern handlers
+	// that re-marshal from the request forward the gateway's trace context.
+	require.Contains(t, string(req.Params), "traceparent")
 }
 
 func Test_parseParamsAndMaybeStartSpan_NilParam(t *testing.T) {
