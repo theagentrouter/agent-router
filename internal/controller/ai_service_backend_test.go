@@ -160,3 +160,26 @@ func TestAIServiceBackendController_Reconcile_finalizer_removal_survives_concurr
 	require.True(t, apierrors.IsNotFound(fakeClient.Get(t.Context(), req.NamespacedName, &backend)),
 		"a concurrent write must not keep the finalizer")
 }
+
+func TestAIServiceBackendController_updateAIServiceBackendStatus(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	c := &AIBackendController{client: fakeClient, logger: ctrl.Log}
+
+	backend := &aigv1b1.AIServiceBackend{ObjectMeta: metav1.ObjectMeta{Name: "backend1", Namespace: "default", Generation: 1}}
+	require.NoError(t, fakeClient.Create(t.Context(), backend))
+
+	// The reconcile processed generation 1, and the spec is edited to generation 2 before the
+	// status is written. The conditions describe generation 1, not the generation the status write
+	// re-reads.
+	processed := backend.DeepCopy()
+	backend.Generation = 2
+	require.NoError(t, fakeClient.Update(t.Context(), backend))
+	for _, conditionType := range []string{aigv1b1.ConditionTypeNotAccepted, aigv1b1.ConditionTypeAccepted} {
+		c.updateAIServiceBackendStatus(t.Context(), processed.DeepCopy(), conditionType, "result")
+		var current aigv1b1.AIServiceBackend
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(backend), &current))
+		require.Len(t, current.Status.Conditions, 1)
+		require.Equal(t, conditionType, current.Status.Conditions[0].Type)
+		require.Equal(t, int64(1), current.Status.Conditions[0].ObservedGeneration)
+	}
+}
