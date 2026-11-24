@@ -70,6 +70,10 @@ jobs:
           # which in turn is used by EG's standalone mode used by aigw, so we skip it
           make build.aigw GOOS_LIST="darwin" GOARCH_LIST="arm64"
 
+      - name: Generate checksums for CLI release binaries
+        # Bare file names (no ./out/ prefix), so install.sh and "sha256sum -c" match on the asset name.
+        run: cd ./out && sha256sum aigw-* | tee checksums.txt
+
       - name: Download conformance test report
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -86,6 +90,7 @@ jobs:
             ./out/ai-gateway-crds-helm-${TAG}.tgz \
             ./out/ai-gateway-helm-${TAG}.tgz \
             ./out/aigw-* \
+            ./out/checksums.txt \
             ./out/inference-extension-conformance-test-report-${TAG}.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -97,6 +102,7 @@ jobs:
             ./out/ai-gateway-crds-helm-${TAG}.tgz \
             ./out/ai-gateway-helm-${TAG}.tgz \
             ./out/aigw-* \
+            ./out/checksums.txt \
             ./out/inference-extension-conformance-test-report-${TAG}.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
