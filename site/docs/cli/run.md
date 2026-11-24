@@ -38,8 +38,11 @@ Requests are routed to each provider by model name: for example `gpt-*` models
 go to OpenAI and `claude-*` models to Anthropic. Only one provider can receive
 all the models that don't match any other provider. When you select several
 providers that can serve any model (such as Tetrate Agent Router Service and
-Ollama), the setup asks which model names to route to each of them. At the end,
-it prints the routing rules and a `curl` command to try them.
+Ollama), the setup asks which model names to route to each of them. When all the
+selected providers serve specific models (such as OpenAI and Anthropic), OpenAI
+receives the other models. For Azure OpenAI, the setup asks for the deployment
+names, which clients send as the model name. At the end, it prints the routing
+rules and a `curl` command to try them.
 
 If you save the configuration, it is written to `~/.config/aigw/config.yaml`
 (`$AIGW_CONFIG_HOME/config.yaml`), which `aigw run` uses by default from then on.

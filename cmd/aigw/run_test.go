@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -544,6 +545,25 @@ func Test_fileIDSeedForRun(t *testing.T) {
 		raw, err := os.ReadFile(seedPath)
 		require.NoError(t, err)
 		require.Equal(t, seed, strings.TrimSpace(string(raw)))
+	})
+
+	t.Run("concurrent runs agree on a single seed", func(t *testing.T) {
+		seedPath := filepath.Join(t.TempDir(), "aigw", fileIDEncryptionSeedFile)
+		const runs = 20
+		seeds := make([]string, runs)
+		var wg sync.WaitGroup
+		for i := range runs {
+			wg.Go(func() { seeds[i] = fileIDSeedForRun(seedPath, io.Discard) })
+		}
+		wg.Wait()
+		raw, err := os.ReadFile(seedPath)
+		require.NoError(t, err)
+		for _, seed := range seeds {
+			require.Equal(t, strings.TrimSpace(string(raw)), seed)
+		}
+		entries, err := os.ReadDir(filepath.Dir(seedPath))
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "temporary files are removed")
 	})
 
 	t.Run("unwritable location still returns a seed", func(t *testing.T) {

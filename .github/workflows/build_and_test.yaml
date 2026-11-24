@@ -575,7 +575,7 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macos-latest # Apple silicon
+          - macos-latest # arm64 (Apple silicon); no Intel macOS binaries are published.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4

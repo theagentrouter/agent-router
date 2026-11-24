@@ -112,9 +112,11 @@ func TestRunInteractiveSetup(t *testing.T) {
 	})
 
 	t.Run("azure", func(t *testing.T) {
-		ui, _ := newTestUI(selectKeys(t, "azure-openai") +
+		ui, out := newTestUI(selectKeys(t, "azure-openai") +
 			"example.com" + keyEnter + // Rejected: not a URL.
-			"https://example.openai.azure.com" + keyEnter + keyEnter + "my-gpt" + keyEnter +
+			"https://example.openai.azure.com" + keyEnter + keyEnter +
+			keyEnter + // Rejected: a deployment is required.
+			"my-gpt" + keyEnter +
 			keyEnter + // Rejected: the key is required.
 			"azure-key" + keyEnter + "n" + keyEnter)
 		var data autoconfig.ConfigData
@@ -124,8 +126,35 @@ func TestRunInteractiveSetup(t *testing.T) {
 			Name: "azure-openai", SchemaName: "AzureOpenAI", Version: "2024-12-01-preview",
 			ModelMatch: ".*", APIKeyEnv: "AZURE_OPENAI_API_KEY",
 		}}, data.Providers)
+		require.Contains(t, out.String(), `"model": "my-gpt"`, "the example request uses a deployment")
 		require.Equal(t, map[string]string{"AZURE_OPENAI_API_KEY": "azure-key"}, env)
 		require.Equal(t, "example.openai.azure.com", data.Backends[0].Hostname)
+	})
+
+	t.Run("one provider receives the other models when all are model-specific", func(t *testing.T) {
+		ui, _ := newTestUI(selectKeys(t, "openai", "anthropic") +
+			"sk-openai" + keyEnter + "sk-ant" + keyEnter + "n" + keyEnter)
+		var data autoconfig.ConfigData
+		_, _, err := runInteractiveSetup(ui, &data, "/cfg/config.yaml")
+		require.NoError(t, err)
+		require.Len(t, data.Providers, 2)
+		require.Equal(t, "anthropic", data.Providers[0].Name)
+		require.Equal(t, autoconfig.ClaudeModels, data.Providers[0].ModelMatch)
+		require.Equal(t, "openai", data.Providers[1].Name)
+		require.Equal(t, autoconfig.AllModels, data.Providers[1].ModelMatch, "OpenAI is the catch-all")
+	})
+
+	t.Run("first provider receives the other models when OpenAI is not selected", func(t *testing.T) {
+		ui, _ := newTestUI(selectKeys(t, "anthropic", "azure-openai") +
+			"sk-ant" + keyEnter + "https://example.openai.azure.com" + keyEnter + keyEnter +
+			"my-gpt" + keyEnter + "azure-key" + keyEnter + "n" + keyEnter)
+		var data autoconfig.ConfigData
+		_, _, err := runInteractiveSetup(ui, &data, "/cfg/config.yaml")
+		require.NoError(t, err)
+		require.Equal(t, "azure-openai", data.Providers[0].Name)
+		require.Equal(t, "my-gpt", data.Providers[0].ModelMatch)
+		require.Equal(t, "anthropic", data.Providers[1].Name)
+		require.Equal(t, autoconfig.AllModels, data.Providers[1].ModelMatch)
 	})
 
 	t.Run("nothing selected", func(t *testing.T) {

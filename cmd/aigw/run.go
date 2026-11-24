@@ -430,21 +430,55 @@ const (
 // there, so ids issued by one run stay valid after a restart. If the seed cannot be saved, a warning
 // is written to stderr and the generated seed is used for this run only.
 func fileIDSeedForRun(seedPath string, stderr io.Writer) string {
-	if raw, err := os.ReadFile(seedPath); err == nil {
-		if seed := strings.TrimSpace(string(raw)); seed != "" {
-			return seed
-		}
-	}
-	seed := rand.Text()
-	err := os.MkdirAll(filepath.Dir(seedPath), 0o750)
-	if err == nil {
-		err = os.WriteFile(seedPath, []byte(seed+"\n"), 0o600)
-	}
+	seed, err := loadOrCreateSeed(seedPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "warning: failed to save the Files/Batch API id encryption seed (%v): "+
 			"file and batch ids will not be valid after a restart. Set %s to use a fixed seed.\n", err, fileIDEncryptionSeedEnvVar)
 	}
 	return seed
+}
+
+// loadOrCreateSeed returns the seed saved at path, creating it with a random value if there is none.
+// The file is created atomically, so concurrent runs agree on a single seed: a run that loses the
+// race reads the seed saved by the winner. On error, it returns a random seed that is not saved.
+func loadOrCreateSeed(path string) (string, error) {
+	seed := rand.Text()
+	for range 2 {
+		if raw, err := os.ReadFile(path); err == nil {
+			if stored := strings.TrimSpace(string(raw)); stored != "" {
+				return stored, nil
+			}
+			// An empty file can't be replaced atomically with a link: remove it and create it again.
+			if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return seed, err
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			return seed, err
+		}
+		// Write the seed to a temporary file and link it in place: the link fails if another
+		// run created the file first, and readers never see a partially written seed.
+		tmp, err := os.CreateTemp(filepath.Dir(path), ".seed-*")
+		if err != nil {
+			return seed, err
+		}
+		_, err = tmp.WriteString(seed + "\n")
+		if closeErr := tmp.Close(); err == nil {
+			err = closeErr
+		}
+		if err == nil {
+			err = os.Link(tmp.Name(), path)
+		}
+		_ = os.Remove(tmp.Name())
+		if err == nil {
+			return seed, nil
+		}
+		if !os.IsExist(err) {
+			return seed, err
+		}
+		// Another run created the seed first: read it on the next iteration.
+	}
+	return seed, fmt.Errorf("%s keeps changing", path)
 }
 
 // setEncryptionSeeds puts the encryption seeds from the environment into the filter config. They are

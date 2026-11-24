@@ -167,14 +167,14 @@ func promptProvider(ui *terminalUI, opt *providerOption) (configuredProvider, er
 		if p.Version, err = requiredInput(ui, "API version", "2024-12-01-preview", false, nil); err != nil {
 			return p, err
 		}
-		deployments, inputErr := ui.input("Deployment names, comma-separated "+ui.dim("(empty routes all models here)"), "", false)
+		// Azure uses the model name as the deployment name, so at least one is needed for requests to work.
+		deployments, inputErr := requiredInput(ui, "Deployment names, comma-separated", "", false, nil)
 		if inputErr != nil {
 			return p, inputErr
 		}
-		if names := splitList(deployments); len(names) > 0 {
-			p.ModelMatch = modelsRegex(names)
-			p.example = names[0]
-		}
+		names := splitList(deployments)
+		p.ModelMatch = modelsRegex(names)
+		p.example = names[0]
 	}
 	switch {
 	case opt.apiKey:
@@ -185,9 +185,11 @@ func promptProvider(ui *terminalUI, opt *providerOption) (configuredProvider, er
 	return p, err
 }
 
-// assignModelRoutes makes sure every provider gets some traffic. A single provider gets
-// every model. When several providers serve any model, only the last one can be the
-// catch-all, so the user is asked which models to route to the others.
+// assignModelRoutes makes sure every provider gets some traffic, and that exactly one
+// receives the models that match no other provider. A single provider gets every model.
+// When several providers serve any model, only the last one can be the catch-all, so the
+// user is asked which models to route to the others. When none does, OpenAI (or the first
+// provider) becomes the catch-all.
 func assignModelRoutes(ui *terminalUI, providers []configuredProvider) error {
 	if len(providers) == 1 {
 		providers[0].ModelMatch = catchAllModels
@@ -210,6 +212,18 @@ func assignModelRoutes(ui *terminalUI, providers []configuredProvider) error {
 		names := splitList(answer)
 		p.ModelMatch = modelsRegex(names)
 		p.example = names[0]
+	}
+	// When every provider serves specific models, one of them must still receive the other models,
+	// or requests for them would match no provider. Prefer OpenAI, as with the environment variables.
+	if len(catchAll) == 0 {
+		fallback := 0
+		for i := range providers {
+			if providers[i].schema == "OpenAI" {
+				fallback = i
+				break
+			}
+		}
+		providers[fallback].ModelMatch = catchAllModels
 	}
 	// Providers serving any model go last, so they don't shadow the ones serving specific models.
 	slices.SortStableFunc(providers, func(a, b configuredProvider) int {
