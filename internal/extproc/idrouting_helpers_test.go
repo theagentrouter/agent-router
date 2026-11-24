@@ -94,7 +94,7 @@ func TestApplyBackendAuth(t *testing.T) {
 func TestFiles_Upstream_AppliesBackendAuth(t *testing.T) {
 	newBackend := func(h filterapi.BackendAuthHandler) *filterapi.RuntimeBackend {
 		return &filterapi.RuntimeBackend{
-			Backend: &filterapi.Backend{Name: "ns/apple", Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}},
+			Backend: &filterapi.Backend{Name: "ns/apple", AIServiceBackendName: "ns/apple", Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}},
 			Handler: h,
 		}
 	}
@@ -144,5 +144,63 @@ func TestBatches_Upstream_AppliesBackendAuth(t *testing.T) {
 		resp, err := up.ProcessRequestHeaders(context.Background(), nil)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusUnauthorized, immediateStatus(resp))
+	})
+}
+
+func TestBackendIdentity(t *testing.T) {
+	routeName := internalapi.PerRouteRuleRefBackendName("route-ns", "openai", "chat", 0, 0)
+	tests := []struct {
+		name    string
+		backend filterapi.Backend
+		want    backendKey
+		wantOK  bool
+	}{
+		{"canonical cross-namespace identity", filterapi.Backend{Name: routeName, AIServiceBackendName: "backend-ns/openai"}, backendKey{"backend-ns", "openai"}, true},
+		{"missing canonical identity", filterapi.Backend{Name: routeName}, backendKey{}, false},
+		{"malformed canonical identity", filterapi.Backend{Name: routeName, AIServiceBackendName: "openai"}, backendKey{}, false},
+		{"canonical identity with extra segment", filterapi.Backend{Name: routeName, AIServiceBackendName: "ns/a/b"}, backendKey{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := backendIdentity(&tt.backend)
+			require.Equal(t, tt.wantOK, ok)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// crossNamespaceBackend returns a backend referenced from route-ns that targets backendNS/openai.
+func crossNamespaceBackend(backendNS string, ref int) *filterapi.RuntimeBackend {
+	return &filterapi.RuntimeBackend{Backend: &filterapi.Backend{
+		Name:                 internalapi.PerRouteRuleRefBackendName("route-ns", "openai", "route", 0, ref),
+		AIServiceBackendName: backendNS + "/openai",
+		Schema:               filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
+	}}
+}
+
+func TestSetBackend_CrossNamespaceIdentity(t *testing.T) {
+	t.Run("files records canonical identity", func(t *testing.T) {
+		rp := &filesProcessor{op: filesOpUpload, logger: slog.Default()}
+		upstream := &filesProcessor{isUpstreamFilter: true, logger: slog.Default()}
+		require.NoError(t, upstream.SetBackend(context.Background(), crossNamespaceBackend("ns-a", 0), "route", rp))
+		require.Equal(t, &backendKey{"ns-a", "openai"}, rp.backend)
+	})
+	t.Run("files rejects id minted for same-named backend in another namespace", func(t *testing.T) {
+		rp := &filesProcessor{op: filesOpRetrieve, decodedBackend: &backendKey{"ns-a", "openai"}, logger: slog.Default()}
+		upstream := &filesProcessor{isUpstreamFilter: true, logger: slog.Default()}
+		err := upstream.SetBackend(context.Background(), crossNamespaceBackend("ns-b", 1), "route", rp)
+		require.ErrorContains(t, err, "file id belongs to backend ns-a/openai, but the request was routed to ns-b/openai")
+	})
+	t.Run("batches records canonical identity", func(t *testing.T) {
+		rp := &batchesProcessor{op: batchesOpList, logger: slog.Default()}
+		upstream := &batchesProcessor{isUpstreamFilter: true, logger: slog.Default()}
+		require.NoError(t, upstream.SetBackend(context.Background(), crossNamespaceBackend("ns-a", 0), "route", rp))
+		require.Equal(t, &backendKey{"ns-a", "openai"}, rp.backend)
+	})
+	t.Run("batches rejects id minted for same-named backend in another namespace", func(t *testing.T) {
+		rp := &batchesProcessor{op: batchesOpRetrieve, decodedBackend: &backendKey{"ns-a", "openai"}, logger: slog.Default()}
+		upstream := &batchesProcessor{isUpstreamFilter: true, logger: slog.Default()}
+		err := upstream.SetBackend(context.Background(), crossNamespaceBackend("ns-b", 1), "route", rp)
+		require.ErrorContains(t, err, "id belongs to backend ns-a/openai, but the request was routed to ns-b/openai")
 	})
 }

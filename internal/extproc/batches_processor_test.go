@@ -49,8 +49,9 @@ func immediateStatus(resp *extprocv3.ProcessingResponse) int {
 
 func openAIBackend(ns, name string, ref int) *filterapi.RuntimeBackend {
 	return &filterapi.RuntimeBackend{Backend: &filterapi.Backend{
-		Name:   internalapi.PerRouteRuleRefBackendName(ns, name, "route", 0, ref),
-		Schema: filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
+		Name:                 internalapi.PerRouteRuleRefBackendName(ns, name, "route", 0, ref),
+		AIServiceBackendName: ns + "/" + name,
+		Schema:               filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI},
 	}}
 }
 
@@ -367,6 +368,13 @@ func TestBatches_SetBackend(t *testing.T) {
 		rp := &batchesProcessor{op: batchesOpList, config: config, logger: slog.Default()}
 		err := upstream.SetBackend(context.Background(), openAIBackend("ns", "a", 0), "route", rp)
 		require.ErrorContains(t, err, "exactly one backend per route rule")
+	})
+	t.Run("same route name in different namespaces", func(t *testing.T) {
+		config := runtimeConfigWithBackends(t, [3]string{"team-a", "openai", "route"}, [3]string{"team-b", "openai", "route"})
+		for key, b := range config.Backends {
+			rp := &batchesProcessor{op: batchesOpList, config: config, logger: slog.Default()}
+			require.NoError(t, upstream.SetBackend(context.Background(), b, "route", rp), key)
+		}
 	})
 	t.Run("non-openai schema", func(t *testing.T) {
 		rp := &batchesProcessor{op: batchesOpRetrieve, logger: slog.Default()}

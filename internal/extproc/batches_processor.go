@@ -472,16 +472,17 @@ func (p *batchesProcessor) SetBackend(_ context.Context, backend *filterapi.Runt
 		return fmt.Errorf("batch API supports exactly one backend per route rule, but the rule serving %q has %d backends", backend.Backend.Name, n)
 	}
 
-	ns, name, ok := internalapi.NamespaceAndNameFromBackendName(backend.Backend.Name)
+	identity, ok := backendIdentity(backend.Backend)
 	if !ok {
 		return fmt.Errorf("could not parse backend identity %q for batches request", backend.Backend.Name)
 	}
+	ns, name := identity.namespace, identity.name
 	if d := rp.decodedBackend; d != nil && (d.namespace != ns || d.name != name) {
 		rp.logger.Error("id belongs to a different backend than the one serving the route",
 			slog.String("id_backend", d.namespace+"/"+d.name), slog.String("selected_backend", ns+"/"+name))
 		return fmt.Errorf("id belongs to backend %s/%s, but the request was routed to %s/%s", d.namespace, d.name, ns, name)
 	}
-	rp.backend = &backendKey{namespace: ns, name: name}
+	rp.backend = &identity
 	p.routeProcessor = rp
 	p.handler = backend.Handler
 

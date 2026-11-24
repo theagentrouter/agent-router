@@ -32,6 +32,17 @@ type backendKey struct {
 	name      string
 }
 
+// backendIdentity returns the canonical namespace/name of the AIServiceBackend served by backend,
+// taken from Backend.AIServiceBackendName. Backend.Name is not used: it carries the route
+// namespace and the reference name, which differ from the target for cross-namespace backendRefs.
+func backendIdentity(backend *filterapi.Backend) (backendKey, bool) {
+	ns, name, ok := strings.Cut(backend.AIServiceBackendName, "/")
+	if !ok || ns == "" || name == "" || strings.Contains(name, "/") {
+		return backendKey{}, false
+	}
+	return backendKey{namespace: ns, name: name}, true
+}
+
 // routeRuleBackendCount returns how many backends in config belong to the same AIGatewayRoute rule
 // as the given composite backend name ("<ns>/<name>/route/<route>/rule/<i>/ref/<j>", see
 // [internalapi.PerRouteRuleRefBackendName]). It returns 0 when the name is not in that form.
@@ -49,18 +60,21 @@ func routeRuleBackendCount(config *filterapi.RuntimeConfig, composite string) in
 	return n
 }
 
-// routeRuleKey extracts the "route/<route>/rule/<i>" part of a composite per-route-rule backend name.
-func routeRuleKey(composite string) (string, bool) {
-	ri := strings.Index(composite, "/route/")
-	if ri == -1 {
-		return "", false
+// routeRuleID identifies one AIGatewayRoute rule, scoped by the route namespace.
+type routeRuleID struct {
+	namespace string
+	rulePath  string // route/<route>/rule/<i>
+}
+
+// routeRuleKey groups all backend refs of one rule in one route namespace.
+func routeRuleKey(composite string) (routeRuleID, bool) {
+	namespace, rest, _ := strings.Cut(composite, "/")
+	backend, ruleAndRef, _ := strings.Cut(rest, "/")
+	ref := strings.LastIndex(ruleAndRef, "/ref/")
+	if namespace == "" || backend == "" || !strings.HasPrefix(ruleAndRef, "route/") || ref == -1 {
+		return routeRuleID{}, false
 	}
-	rest := composite[ri+1:]
-	ref := strings.LastIndex(rest, "/ref/")
-	if ref == -1 {
-		return "", false
-	}
-	return rest[:ref], true
+	return routeRuleID{namespace: namespace, rulePath: ruleAndRef[:ref]}, true
 }
 
 // requestHeadersResponse wraps a header mutation in a request-headers processing response.
