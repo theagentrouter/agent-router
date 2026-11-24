@@ -157,7 +157,7 @@ func validChecksums() string {
 	return fmt.Sprintf("%s  aigw-darwin-arm64\n%s  aigw-linux-amd64\n%s  aigw-linux-arm64\n", h, h, h)
 }
 
-func runInstall(t *testing.T, o options) result {
+func runInstall(t *testing.T, o *options) result {
 	t.Helper()
 	script, err := filepath.Abs("../../site/static/install.sh")
 	require.NoError(t, err)
@@ -270,7 +270,7 @@ func TestInstall_DownloadURL(t *testing.T) {
 			if tt.version != "" {
 				env = append(env, "AIGW_VERSION="+tt.version)
 			}
-			r := runInstall(t, options{os: tt.os, arch: tt.arch, env: env})
+			r := runInstall(t, &options{os: tt.os, arch: tt.arch, env: env})
 			require.NoError(t, r.err, "stdout: %s\nstderr: %s", r.stdout, r.stderr)
 			require.Equal(t, []string{"curl " + tt.url, "curl " + tt.sums, "aigw download-envoy"}, strings.Split(strings.TrimSpace(r.log), "\n"))
 			require.Contains(t, r.stdout, "Checksum verified.")
@@ -295,7 +295,7 @@ func TestInstall_Unsupported(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := runInstall(t, options{os: tt.os, arch: tt.arch})
+			r := runInstall(t, &options{os: tt.os, arch: tt.arch})
 			require.Error(t, r.err)
 			require.Contains(t, r.stderr, tt.err)
 			require.Empty(t, r.log, "nothing must be downloaded")
@@ -306,20 +306,20 @@ func TestInstall_Unsupported(t *testing.T) {
 
 func TestInstall_Failures(t *testing.T) {
 	t.Run("curl missing", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", noCurl: true})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", noCurl: true})
 		require.Error(t, r.err)
 		require.Contains(t, r.stderr, "curl or wget is required")
 	})
 
 	t.Run("download fails", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", curlFails: true})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", curlFails: true})
 		require.Error(t, r.err)
 		require.Contains(t, r.stderr, "failed to download "+releasesURL+"download/latest-main/aigw-linux-amd64")
 		require.NoFileExists(t, filepath.Join(r.installDir, "aigw"))
 	})
 
 	t.Run("envoy download fails", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", envoyFails: true})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", envoyFails: true})
 		require.NoError(t, r.err, "the install must succeed anyway")
 		require.Contains(t, r.stderr, "warning: failed to pre-download Envoy")
 		require.FileExists(t, filepath.Join(r.installDir, "aigw"))
@@ -327,18 +327,18 @@ func TestInstall_Failures(t *testing.T) {
 }
 
 func TestInstall_PathHint(t *testing.T) {
-	r := runInstall(t, options{os: "Linux", arch: "x86_64"})
+	r := runInstall(t, &options{os: "Linux", arch: "x86_64"})
 	require.NoError(t, r.err)
 	require.Contains(t, r.stdout, r.installDir+" is not in your PATH")
 
-	r = runInstall(t, options{os: "Linux", arch: "x86_64", dirInPath: true})
+	r = runInstall(t, &options{os: "Linux", arch: "x86_64", dirInPath: true})
 	require.NoError(t, r.err)
 	require.NotContains(t, r.stdout, "is not in your PATH")
 }
 
 func TestInstall_Checksums(t *testing.T) {
 	t.Run("mismatch", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", checksums: strings.Repeat("0", 64) + "  aigw-linux-amd64\n"})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", checksums: strings.Repeat("0", 64) + "  aigw-linux-amd64\n"})
 		require.Error(t, r.err)
 		require.Contains(t, r.stderr, "checksum mismatch for aigw-linux-amd64")
 		require.NotContains(t, r.log, "aigw download-envoy")
@@ -346,7 +346,7 @@ func TestInstall_Checksums(t *testing.T) {
 	})
 
 	t.Run("asset missing from checksums.txt", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", checksums: strings.Repeat("0", 64) + "  aigw-darwin-arm64\n"})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", checksums: strings.Repeat("0", 64) + "  aigw-darwin-arm64\n"})
 		require.Error(t, r.err)
 		require.Contains(t, r.stderr, "does not list aigw-linux-amd64")
 		requireNothingInstalled(t, r.installDir)
@@ -355,7 +355,7 @@ func TestInstall_Checksums(t *testing.T) {
 	t.Run("no checksum exists for an old release", func(t *testing.T) {
 		// No checksums.txt, and the asset predates the digests computed by GitHub.
 		api := `{"assets":[{"name":"aigw-linux-amd64","digest":null},{"name":"aigw-linux-arm64","digest":"sha256:` + strings.Repeat("2", 64) + `"}]}`
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0"}})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0"}})
 		require.NoError(t, r.err, "stderr: %s", r.stderr)
 		require.Contains(t, r.stderr, "warning: no checksum is published for aigw-linux-amd64 (v1.3.0)")
 		require.NotContains(t, r.stdout, "Checksum verified.")
@@ -369,7 +369,7 @@ func TestInstall_Checksums(t *testing.T) {
 
 	t.Run("binary-mode marker in checksums.txt", func(t *testing.T) {
 		sum := sha256.Sum256([]byte(aigwStub))
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", checksums: hex.EncodeToString(sum[:]) + " *aigw-linux-amd64\n"})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", checksums: hex.EncodeToString(sum[:]) + " *aigw-linux-amd64\n"})
 		require.NoError(t, r.err, "stderr: %s", r.stderr)
 		require.Contains(t, r.stdout, "Checksum verified.")
 	})
@@ -380,14 +380,14 @@ func TestInstall_InstallDir(t *testing.T) {
 		file := filepath.Join(t.TempDir(), "file")
 		require.NoError(t, os.WriteFile(file, nil, 0o600))
 		dir := filepath.Join(file, "bin")
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", env: []string{"AIGW_INSTALL_DIR=" + dir}})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", env: []string{"AIGW_INSTALL_DIR=" + dir}})
 		require.Error(t, r.err)
 		require.Contains(t, r.stderr, "cannot create "+dir)
 		require.Empty(t, r.log, "nothing must be downloaded")
 	})
 
 	t.Run("failed download leaves no partial file", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", curlFails: true})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", curlFails: true})
 		require.Error(t, r.err)
 		requireNothingInstalled(t, r.installDir)
 	})
@@ -415,21 +415,21 @@ func TestInstall_GitHubDigestFallback(t *testing.T) {
 		`{"name":"aigw-linux-arm64","digest":"sha256:` + strings.Repeat("2", 64) + `"}]}`
 
 	t.Run("pinned release", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0"}})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0"}})
 		require.NoError(t, r.err, "stderr: %s", r.stderr)
 		require.Contains(t, r.stdout, "Checksum verified.")
 		require.Contains(t, r.log, "curl https://api.github.com/repos/theagentrouter/agent-router/releases/tags/v1.3.0")
 	})
 
 	t.Run("latest release", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=latest"}})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=latest"}})
 		require.NoError(t, r.err, "stderr: %s", r.stderr)
 		require.Contains(t, r.stdout, "Checksum verified.")
 		require.Contains(t, r.log, "curl https://api.github.com/repos/theagentrouter/agent-router/releases/latest")
 	})
 
 	t.Run("mismatch", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "aarch64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0"}})
+		r := runInstall(t, &options{os: "Linux", arch: "aarch64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0"}})
 		require.Error(t, r.err)
 		require.Contains(t, r.stderr, "checksum mismatch for aigw-linux-arm64")
 		requireNothingInstalled(t, r.installDir)
@@ -437,7 +437,7 @@ func TestInstall_GitHubDigestFallback(t *testing.T) {
 
 	t.Run("not used for main", func(t *testing.T) {
 		// latest-main always has a checksums.txt: a 404 means the release is being updated.
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: api})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", noChecksums: true, api: api})
 		require.Error(t, r.err)
 		require.Contains(t, r.stderr, "checksums.txt is missing from the latest build of main")
 		require.NotContains(t, r.log, "api.github.com")
@@ -466,13 +466,13 @@ func TestInstall_GitHubDigestFallback(t *testing.T) {
   ],
   "body": "notes"
 }`
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: pretty, env: []string{"AIGW_VERSION=v1.3.0"}})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", noChecksums: true, api: pretty, env: []string{"AIGW_VERSION=v1.3.0"}})
 		require.NoError(t, r.err, "stderr: %s", r.stderr)
 		require.Contains(t, r.stdout, "Checksum verified.")
 	})
 
 	t.Run("token", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0", "GITHUB_TOKEN=secret"}})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0", "GITHUB_TOKEN=secret"}})
 		require.NoError(t, r.err, "stderr: %s", r.stderr)
 		// The token is sent to the GitHub API only, not with the downloads.
 		require.Equal(t, []string{
@@ -548,7 +548,7 @@ func TestInstall_ChecksumNotFetched(t *testing.T) {
 				o := tt.opts
 				o.os, o.arch = "Linux", "x86_64"
 				o.noCurl, o.wget = client == "wget", client == "wget"
-				r := runInstall(t, o)
+				r := runInstall(t, &o)
 				require.Error(t, r.err)
 				require.Contains(t, r.stderr, tt.err)
 				require.Contains(t, r.stderr, "Nothing was installed.")
@@ -560,7 +560,7 @@ func TestInstall_ChecksumNotFetched(t *testing.T) {
 	}
 
 	t.Run("AIGW_SKIP_CHECKSUM", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", checksumsStatus: "0", env: []string{"AIGW_SKIP_CHECKSUM=1"}})
+		r := runInstall(t, &options{os: "Linux", arch: "x86_64", checksumsStatus: "0", env: []string{"AIGW_SKIP_CHECKSUM=1"}})
 		require.NoError(t, r.err, "stderr: %s", r.stderr)
 		require.Contains(t, r.stderr, "warning: AIGW_SKIP_CHECKSUM=1: installing aigw-linux-amd64 (main) without verifying its checksum")
 		require.NotContains(t, r.log, "checksums.txt")
@@ -569,7 +569,7 @@ func TestInstall_ChecksumNotFetched(t *testing.T) {
 }
 
 func TestInstall_Wget(t *testing.T) {
-	r := runInstall(t, options{os: "Linux", arch: "x86_64", noCurl: true, wget: true})
+	r := runInstall(t, &options{os: "Linux", arch: "x86_64", noCurl: true, wget: true})
 	require.NoError(t, r.err, "stderr: %s", r.stderr)
 	require.Equal(t, []string{
 		"wget " + releasesURL + "download/latest-main/aigw-linux-amd64",
@@ -582,7 +582,7 @@ func TestInstall_Wget(t *testing.T) {
 	t.Run("GitHub digest fallback", func(t *testing.T) {
 		sum := sha256.Sum256([]byte(aigwStub))
 		api := `{"assets":[{"name":"aigw-linux-amd64","digest":"sha256:` + hex.EncodeToString(sum[:]) + `"}]}`
-		r := runInstall(t, options{
+		r := runInstall(t, &options{
 			os: "Linux", arch: "x86_64", noCurl: true, wget: true, noChecksums: true, api: api,
 			env: []string{"AIGW_VERSION=v1.3.0", "GITHUB_TOKEN=secret"},
 		})
@@ -593,17 +593,17 @@ func TestInstall_Wget(t *testing.T) {
 }
 
 func TestInstall_UnsupportedSuggestsDocker(t *testing.T) {
-	r := runInstall(t, options{os: "Darwin", arch: "x86_64"})
+	r := runInstall(t, &options{os: "Darwin", arch: "x86_64"})
 	require.Error(t, r.err)
 	require.Contains(t, r.stderr, "docker run --rm -p 1975:1975")
 }
 
 func TestInstall_ShadowedBinary(t *testing.T) {
-	r := runInstall(t, options{os: "Linux", arch: "x86_64", dirInPath: true, otherAigw: true})
+	r := runInstall(t, &options{os: "Linux", arch: "x86_64", dirInPath: true, otherAigw: true})
 	require.NoError(t, r.err, "stderr: %s", r.stderr)
 	require.Contains(t, r.stderr, "will shadow the new aigw")
 
-	r = runInstall(t, options{os: "Linux", arch: "x86_64", dirInPath: true})
+	r = runInstall(t, &options{os: "Linux", arch: "x86_64", dirInPath: true})
 	require.NoError(t, r.err, "stderr: %s", r.stderr)
 	require.NotContains(t, r.stderr, "shadow")
 }
@@ -620,7 +620,7 @@ func TestInstall_PathHintPerShell(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.shell+" on "+tt.os, func(t *testing.T) {
-			r := runInstall(t, options{os: tt.os, arch: "arm64", env: []string{"SHELL=" + tt.shell}})
+			r := runInstall(t, &options{os: tt.os, arch: "arm64", env: []string{"SHELL=" + tt.shell}})
 			require.NoError(t, r.err, "stderr: %s", r.stderr)
 			require.Contains(t, r.stdout, "and to "+tt.profile+" to keep it")
 			require.Contains(t, r.stdout, "  "+tt.line)
