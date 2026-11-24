@@ -216,7 +216,9 @@ metadata:
   namespace: default
 type: Opaque
 stringData:
-  apiKey: ${AZURE_OPENAI_API_KEY}
+  # A block scalar keeps the substituted key a string, whatever it looks like (e.g. digits only).
+  apiKey: |-
+    ${AZURE_OPENAI_API_KEY}
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: BackendSecurityPolicy

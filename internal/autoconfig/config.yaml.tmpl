@@ -361,7 +361,9 @@ metadata:
 type: Opaque
 stringData:
 {{- if .APIKeyEnv }}
-  apiKey: ${ {{- .APIKeyEnv -}} }
+  # A block scalar keeps the substituted key a string, whatever it looks like (e.g. digits only).
+  apiKey: |-
+    ${ {{- .APIKeyEnv -}} }
 {{- else }}
   apiKey: {{ yamlString .APIKey }}
 {{- end }}
@@ -404,7 +406,8 @@ metadata:
   namespace: default
 type: Opaque
 stringData:
-  apiKey: {{ .APIKey }}
+  apiKey: |-
+    {{ .APIKey }}
 ---
 {{- end }}
 {{- end }}

@@ -172,19 +172,19 @@ func TestReadConfigInteractive(t *testing.T) {
 	}
 	config, err := readConfig("", nil, false, setup)
 	require.NoError(t, err)
-	require.Contains(t, config, "apiKey: sk-$ecret")
+	require.Contains(t, config, "apiKey: |-\n    sk-$ecret")
 
 	// The saved config references the key, it does not contain it.
 	saved, err := os.ReadFile(savePath)
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(string(saved), savedConfigHeader))
-	require.Contains(t, string(saved), "apiKey: ${OPENAI_API_KEY}")
+	require.Contains(t, string(saved), "apiKey: |-\n    ${OPENAI_API_KEY}")
 	require.NotContains(t, string(saved), "sk-$ecret")
 
 	t.Run("reloaded with the key in the environment", func(t *testing.T) {
 		reloaded, err := readConfig(savePath, nil, false, nil)
 		require.NoError(t, err)
-		require.Contains(t, reloaded, "apiKey: sk-$ecret")
+		require.Contains(t, reloaded, "apiKey: |-\n    sk-$ecret")
 	})
 
 	t.Run("reloaded without the key in the environment", func(t *testing.T) {

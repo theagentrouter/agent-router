@@ -22,6 +22,8 @@ import (
 
 func Test_doMain(t *testing.T) {
 	internaltesting.ClearTestEnv(t)
+	// Don't pick up a config.yaml saved in the real config home.
+	t.Setenv("AIGW_CONFIG_HOME", t.TempDir())
 	tests := []struct {
 		name         string
 		args         []string

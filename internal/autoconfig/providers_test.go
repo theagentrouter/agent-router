@@ -8,9 +8,11 @@ package autoconfig
 import (
 	_ "embed"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"sigs.k8s.io/yaml"
 )
 
 //go:embed testdata/providers.yaml
@@ -41,4 +43,34 @@ func TestAddProvider(t *testing.T) {
 
 	require.Error(t, AddProvider(&data, &Provider{Name: "bad"}, "ftp://example.com"))
 	require.Error(t, AddProvider(nil, &Provider{}, "https://example.com"))
+}
+
+// TestAPIKeyEnvIsAlwaysAString checks that API keys that look like other YAML types are
+// still rendered as strings, as they are substituted into the generated configuration.
+func TestAPIKeyEnvIsAlwaysAString(t *testing.T) {
+	for _, key := range []string{"12345", "1e3", "true", "null", "~", "0x1F", `with"quote`, "with: colon", "#hash"} {
+		t.Run(key, func(t *testing.T) {
+			var data ConfigData
+			require.NoError(t, AddProvider(&data, &Provider{
+				Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "TEST_KEY",
+			}, "https://api.openai.com/v1"))
+			config, err := WriteConfig(&data)
+			require.NoError(t, err)
+			config = strings.ReplaceAll(config, "${TEST_KEY}", key)
+
+			var found bool
+			for _, doc := range strings.Split(config, "\n---") {
+				var secret struct {
+					Kind       string         `json:"kind"`
+					StringData map[string]any `json:"stringData"`
+				}
+				require.NoError(t, yaml.Unmarshal([]byte(doc), &secret), doc)
+				if secret.Kind == "Secret" {
+					found = true
+					require.Equal(t, key, secret.StringData["apiKey"])
+				}
+			}
+			require.True(t, found)
+		})
+	}
 }
