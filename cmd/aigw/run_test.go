@@ -518,26 +518,43 @@ func Test_mustStartExtProc_seedNotOnCommandLine(t *testing.T) {
 }
 
 func Test_fileIDSeedForRun(t *testing.T) {
-	seedPath := filepath.Join(t.TempDir(), fileIDEncryptionSeedFile)
+	t.Run("generated and saved when missing, then reused", func(t *testing.T) {
+		// The config home does not exist yet: it is created.
+		seedPath := filepath.Join(t.TempDir(), "aigw", fileIDEncryptionSeedFile)
+		var stderr bytes.Buffer
+		seed := fileIDSeedForRun(seedPath, &stderr)
+		require.NotEmpty(t, seed)
+		require.Empty(t, stderr.String())
+		raw, err := os.ReadFile(seedPath)
+		require.NoError(t, err)
+		require.Equal(t, seed, strings.TrimSpace(string(raw)))
+		info, err := os.Stat(seedPath)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 
-	seed, err := fileIDSeedForRun(seedPath, false, false)
-	require.NoError(t, err)
-	require.Empty(t, seed, "no setup and no saved seed: use the extproc default")
+		require.Equal(t, seed, fileIDSeedForRun(seedPath, &stderr), "later runs reuse the saved seed")
+		require.Empty(t, stderr.String())
+	})
 
-	seed, err = fileIDSeedForRun(seedPath, true, false)
-	require.NoError(t, err)
-	require.NotEmpty(t, seed)
-	require.NoFileExists(t, seedPath, "the seed is only saved with the configuration")
+	t.Run("empty file is regenerated", func(t *testing.T) {
+		seedPath := filepath.Join(t.TempDir(), fileIDEncryptionSeedFile)
+		require.NoError(t, os.WriteFile(seedPath, []byte(" \n"), 0o600))
+		seed := fileIDSeedForRun(seedPath, io.Discard)
+		require.NotEmpty(t, seed)
+		raw, err := os.ReadFile(seedPath)
+		require.NoError(t, err)
+		require.Equal(t, seed, strings.TrimSpace(string(raw)))
+	})
 
-	saved, err := fileIDSeedForRun(seedPath, true, true)
-	require.NoError(t, err)
-	require.NotEmpty(t, saved)
-	info, err := os.Stat(seedPath)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-
-	// Later runs with the saved configuration reuse the saved seed.
-	seed, err = fileIDSeedForRun(seedPath, false, false)
-	require.NoError(t, err)
-	require.Equal(t, saved, seed)
+	t.Run("unwritable location still returns a seed", func(t *testing.T) {
+		// The parent of the seed path is a regular file, so neither the directory nor the seed can be created.
+		parent := filepath.Join(t.TempDir(), "file")
+		require.NoError(t, os.WriteFile(parent, nil, 0o600))
+		seedPath := filepath.Join(parent, fileIDEncryptionSeedFile)
+		var stderr bytes.Buffer
+		seed := fileIDSeedForRun(seedPath, &stderr)
+		require.NotEmpty(t, seed)
+		require.Contains(t, stderr.String(), "failed to save the Files/Batch API id encryption seed")
+		require.NoFileExists(t, seedPath)
+	})
 }

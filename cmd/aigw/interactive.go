@@ -74,8 +74,6 @@ type interactiveSetup struct {
 	prompt func(data *autoconfig.ConfigData) error
 	// savePath is where readConfig saves the generated configuration. Empty means it is not saved.
 	savePath string
-	// ran is set when the setup completed and generated the configuration.
-	ran bool
 }
 
 // configuredProvider is a provider with the values entered by the user.

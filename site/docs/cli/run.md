@@ -381,14 +381,23 @@ See [docker-compose-otel.yaml][docker-compose-otel.yaml] for a complete example 
 
 ### Encryption seeds
 
-`aigw run` encrypts Files/Batch API ids and MCP session ids with keys derived from seeds. By default
-it uses a well-known public seed, which lets anyone decrypt and forge these ids. Set your own secret,
-randomly generated seeds with these environment variables:
+`aigw run` encrypts Files/Batch API ids and MCP session ids with keys derived from seeds. Set your own
+secret, randomly generated seeds with these environment variables:
 
 | Environment Variable               | Purpose                                                                  |
 | ---------------------------------- | ------------------------------------------------------------------------ |
 | `AIGW_FILE_ID_ENCRYPTION_SEED`     | Seed for [Files API](../capabilities/llm-integrations/files-api.md) ids. |
 | `AIGW_MCP_SESSION_ENCRYPTION_SEED` | Seed for MCP session ids. Used only when MCP is configured.              |
+
+When `AIGW_FILE_ID_ENCRYPTION_SEED` is not set, `aigw run` uses a random seed: the first run generates
+it and saves it to `~/.config/aigw/file-id-encryption-seed` (`$AIGW_CONFIG_HOME/file-id-encryption-seed`),
+readable only by your user, and later runs reuse it, so file and batch ids stay valid across restarts.
+Setting the environment variable overrides the saved seed. Deleting the file rotates the seed on the
+next run, which invalidates all previously issued file and batch ids. If the seed cannot be saved,
+`aigw run` prints a warning and uses a random seed for that run only.
+
+When `AIGW_MCP_SESSION_ENCRYPTION_SEED` is not set, MCP session ids use a well-known public seed, which
+lets anyone decrypt and forge them.
 
 The seeds are passed to the external processor through its configuration file, not its command line.
 The key derivation iterations are set with `--file-id-encryption-iterations` and
@@ -418,6 +427,7 @@ Each invocation creates a unique run identifier (`runID`) in format `YYYYMMDD_HH
 | ------------------------- | ---------------------------------------- | ---------------------------------------------------------------- | ------- |
 | Default Config            | Configuration file location              | `${AIGW_CONFIG_HOME}/config.yaml`                                | CONFIG  |
 | Envoy Version Preference  | Selected Envoy version (via func-e)      | `${AIGW_CONFIG_HOME}/envoy-version`                              | CONFIG  |
+| File ID Encryption Seed   | Default Files/Batch API id seed          | `${AIGW_CONFIG_HOME}/file-id-encryption-seed`                    | CONFIG  |
 | Envoy Binaries            | Downloaded executables (via func-e)      | `${AIGW_DATA_HOME}/envoy-versions/{version}/bin/envoy`           | DATA    |
 | AIGW Logs                 | Gateway logs and stderr output           | `${AIGW_STATE_HOME}/runs/{runID}/aigw.log`                       | STATE   |
 | Envoy Gateway Config      | Generated EG configuration               | `${AIGW_STATE_HOME}/runs/{runID}/envoy-gateway-config.yaml`      | STATE   |

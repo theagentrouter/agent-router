@@ -41,8 +41,33 @@ jobs:
               - '!netlify.toml'
           predicate-quantifier: every # Make the filters be AND-ed
           token: "" # don't use github api
+      - uses: dorny/paths-filter@b41dfa943b1939b9b646f67753bfe35cf6e4de03
+        id: install_script
+        with:
+          filters: |
+            install_script:
+              - 'site/static/install.sh'
+              - 'tests/install/**'
+          token: "" # don't use github api
     outputs:
       code: ${{ steps.changes.outputs.code }}
+      install_script: ${{ steps.install_script.outputs.install_script }}
+
+  test_install_script:
+    # The install script lives in the docs site, which the "code" filter ignores, so it has its own filter.
+    needs: changes
+    if: ${{ needs.changes.outputs.install_script == 'true' }}
+    name: Install Script Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+        with:
+          cache: false
+          go-version-file: go.mod
+      - name: Shellcheck
+        run: shellcheck site/static/install.sh # Preinstalled on the GitHub-hosted Ubuntu runners.
+      - run: go test -v ./tests/install/
 
   unittest:
     needs: changes
@@ -514,6 +539,35 @@ jobs:
 
           Install it with: curl -sSL https://theagentrouter.ai/install.sh | sh"
 
+  aigw_main_release_smoke_test:
+    name: Install aigw from latest-main (${{ matrix.os }})
+    # Runs the install script against the release just published, to catch what the stubbed
+    # tests in tests/install cannot: missing assets, wrong asset names or broken download URLs.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [aigw_main_release]
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest # Apple silicon
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - name: Install aigw
+        env:
+          AIGW_INSTALL_DIR: ${{ runner.temp }}/aigw-bin
+        run: sh site/static/install.sh
+      - name: Check the installed version
+        run: |
+          version="$("${RUNNER_TEMP}/aigw-bin/aigw" version)"
+          echo "$version"
+          # The binary must be the one built from this commit, not a stale asset.
+          case "$version" in
+            *"${GITHUB_SHA:0:7}"*) ;;
+            *) echo "::error::expected aigw built from ${GITHUB_SHA}, got: ${version}"; exit 1 ;;
+          esac
+
   # Aggregate all the required jobs and make it easier to customize CI required jobs
   ci-required:
     runs-on: ubuntu-latest
@@ -527,6 +581,7 @@ jobs:
       - test_data_plane
       - test_data_plane_mcp
       - test_e2e_aigw
+      - test_install_script
       - compute_version
     # We need this to run always to force-fail (and not skip) if any needed
     # job has failed. Otherwise, a skipped job will not fail the workflow.

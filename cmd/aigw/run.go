@@ -183,18 +183,16 @@ func run(ctx context.Context, c *cmdRun, o *runOpts, stdout, stderr io.Writer) e
 				return fmt.Errorf("failed to set %s: %w", k, setErr)
 			}
 		}
-		setup.ran = setupErr == nil
 		return setupErr
 	}
 	aiGatewayResourcesYaml, err := readConfig(o.configPath, c.mcpConfig, c.Debug, setup)
 	if err != nil {
 		return err
 	}
-	// Configurations made by the interactive setup use their own random seed instead of the
-	// insecure default. It is saved with the configuration, so ids stay valid across runs.
-	seedPath := filepath.Join(o.ConfigHome, fileIDEncryptionSeedFile)
-	if runCtx.fileIDEncryptionSeed, err = fileIDSeedForRun(seedPath, setup.ran, setup.savePath != ""); err != nil {
-		return err
+	// Unless the environment sets one, use a random Files/Batch API id encryption seed instead of the
+	// insecure default. It is saved in the config home, so ids stay valid across runs.
+	if os.Getenv(fileIDEncryptionSeedEnvVar) == "" {
+		runCtx.fileIDEncryptionSeed = fileIDSeedForRun(filepath.Join(o.ConfigHome, fileIDEncryptionSeedFile), stderr)
 	}
 	fakeClient, extProxDone, listenerPort, err := runCtx.writeEnvoyResourcesAndRunExtProc(ctx, aiGatewayResourcesYaml)
 	if err != nil {
@@ -420,35 +418,33 @@ func (runCtx *runCmdContext) writeEnvoyResourcesAndRunExtProc(ctx context.Contex
 const (
 	// fileIDEncryptionSeedEnvVar sets the Files/Batch API id encryption seed for `aigw run`.
 	fileIDEncryptionSeedEnvVar = "AIGW_FILE_ID_ENCRYPTION_SEED"
-	// fileIDEncryptionSeedFile is where the interactive setup saves the Files/Batch API id encryption
-	// seed, in the config home next to the configuration it saves.
+	// fileIDEncryptionSeedFile is where `aigw run` saves the random Files/Batch API id encryption
+	// seed it uses when the environment does not set one, in the config home.
 	fileIDEncryptionSeedFile = "file-id-encryption-seed"
 	// mcpSessionEncryptionSeedEnvVar sets the MCP session encryption seed for `aigw run`.
 	mcpSessionEncryptionSeedEnvVar = "AIGW_MCP_SESSION_ENCRYPTION_SEED"
 )
 
 // fileIDSeedForRun returns the Files/Batch API id encryption seed to use when the environment does
-// not set one. It is read from seedPath when the interactive setup saved one there. When the setup
-// just ran, a random seed is generated, and saved to seedPath if the configuration was saved.
-// Otherwise it returns an empty seed, so the extproc uses its default.
-func fileIDSeedForRun(seedPath string, setupRan, setupSaved bool) (string, error) {
+// not set one. It is read from seedPath; when missing or empty, a random seed is generated and saved
+// there, so ids issued by one run stay valid after a restart. If the seed cannot be saved, a warning
+// is written to stderr and the generated seed is used for this run only.
+func fileIDSeedForRun(seedPath string, stderr io.Writer) string {
 	if raw, err := os.ReadFile(seedPath); err == nil {
 		if seed := strings.TrimSpace(string(raw)); seed != "" {
-			return seed, nil
+			return seed
 		}
-	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("failed to read %s: %w", seedPath, err)
-	}
-	if !setupRan {
-		return "", nil
 	}
 	seed := rand.Text()
-	if setupSaved {
-		if err := os.WriteFile(seedPath, []byte(seed+"\n"), 0o600); err != nil {
-			return "", fmt.Errorf("failed to save %s: %w", seedPath, err)
-		}
+	err := os.MkdirAll(filepath.Dir(seedPath), 0o750)
+	if err == nil {
+		err = os.WriteFile(seedPath, []byte(seed+"\n"), 0o600)
 	}
-	return seed, nil
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: failed to save the Files/Batch API id encryption seed (%v): "+
+			"file and batch ids will not be valid after a restart. Set %s to use a fixed seed.\n", err, fileIDEncryptionSeedEnvVar)
+	}
+	return seed
 }
 
 // setEncryptionSeeds puts the encryption seeds from the environment into the filter config. They are
