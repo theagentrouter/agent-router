@@ -1361,30 +1361,27 @@ func (c *GatewayController) checkPodHasBundleSlots(pod *corev1.Pod) (hasBundleSl
 }
 
 // projectedBundlePartSlots returns the number of filter config bundle part slots projected into the
-// pod, or -1 when the pod has no bundle volume.
+// pod, or -1 when the pod has no bundle volume. The volume is matched by the name the webhook gives
+// it, since the pod may carry other projected volumes with the same item keys.
 func projectedBundlePartSlots(pod *corev1.Pod) int {
+	name := filterConfigBundleVolumeName(pod.Labels[egOwningGatewayNameLabel], pod.Labels[egOwningGatewayNamespaceLabel])
 	for i := range pod.Spec.Volumes {
-		projected := pod.Spec.Volumes[i].Projected
-		if projected == nil {
+		volume := &pod.Spec.Volumes[i]
+		if volume.Name != name || volume.Projected == nil {
 			continue
 		}
-		isBundle, parts := false, 0
-		for _, source := range projected.Sources {
+		parts := 0
+		for _, source := range volume.Projected.Sources {
 			if source.Secret == nil {
 				continue
 			}
 			for _, item := range source.Secret.Items {
-				switch item.Key {
-				case FilterConfigBundleIndexKey:
-					isBundle = true
-				case FilterConfigBundlePartKey:
+				if item.Key == FilterConfigBundlePartKey {
 					parts++
 				}
 			}
 		}
-		if isBundle {
-			return parts
-		}
+		return parts
 	}
 	return -1
 }

@@ -2857,7 +2857,9 @@ func TestGatewayController_checkPodHasBundleSlots(t *testing.T) {
 			c := newTestGatewayController(requireNewFakeClientWithIndexes(t), fake2.NewClientset(), ctrl.Log,
 				"envoy-gateway-system", image, "info", false, nil, false)
 			c.bundleMaxSlots = tc.maxSlots
-			pod := &corev1.Pod{}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+				egOwningGatewayNameLabel: "gw", egOwningGatewayNamespaceLabel: "ns",
+			}}}
 			if tc.podSlots >= 0 {
 				pod.Spec.Volumes = []corev1.Volume{testBundleVolume("gw", "ns", tc.podSlots)}
 			}
