@@ -2929,12 +2929,19 @@ func TestGatewayController_annotateGatewayPods_FewerBundleSlots(t *testing.T) {
 			_, err = kube.AppsV1().Deployments(egNamespace).Create(t.Context(), deployment, metav1.CreateOptions{})
 			require.NoError(t, err)
 
-			_, err = c.annotateGatewayPods(t.Context(), []corev1.Pod{*pod}, []appsv1.Deployment{*deployment}, nil, "uuid-1", true, false, c.image, desiredHash)
+			result, err := c.annotateGatewayPods(t.Context(), []corev1.Pod{*pod}, []appsv1.Deployment{*deployment}, nil, "uuid-1", true, false, c.image, desiredHash)
 			require.NoError(t, err)
 			dep, err := kube.AppsV1().Deployments(egNamespace).Get(t.Context(), "dep", metav1.GetOptions{})
 			require.NoError(t, err)
 			_, rolled := dep.Spec.Template.Annotations[aigatewayUUIDAnnotationKey]
 			require.Equal(t, tc.wantRoll, rolled)
+			// A roll requeues so the replacement pods are checked again: an old controller replica can
+			// admit them with too few slots, and nothing else triggers a reconcile.
+			if tc.wantRoll {
+				require.Equal(t, ctrl.Result{RequeueAfter: 5 * time.Second}, result)
+			} else {
+				require.Equal(t, ctrl.Result{}, result)
+			}
 		})
 	}
 }

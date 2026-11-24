@@ -1543,6 +1543,14 @@ func (c *GatewayController) annotateGatewayPods(ctx context.Context,
 			return ctrl.Result{}, fmt.Errorf("failed to patch daemonset %s: %w", daemonSet.Name, err)
 		}
 	}
+	// The replacement pods can again project too few slots when an old controller replica still
+	// serves the webhook. This controller does not watch pods or workloads, so requeue to check them
+	// again; isRolloutInProgress keeps requeueing until the rollout finishes.
+	if needsBundleSlotsRollout && len(deployments)+len(daemonSets) > 0 {
+		const requeueAfter = 5 * time.Second
+		c.logger.Info("rolled out workloads for missing bundle slots - requeueing", "requeueAfter", requeueAfter.String())
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
