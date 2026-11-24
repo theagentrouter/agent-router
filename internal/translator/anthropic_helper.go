@@ -86,22 +86,34 @@ func openAIToolParamsToAnthropicInputSchema(parameters any) (anthropic.ToolInput
 
 func anthropicToOpenAIFinishReason(stopReason anthropic.StopReason) (openai.ChatCompletionChoicesFinishReason, error) {
 	switch stopReason {
-	// The most common stop reason. Indicates Claude finished its response naturally.
-	// or Claude encountered one of your custom stop sequences.
-	// TODO: A better way to return pause_turn
-	// TODO: "pause_turn" Used with server tools like web search when Claude needs to pause a long-running operation.
-	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
+	// The most common stop reason. Indicates Claude finished its response naturally, or Claude encountered one of your custom stop sequences.
+	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence:
 		return openai.ChatCompletionChoicesFinishReasonStop, nil
+	case anthropic.StopReasonPauseTurn: // Used with server tools like web search when Claude pauses a long-running turn; the caller can continue it.
+		return openai.ChatCompletionChoicesFinishReasonPauseTurn, nil
 	case anthropic.StopReasonMaxTokens: // Claude stopped because it reached the max_tokens limit specified in your request.
 		// TODO: do we want to return an error? see: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use#handling-the-max-tokens-stop-reason
 		return openai.ChatCompletionChoicesFinishReasonLength, nil
 	case anthropic.StopReasonToolUse:
 		return openai.ChatCompletionChoicesFinishReasonToolCalls, nil
-	case anthropic.StopReasonRefusal:
+	case anthropic.StopReasonRefusal: // Anthropic's safety classifiers intervened; the response may be cut off.
 		return openai.ChatCompletionChoicesFinishReasonContentFilter, nil
+	case anthropic.StopReason(anthropicschema.StopReasonModelContextWindowExceeded):
+		return openai.ChatCompletionChoicesFinishReasonContextWindowExceeded, nil
 	default:
-		return "", fmt.Errorf("received invalid stop reason %v", stopReason)
+		return openai.ChatCompletionChoicesFinishReasonError, fmt.Errorf("received invalid stop reason %v", stopReason)
 	}
+}
+
+// refusalFields converts Anthropic's refusal stop_details into the OpenAI-format refusal and refusal_category fields. Anthropic sends null category and explanation when a refusal does not map to a named category; empty values are omitted, and finish_reason content_filter still signals the refusal.
+func refusalFields(explanation, category string) (refusal, refusalCategory *string) {
+	if explanation != "" {
+		refusal = &explanation
+	}
+	if category != "" {
+		refusalCategory = &category
+	}
+	return refusal, refusalCategory
 }
 
 // validateTemperatureForAnthropic checks if the temperature is within Anthropic's supported range (0.0 to 1.0).
@@ -875,15 +887,17 @@ type streamingToolCall struct {
 // anthropicStreamParser manages the stateful translation of an Anthropic SSE stream
 // to an OpenAI-compatible SSE stream.
 type anthropicStreamParser struct {
-	buffer          bytes.Buffer
-	activeMessageID string
-	activeToolCalls map[int64]*streamingToolCall
-	toolIndex       int64
-	tokenUsage      metrics.TokenUsage
-	stopReason      anthropic.StopReason
-	requestModel    internalapi.RequestModel
-	sentFirstChunk  bool
-	created         openai.JSONUNIXTime
+	buffer             bytes.Buffer
+	activeMessageID    string
+	activeToolCalls    map[int64]*streamingToolCall
+	toolIndex          int64
+	tokenUsage         metrics.TokenUsage
+	stopReason         anthropic.StopReason
+	refusalExplanation string
+	refusalCategory    string
+	requestModel       internalapi.RequestModel
+	sentFirstChunk     bool
+	created            openai.JSONUNIXTime
 }
 
 // overloadedErrorType is the error type of Anthropic's in-stream overload event. The gateway sends the same
@@ -1259,6 +1273,10 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		}
 		if event.Delta.StopReason != "" {
 			p.stopReason = event.Delta.StopReason
+			if event.Delta.StopReason == anthropic.StopReasonRefusal {
+				p.refusalExplanation = event.Delta.StopDetails.Explanation
+				p.refusalCategory = string(event.Delta.StopDetails.Category)
+			}
 		}
 		return nil, nil
 
@@ -1321,7 +1339,11 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		if err != nil {
 			return nil, err
 		}
-		return p.constructOpenAIChatCompletionChunk(&openai.ChatCompletionResponseChunkChoiceDelta{}, finishReason), nil
+		delta := &openai.ChatCompletionResponseChunkChoiceDelta{}
+		if p.stopReason == anthropic.StopReasonRefusal {
+			delta.Refusal, delta.RefusalCategory = refusalFields(p.refusalExplanation, p.refusalCategory)
+		}
+		return p.constructOpenAIChatCompletionChunk(delta, finishReason), nil
 
 	case string(constant.ValueOf[constant.Error]()):
 		var errEvent anthropicschema.ErrorResponse
@@ -1417,6 +1439,9 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 		Index:        0,
 		Message:      openai.ChatCompletionResponseChoiceMessage{Role: role},
 		FinishReason: finishReason,
+	}
+	if anthropicResp.StopReason == anthropic.StopReasonRefusal {
+		choice.Message.Refusal, choice.Message.RefusalCategory = refusalFields(anthropicResp.StopDetails.Explanation, string(anthropicResp.StopDetails.Category))
 	}
 
 	for i := range anthropicResp.Content { // NOTE: Content structure is massive, do not range over values.
