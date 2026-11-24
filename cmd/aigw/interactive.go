@@ -33,6 +33,7 @@ type providerOption struct {
 	example     string // Example model name, for the usage hint.
 	path        string // Path clients use to reach it, for the usage hint.
 	azure       bool   // Whether it needs the Azure-specific prompts.
+	askExample  bool   // Whether to ask for a model to use in the example request, defaulting to example.
 }
 
 // interactiveProviders are the providers offered by the interactive setup.
@@ -60,11 +61,11 @@ var interactiveProviders = []providerOption{
 	},
 	{
 		name: "ollama", title: "Ollama (local models)", schema: "OpenAI", baseURL: "http://localhost:11434/v1", askBaseURL: true,
-		models: catchAllModels, example: "qwen2.5:0.5b", path: "/v1/chat/completions",
+		models: catchAllModels, example: "qwen2.5:0.5b", askExample: true, path: "/v1/chat/completions",
 	},
 	{
 		name: "openai-compatible", keyEnv: "OPENAI_COMPATIBLE_API_KEY", title: "Other OpenAI-compatible API", schema: "OpenAI", askBaseURL: true,
-		optionalKey: true, models: catchAllModels, example: "<model>", path: "/v1/chat/completions",
+		optionalKey: true, models: catchAllModels, askExample: true, path: "/v1/chat/completions",
 	},
 }
 
@@ -175,6 +176,12 @@ func promptProvider(ui *terminalUI, opt *providerOption) (configuredProvider, er
 		names := splitList(deployments)
 		p.ModelMatch = modelsRegex(names)
 		p.example = names[0]
+	}
+	if opt.askExample {
+		// There is no well-known model for these providers, but the example request needs one.
+		if p.example, err = requiredInput(ui, "A model it serves, to try it", opt.example, false, nil); err != nil {
+			return p, err
+		}
 	}
 	switch {
 	case opt.apiKey:

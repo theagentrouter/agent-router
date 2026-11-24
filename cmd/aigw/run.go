@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -438,47 +439,54 @@ func fileIDSeedForRun(seedPath string, stderr io.Writer) string {
 	return seed
 }
 
-// loadOrCreateSeed returns the seed saved at path, creating it with a random value if there is none.
-// The file is created atomically, so concurrent runs agree on a single seed: a run that loses the
-// race reads the seed saved by the winner. On error, it returns a random seed that is not saved.
+// loadOrCreateSeed returns the seed saved at path, creating it with a random value if there is
+// none or it is empty. Creation holds an exclusive lock on a file next to it, so concurrent runs
+// agree on a single seed: a run that waits for the lock reads the seed saved by the other.
+// On error, it returns a random seed that is not saved.
 func loadOrCreateSeed(path string) (string, error) {
 	seed := rand.Text()
-	for range 2 {
-		if raw, err := os.ReadFile(path); err == nil {
-			if stored := strings.TrimSpace(string(raw)); stored != "" {
-				return stored, nil
-			}
-			// An empty file can't be replaced atomically with a link: remove it and create it again.
-			if err = os.Remove(path); err != nil && !os.IsNotExist(err) {
-				return seed, err
-			}
-		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-			return seed, err
-		}
-		// Write the seed to a temporary file and link it in place: the link fails if another
-		// run created the file first, and readers never see a partially written seed.
-		tmp, err := os.CreateTemp(filepath.Dir(path), ".seed-*")
-		if err != nil {
-			return seed, err
-		}
-		_, err = tmp.WriteString(seed + "\n")
-		if closeErr := tmp.Close(); err == nil {
-			err = closeErr
-		}
-		if err == nil {
-			err = os.Link(tmp.Name(), path)
-		}
-		_ = os.Remove(tmp.Name())
-		if err == nil {
-			return seed, nil
-		}
-		if !os.IsExist(err) {
-			return seed, err
-		}
-		// Another run created the seed first: read it on the next iteration.
+	if stored := readSeed(path); stored != "" {
+		return stored, nil
 	}
-	return seed, fmt.Errorf("%s keeps changing", path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return seed, err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return seed, err
+	}
+	defer lock.Close()                                                    // Closing the file releases the lock.
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // a file descriptor always fits in an int.
+		return seed, err
+	}
+	// Another run may have saved a seed while this one waited for the lock.
+	if stored := readSeed(path); stored != "" {
+		return stored, nil
+	}
+	// Write the seed to a temporary file and rename it in place, so readers that don't take
+	// the lock never see a partially written seed.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".seed-*")
+	if err != nil {
+		return seed, err
+	}
+	defer os.Remove(tmp.Name()) //nolint:errcheck // gone after a successful rename.
+	_, err = tmp.WriteString(seed + "\n")
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	return seed, err
+}
+
+// readSeed returns the seed saved at path, or an empty string if there is none.
+func readSeed(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 // setEncryptionSeeds puts the encryption seeds from the environment into the filter config. They are

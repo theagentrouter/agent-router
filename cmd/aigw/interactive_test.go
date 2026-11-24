@@ -98,7 +98,7 @@ func TestRunInteractiveSetup(t *testing.T) {
 
 	t.Run("only the last catch-all provider gets the remaining models", func(t *testing.T) {
 		ui, _ := newTestUI(selectKeys(t, "tars", "ollama") +
-			"sk-tars" + keyEnter + keyEnter + // Ollama base URL default.
+			"sk-tars" + keyEnter + keyEnter + keyEnter + // Ollama base URL and model defaults.
 			"gpt-5, gpt-5-mini" + keyEnter + "n" + keyEnter)
 		var data autoconfig.ConfigData
 		_, env, err := runInteractiveSetup(ui, &data, "/cfg/config.yaml")
@@ -155,6 +155,19 @@ func TestRunInteractiveSetup(t *testing.T) {
 		require.Equal(t, "my-gpt", data.Providers[0].ModelMatch)
 		require.Equal(t, "anthropic", data.Providers[1].Name)
 		require.Equal(t, autoconfig.AllModels, data.Providers[1].ModelMatch)
+	})
+
+	t.Run("asks for a model of an OpenAI-compatible API", func(t *testing.T) {
+		ui, out := newTestUI(selectKeys(t, "openai-compatible") +
+			"https://llm.example.com/v1" + keyEnter +
+			keyEnter + // Rejected: a model is required.
+			"my-model" + keyEnter + keyEnter + "n" + keyEnter)
+		var data autoconfig.ConfigData
+		_, env, err := runInteractiveSetup(ui, &data, "/cfg/config.yaml")
+		require.NoError(t, err)
+		require.Empty(t, env, "no API key was entered")
+		require.Contains(t, out.String(), `"model": "my-model"`)
+		require.NotContains(t, out.String(), "<model>")
 	})
 
 	t.Run("nothing selected", func(t *testing.T) {
@@ -221,6 +234,14 @@ func TestReadConfigInteractive(t *testing.T) {
 		_, err := readConfig(savePath, nil, false, nil)
 		require.ErrorContains(t, err, "variable ${OPENAI_API_KEY} set but empty")
 		require.ErrorContains(t, err, "delete the file to run the interactive setup again")
+	})
+
+	t.Run("still strict after edits above the header", func(t *testing.T) {
+		t.Setenv("OPENAI_API_KEY", "")
+		edited := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(edited, append([]byte("# My notes\n\n"), saved...), 0o600))
+		_, err := readConfig(edited, nil, false, nil)
+		require.ErrorContains(t, err, "variable ${OPENAI_API_KEY} set but empty")
 	})
 
 	t.Run("other configs still allow unset variables", func(t *testing.T) {

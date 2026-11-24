@@ -530,6 +530,11 @@ jobs:
     # the install script (site/static/install.sh) can install the latest main without waiting for a release.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [ci-required]
+    # The workflow-level concurrency group includes the actor, so pushes by different people could
+    # publish at the same time. Serialize the publishing: queued runs are replaced by the newest one.
+    concurrency:
+      group: aigw-main-release
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write # gh release create/upload/edit and moving the tag require contents:write

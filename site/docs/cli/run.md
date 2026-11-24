@@ -31,7 +31,8 @@ aigw run
    OpenAI, Anthropic, Tetrate Agent Router Service, Azure OpenAI, Ollama, or any
    other OpenAI-compatible API.
 2. Paste the API key of each provider (the input is masked), and the endpoint
-   for providers that need one.
+   for providers that need one. For Ollama and other OpenAI-compatible APIs, it
+   also asks for a model they serve, to print a request that works.
 3. Choose whether to save the configuration.
 
 Requests are routed to each provider by model name: for example `gpt-*` models
