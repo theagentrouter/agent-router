@@ -56,6 +56,14 @@ kubectl wait pods --timeout=2m \
 
 Use the gateway URL configured in the [Basic Usage](../basic-usage.md) guide.
 
+Export the same model ID configured in `scaleway.yaml`:
+
+```shell
+export SCW_MODEL_ID="llama-3.3-70b-instruct"
+```
+
+Replace the example model ID with your selected Scaleway model.
+
 ```shell
 curl -H "Content-Type: application/json" \
   -H "x-ai-eg-model: ${SCW_MODEL_ID}" \

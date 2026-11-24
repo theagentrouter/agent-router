@@ -42,10 +42,17 @@ Generative APIs using the project-scoped OpenAI-compatible endpoint:
 4. Apply `basic.yaml` and the configured `scaleway.yaml` to a
    Kubernetes cluster with Envoy AI Gateway installed.
 
+Export the same model ID configured in `scaleway.yaml` and discover the Gateway address:
+
+```bash
+export SCW_MODEL_ID="llama-3.3-70b-instruct"
+export GATEWAY_URL="http://$(kubectl get gateway envoy-ai-gateway-basic -n default -o jsonpath='{.status.addresses[0].value}')"
+```
+
 Send a chat completion request to the gateway using the configured model:
 
 ```bash
-curl -X POST "http://localhost:8080/v1/chat/completions" \
+curl -X POST "${GATEWAY_URL}/v1/chat/completions" \
   -H "x-ai-eg-model: ${SCW_MODEL_ID}" \
   -H "Content-Type: application/json" \
   -d "{\"model\":\"${SCW_MODEL_ID}\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello!\"}]}"
