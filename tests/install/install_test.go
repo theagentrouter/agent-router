@@ -60,6 +60,7 @@ echo "curl $url" >> "$FAKE_LOG"
 [ -n "$header" ] && echo "header $header" >> "$FAKE_LOG"
 [ "$FAKE_CURL_FAIL" = "1" ] && exit 22
 ` + fakeResponses + `[ "$status" = "0" ] && exit 7
+if [ "$status" = "cut" ]; then printf '%s' "$body" | cut -c1-40 > "$out"; printf '200'; exit 18; fi
 if [ "$status" = "200" ]; then printf '%s' "$body" > "$out"; else echo "error page" > "$out"; fi
 printf '%s' "$status"
 `
@@ -83,6 +84,7 @@ echo "wget $url" >> "$FAKE_LOG"
 [ -n "$header" ] && echo "header $header" >> "$FAKE_LOG"
 [ "$FAKE_CURL_FAIL" = "1" ] && exit 8
 ` + fakeResponses + `[ "$status" = "0" ] && exit 4
+if [ "$status" = "cut" ]; then echo "  HTTP/1.1 200 OK" >&2; printf '%s' "$body" | cut -c1-40 > "$out"; exit 4; fi
 echo "  HTTP/1.1 $status Fake" >&2
 [ "$status" = "200" ] || exit 8
 printf '%s' "$body" > "$out"
@@ -92,6 +94,7 @@ printf '%s' "$body" > "$out"
 // the GitHub API it sets $body from $FAKE_CHECKSUMS or $FAKE_API, and $status from
 // $FAKE_CHECKSUMS_STATUS or $FAKE_API_STATUS: by default 200 with a body and 404 (a page that
 // does not exist) without one. Status 0 is a request that got no response, such as a network error.
+// Status "cut" is a 200 whose body stops after 40 characters, because the connection was closed.
 const fakeResponses = `case "$url" in
   */checksums.txt)
     status="$FAKE_CHECKSUMS_STATUS"
@@ -112,7 +115,7 @@ fi
 `
 
 // systemTools are the external commands the script needs besides uname and curl.
-var systemTools = []string{"mktemp", "chmod", "mkdir", "mv", "rm", "cat", "awk", "tr"}
+var systemTools = []string{"mktemp", "chmod", "mkdir", "mv", "rm", "cat", "awk", "tr", "cut"}
 
 // sha256Tools are the checksum utilities the script can use. Only the first one found is
 // needed: Linux has sha256sum, macOS only has shasum.
@@ -142,7 +145,8 @@ type options struct {
 	// api is the GitHub API response for the release.
 	api string
 	// checksumsStatus and apiStatus override the HTTP status of checksums.txt and of the GitHub
-	// API. "0" simulates a request that fails without a response, such as a network error.
+	// API. "0" simulates a request that fails without a response, such as a network error, and
+	// "cut" a 200 response whose body is cut short.
 	checksumsStatus, apiStatus string
 }
 
@@ -484,6 +488,8 @@ func TestInstall_GitHubDigestFallback(t *testing.T) {
 // TestInstall_ChecksumNotFetched checks that a checksum that could not be fetched, as opposed to
 // one that does not exist, stops the install instead of skipping the verification.
 func TestInstall_ChecksumNotFetched(t *testing.T) {
+	// The name of the asset is within the first 40 characters, and its digest after them.
+	apiWithDigest := `{"assets":[{"name":"aigw-linux-amd64","size":3,"digest":"sha256:` + strings.Repeat("1", 64) + `"}]}`
 	tests := []struct {
 		name string
 		opts options
@@ -513,6 +519,27 @@ func TestInstall_ChecksumNotFetched(t *testing.T) {
 			name: "network error on the GitHub API",
 			opts: options{noChecksums: true, apiStatus: "0", env: []string{"AIGW_VERSION=latest"}},
 			err:  "from the GitHub API (no response)",
+		},
+		{
+			// The digest never arrives: this must not be read as an asset without a digest.
+			name: "GitHub API response cut short",
+			opts: options{noChecksums: true, api: apiWithDigest, apiStatus: "cut", env: []string{"AIGW_VERSION=v1.3.0"}},
+			err:  "from the GitHub API (incomplete response)",
+		},
+		{
+			name: "checksums.txt cut short",
+			opts: options{checksumsStatus: "cut"},
+			err:  "download/latest-main/checksums.txt (incomplete response)",
+		},
+		{
+			name: "GitHub API response without the asset",
+			opts: options{noChecksums: true, api: `{"assets":[{"name":"aigw-darwin-arm64","digest":null}]}`, env: []string{"AIGW_VERSION=v1.3.0"}},
+			err:  "could not read the checksum of aigw-linux-amd64 (v1.3.0) from the GitHub API response",
+		},
+		{
+			name: "GitHub API response without a digest",
+			opts: options{noChecksums: true, api: `{"assets":[{"name":"aigw-linux-amd64","size":3}]}`, env: []string{"AIGW_VERSION=v1.3.0"}},
+			err:  "could not read the checksum of aigw-linux-amd64 (v1.3.0) from the GitHub API response",
 		},
 	}
 	for _, client := range []string{"curl", "wget"} {

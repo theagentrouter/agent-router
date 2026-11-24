@@ -81,34 +81,44 @@ fi
 
 # http_fetch URL DEST [HEADER]: download URL to DEST, telling a page that does not exist from a
 # request that failed. Returns 0 on success, 1 if the server answers 404, and 2 for anything else
-# (network errors, rate limits, server errors). The HTTP status, if any, is left in http_status.
+# (network errors, rate limits, server errors, responses cut short). What happened is left in
+# http_detail, for error messages.
 http_fetch() {
   http_status=""
+  http_detail="no response"
   case "$http_client" in
     curl)
       # No -f: the status is needed, and curl must not turn a 404 into a generic failure.
+      curl_status=0
       if [ -n "${3:-}" ]; then
-        http_status="$(curl -sSL --retry 3 --retry-delay 2 -o "$2" -w '%{http_code}' -H "$3" "$1" 2>/dev/null)" || {
-          http_status=""
-          return 2
-        }
+        http_status="$(curl -sSL --retry 3 --retry-delay 2 -o "$2" -w '%{http_code}' -H "$3" "$1" 2>/dev/null)" || curl_status=$?
       else
-        http_status="$(curl -sSL --retry 3 --retry-delay 2 -o "$2" -w '%{http_code}' "$1" 2>/dev/null)" || {
-          http_status=""
-          return 2
-        }
+        http_status="$(curl -sSL --retry 3 --retry-delay 2 -o "$2" -w '%{http_code}' "$1" 2>/dev/null)" || curl_status=$?
+      fi
+      if [ "$curl_status" -ne 0 ]; then
+        # A 200 from a curl that failed is a response cut short: the body is incomplete.
+        if [ "$http_status" = "200" ]; then http_detail="incomplete response"; else http_detail="no response"; fi
+        return 2
       fi
       ;;
     wget)
       # -S prints the response headers to stderr. The last status line is the one of the final
       # response, after redirects. Without any status line, the request itself failed.
+      wget_status=0
       if [ -n "${3:-}" ]; then
-        http_status="$(wget -qS -O "$2" --header="$3" "$1" 2>&1 | awk '$1 ~ /^HTTP\// { code = $2 } END { print code }')"
+        wget_output="$(wget -qS -O "$2" --header="$3" "$1" 2>&1)" || wget_status=$?
       else
-        http_status="$(wget -qS -O "$2" "$1" 2>&1 | awk '$1 ~ /^HTTP\// { code = $2 } END { print code }')"
+        wget_output="$(wget -qS -O "$2" "$1" 2>&1)" || wget_status=$?
+      fi
+      http_status="$(printf '%s\n' "$wget_output" | awk '$1 ~ /^HTTP\// { code = $2 } END { print code }')"
+      # A 200 from a wget that failed is a response cut short: the body is incomplete.
+      if [ "$wget_status" -ne 0 ] && [ "$http_status" = "200" ]; then
+        http_detail="incomplete response"
+        return 2
       fi
       ;;
   esac
+  http_detail="${http_status:+HTTP }${http_status:-no response}"
   case "$http_status" in
     200) return 0 ;;
     404) return 1 ;;
@@ -175,24 +185,34 @@ ${retry_hint}"
       fi
       status=0
       http_fetch "$release_api" "$meta" "${GITHUB_TOKEN:+Authorization: Bearer ${GITHUB_TOKEN}}" || status=$?
-      [ "$status" -eq 0 ] || fail "could not fetch the checksum of ${asset} (${VERSION}) from the GitHub API (${http_status:+HTTP }${http_status:-no response}).
+      [ "$status" -eq 0 ] || fail "could not fetch the checksum of ${asset} (${VERSION}) from the GitHub API (${http_detail}).
 The API limits unauthenticated requests: setting GITHUB_TOKEN avoids that.
 ${retry_hint}"
       # Split the JSON on commas so each field is on its own line whether or not it is pretty-printed,
       # then take the digest that follows the asset's name. Assets uploaded before GitHub computed
-      # digests have none: that is the one case where there is no checksum to verify against.
+      # digests have a null one: that is the one case where there is no checksum to verify against.
+      # It must be stated by the response: an asset or a digest that is not there at all means the
+      # response is incomplete or unexpected, not that there is no checksum.
       expected="$(tr ',' '\n' <"$meta" |
         awk -v asset="$asset" '
           /"name": *"/ { found = ($0 ~ "\"name\": *\"" asset "\"") }
           found && /"digest": *"sha256:/ { sub(/.*"sha256:/, ""); sub(/".*/, ""); print; exit }
+          found && /"digest": *null/ { print "none"; exit }
         ')"
-      if [ -z "$expected" ]; then
-        verify=0
-        warn "no checksum is published for ${asset} (${VERSION}); skipping verification"
-      fi
+      case "$expected" in
+        "")
+          fail "could not read the checksum of ${asset} (${VERSION}) from the GitHub API response.
+${retry_hint}"
+          ;;
+        none)
+          expected=""
+          verify=0
+          warn "no checksum is published for ${asset} (${VERSION}); skipping verification"
+          ;;
+      esac
       ;;
     *)
-      fail "could not fetch the checksum of ${asset} (${VERSION}) from ${base}/checksums.txt (${http_status:+HTTP }${http_status:-no response}).
+      fail "could not fetch the checksum of ${asset} (${VERSION}) from ${base}/checksums.txt (${http_detail}).
 ${retry_hint}"
       ;;
   esac
