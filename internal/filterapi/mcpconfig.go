@@ -5,6 +5,8 @@
 
 package filterapi
 
+import "log/slog"
+
 // MCPConfig is the configuration for the MCP listener and routing.
 type MCPConfig struct {
 	// BackendListenerAddr is the address that speaks plain HTTP and can be used to
@@ -17,6 +19,35 @@ type MCPConfig struct {
 
 	// Routes is the list of routes that this listener can route to.
 	Routes []MCPRoute `json:"routes,omitempty"`
+
+	// SessionEncryption is the configuration used to encrypt and decrypt MCP session IDs.
+	//
+	// It is delivered through the filter config (which is stored in Secrets) rather than as
+	// command line arguments, so that the seeds are not exposed in the Pod spec or the process
+	// command line. When nil, the external processor falls back to its command line flags.
+	SessionEncryption *MCPSessionEncryption `json:"sessionEncryption,omitempty"`
+}
+
+// MCPSessionEncryption is the configuration for MCP session ID encryption.
+type MCPSessionEncryption struct {
+	// Seed is the seed used to derive the MCP session encryption key.
+	Seed string `json:"seed"`
+	// Iterations is the number of PBKDF2 iterations used to derive the key from Seed.
+	Iterations int `json:"iterations"`
+	// FallbackSeed is the optional seed used to decrypt session IDs during seed rotation.
+	FallbackSeed string `json:"fallbackSeed,omitempty"`
+	// FallbackIterations is the number of PBKDF2 iterations used to derive the key from FallbackSeed.
+	FallbackIterations int `json:"fallbackIterations,omitempty"`
+}
+
+// LogValue implements slog.LogValuer for MCPSessionEncryption to redact sensitive information.
+func (e MCPSessionEncryption) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("seed", "[REDACTED]"),
+		slog.Int("iterations", e.Iterations),
+		slog.Bool("fallbackSeedSet", e.FallbackSeed != ""),
+		slog.Int("fallbackIterations", e.FallbackIterations),
+	)
 }
 
 // PrefixMode controls how tool and prompt names are prefixed when exposed to clients.
@@ -44,6 +75,11 @@ type MCPRoute struct {
 
 	// Authorization is the authorization configuration for this route.
 	Authorization *MCPRouteAuthorization `json:"authorization,omitempty"`
+
+	// ProtectedResourceMetadata is the OAuth protected resource metadata (RFC 9728) served for
+	// this route. When set, the MCP proxy serves the protected resource metadata document and
+	// includes a resource_metadata challenge in WWW-Authenticate headers it emits.
+	ProtectedResourceMetadata *MCPRouteOAuthProtectedResourceMetadata `json:"protectedResourceMetadata,omitempty"`
 
 	// BackendSelector restricts which of this route's backends a request may fan out to.
 	// It reuses the same MCPRouteAuthorization shape and CEL engine as Authorization above,
@@ -161,10 +197,6 @@ type MCPRouteAuthorization struct {
 	// If no rules are defined, all requests will be denied.
 	Rules []MCPRouteAuthorizationRule `json:"rules,omitempty"`
 
-	// ResourceMetadataURL is the URI of the OAuth Protected Resource Metadata document for this route.
-	// This is used to populate the WWW-Authenticate header when scope-based authorization fails.
-	ResourceMetadataURL string `json:"resourceMetadataURL,omitempty"`
-
 	// VerifiedJWT reports whether Envoy has been configured to cryptographically verify the
 	// bearer JWT's signature, issuer, and audience before a request reaches the MCP proxy
 	// (i.e. the owning MCPRoute has securityPolicy.oauth configured). JWT claims and scopes
@@ -173,6 +205,44 @@ type MCPRouteAuthorization struct {
 	// caller can present a structurally valid but unsigned/forged token, and the proxy has no
 	// way to distinguish it from a genuine one.
 	VerifiedJWT bool `json:"verifiedJWT,omitempty"`
+}
+
+// MCPRouteOAuthProtectedResourceMetadata is the OAuth protected resource metadata the gateway
+// advertises for a route. Every field here corresponds to a member of the document the MCP
+// proxy serves; the remaining OAuth settings on the MCPRoute API (audiences, JWKS, claim to
+// header projection) are realized as Envoy policy and never reach this config.
+//
+// The resource identifier itself is deliberately not part of this configuration unless the
+// operator overrides it: it is computed per request from the scheme, authority and path the
+// client actually used, so a single configuration stays correct behind any hostname, port or
+// TLS termination point. See RFC 9728 and the MCP authorization spec:
+// * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
+// * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization
+type MCPRouteOAuthProtectedResourceMetadata struct {
+	// Issuer is the OAuth authorization server issuer URL. It is advertised as the single
+	// entry of the metadata document's authorization_servers.
+	Issuer string `json:"issuer"`
+
+	// Resource, when non-empty, pins the resource identifier instead of deriving it from the
+	// request. Set it only when the externally visible URL cannot be recovered from the
+	// request, e.g. behind a proxy that rewrites the authority without forwarding headers.
+	Resource string `json:"resource,omitempty"`
+
+	// ResourceName is a human-readable name for the protected resource.
+	ResourceName string `json:"resourceName,omitempty"`
+
+	// ScopesSupported is the list of scopes the resource advertises support for. It is also
+	// used to build the scope challenge in WWW-Authenticate headers.
+	ScopesSupported []string `json:"scopesSupported,omitempty"`
+
+	// ResourceSigningAlgValuesSupported is the list of JWS signing algorithms supported.
+	ResourceSigningAlgValuesSupported []string `json:"resourceSigningAlgValuesSupported,omitempty"`
+
+	// ResourceDocumentation is a URL to human-readable documentation for the resource.
+	ResourceDocumentation string `json:"resourceDocumentation,omitempty"`
+
+	// ResourcePolicyURI is a URL to the resource's data usage policy.
+	ResourcePolicyURI string `json:"resourcePolicyURI,omitempty"`
 }
 
 type AuthorizationAction string

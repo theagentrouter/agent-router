@@ -269,11 +269,14 @@ func TestAIGatewayRouteController(t *testing.T) {
 	c, cfg, k := testsinternal.NewEnvTest(t)
 
 	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
-	rc := controller.NewAIGatewayRouteController(c, k, defaultLogger(), eventCh.Ch, "/foobar/")
-
 	opt := ctrl.Options{Scheme: c.Scheme(), LeaderElection: false, Controller: config.Controller{SkipNameValidation: ptr.To(true)}}
 	mgr, err := ctrl.NewManager(cfg, opt)
 	require.NoError(t, err)
+	require.NoError(t, controller.ApplyIndexing(t.Context(), mgr.GetFieldIndexer().IndexField))
+
+	// Use the manager's cached client so field-selector (index) lookups work, mirroring production
+	// (StartControllers) where the AIGatewayRoute controller reconcile lists QuotaPolicies by index.
+	rc := controller.NewAIGatewayRouteController(mgr.GetClient(), k, defaultLogger(), eventCh.Ch, "/foobar/")
 
 	err = controller.TypedControllerBuilderForCRD(mgr, &aigv1b1.AIGatewayRoute{}).Complete(rc)
 	require.NoError(t, err)
@@ -410,7 +413,8 @@ func TestAIGatewayRouteController(t *testing.T) {
 			if len(r.Status.Conditions) != 1 {
 				return false
 			}
-			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted
+			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted &&
+				r.Status.Conditions[0].ObservedGeneration == r.Generation
 		}, 30*time.Second, 200*time.Millisecond)
 	})
 
@@ -443,7 +447,7 @@ func TestBackendSecurityPolicyController(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, controller.ApplyIndexing(t.Context(), mgr.GetFieldIndexer().IndexField))
 
-	pc := controller.NewBackendSecurityPolicyController(mgr.GetClient(), k, defaultLogger(), eventCh.Ch, eventChPool.Ch)
+	pc := controller.NewBackendSecurityPolicyController(mgr.GetClient(), k, defaultLogger(), eventCh.Ch, eventChPool.Ch, controller.DefaultPreRotationWindow)
 	err = controller.TypedControllerBuilderForCRD(mgr, &aigv1b1.BackendSecurityPolicy{}).Complete(pc)
 	require.NoError(t, err)
 
@@ -562,7 +566,8 @@ func TestBackendSecurityPolicyController(t *testing.T) {
 			if len(r.Status.Conditions) != 1 {
 				return false
 			}
-			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted
+			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted &&
+				r.Status.Conditions[0].ObservedGeneration == r.Generation
 		}, 30*time.Second, 200*time.Millisecond)
 	})
 
@@ -715,7 +720,8 @@ func TestAIServiceBackendController(t *testing.T) {
 			if len(r.Status.Conditions) != 1 {
 				return false
 			}
-			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted
+			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted &&
+				r.Status.Conditions[0].ObservedGeneration == r.Generation
 		}, 30*time.Second, 200*time.Millisecond)
 	})
 

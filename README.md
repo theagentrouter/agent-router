@@ -52,7 +52,7 @@ Then point any OpenAI-compatible client at `http://localhost:1975/v1`. See the [
 
 When using Agent Router, we refer to a two-tier gateway pattern. **The Tier One Gateway** functions as a centralized entry point, and the **Tier Two Gateway** handles ingress traffic to a self-hosted model serving cluster.
 
-- The **Tier One Gateway** handles authentication, top-level routing, and global rate limiting
+- The **Tier One Gateway** handles authentication, top-level routing, and global rate limiting.
 - The **Tier Two Gateway** provides fine-grained control over self-hosted model access, with endpoint picker support for LLM inference optimization.
 
 ![](site/blog/images/aigw-ref.drawio.png)
@@ -133,6 +133,32 @@ Agent Router supports a wide range of AI providers, making it easy to integrate 
       <td align="center" width="120">
         <img src="site/static/img/providers/anthropic.svg" width="60" height="60" alt="Anthropic"/>
         <br><sub><b>Anthropic</b></sub>
+      </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/bitdeer.svg" width="60" height="60" alt="BitDeer"/>
+        <br><sub><b>BitDeer</b></sub>
+      </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/eden-ai.svg" width="60" height="60" alt="Eden AI"/>
+        <br><sub><b>Eden AI</b></sub>
+      </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/lanseq.svg" width="60" height="60" alt="Lanseq"/>
+        <br><sub><b>Lanseq</b></sub>
+      </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/tencent-lke.svg" width="60" height="60" alt="Tencent LLM Knowledge Engine"/>
+        <br><sub><b>Tencent LLM Knowledge Engine</b></sub>
+      </td>
+    </tr>
+    <tr>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/typesafe-ai.svg" width="60" height="60" alt="TypeSafe AI"/>
+        <br><sub><b>TypeSafe AI</b></sub>
+      </td>
+      <td align="center" width="120">
+        <img src="site/static/img/providers/paxa-labs.svg" width="60" height="60" alt="Paxa Labs"/>
+        <br><sub><b>Paxa Labs</b></sub>
       </td>
     </tr>
   </table>

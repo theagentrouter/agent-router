@@ -14,6 +14,9 @@ const (
 	// ConditionTypeNotAccepted is a condition type for the reconciliation result
 	// where resources are not accepted.
 	ConditionTypeNotAccepted = "NotAccepted"
+	// ConditionReasonRefNotPermitted indicates that a referenced resource is
+	// not authorized by a Gateway API ReferenceGrant.
+	ConditionReasonRefNotPermitted = "RefNotPermitted"
 )
 
 // AIGatewayRouteStatus contains the conditions by the reconciliation result.
