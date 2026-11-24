@@ -292,21 +292,10 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 			},
 		},
 	}
-	// The slot count is fixed for the pod's lifetime. The reconciler builds its extproc builder
-	// from the same Options, so within one controller process the slots projected here are never
-	// fewer than the slots writeFilterConfigBundle may fill. Pods that project fewer slots, for
-	// example ones created by another controller replica during a rollout, are rolled by
-	// checkPodHasBundleSlots.
-	//
-	// Project at least as many slots as the current index lists. After the slot count is lowered
-	// while the config still needs more parts, writeFilterConfigBundle refuses the write and the
-	// index keeps listing the parts of the last successful write, past the new slot count. A pod
-	// projecting only the new count would never load that config.
-	//
-	// When the slot count is raised and the config already needs more parts than the old count,
-	// Reconcile writes the larger bundle before rolling the workloads. Until a pod is replaced,
-	// its extproc sees an index listing parts it does not project and logs
-	// "failed to update bundled config" on every tick while it keeps serving its last good config.
+	// A pod's slot count is fixed at admission; pods with too few are rolled by
+	// checkPodHasBundleSlots. Project at least as many slots as the index lists: when the slot
+	// count is lowered below the parts the config needs, the write is refused and the index keeps
+	// listing the previous, larger set of parts.
 	slots := g.filterConfigBundleMaxSlots()
 	if index, indexErr := filterConfigBundleIndexFromSecret(bundleConfigIndexSecret); indexErr == nil {
 		slots = max(slots, len(index.Parts))
