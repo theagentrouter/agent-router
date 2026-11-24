@@ -55,7 +55,7 @@ func Test_healthcheck(t *testing.T) {
 		err := func_e.Run(ctx, []string{
 			"--config-yaml",
 			"admin: {address: {socket_address: {address: '127.0.0.1', port_value: 0}}}",
-		}, api.Out(io.Discard), api.EnvoyOut(io.Discard), api.EnvoyErr(io.Discard), admin.WithStartupHook(startupHook))
+		}, api.EnvoyVersion(envoyVersion), api.Out(io.Discard), api.EnvoyOut(io.Discard), api.EnvoyErr(io.Discard), admin.WithStartupHook(startupHook))
 
 		// Expect nil error since Run returns nil on context cancellation (documented behavior)
 		require.NoError(t, err)
