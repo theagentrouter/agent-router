@@ -14,10 +14,13 @@
 #   AIGW_INSTALL_DIR  Directory to install aigw into. Defaults to ~/.local/bin.
 #   GITHUB_TOKEN      Optional. Authenticates the GitHub API call used to verify releases that
 #                     predate checksums.txt, to avoid the low unauthenticated rate limit.
+#   AIGW_SKIP_CHECKSUM  Set to 1 to install without verifying the checksum.
 #
 # The script needs curl or wget. The binary is verified against the checksums.txt published
 # with it (or, for older releases, the digest GitHub reports for the asset) using sha256sum or
-# shasum. It never uses sudo: pick a writable AIGW_INSTALL_DIR if the default does not suit you.
+# shasum. If the checksum cannot be fetched, nothing is installed: only a release that has no
+# checksum at all is installed without verification, with a warning.
+# It never uses sudo: pick a writable AIGW_INSTALL_DIR if the default does not suit you.
 
 set -eu
 
@@ -67,7 +70,7 @@ case "$VERSION" in
 esac
 url="${base}/${asset}"
 
-# Everything below downloads through http_get and http_download, so curl and wget behave the same.
+# Everything below downloads through http_download and http_fetch, so curl and wget behave the same.
 if command -v curl >/dev/null 2>&1; then
   http_client=curl
 elif command -v wget >/dev/null 2>&1; then
@@ -76,18 +79,40 @@ else
   fail "curl or wget is required"
 fi
 
-# http_get URL [HEADER]: print the response body to stdout. Fails on HTTP errors.
-http_get() {
-  if [ -n "${2:-}" ]; then
-    case "$http_client" in
-      curl) curl -fsSL --retry 3 --retry-delay 2 -H "$2" "$1" ;;
-      wget) wget -qO- --header="$2" "$1" ;;
-    esac
-    return
-  fi
+# http_fetch URL DEST [HEADER]: download URL to DEST, telling a page that does not exist from a
+# request that failed. Returns 0 on success, 1 if the server answers 404, and 2 for anything else
+# (network errors, rate limits, server errors). The HTTP status, if any, is left in http_status.
+http_fetch() {
+  http_status=""
   case "$http_client" in
-    curl) curl -fsSL --retry 3 --retry-delay 2 "$1" ;;
-    wget) wget -qO- "$1" ;;
+    curl)
+      # No -f: the status is needed, and curl must not turn a 404 into a generic failure.
+      if [ -n "${3:-}" ]; then
+        http_status="$(curl -sSL --retry 3 --retry-delay 2 -o "$2" -w '%{http_code}' -H "$3" "$1" 2>/dev/null)" || {
+          http_status=""
+          return 2
+        }
+      else
+        http_status="$(curl -sSL --retry 3 --retry-delay 2 -o "$2" -w '%{http_code}' "$1" 2>/dev/null)" || {
+          http_status=""
+          return 2
+        }
+      fi
+      ;;
+    wget)
+      # -S prints the response headers to stderr. The last status line is the one of the final
+      # response, after redirects. Without any status line, the request itself failed.
+      if [ -n "${3:-}" ]; then
+        http_status="$(wget -qS -O "$2" --header="$3" "$1" 2>&1 | awk '$1 ~ /^HTTP\// { code = $2 } END { print code }')"
+      else
+        http_status="$(wget -qS -O "$2" "$1" 2>&1 | awk '$1 ~ /^HTTP\// { code = $2 } END { print code }')"
+      fi
+      ;;
+  esac
+  case "$http_status" in
+    200) return 0 ;;
+    404) return 1 ;;
+    *) return 2 ;;
   esac
 }
 
@@ -108,7 +133,8 @@ mkdir -p "$INSTALL_DIR" 2>/dev/null || fail "cannot create ${INSTALL_DIR}. Set A
 # cannot run out of space. The EXIT trap removes the partial file on any failure, and the
 # signal traps route Ctrl-C and termination through it.
 tmp="$(mktemp "${INSTALL_DIR}/.aigw.XXXXXX")"
-trap 'rm -f "$tmp"' EXIT
+meta="${tmp}.meta" # Holds checksums.txt or the GitHub API response while verifying.
+trap 'rm -f "$tmp" "$meta"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -117,23 +143,61 @@ http_download "$url" "$tmp" || fail "failed to download ${url}"
 
 # Verify the download. Prefer the checksums.txt published with the binaries. Releases cut before
 # checksums.txt existed fall back to the digest the GitHub API reports for every release asset.
-expected="$(http_get "${base}/checksums.txt" 2>/dev/null |
-  awk -v asset="$asset" '$2 == asset || $2 == "*" asset { print $1; exit }')" || expected=""
-if [ -z "$expected" ] && [ "$VERSION" != "main" ]; then
-  if [ "$VERSION" = "latest" ]; then
-    release_api="https://api.github.com/repos/${REPO}/releases/latest"
-  else
-    release_api="https://api.github.com/repos/${REPO}/releases/tags/${VERSION}"
-  fi
-  # Split the JSON on commas so each field is on its own line whether or not it is pretty-printed,
-  # then take the digest that follows the asset's name.
-  expected="$(http_get "$release_api" "${GITHUB_TOKEN:+Authorization: Bearer ${GITHUB_TOKEN}}" 2>/dev/null |
-    tr ',' '\n' |
-    awk -v asset="$asset" '
-      /"name": *"/ { found = ($0 ~ "\"name\": *\"" asset "\"") }
-      found && /"digest": *"sha256:/ { sub(/.*"sha256:/, ""); sub(/".*/, ""); print; exit }
-    ')" || expected=""
+#
+# A checksum that does not exist and a checksum that could not be fetched are different things:
+# only the first one, which can only happen for old releases, is installed without verification.
+# Anything else stops the install, so a network error or a rate limit never skips the check.
+retry_hint="Try again in a minute, or set AIGW_SKIP_CHECKSUM=1 to install without verifying it.
+Nothing was installed."
+expected=""
+verify=1
+if [ "${AIGW_SKIP_CHECKSUM:-}" = "1" ]; then
+  verify=0
+  warn "AIGW_SKIP_CHECKSUM=1: installing ${asset} (${VERSION}) without verifying its checksum"
+else
+  status=0
+  http_fetch "${base}/checksums.txt" "$meta" || status=$?
+  case "$status" in
+    0)
+      expected="$(awk -v asset="$asset" '$2 == asset || $2 == "*" asset { print $1; exit }' "$meta")"
+      [ -n "$expected" ] || fail "checksums.txt of ${VERSION} does not list ${asset}, so it cannot be verified.
+${retry_hint}"
+      ;;
+    1)
+      # The latest-main release always has a checksums.txt. It is only missing for the few seconds
+      # the release is being updated, so this is not a release without checksums.
+      [ "$VERSION" != "main" ] || fail "checksums.txt is missing from the latest build of main, which is probably being updated.
+${retry_hint}"
+      if [ "$VERSION" = "latest" ]; then
+        release_api="https://api.github.com/repos/${REPO}/releases/latest"
+      else
+        release_api="https://api.github.com/repos/${REPO}/releases/tags/${VERSION}"
+      fi
+      status=0
+      http_fetch "$release_api" "$meta" "${GITHUB_TOKEN:+Authorization: Bearer ${GITHUB_TOKEN}}" || status=$?
+      [ "$status" -eq 0 ] || fail "could not fetch the checksum of ${asset} (${VERSION}) from the GitHub API (${http_status:+HTTP }${http_status:-no response}).
+The API limits unauthenticated requests: setting GITHUB_TOKEN avoids that.
+${retry_hint}"
+      # Split the JSON on commas so each field is on its own line whether or not it is pretty-printed,
+      # then take the digest that follows the asset's name. Assets uploaded before GitHub computed
+      # digests have none: that is the one case where there is no checksum to verify against.
+      expected="$(tr ',' '\n' <"$meta" |
+        awk -v asset="$asset" '
+          /"name": *"/ { found = ($0 ~ "\"name\": *\"" asset "\"") }
+          found && /"digest": *"sha256:/ { sub(/.*"sha256:/, ""); sub(/".*/, ""); print; exit }
+        ')"
+      if [ -z "$expected" ]; then
+        verify=0
+        warn "no checksum is published for ${asset} (${VERSION}); skipping verification"
+      fi
+      ;;
+    *)
+      fail "could not fetch the checksum of ${asset} (${VERSION}) from ${base}/checksums.txt (${http_status:+HTTP }${http_status:-no response}).
+${retry_hint}"
+      ;;
+  esac
 fi
+rm -f "$meta"
 if command -v sha256sum >/dev/null 2>&1; then
   sha256="sha256sum"
 elif command -v shasum >/dev/null 2>&1; then
@@ -141,16 +205,16 @@ elif command -v shasum >/dev/null 2>&1; then
 else
   sha256=""
 fi
-if [ -z "$expected" ]; then
-  warn "no checksum is published for ${asset} (${VERSION}); skipping verification"
-elif [ -z "$sha256" ]; then
-  warn "neither sha256sum nor shasum is installed; skipping checksum verification"
-else
-  actual="$($sha256 "$tmp" | awk '{ print $1 }')"
-  [ "$actual" = "$expected" ] || fail "checksum mismatch for ${asset} (${VERSION}): expected ${expected}, got ${actual}.
+if [ "$verify" -eq 1 ]; then
+  if [ -z "$sha256" ]; then
+    warn "neither sha256sum nor shasum is installed; skipping checksum verification"
+  else
+    actual="$($sha256 "$tmp" | awk '{ print $1 }')"
+    [ "$actual" = "$expected" ] || fail "checksum mismatch for ${asset} (${VERSION}): expected ${expected}, got ${actual}.
 The download may be corrupted or tampered with, or the release was being updated: try again in a minute.
 Nothing was installed."
-  echo "Checksum verified."
+    echo "Checksum verified."
+  fi
 fi
 
 # mktemp creates the file as 0600, so set the mode explicitly rather than just adding +x.

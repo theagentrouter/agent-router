@@ -39,53 +39,76 @@ echo "aigw $*" >> "$FAKE_LOG"
 exit 0
 `
 
-// curlStub records the requested URL. It writes the aigw stub to the -o path, and prints
-// the fake responses for checksums.txt and the GitHub API.
+// curlStub records the requested URL. It writes the aigw stub to the -o path. For checksums.txt
+// and the GitHub API it behaves like "curl -o FILE -w '%{http_code}'": the body goes to the -o
+// path and the HTTP status to stdout, and only a failed request exits with an error.
 const curlStub = `#!/bin/sh
 out=""
 url=""
+header=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift ;;
+    -H) header="$2"; shift ;;
+    -w | --retry | --retry-delay) shift ;;
     -*) ;;
     *) url="$1" ;;
   esac
   shift
 done
 echo "curl $url" >> "$FAKE_LOG"
+[ -n "$header" ] && echo "header $header" >> "$FAKE_LOG"
 [ "$FAKE_CURL_FAIL" = "1" ] && exit 22
-` + fakeResponses
+` + fakeResponses + `[ "$status" = "0" ] && exit 7
+if [ "$status" = "200" ]; then printf '%s' "$body" > "$out"; else echo "error page" > "$out"; fi
+printf '%s' "$status"
+`
 
-// wgetStub is the wget equivalent of curlStub.
+// wgetStub is the wget equivalent of curlStub. For checksums.txt and the GitHub API it behaves
+// like "wget -S": the status line goes to stderr, and anything but a 200 exits with an error.
 const wgetStub = `#!/bin/sh
 out=""
 url=""
+header=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    -qO-) out="-" ;;
-    -qO) out="$2"; shift ;;
+    -qO | -O) out="$2"; shift ;;
+    --header=*) header="${1#--header=}" ;;
     -*) ;;
     *) url="$1" ;;
   esac
   shift
 done
 echo "wget $url" >> "$FAKE_LOG"
+[ -n "$header" ] && echo "header $header" >> "$FAKE_LOG"
 [ "$FAKE_CURL_FAIL" = "1" ] && exit 8
-` + fakeResponses
+` + fakeResponses + `[ "$status" = "0" ] && exit 4
+echo "  HTTP/1.1 $status Fake" >&2
+[ "$status" = "200" ] || exit 8
+printf '%s' "$body" > "$out"
+`
 
-// fakeResponses serves $url: checksums.txt from $FAKE_CHECKSUMS, the GitHub API from $FAKE_API
-// (both failing like a missing page when empty), and the aigw stub otherwise.
+// fakeResponses serves $url. The aigw stub is written to $out right away. For checksums.txt and
+// the GitHub API it sets $body from $FAKE_CHECKSUMS or $FAKE_API, and $status from
+// $FAKE_CHECKSUMS_STATUS or $FAKE_API_STATUS: by default 200 with a body and 404 (a page that
+// does not exist) without one. Status 0 is a request that got no response, such as a network error.
 const fakeResponses = `case "$url" in
   */checksums.txt)
-    [ -n "$FAKE_CHECKSUMS" ] || exit 22
-    printf '%s' "$FAKE_CHECKSUMS"
+    status="$FAKE_CHECKSUMS_STATUS"
+    body="$FAKE_CHECKSUMS"
     ;;
   https://api.github.com/*)
-    [ -n "$FAKE_API" ] || exit 22
-    printf '%s' "$FAKE_API"
+    status="$FAKE_API_STATUS"
+    body="$FAKE_API"
     ;;
-  *) cat "$FAKE_AIGW" > "$out" ;;
+  *)
+    cat "$FAKE_AIGW" > "$out"
+    exit 0
+    ;;
 esac
+if [ -z "$status" ]; then
+  if [ -n "$body" ]; then status=200; else status=404; fi
+fi
 `
 
 // systemTools are the external commands the script needs besides uname and curl.
@@ -118,6 +141,9 @@ type options struct {
 	noChecksums bool
 	// api is the GitHub API response for the release.
 	api string
+	// checksumsStatus and apiStatus override the HTTP status of checksums.txt and of the GitHub
+	// API. "0" simulates a request that fails without a response, such as a network error.
+	checksumsStatus, apiStatus string
 }
 
 // validChecksums returns a checksums.txt matching the aigw stub for every published asset.
@@ -198,6 +224,8 @@ func runInstall(t *testing.T, o options) result {
 		"FAKE_AIGW=" + aigw,
 		"FAKE_CHECKSUMS=" + checksums,
 		"FAKE_API=" + o.api,
+		"FAKE_CHECKSUMS_STATUS=" + o.checksumsStatus,
+		"FAKE_API_STATUS=" + o.apiStatus,
 		"FAKE_CURL_FAIL=" + flag(o.curlFails),
 		"FAKE_ENVOY_FAIL=" + flag(o.envoyFails),
 	}, o.env...)
@@ -315,19 +343,24 @@ func TestInstall_Checksums(t *testing.T) {
 
 	t.Run("asset missing from checksums.txt", func(t *testing.T) {
 		r := runInstall(t, options{os: "Linux", arch: "x86_64", checksums: strings.Repeat("0", 64) + "  aigw-darwin-arm64\n"})
-		require.NoError(t, r.err, "stderr: %s", r.stderr)
-		require.Contains(t, r.stderr, "warning: no checksum is published for aigw-linux-amd64")
-		require.FileExists(t, filepath.Join(r.installDir, "aigw"))
+		require.Error(t, r.err)
+		require.Contains(t, r.stderr, "does not list aigw-linux-amd64")
+		requireNothingInstalled(t, r.installDir)
 	})
 
-	t.Run("checksums.txt not published", func(t *testing.T) {
-		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, env: []string{"AIGW_VERSION=v1.3.0"}})
+	t.Run("no checksum exists for an old release", func(t *testing.T) {
+		// No checksums.txt, and the asset predates the digests computed by GitHub.
+		api := `{"assets":[{"name":"aigw-linux-amd64","digest":null},{"name":"aigw-linux-arm64","digest":"sha256:` + strings.Repeat("2", 64) + `"}]}`
+		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0"}})
 		require.NoError(t, r.err, "stderr: %s", r.stderr)
 		require.Contains(t, r.stderr, "warning: no checksum is published for aigw-linux-amd64 (v1.3.0)")
 		require.NotContains(t, r.stdout, "Checksum verified.")
 		info, err := os.Stat(filepath.Join(r.installDir, "aigw"))
 		require.NoError(t, err)
 		require.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+		entries, err := os.ReadDir(r.installDir)
+		require.NoError(t, err)
+		require.Len(t, entries, 1, "only aigw must be left in the install directory")
 	})
 
 	t.Run("binary-mode marker in checksums.txt", func(t *testing.T) {
@@ -399,10 +432,112 @@ func TestInstall_GitHubDigestFallback(t *testing.T) {
 	})
 
 	t.Run("not used for main", func(t *testing.T) {
+		// latest-main always has a checksums.txt: a 404 means the release is being updated.
 		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: api})
-		require.NoError(t, r.err, "stderr: %s", r.stderr)
-		require.Contains(t, r.stderr, "warning: no checksum is published for aigw-linux-amd64 (main)")
+		require.Error(t, r.err)
+		require.Contains(t, r.stderr, "checksums.txt is missing from the latest build of main")
 		require.NotContains(t, r.log, "api.github.com")
+		requireNothingInstalled(t, r.installDir)
+	})
+
+	t.Run("real response shape", func(t *testing.T) {
+		// The GitHub API pretty-prints, and has other fields between the name and the digest.
+		pretty := `{
+  "name": "v1.3.0",
+  "assets": [
+    {
+      "name": "aigw-darwin-arm64",
+      "uploader": { "login": "github-actions[bot]", "id": 1 },
+      "size": 3,
+      "digest": "sha256:` + strings.Repeat("1", 64) + `",
+      "download_count": 3
+    },
+    {
+      "name": "aigw-linux-amd64",
+      "uploader": { "login": "github-actions[bot]", "id": 1 },
+      "size": 3,
+      "digest": "sha256:` + digest + `",
+      "download_count": 3
+    }
+  ],
+  "body": "notes"
+}`
+		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: pretty, env: []string{"AIGW_VERSION=v1.3.0"}})
+		require.NoError(t, r.err, "stderr: %s", r.stderr)
+		require.Contains(t, r.stdout, "Checksum verified.")
+	})
+
+	t.Run("token", func(t *testing.T) {
+		r := runInstall(t, options{os: "Linux", arch: "x86_64", noChecksums: true, api: api, env: []string{"AIGW_VERSION=v1.3.0", "GITHUB_TOKEN=secret"}})
+		require.NoError(t, r.err, "stderr: %s", r.stderr)
+		// The token is sent to the GitHub API only, not with the downloads.
+		require.Equal(t, []string{
+			"curl " + releasesURL + "download/v1.3.0/aigw-linux-amd64",
+			"curl " + releasesURL + "download/v1.3.0/checksums.txt",
+			"curl https://api.github.com/repos/theagentrouter/agent-router/releases/tags/v1.3.0",
+			"header Authorization: Bearer secret",
+			"aigw download-envoy",
+		}, strings.Split(strings.TrimSpace(r.log), "\n"))
+	})
+}
+
+// TestInstall_ChecksumNotFetched checks that a checksum that could not be fetched, as opposed to
+// one that does not exist, stops the install instead of skipping the verification.
+func TestInstall_ChecksumNotFetched(t *testing.T) {
+	tests := []struct {
+		name string
+		opts options
+		err  string
+	}{
+		{
+			name: "network error on checksums.txt",
+			opts: options{checksumsStatus: "0"},
+			err:  "could not fetch the checksum of aigw-linux-amd64 (main) from " + releasesURL + "download/latest-main/checksums.txt (no response)",
+		},
+		{
+			name: "server error on checksums.txt",
+			opts: options{checksumsStatus: "503"},
+			err:  "download/latest-main/checksums.txt (HTTP 503)",
+		},
+		{
+			name: "server error on checksums.txt of a release",
+			opts: options{checksumsStatus: "500", env: []string{"AIGW_VERSION=v1.3.0"}},
+			err:  "download/v1.3.0/checksums.txt (HTTP 500)",
+		},
+		{
+			name: "GitHub API rate limit",
+			opts: options{noChecksums: true, apiStatus: "403", env: []string{"AIGW_VERSION=v1.3.0"}},
+			err:  "from the GitHub API (HTTP 403)",
+		},
+		{
+			name: "network error on the GitHub API",
+			opts: options{noChecksums: true, apiStatus: "0", env: []string{"AIGW_VERSION=latest"}},
+			err:  "from the GitHub API (no response)",
+		},
+	}
+	for _, client := range []string{"curl", "wget"} {
+		for _, tt := range tests {
+			t.Run(client+"/"+tt.name, func(t *testing.T) {
+				o := tt.opts
+				o.os, o.arch = "Linux", "x86_64"
+				o.noCurl, o.wget = client == "wget", client == "wget"
+				r := runInstall(t, o)
+				require.Error(t, r.err)
+				require.Contains(t, r.stderr, tt.err)
+				require.Contains(t, r.stderr, "Nothing was installed.")
+				require.NotContains(t, r.stderr, "no checksum is published")
+				require.NotContains(t, r.log, "aigw download-envoy")
+				requireNothingInstalled(t, r.installDir)
+			})
+		}
+	}
+
+	t.Run("AIGW_SKIP_CHECKSUM", func(t *testing.T) {
+		r := runInstall(t, options{os: "Linux", arch: "x86_64", checksumsStatus: "0", env: []string{"AIGW_SKIP_CHECKSUM=1"}})
+		require.NoError(t, r.err, "stderr: %s", r.stderr)
+		require.Contains(t, r.stderr, "warning: AIGW_SKIP_CHECKSUM=1: installing aigw-linux-amd64 (main) without verifying its checksum")
+		require.NotContains(t, r.log, "checksums.txt")
+		require.FileExists(t, filepath.Join(r.installDir, "aigw"))
 	})
 }
 
@@ -416,6 +551,18 @@ func TestInstall_Wget(t *testing.T) {
 	}, strings.Split(strings.TrimSpace(r.log), "\n"))
 	require.Contains(t, r.stdout, "Checksum verified.")
 	require.FileExists(t, filepath.Join(r.installDir, "aigw"))
+
+	t.Run("GitHub digest fallback", func(t *testing.T) {
+		sum := sha256.Sum256([]byte(aigwStub))
+		api := `{"assets":[{"name":"aigw-linux-amd64","digest":"sha256:` + hex.EncodeToString(sum[:]) + `"}]}`
+		r := runInstall(t, options{
+			os: "Linux", arch: "x86_64", noCurl: true, wget: true, noChecksums: true, api: api,
+			env: []string{"AIGW_VERSION=v1.3.0", "GITHUB_TOKEN=secret"},
+		})
+		require.NoError(t, r.err, "stderr: %s", r.stderr)
+		require.Contains(t, r.stdout, "Checksum verified.")
+		require.Contains(t, r.log, "wget https://api.github.com/repos/theagentrouter/agent-router/releases/tags/v1.3.0\nheader Authorization: Bearer secret")
+	})
 }
 
 func TestInstall_UnsupportedSuggestsDocker(t *testing.T) {
