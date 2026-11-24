@@ -162,7 +162,7 @@ func TestResponseModel_AWSAnthropic(t *testing.T) {
 	require.Equal(t, uint32(5), outputTokens)
 }
 
-func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_Claude55StructuredOutput(t *testing.T) {
+func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_StructuredOutput(t *testing.T) {
 	const schema = `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`
 	request := &openai.ChatCompletionRequest{
 		Model: "claude",
@@ -186,6 +186,13 @@ func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_Claude55StructuredOutput
 		"anthropic.claude-opus-5-5",
 		"global.anthropic.claude-sonnet-5-5",
 		"global.anthropic.claude-haiku-5-5",
+		"global.anthropic.claude-opus-4-7",
+		"global.anthropic.claude-opus-4-8",
+		"global.anthropic.claude-opus-5",
+		"global.anthropic.claude-sonnet-5",
+		"global.anthropic.claude-fable-5",
+		"global.anthropic.claude-fable-5-1",
+		"global.anthropic.claude-fable-5-2",
 	} {
 		t.Run(model, func(t *testing.T) {
 			translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", model)

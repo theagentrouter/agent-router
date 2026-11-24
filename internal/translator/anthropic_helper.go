@@ -666,6 +666,11 @@ var awsOutputConfigModels = []string{
 	"opus-5-5",   // Claude Opus 5.5
 	"sonnet-5-5", // Claude Sonnet 5.5
 	"haiku-5-5",  // Claude Haiku 5.5
+	"opus-4-7",   // Claude Opus 4.7
+	"opus-4-8",   // Claude Opus 4.8
+	"opus-5",     // Claude Opus 5
+	"sonnet-5",   // Claude Sonnet 5
+	"fable-5",    // Claude Fable 5
 }
 
 // gcpOutputConfigModels lists model identifiers that support structured outputs
