@@ -3,25 +3,28 @@
 This document describes the roles in the Agent Router community, what each role can do, what
 it is responsible for, and how people move from one role to the next:
 
-**Contributor → Frequent Contributor → Reviewer → Maintainer**
+**Contributor → Reviewer → Maintainer**
 
-The [Technical Charter](Technical_Charter.pdf) defines Contributors and Maintainers and lets the
-Technical Steering Committee (TSC) add roles as long as they are documented from the
-CONTRIBUTING file. The TSC adopts and amends this document under section 2 of the charter.
+The [Technical Charter](Technical_Charter.pdf) gives default definitions of Contributors and
+Maintainers, and section 2.c lets the Technical Steering Committee (TSC) adopt or modify roles as
+long as they are documented in the CONTRIBUTING file. This document replaces those defaults with
+the three roles below. The TSC adopts and amends it under section 2 of the charter.
 
-Frequent Contributors are the members of the `@theagentrouter/agent-router-assignable` GitHub
-team. The [OWNERS](OWNERS) file is the source of truth for who holds the Reviewer and Maintainer
-roles, which company each person works for, and their areas. [MAINTAINERS.md](MAINTAINERS.md)
-is the readable version of the same list.
+Contributors are the members of the `@theagentrouter/agent-router-assignable` GitHub team.
+[MAINTAINERS.md](MAINTAINERS.md) lists the Reviewers and Maintainers, with each person's company
+and areas.
+
+You don't need a role to take part. Anyone can open an issue, send a pull request, review code,
+improve documentation, answer questions, or join a community meeting, with no sign-up. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) to get started.
 
 ## At a glance
 
-| Role                 | GitHub access | Can approve PRs                                         | Can merge PRs | TSC vote |
-| -------------------- | ------------- | ------------------------------------------------------- | ------------- | -------- |
-| Contributor          | None needed   | Comments only                                           | No            | No       |
-| Frequent Contributor | Read          | Comments only                                           | No            | No       |
-| Reviewer             | Write         | Yes. Two Reviewer approvals equal one from a Maintainer | Yes           | No       |
-| Maintainer           | Maintain      | Yes, on their own                                       | Yes           | Yes      |
+| Role        | GitHub access | Part in pull request review | Can merge                   | TSC vote |
+| ----------- | ------------- | --------------------------- | --------------------------- | -------- |
+| Contributor | Read          | Comments                    | No                          | No       |
+| Reviewer    | Write         | First review                | After a Maintainer approves | No       |
+| Maintainer  | Maintain      | Final approval              | Yes                         | Yes      |
 
 The numbers in this document are typical, not minimums. Quality matters more than quantity: a
 strong candidate is not held back by a count, and meeting a number does not guarantee a
@@ -29,14 +32,7 @@ nomination.
 
 ## Contributor
 
-Anyone who opens an issue, sends a pull request, reviews code, improves documentation, answers
-questions, or takes part in community meetings is a Contributor. No sign-up is needed. Read
-[CONTRIBUTING.md](CONTRIBUTING.md) to get started.
-
-## Frequent Contributor
-
-A Frequent Contributor is someone who has started contributing regularly and wants to take on
-issues and reviews.
+A Contributor is someone who contributes regularly and wants to take on issues and reviews.
 
 **Privileges**
 
@@ -49,8 +45,8 @@ issues and reviews.
 - Follow [CONTRIBUTING.md](CONTRIBUTING.md) and the project's code of conduct.
 - Own the issues assigned to you. If you can't continue, say so and unassign yourself.
 - Respond to review feedback on your pull requests.
-- Review other people's pull requests in areas you know. Your comments do not count as
-  approvals, but they are how you build toward the Reviewer role.
+- Review other people's pull requests in areas you know. Your reviews are how you build toward
+  the Reviewer role.
 
 **Typical expectations**
 
@@ -65,29 +61,28 @@ sponsoring Maintainer asks an organization admin to add you to the
 
 **Stepping back**
 
-Frequent Contributors are removed from the team after about 12 months without activity. You can
-ask to rejoin at any time.
+Contributors are removed from the team after about 12 months without activity. You can ask to
+rejoin at any time.
 
 ## Reviewer
 
-A Reviewer takes on first-line review so that Maintainers can focus on design, API, and release
-work. Two Reviewer approvals count the same as one Maintainer approval.
+A Reviewer does the first, detailed review of pull requests, so that Maintainers can give the
+final approval quickly and spend more of their time on design, API, and release work.
 
 **Privileges**
 
 - Write access to the repository through the `@theagentrouter/agent-router-reviewers` team.
-- Approvals that count toward merging. See [How pull requests get approved](#how-pull-requests-get-approved).
-- Merge pull requests once they meet the approval rules and CI passes.
+- First review on pull requests in your areas. Maintainers rely on your review when they give
+  the final approval.
+- Merge pull requests once a Maintainer has approved them and CI passes.
 - Start CI for pull requests from first-time contributors (the **Approve and run workflows**
   button), and re-run failed jobs.
 - Triage: label, assign, close, and reopen issues and pull requests, and set milestones.
 
 **Limits**
 
-- A Maintainer must approve changes to Maintainer-only paths: the API (`/api/`), CI and
-  repository automation (`/.github/`), design proposals (`/docs/proposals/`), and governance
-  files such as this one. [CODEOWNERS](CODEOWNERS) has the full list.
-- A Maintainer must approve pull requests into `release/**` branches.
+- Every pull request needs a Maintainer's approval to merge. A Reviewer's approval is not enough
+  on its own.
 - Reviewers do not merge their own pull requests.
 - Reviewers work from forks. Only Maintainers create branches or tags in the main repository,
   and only Maintainers cut releases.
@@ -98,15 +93,16 @@ work. Two Reviewer approvals count the same as one Maintainer approval.
 - Give a first review within about 3 business days on pull requests in your areas.
 - Hold pull requests to [CONTRIBUTING.md](CONTRIBUTING.md): DCO sign-off, the pull request
   template, tests for new code paths, and the generative AI policy.
-- Approve only changes you understand and would be comfortable maintaining. If a pull request
-  raises API, design, or security questions, bring in a Maintainer instead of approving.
+- Approve only changes you understand and would be comfortable maintaining. Your approval tells
+  a Maintainer the change is ready for a final look. If a pull request raises API, design, or
+  security questions, say so and bring in a Maintainer.
 - You can use AI tools to help with a review if you say so in the review. You are responsible
   for every comment and approval you post.
 - When you merge, clean up the squash commit title and description as CONTRIBUTING.md
   describes.
 - Triage new issues and pull requests in your areas.
-- Help new contributors, and point out good candidates for Frequent Contributor and Reviewer.
-- Keep your company and areas in [OWNERS](OWNERS) up to date.
+- Help newcomers, and point out good candidates for the Contributor and Reviewer roles.
+- Keep your company and areas in [MAINTAINERS.md](MAINTAINERS.md) up to date.
 
 **What we look for**
 
@@ -132,7 +128,7 @@ should have read them.
 3. The nomination needs a +1 from at least two Maintainers who work at two different companies,
    and stays open for at least 7 days. Any Maintainer can object. Objections are discussed in
    the issue, and the TSC decides if they cannot be resolved.
-4. A Maintainer opens a pull request that adds the nominee to [OWNERS](OWNERS) and
+4. A Maintainer opens a pull request that adds the nominee to the Reviewers section of
    [MAINTAINERS.md](MAINTAINERS.md). Once it merges, an organization admin adds them to the
    Reviewers team.
 
@@ -140,10 +136,10 @@ Individual Reviewer nominations do not need a TSC vote.
 
 **Stepping back**
 
-Reviewers can step down at any time by opening a pull request that moves them to
-`emeritus-reviewers` in [OWNERS](OWNERS). A Reviewer with no reviews for 6 months is contacted by
-a Maintainer and, if they don't plan to return, moved to emeritus. An emeritus Reviewer can be
-reinstated with a +1 from two Maintainers, without a new nomination.
+Reviewers can step down at any time by opening a pull request that moves them to Emeritus
+Reviewers in [MAINTAINERS.md](MAINTAINERS.md). A Reviewer with no reviews for 6 months is
+contacted by a Maintainer and, if they don't plan to return, moved to emeritus. An emeritus
+Reviewer can be reinstated with a +1 from two Maintainers, without a new nomination.
 
 ## Maintainer
 
@@ -152,26 +148,25 @@ voting members of the TSC.
 
 **Privileges**
 
-- Maintain access to the repository, and code owner for every path, including the
-  Maintainer-only paths.
-- A single Maintainer approval is enough to merge, subject to CI and CODEOWNERS.
+- Maintain access to the repository, and code owner for every path.
+- Give the approval a pull request needs to merge.
 - Cut releases, push release tags, and manage release branches.
 - Handle security reports and advisories as described in [SECURITY.md](SECURITY.md).
 - Vote on TSC decisions.
 
 **Responsibilities**
 
-- Review and merge pull requests, and give the final review for API, CI, governance, and
-  release changes.
+- Give the final approval on pull requests. When a Reviewer has already reviewed, focus on
+  whether the change fits the project. Review API, CI, governance, and release changes in full.
 - Own the project's technical direction: design proposals, the roadmap, and deprecations.
 - Run releases and backports.
 - Respond to security reports.
 - Take part in community meetings and TSC decisions.
-- Mentor Reviewers, and nominate Frequent Contributors, Reviewers, and Maintainers.
+- Sponsor Contributors, mentor Reviewers, and nominate Reviewers and Maintainers.
 
 **What we look for**
 
-- A record as a Reviewer whose approvals Maintainers trust, including being the main reviewer on
+- A record as a Reviewer whose reviews Maintainers trust, including being the main reviewer on
   many pull requests.
 - Good judgment on design, shown by writing or shepherding a design proposal.
 - Knowledge of more than one area of the project.
@@ -189,35 +184,32 @@ of their work makes the case.
 3. The TSC votes, as section 2 of the charter requires: a Contributor becomes a Maintainer with
    a majority approval of the TSC. A vote held without a meeting needs a majority of all TSC
    voting members.
-4. A Maintainer opens a pull request that moves the nominee to `maintainers` in
-   [OWNERS](OWNERS) and updates [MAINTAINERS.md](MAINTAINERS.md). Once it merges, an organization
-   admin updates their GitHub access.
+4. A Maintainer opens a pull request that moves the nominee to the Maintainers section of
+   [MAINTAINERS.md](MAINTAINERS.md). Once it merges, an organization admin updates their GitHub
+   access.
 
 **Stepping back**
 
-Maintainers can step down at any time by opening a pull request that moves them to
-`emeritus-maintainers`. The TSC can move an inactive Maintainer to emeritus by majority vote, as
-the charter allows. An emeritus Maintainer can return through a TSC vote.
+Maintainers can step down at any time by opening a pull request that moves them to Emeritus
+Maintainers in [MAINTAINERS.md](MAINTAINERS.md). The TSC can move an inactive Maintainer to
+emeritus by majority vote, as the charter allows. An emeritus Maintainer can return through a
+TSC vote.
 
 ## How pull requests get approved
 
-A pull request into `main` can merge when all of the following are true:
+A pull request into `main` or a `release/**` branch can merge when all of the following are true:
 
 1. Required CI checks pass.
-2. The `approval-policy` check passes. It needs either:
-   - an approval from at least one Maintainer, or
-   - approvals from at least two Reviewers, at least one of whom works at a different company
-     from the pull request author. If the author is not listed in [OWNERS](OWNERS), the two
-     Reviewers must work at two different companies.
-3. If the pull request changes a Maintainer-only path, a Maintainer has approved it.
-   [CODEOWNERS](CODEOWNERS) enforces this.
-4. Nobody with Write access has an open **Request changes** review on it.
+2. A Maintainer has approved it. [CODEOWNERS](CODEOWNERS) makes the Maintainers the code owners
+   of every path, and GitHub requires a code owner's approval.
+3. Nobody with Write access has an open **Request changes** review on it.
+
+Usually a Reviewer reviews first and a Maintainer gives the final approval. This is how the work
+is shared, not a rule: a Maintainer can review and approve directly, for example when no Reviewer
+covers the area or a fix is urgent.
 
 The author's own approval never counts. Approvals stay valid when new commits are pushed, so the
 person who merges should check that the final diff is what was approved.
 
-Pull requests into `release/**` branches need a Maintainer's approval.
-
-Anyone is welcome to review any pull request. Reviews from people who do not hold the Reviewer or
-Maintainer role don't count toward merging, but they are valued and are how people grow into
-those roles.
+Anyone is welcome to review any pull request. Reviews from people who don't hold a role are
+valued, and they are how people grow into the Reviewer role.

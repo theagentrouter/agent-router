@@ -10,7 +10,7 @@ _Nominee_: @<handle>
 
 _Company_:
 
-> Their current employer, or Independent. This goes into OWNERS and is used for the company rule.
+> Their current employer, or Independent. This goes into MAINTAINERS.md.
 
 _Areas_:
 
@@ -37,5 +37,5 @@ Checklist (see COMMUNITY_ROLES.md for the full process):
 - [ ] The nominee has commented to accept.
 - [ ] +1 from at least two Maintainers who work at two different companies.
 - [ ] Open for at least 7 days with no unresolved objection.
-- [ ] Pull request adding the nominee to `OWNERS` and `MAINTAINERS.md` is merged.
+- [ ] Pull request adding the nominee to the Reviewers section of `MAINTAINERS.md` is merged.
 - [ ] An organization admin has added the nominee to the Reviewers team.

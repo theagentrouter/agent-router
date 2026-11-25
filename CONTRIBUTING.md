@@ -131,16 +131,17 @@ make sure that these automated checks pass after you open a PR by following the 
   as commit message by default. Maintainers and Reviewers may request contributors to
   edit the pull request title and description to ensure that it remains descriptive as a
   commit message. Alternatively, whoever merges may change the commit message directly at the time of merge.
-- A pull request needs an approval from one Maintainer, or from two Reviewers. The full rules are in
-  [COMMUNITY_ROLES.md](./COMMUNITY_ROLES.md#how-pull-requests-get-approved).
+- A pull request needs a Maintainer's approval to merge. Usually a Reviewer reviews it first. The full rules
+  are in [COMMUNITY_ROLES.md](./COMMUNITY_ROLES.md#how-pull-requests-get-approved).
 - If you have any questions during the review, please feel free to ask the maintainers and reviewers listed in [MAINTAINERS.md](./MAINTAINERS.md).
 
 ## Community roles
 
-The community has four roles: Contributor, Frequent Contributor, Reviewer, and Maintainer.
-[COMMUNITY_ROLES.md](./COMMUNITY_ROLES.md) describes what each role can do, its responsibilities,
-and how to move from one role to the next. It is adopted by the Technical Steering Committee under
-the project's [Technical Charter](./Technical_Charter.pdf) and is part of this contributing guide.
+The community has three roles: Contributor, Reviewer, and Maintainer. You don't need a role to
+contribute. [COMMUNITY_ROLES.md](./COMMUNITY_ROLES.md) describes what each role can do, its
+responsibilities, and how to move from one role to the next. It is adopted by the Technical
+Steering Committee under section 2 of the project's [Technical Charter](./Technical_Charter.pdf),
+replaces the charter's default role definitions, and is part of this contributing guide.
 
-The [OWNERS](./OWNERS) file lists the current Reviewers and Maintainers. Frequent Contributors are
-the members of the `@theagentrouter/agent-router-assignable` GitHub team.
+Contributors are the members of the `@theagentrouter/agent-router-assignable` GitHub team.
+[MAINTAINERS.md](./MAINTAINERS.md) lists the current Reviewers and Maintainers.

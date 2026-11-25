@@ -36,5 +36,5 @@ Checklist (see COMMUNITY_ROLES.md for the full process):
 - [ ] The nominee has commented to accept.
 - [ ] The TSC has approved by majority vote, as the Technical Charter requires. For a vote held
       in this issue, that is a majority of all TSC voting members.
-- [ ] Pull request moving the nominee to `maintainers` in `OWNERS` and updating `MAINTAINERS.md` is merged.
+- [ ] Pull request moving the nominee to the Maintainers section of `MAINTAINERS.md` is merged.
 - [ ] An organization admin has updated the nominee's GitHub access.

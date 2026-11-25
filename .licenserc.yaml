@@ -36,7 +36,6 @@ header:
     - .testcoverage.yml
     - LICENSE
     - CODEOWNERS
-    - OWNERS
     - pre-commit.sh
     - "**/*/server.key"
     - "**/*/server.crt"
