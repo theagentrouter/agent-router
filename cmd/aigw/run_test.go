@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -478,6 +479,18 @@ func Test_setEncryptionSeeds(t *testing.T) {
 		require.Equal(t, &filterapi.FileIDEncryption{Seed: "file-seed", Iterations: 5678}, cfg.FileIDEncryption)
 		require.Equal(t, &filterapi.MCPSessionEncryption{Seed: "mcp-seed", Iterations: 1234}, cfg.MCPConfig.SessionEncryption)
 	})
+	t.Run("fallback file id seed", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "")
+		seedCtx := &runCmdContext{fileIDEncryptionIterations: 5678, fileIDEncryptionSeed: "saved-seed"}
+		cfg := &filterapi.Config{}
+		seedCtx.setEncryptionSeeds(cfg)
+		require.Equal(t, &filterapi.FileIDEncryption{Seed: "saved-seed", Iterations: 5678}, cfg.FileIDEncryption)
+
+		// The environment takes precedence.
+		t.Setenv(fileIDEncryptionSeedEnvVar, "env-seed")
+		seedCtx.setEncryptionSeeds(cfg)
+		require.Equal(t, "env-seed", cfg.FileIDEncryption.Seed)
+	})
 	t.Run("no MCP config", func(t *testing.T) {
 		t.Setenv(mcpSessionEncryptionSeedEnvVar, "mcp-seed")
 		cfg := &filterapi.Config{}
@@ -503,4 +516,87 @@ func Test_mustStartExtProc_seedNotOnCommandLine(t *testing.T) {
 	require.NotContains(t, strings.Join(capturedArgs, " "), "file-seed")
 	cfg := requireExtProcConfigBundle(t, findFlagValue(capturedArgs, "--configBundlePath"))
 	require.Equal(t, "file-seed", cfg.FileIDEncryption.Seed)
+}
+
+func Test_fileIDSeedForRun(t *testing.T) {
+	t.Run("generated and saved when missing, then reused", func(t *testing.T) {
+		// The config home does not exist yet: it is created.
+		seedPath := filepath.Join(t.TempDir(), "aigw", fileIDEncryptionSeedFile)
+		var stderr bytes.Buffer
+		seed := fileIDSeedForRun(seedPath, &stderr)
+		require.NotEmpty(t, seed)
+		require.Empty(t, stderr.String())
+		raw, err := os.ReadFile(seedPath)
+		require.NoError(t, err)
+		require.Equal(t, seed, strings.TrimSpace(string(raw)))
+		info, err := os.Stat(seedPath)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+		require.Equal(t, seed, fileIDSeedForRun(seedPath, &stderr), "later runs reuse the saved seed")
+		require.Empty(t, stderr.String())
+	})
+
+	t.Run("empty file is regenerated", func(t *testing.T) {
+		seedPath := filepath.Join(t.TempDir(), fileIDEncryptionSeedFile)
+		require.NoError(t, os.WriteFile(seedPath, []byte(" \n"), 0o600))
+		seed := fileIDSeedForRun(seedPath, io.Discard)
+		require.NotEmpty(t, seed)
+		raw, err := os.ReadFile(seedPath)
+		require.NoError(t, err)
+		require.Equal(t, seed, strings.TrimSpace(string(raw)))
+	})
+
+	t.Run("concurrent runs agree on a single seed", func(t *testing.T) {
+		seedPath := filepath.Join(t.TempDir(), "aigw", fileIDEncryptionSeedFile)
+		const runs = 20
+		seeds := make([]string, runs)
+		var wg sync.WaitGroup
+		for i := range runs {
+			wg.Go(func() { seeds[i] = fileIDSeedForRun(seedPath, io.Discard) })
+		}
+		wg.Wait()
+		raw, err := os.ReadFile(seedPath)
+		require.NoError(t, err)
+		for _, seed := range seeds {
+			require.Equal(t, strings.TrimSpace(string(raw)), seed)
+		}
+		entries, err := os.ReadDir(filepath.Dir(seedPath))
+		require.NoError(t, err)
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		require.ElementsMatch(t, []string{fileIDEncryptionSeedFile, fileIDEncryptionSeedFile + ".lock"}, names,
+			"temporary files are removed")
+	})
+
+	t.Run("concurrent runs agree on a single seed replacing an empty file", func(t *testing.T) {
+		seedPath := filepath.Join(t.TempDir(), fileIDEncryptionSeedFile)
+		require.NoError(t, os.WriteFile(seedPath, nil, 0o600))
+		const runs = 20
+		seeds := make([]string, runs)
+		var wg sync.WaitGroup
+		for i := range runs {
+			wg.Go(func() { seeds[i] = fileIDSeedForRun(seedPath, io.Discard) })
+		}
+		wg.Wait()
+		raw, err := os.ReadFile(seedPath)
+		require.NoError(t, err)
+		for _, seed := range seeds {
+			require.Equal(t, strings.TrimSpace(string(raw)), seed)
+		}
+	})
+
+	t.Run("unwritable location still returns a seed", func(t *testing.T) {
+		// The parent of the seed path is a regular file, so neither the directory nor the seed can be created.
+		parent := filepath.Join(t.TempDir(), "file")
+		require.NoError(t, os.WriteFile(parent, nil, 0o600))
+		seedPath := filepath.Join(parent, fileIDEncryptionSeedFile)
+		var stderr bytes.Buffer
+		seed := fileIDSeedForRun(seedPath, &stderr)
+		require.NotEmpty(t, seed)
+		require.Contains(t, stderr.String(), "failed to save the Files/Batch API id encryption seed")
+		require.NoFileExists(t, seedPath)
+	})
 }

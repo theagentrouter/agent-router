@@ -11,7 +11,7 @@
 GO_TOOL := go tool -modfile=tools/go.mod
 
 # This is the package that contains the version information for the build.
-VERSION_STRING:=$(shell git describe --tags --long)
+VERSION_STRING:=$(shell git describe --tags --long --match 'v*')
 VERSION_PACKAGE := github.com/envoyproxy/ai-gateway/internal/version
 GO_LDFLAGS += -X $(VERSION_PACKAGE).version=$(VERSION_STRING)
 
