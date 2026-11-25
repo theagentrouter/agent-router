@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/mod/semver"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -48,6 +49,17 @@ const (
 // can be set to "true" to preserve the logs and the kind cluster even if the tests pass.
 var KeepCluster = func() bool {
 	v, _ := os.LookupEnv("TEST_KEEP_CLUSTER")
+	return v == "true"
+}()
+
+// By default, SetupAll creates the kind cluster and installs the Envoy Gateway, the AI Gateway, and
+// any other test dependencies from scratch. The TEST_SKIP_SETUP environment variable can be set to
+// "true" to skip all of that and reuse an already set up environment instead - for example, a kind
+// cluster left running from a previous run via TEST_KEEP_CLUSTER=true. This is useful when iterating
+// on the tests themselves, since it avoids paying the setup cost on every run. The reused cluster is
+// never deleted at the end of the run, so it can be reused again by the next one.
+var SkipSetup = func() bool {
+	v, _ := os.LookupEnv("TEST_SKIP_SETUP")
 	return v == "true"
 }()
 
@@ -99,13 +111,17 @@ func TestMain(m *testing.M, aigwOpts AIGatewayHelmOption, inferenceExtension, ne
 
 // SetupAll sets up the kind cluster, installs the Envoy Gateway, and installs the AI Gateway.
 func SetupAll(ctx context.Context, clusterName string, aigwOpts AIGatewayHelmOption, inferenceExtension, needPrometheus bool) error {
+	if SkipSetup {
+		fmt.Printf("Skipped to set up the test environment\n")
+		return nil
+	}
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithDeadline(ctx, time.Now().Add(5*time.Minute))
 	defer cancel()
 	// The following code sets up the kind cluster, installs the Envoy Gateway, and installs the AI Gateway.
 	// They must be idempotent and can be run multiple times so that we can run the tests multiple times on
 	// failures.
-	if err := initKindCluster(ctx, clusterName); err != nil {
+	if err := initKindCluster(ctx, clusterName, inferenceExtension); err != nil {
 		return fmt.Errorf("failed to initialize kind cluster: %w", err)
 	}
 	if err := initMetalLB(ctx); err != nil {
@@ -132,7 +148,7 @@ func SetupAll(ctx context.Context, clusterName string, aigwOpts AIGatewayHelmOpt
 	return nil
 }
 
-func initKindCluster(ctx context.Context, clusterName string) (err error) {
+func initKindCluster(ctx context.Context, clusterName string, _ bool) (err error) {
 	initLog("Setting up the kind cluster")
 	start := time.Now()
 	defer func() {
@@ -162,13 +178,14 @@ func initKindCluster(ctx context.Context, clusterName string) (err error) {
 	}
 
 	initLog("\tLoading Docker images into kind cluster")
-	for _, image := range []string{
+	loadImages := []string{
 		"docker.io/envoyproxy/ai-gateway-controller:latest",
 		"docker.io/envoyproxy/ai-gateway-extproc:latest",
 		"docker.io/envoyproxy/ai-gateway-testupstream:latest",
 		"docker.io/envoyproxy/ai-gateway-testmcpserver:latest",
 		"docker.io/envoyproxy/ai-gateway-testextauthserver:latest",
-	} {
+	}
+	for _, image := range loadImages {
 		cmd := testsinternal.GoToolCmdContext(ctx, "kind", "load", "docker-image", image, "--name", clusterName)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -352,7 +369,7 @@ func CleanupKindCluster(testsFailed bool, clusterName string) {
 		cmd.Stderr = os.Stderr
 		_ = cmd.Run()
 	}
-	if !testsFailed && !KeepCluster {
+	if !testsFailed && !KeepCluster && !SkipSetup {
 		cleanupLog("Destroying the kind cluster")
 		cmd := testsinternal.GoToolCmd("kind", "delete", "cluster", "--name", clusterName)
 		cmd.Stdout = os.Stdout
@@ -384,17 +401,6 @@ func installInferencePoolEnvironment(ctx context.Context) (err error) {
 	); err != nil {
 		return fmt.Errorf("failed to install inference extension CRDs: %w", err)
 	}
-	baseURL := fmt.Sprintf("https://github.com/kubernetes-sigs/gateway-api-inference-extension/raw/%s/config/manifests", infExtVersion)
-	for _, manifest := range []string{
-		"vllm/sim-deployment.yaml",
-		"inferencepool-resources.yaml",
-		"inferenceobjective.yaml",
-	} {
-		initLog(fmt.Sprintf("\tApplying InferencePool manifest: %s", manifest))
-		if err = KubectlApplyManifest(ctx, fmt.Sprintf("%s/%s", baseURL, manifest)); err != nil {
-			return fmt.Errorf("failed to apply InferencePool manifest %s: %w", manifest, err)
-		}
-	}
 	return nil
 }
 
@@ -410,6 +416,20 @@ func EnvoyGatewayVersion() string {
 // EG release includes envoyproxy/gateway#9216, otherwise it will keep skipping on that release.
 func EnvoyGatewaySupportsLimitFromMetadata() bool {
 	return EnvoyGatewayVersion() == EnvoyGatewayLatestVersion
+}
+
+// envoyGatewayMultipleInferencePoolsPerRuleVersion is the first Envoy Gateway release that builds
+// one cluster per InferencePool backendRef of a route rule.
+const envoyGatewayMultipleInferencePoolsPerRuleVersion = "v1.11.0-rc.1"
+
+// EnvoyGatewaySupportsMultipleInferencePoolsPerRule reports whether the installed Envoy Gateway
+// builds one cluster per InferencePool backendRef of a route rule: the main build, or
+// v1.11.0-rc.1 and later. Older releases pass every InferencePool of the rule to a single
+// PostClusterModify call, so the extension server rejects that rule with a 500.
+func EnvoyGatewaySupportsMultipleInferencePoolsPerRule() bool {
+	v := EnvoyGatewayVersion()
+	return v == EnvoyGatewayLatestVersion ||
+		semver.Compare(v, envoyGatewayMultipleInferencePoolsPerRuleVersion) >= 0
 }
 
 // initEnvoyGateway initializes the Envoy Gateway in the kind cluster following the quickstart guide:
@@ -616,8 +636,12 @@ func kubectlWaitForDaemonSetReady(ctx context.Context, namespace, daemonset stri
 
 // RequireWaitForGatewayPodReady waits for the Envoy Gateway pod with the given selector to be ready.
 func RequireWaitForGatewayPodReady(t *testing.T, selector string) {
-	requireWaitForGatewayPod(t, selector)
-	RequireWaitForPodReady(t, EnvoyGatewayNamespace, selector)
+	RequireWaitForGatewayPodReadyWithNamespace(t, EnvoyGatewayNamespace, selector)
+}
+
+func RequireWaitForGatewayPodReadyWithNamespace(t *testing.T, namespace, selector string) {
+	requireWaitForGatewayPod(t, namespace, selector)
+	RequireWaitForPodReady(t, namespace, selector)
 }
 
 // RequireGatewayListenerAddressViaMetalLB gets the external IP address of the Gateway via MetalLB.
@@ -634,13 +658,13 @@ func RequireGatewayListenerAddressViaMetalLB(t *testing.T, namespace, name strin
 
 // requireWaitForGatewayPod waits for the Envoy Gateway pod containing the
 // extproc container.
-func requireWaitForGatewayPod(t *testing.T, selector string) {
+func requireWaitForGatewayPod(t *testing.T, namespace, selector string) {
 	waitUntilKubectl(t, 2*time.Minute, 1*time.Second, func(output string) error {
 		if !strings.Contains(output, "ai-gateway-extproc") {
 			return fmt.Errorf("container not found, output: %s", output)
 		}
 		return nil
-	}, "get", "pod", "-n", EnvoyGatewayNamespace,
+	}, "get", "pod", "-n", namespace,
 		"--selector="+selector, "-o", "jsonpath='{.items[0].spec.initContainers[*].name} {.items[0].spec.containers[*].name}'")
 }
 

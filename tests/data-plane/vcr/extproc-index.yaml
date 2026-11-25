@@ -1,0 +1,10 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+checksum: b2aaa5fcd4a305b33fccd23d56b57b5272aedb7ef6cd062112e48ee4c36b4ddb
+parts:
+  - name: config
+    path: config.yaml
+    sizeBytes: 1000

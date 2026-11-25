@@ -36,22 +36,29 @@ const (
 	// RequiredCredentialDeepInfra is the bit flag for the DeepInfra API key.
 	// https://deepinfra.com/docs/openai_api
 	RequiredCredentialDeepInfra
+	// RequiredCredentialOpenRouter is the bit flag for the OpenRouter API key.
+	// https://openrouter.ai/docs
+	RequiredCredentialOpenRouter
 	// RequiredCredentialAnthropic is the bit flag for the Anthropic API key.
 	RequiredCredentialAnthropic
 	// RequiredCredentialCohere is the bit flag for the Cohere API key.
 	RequiredCredentialCohere
+	// RequiredCredentialTypeSafe is the bit flag for the TypeSafe API key.
+	RequiredCredentialTypeSafe
 )
 
 // CredentialsContext holds the context for the credentials used in the tests.
 type CredentialsContext struct {
 	// OpenAIValid, AWSValid, AzureValid, etc. are true if the credentials are set and ready to use the real services.
-	OpenAIValid, AWSValid, AzureValid, GeminiValid, GroqValid, GrokValid, SambaNovaValid, DeepInfraValid, AnthropicValid, CohereValid bool
+	OpenAIValid, AWSValid, AzureValid, GeminiValid, GroqValid, GrokValid, SambaNovaValid, DeepInfraValid, OpenRouterValid, AnthropicValid, CohereValid, TypeSafeValid bool
 	// OpenAIAPIKey is the OpenAI API key. This defaults to "dummy-openai-api-key" if not set.
 	OpenAIAPIKey string
 	// AnthropicAPIKey is the Anthropic API key. This defaults to "dummy-anthropic-api-key" if not set.
 	AnthropicAPIKey string
 	// CohereAPIKey is the Cohere API key. This defaults to "dummy-cohere-api-key" if not set.
 	CohereAPIKey string
+	// TypeSafeAPIKey is the TypeSafe API key. This defaults to "dummy-typesafe-api-key" if not set.
+	TypeSafeAPIKey string
 	// AWSFileLiteral contains the AWS credentials in the format of a file literal.
 	AWSFileLiteral     string
 	AWSAccessKeyID     string
@@ -68,6 +75,8 @@ type CredentialsContext struct {
 	SambaNovaAPIKey string
 	// DeepInfraAPIKey is the API key for DeepInfra API. https://deepinfra.com/docs/openai_api
 	DeepInfraAPIKey string
+	// OpenRouterAPIKey is the API key for OpenRouter API. https://openrouter.ai/docs
+	OpenRouterAPIKey string
 }
 
 // MaybeSkip skips the test if the required credentials are not set.
@@ -96,11 +105,17 @@ func (c CredentialsContext) MaybeSkip(t testing.TB, required RequiredCredential)
 	if required&RequiredCredentialDeepInfra != 0 && !c.DeepInfraValid {
 		t.Skip("skipping test as DeepInfra API key is not set in TEST_DEEPINFRA_API_KEY")
 	}
+	if required&RequiredCredentialOpenRouter != 0 && !c.OpenRouterValid {
+		t.Skip("skipping test as OpenRouter API key is not set in TEST_OPENROUTER_API_KEY")
+	}
 	if required&RequiredCredentialAnthropic != 0 && !c.AnthropicValid {
 		t.Skip("skipping test as Anthropic API key is not set in TEST_ANTHROPIC_API_KEY")
 	}
 	if required&RequiredCredentialCohere != 0 && !c.CohereValid {
 		t.Skip("skipping test as Cohere API key is not set in TEST_COHERE_API_KEY")
+	}
+	if required&RequiredCredentialTypeSafe != 0 && !c.TypeSafeValid {
+		t.Skip("skipping test as TypeSafe API key is not set in TEST_TYPESAFE_API_KEY")
 	}
 }
 
@@ -136,6 +151,11 @@ func RequireNewCredentialsContext() (ctx CredentialsContext) {
 	ctx.DeepInfraValid = deepInfraAPIKeyEnv != ""
 	ctx.DeepInfraAPIKey = cmp.Or(deepInfraAPIKeyEnv, "dummy-deepinfra-api-key")
 
+	// Set up credential for OpenRouter API.
+	openRouterAPIKeyEnv := os.Getenv("TEST_OPENROUTER_API_KEY")
+	ctx.OpenRouterValid = openRouterAPIKeyEnv != ""
+	ctx.OpenRouterAPIKey = cmp.Or(openRouterAPIKeyEnv, "dummy-openrouter-api-key")
+
 	// Set up credential file for Azure.
 	azureAccessTokenEnv := os.Getenv("TEST_AZURE_ACCESS_TOKEN")
 	ctx.AzureValid = azureAccessTokenEnv != ""
@@ -167,5 +187,9 @@ func RequireNewCredentialsContext() (ctx CredentialsContext) {
 	cohereAPIKeyEnv := os.Getenv("TEST_COHERE_API_KEY")
 	ctx.CohereValid = cohereAPIKeyEnv != ""
 	ctx.CohereAPIKey = cmp.Or(cohereAPIKeyEnv, "dummy-cohere-api-key")
+	// Set up credential for TypeSafe.
+	typeSafeAPIKeyEnv := os.Getenv("TEST_TYPESAFE_API_KEY")
+	ctx.TypeSafeValid = typeSafeAPIKeyEnv != ""
+	ctx.TypeSafeAPIKey = cmp.Or(typeSafeAPIKeyEnv, "dummy-typesafe-api-key")
 	return
 }

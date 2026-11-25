@@ -19,6 +19,8 @@ import (
 	"github.com/openai/openai-go/option"
 	"github.com/stretchr/testify/require"
 
+	"github.com/envoyproxy/ai-gateway/internal/controller"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 	"github.com/envoyproxy/ai-gateway/tests/internal/e2elib"
 	"github.com/envoyproxy/ai-gateway/tests/internal/testupstreamlib"
@@ -254,18 +256,18 @@ func TestWithTestUpstream(t *testing.T) {
 	})
 
 	t.Run("secret update propagation", func(t *testing.T) {
-		const secretName = "translation-testupstream-default"
-		// Verify that the apiKey still exists in the filter-config.yaml secret with the existing value.
+		indexSecretName := controller.FilterConfigBundleIndexSecretName("translation-testupstream", "default")
+		// Verify that the apiKey still exists in the filter config bundle with the existing value.
 		internaltesting.RequireEventuallyNoError(t, func() error {
-			secret, err := extractFilterConfigFromSecret(t.Context(), secretName)
+			config, err := extractFilterConfigFromBundle(t.Context(), indexSecretName)
 			if err != nil {
 				return err
 			}
-			if !strings.Contains(secret, dummyToken) {
-				return fmt.Errorf("filter-config.yaml does not contain %s", dummyToken)
+			if !strings.Contains(config, dummyToken) {
+				return fmt.Errorf("filter config bundle does not contain %s", dummyToken)
 			}
 			return nil
-		}, 10*time.Second, 1*time.Second, "initial secret not found in filter-config.yaml")
+		}, 10*time.Second, 1*time.Second, "initial filter config bundle not found")
 
 		// Update the secret used by the BackendSecurityPolicy to have a new apiKey value.
 		const updatedKey = "pikachu"
@@ -279,36 +281,59 @@ stringData:
   apiKey: "%s"`, updatedKey)
 		require.NoError(t, e2elib.KubectlApplyManifestStdin(t.Context(), secretUpdated))
 
-		// Verify that the new apiKey is propagated to the filter-config.yaml secret.
+		// Verify that the new apiKey is propagated to the filter config bundle.
 		internaltesting.RequireEventuallyNoError(t, func() error {
-			secret, err := extractFilterConfigFromSecret(t.Context(), secretName)
+			config, err := extractFilterConfigFromBundle(t.Context(), indexSecretName)
 			if err != nil {
 				return err
 			}
-			if !strings.Contains(secret, updatedKey) {
-				return fmt.Errorf("filter-config.yaml does not contain %s", updatedKey)
+			if !strings.Contains(config, updatedKey) {
+				return fmt.Errorf("filter config bundle does not contain %s", updatedKey)
 			}
 			return nil
-		}, 20*time.Second, 1*time.Second, "updated secret not propagated to filter-config.yaml")
+		}, 20*time.Second, 1*time.Second, "updated secret not propagated to filter config bundle")
 	})
 }
 
-// extractFilterConfigFromSecret extracts the filter-config.yaml content from the given secret name.
-func extractFilterConfigFromSecret(ctx context.Context, name string) (string, error) {
+// extractFilterConfigFromBundle reassembles the filter config from its Kubernetes Secrets.
+func extractFilterConfigFromBundle(ctx context.Context, indexSecretName string) (string, error) {
 	ctrl := e2elib.Kubectl(ctx, "get", "secrets", "-n", e2elib.EnvoyGatewayNamespace,
-		name, "-o",
-		`jsonpath='{.data.filter-config\.yaml}'`)
+		indexSecretName, "-o", `jsonpath='{.data.index\.yaml}'`)
 	ctrl.Stderr = nil
 	ctrl.Stdout = nil
 	output, err := ctrl.Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to get filter-config.yaml from secret: %w", err)
+		return "", fmt.Errorf("failed to get filter config bundle index: %w", err)
 	}
-	decoded, err := base64.StdEncoding.DecodeString(strings.Trim(string(output), "'"))
+	indexRaw, err := base64.StdEncoding.DecodeString(strings.Trim(string(output), "'"))
 	if err != nil {
-		return "", fmt.Errorf("failed to base64 decode filter-config.yaml: %w", err)
+		return "", fmt.Errorf("failed to decode filter config bundle index: %w", err)
 	}
-	return string(decoded), nil
+	index, err := filterapi.UnmarshalConfigBundleIndex(indexRaw)
+	if err != nil {
+		return "", err
+	}
+
+	var raw []byte
+	for _, part := range index.Parts {
+		ctrl = e2elib.Kubectl(ctx, "get", "secrets", "-n", e2elib.EnvoyGatewayNamespace,
+			part.Name, "-o", "jsonpath='{.data.chunk}'")
+		ctrl.Stderr = nil
+		ctrl.Stdout = nil
+		output, err = ctrl.Output()
+		if err != nil {
+			return "", fmt.Errorf("failed to get filter config bundle part %s: %w", part.Name, err)
+		}
+		partRaw, decodeErr := base64.StdEncoding.DecodeString(strings.Trim(string(output), "'"))
+		if decodeErr != nil {
+			return "", fmt.Errorf("failed to decode filter config bundle part %s: %w", part.Name, decodeErr)
+		}
+		raw = append(raw, partRaw...)
+	}
+	if got := filterapi.ConfigBundleChecksum(raw); got != index.Checksum {
+		return "", fmt.Errorf("filter config bundle checksum mismatch: expected %s, got %s", index.Checksum, got)
+	}
+	return string(raw), nil
 }
 
 // TestPromptCacheTranslationMatrix proves OpenAI-shim cache_control markers survive

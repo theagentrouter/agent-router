@@ -7,14 +7,14 @@ sidebar_position: 6
 import CodeBlock from '@theme/CodeBlock';
 import vars from '../../\_vars.json';
 
-When using the Envoy AI Gateway, it will collect AI specific metrics and expose them to Prometheus for monitoring by default.
+When using the Agent Router, it will collect AI specific metrics and expose them to Prometheus for monitoring by default.
 This guide provides an overview of the metrics collected by the AI Gateway and how to monitor them using Prometheus.
 
 ## Overview
 
-Envoy AI Gateway is designed to intercept and process AI/LLM requests, that enables it to collect metrics for monitoring and observability.
+Agent Router is designed to intercept and process AI/LLM requests, that enables it to collect metrics for monitoring and observability.
 Currently, it collects metrics and exports them to Prometheus for monitoring in the OpenTelemetry format as specified by the [OpenTelemetry Gen AI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/attributes-registry/gen-ai/).
-Not all metrics are supported yet, but the Envoy AI Gateway will continue to add more metrics in the future.
+Not all metrics are supported yet, but the Agent Router will continue to add more metrics in the future.
 
 ### Supported Endpoints
 
@@ -26,11 +26,11 @@ Metrics are collected for the following LLM endpoints:
 - **`/cohere/v2/rerank`** - Rerank
 - **`/anthropic/v1/messages`** - Anthropic messages (streaming and non-streaming)
 
-For example, the Envoy AI Gateway collects metrics such as:
+For example, the Agent Router collects metrics such as:
 
 - [**`gen_ai.client.token.usage`**](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiclienttokenusage): Number of tokens processed. The attribute `gen_ai.token.type` can be used to differentiate between input, output, and total tokens.
-- [**`gen_ai.server.request.duration`**](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiserverrequestduration): Measured from the start of the received request headers in the Envoy AI Gateway filter to the end of the processed response body processing.
-- [**`gen_ai.server.time_to_first_token`**](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiservertime_to_first_token): Measured from the start of the received request headers in the Envoy AI Gateway filter to the receiving of the first token in the response body handling.
+- [**`gen_ai.server.request.duration`**](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiserverrequestduration): Measured from the start of the received request headers in the Agent Router filter to the end of the processed response body processing.
+- [**`gen_ai.server.time_to_first_token`**](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiservertime_to_first_token): Measured from the start of the received request headers in the Agent Router filter to the receiving of the first token in the response body handling.
 - [**`gen_ai.server.time_per_output_token`**](https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiservertime_per_output_token): The latency between consecutive tokens, if supported, or by chunks/tokens otherwise.
 
 Each metric comes with some default attributes such as:
@@ -49,7 +49,7 @@ Each metric comes with some default attributes such as:
 
 :::tip
 
-You can enrich the metrics with custom labels extracted from HTTP request headers. Use `controller.requestHeaderAttributes` for a base mapping shared with spans and access logs, and `controller.metricsRequestHeaderAttributes` for metrics-only mappings. Metrics never default to `session.id` because it is high-cardinality. See [values.yaml](https://github.com/envoyproxy/ai-gateway/blob/main/manifests/charts/ai-gateway-helm/values.yaml) for more details including other configurations.
+You can enrich the metrics with custom labels extracted from HTTP request headers. Use `controller.requestHeaderAttributes` for a base mapping shared with spans and access logs, and `controller.metricsRequestHeaderAttributes` for metrics-only mappings. Metrics never default to `session.id` because it is high-cardinality. See [values.yaml](https://github.com/theagentrouter/agent-router/blob/main/manifests/charts/ai-gateway-helm/values.yaml) for more details including other configurations.
 
 :::
 
@@ -60,7 +60,7 @@ Before you begin, you'll need to complete the basic setup from the [Basic Usage]
 Then, you can install the prometheus using the following commands:
 
 <CodeBlock language="shell">
-{`kubectl apply -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/${vars.aigwGitRef}/examples/monitoring/monitoring.yaml`}
+{`kubectl apply -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/monitoring/monitoring.yaml`}
 </CodeBlock>
 
 Let's wait for a while until the Prometheus is up and running.

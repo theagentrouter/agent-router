@@ -180,39 +180,3 @@ func TestFilterConfigBundleVolumeName(t *testing.T) {
 		})
 	}
 }
-
-func TestLegacyFilterConfigVolumeName(t *testing.T) {
-	tests := []struct {
-		name        string
-		gwName      string
-		gwNamespace string
-		expect      string
-	}{
-		{
-			name:        "short gateway name",
-			gwName:      "gw",
-			gwNamespace: "default",
-			expect:      "ai-gateway-gw-default-3d45476e8d68",
-		},
-		{
-			name:        "another identity",
-			gwName:      "gateway",
-			gwNamespace: "ns1",
-			expect:      "ai-gateway-gateway-ns1-c6d39be275c7",
-		},
-		{
-			name:        "long gateway name bounded with hash",
-			gwName:      strings.Repeat("gw", 50),
-			gwNamespace: "default",
-			expect:      "ai-gateway-gwgwgwgwgwgwgwgwgwgwgwgwgwgwgwgwgwgwgwg-aa314d0b5069",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := legacyFilterConfigVolumeName(tt.gwName, tt.gwNamespace)
-			require.Equal(t, tt.expect, got)
-			require.LessOrEqual(t, len(got), k8sVolumeNameMaxLen)
-		})
-	}
-}

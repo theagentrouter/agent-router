@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	openAIconstant "github.com/openai/openai-go/shared/constant"
 	"k8s.io/utils/ptr"
 
+	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
@@ -84,22 +86,34 @@ func openAIToolParamsToAnthropicInputSchema(parameters any) (anthropic.ToolInput
 
 func anthropicToOpenAIFinishReason(stopReason anthropic.StopReason) (openai.ChatCompletionChoicesFinishReason, error) {
 	switch stopReason {
-	// The most common stop reason. Indicates Claude finished its response naturally.
-	// or Claude encountered one of your custom stop sequences.
-	// TODO: A better way to return pause_turn
-	// TODO: "pause_turn" Used with server tools like web search when Claude needs to pause a long-running operation.
-	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
+	// The most common stop reason. Indicates Claude finished its response naturally, or Claude encountered one of your custom stop sequences.
+	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence:
 		return openai.ChatCompletionChoicesFinishReasonStop, nil
+	case anthropic.StopReasonPauseTurn: // Used with server tools like web search when Claude pauses a long-running turn; the caller can continue it.
+		return openai.ChatCompletionChoicesFinishReasonPauseTurn, nil
 	case anthropic.StopReasonMaxTokens: // Claude stopped because it reached the max_tokens limit specified in your request.
 		// TODO: do we want to return an error? see: https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use#handling-the-max-tokens-stop-reason
 		return openai.ChatCompletionChoicesFinishReasonLength, nil
 	case anthropic.StopReasonToolUse:
 		return openai.ChatCompletionChoicesFinishReasonToolCalls, nil
-	case anthropic.StopReasonRefusal:
+	case anthropic.StopReasonRefusal: // Anthropic's safety classifiers intervened; the response may be cut off.
 		return openai.ChatCompletionChoicesFinishReasonContentFilter, nil
+	case anthropic.StopReason(anthropicschema.StopReasonModelContextWindowExceeded):
+		return openai.ChatCompletionChoicesFinishReasonContextWindowExceeded, nil
 	default:
-		return "", fmt.Errorf("received invalid stop reason %v", stopReason)
+		return openai.ChatCompletionChoicesFinishReasonError, fmt.Errorf("received invalid stop reason %v", stopReason)
 	}
+}
+
+// refusalFields converts Anthropic's refusal stop_details into the OpenAI-format refusal and refusal_category fields. Anthropic sends null category and explanation when a refusal does not map to a named category; empty values are omitted, and finish_reason content_filter still signals the refusal.
+func refusalFields(explanation, category string) (refusal, refusalCategory *string) {
+	if explanation != "" {
+		refusal = &explanation
+	}
+	if category != "" {
+		refusalCategory = &category
+	}
+	return refusal, refusalCategory
 }
 
 // validateTemperatureForAnthropic checks if the temperature is within Anthropic's supported range (0.0 to 1.0).
@@ -172,6 +186,16 @@ func translateOpenAItoAnthropicTools(openAITools []openai.Tool, openAIToolChoice
 	if len(openAITools) > 0 {
 		anthropicTools := make([]anthropic.ToolUnionParam, 0, len(openAITools))
 		for _, openAITool := range openAITools {
+			if openAITool.Type == openai.ToolTypeAnthropicWebSearch {
+				anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{
+					OfWebSearchTool20260209: &anthropic.WebSearchTool20260209Param{
+						Name: constant.WebSearch(openAITool.Name),
+						Type: constant.WebSearch20260209(openAITool.Type),
+					},
+				})
+				continue
+			}
+
 			if openAITool.Type != openai.ToolTypeFunction {
 				err = fmt.Errorf("%w: unsupported tool type: %s", internalapi.ErrInvalidRequestBody, openAITool.Type)
 				return
@@ -205,9 +229,9 @@ func translateOpenAItoAnthropicTools(openAITools []openai.Tool, openAIToolChoice
 			}
 
 			anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{OfTool: &toolParam})
-			if len(anthropicTools) > 0 {
-				tools = anthropicTools
-			}
+		}
+		if len(anthropicTools) > 0 {
+			tools = anthropicTools
 		}
 
 		// 2. Handle the tool_choice parameter.
@@ -610,6 +634,10 @@ func getThinkingConfigParamUnion(tu *openai.ThinkingUnion) *anthropic.ThinkingCo
 			Type:    constant.Adaptive(tu.OfAdaptive.Type),
 			Display: anthropic.ThinkingConfigAdaptiveDisplay(tu.OfAdaptive.Display),
 		}
+	case tu.OfBetweenTools != nil:
+		result.OfBetweenTools = &anthropic.ThinkingConfigBetweenToolsParam{
+			Type: constant.BetweenTools(tu.OfBetweenTools.Type),
+		}
 	}
 
 	return result
@@ -643,9 +671,10 @@ var awsOutputConfigModels = []string{
 }
 
 // gcpOutputConfigModels lists model identifiers that support structured outputs
-// on GCP Vertex AI: Claude Fable 5, Claude Mythos 5, Claude Opus 4.8, Claude
-// Mythos Preview, Claude Opus 4.7, Claude Opus 4.6, Claude Sonnet 5, Claude
-// Sonnet 4.6, Claude Sonnet 4.5, Claude Opus 4.5, and Claude Haiku 4.5.
+// on GCP Vertex AI: Claude Fable 5, Claude Mythos 5, Claude Opus 5.5,
+// Claude Opus 5, Claude Opus 4.8, Claude Mythos Preview, Claude Opus 4.7,
+// Claude Opus 4.6, Claude Sonnet 5.5, Claude Sonnet 5, Claude Sonnet 4.6,
+// Claude Sonnet 4.5, Claude Opus 4.5, Claude Haiku 5.5, and Claude Haiku 4.5.
 var gcpOutputConfigModels = []string{
 	"opus-4-5",       // Claude Opus 4.5
 	"sonnet-4-5",     // Claude Sonnet 4.5
@@ -654,7 +683,11 @@ var gcpOutputConfigModels = []string{
 	"sonnet-4-6",     // Claude Sonnet 4.6
 	"opus-4-7",       // Claude Opus 4.7
 	"opus-4-8",       // Claude Opus 4.8
+	"opus-5",         // Claude Opus 5
+	"opus-5-5",       // Claude Opus 5.5
 	"sonnet-5",       // Claude Sonnet 5
+	"sonnet-5-5",     // Claude Sonnet 5.5
+	"haiku-5-5",      // Claude Haiku 5.5
 	"fable-5",        // Claude Fable 5
 	"mythos-5",       // Claude Mythos 5
 	"mythos-preview", // Claude Mythos Preview
@@ -672,16 +705,22 @@ func outputConfigAvailable(apiSchema filterapi.APISchemaName, model internalapi.
 }
 
 // effortModels lists model identifiers that support the output_config.effort parameter.
-// The effort parameter is supported by Claude Fable 5, Claude Mythos 5, Claude Opus 4.8, Claude Mythos Preview,
-// Claude Opus 4.7, Claude Opus 4.6, Claude Sonnet 5, Claude Sonnet 4.6, and Claude Opus 4.5.
+// The effort parameter is supported by Claude Fable 5, Claude Mythos 5,
+// Claude Opus 5.5, Claude Opus 5, Claude Opus 4.8, Claude Mythos Preview,
+// Claude Opus 4.7, Claude Opus 4.6, Claude Sonnet 5.5, Claude Sonnet 5,
+// Claude Sonnet 4.6, Claude Haiku 5.5, and Claude Opus 4.5.
 // See: https://platform.claude.com/docs/en/build-with-claude/effort
 var effortModels = []string{
 	"opus-4-5",       // Claude Opus 4.5
 	"opus-4-6",       // Claude Opus 4.6
 	"opus-4-7",       // Claude Opus 4.7
 	"opus-4-8",       // Claude Opus 4.8
+	"opus-5",         // Claude Opus 5
+	"opus-5-5",       // Claude Opus 5.5
 	"sonnet-4-6",     // Claude Sonnet 4.6
 	"sonnet-5",       // Claude Sonnet 5
+	"sonnet-5-5",     // Claude Sonnet 5.5
+	"haiku-5-5",      // Claude Haiku 5.5
 	"fable-5",        // Claude Fable 5
 	"mythos-5",       // Claude Mythos 5
 	"mythos-preview", // Claude Mythos Preview
@@ -755,16 +794,23 @@ func buildAnthropicParams(openAIReq *openai.ChatCompletionRequest, apiSchema fil
 		featureCheckModel = modelNameOverride
 	}
 	if openAIReq.ResponseFormat != nil && openAIReq.ResponseFormat.OfJSONSchema != nil && outputConfigAvailable(apiSchema, featureCheckModel) {
-		// Convert OpenAI JSON schema to Anthropic OutputConfig format
+		// Validate that the OpenAI JSON schema is an object while retaining its
+		// original bytes. Anthropic's SDK sorts map keys when marshaling, which
+		// would otherwise change the property order seen by Claude.
+		rawSchema := openAIReq.ResponseFormat.OfJSONSchema.JSONSchema.Schema
 		var schemaMap map[string]any
-		if err = json.Unmarshal(openAIReq.ResponseFormat.OfJSONSchema.JSONSchema.Schema, &schemaMap); err != nil {
+		if err = json.Unmarshal(rawSchema, &schemaMap); err != nil {
 			return nil, fmt.Errorf("failed to parse JSON schema: %w", err)
 		}
+		format := anthropic.JSONOutputFormatParam{
+			Type:   constant.JSONSchema("json_schema"),
+			Schema: schemaMap,
+		}
+		// Override only the serialized schema with the validated raw JSON. Keeping
+		// Schema populated above preserves the typed representation for callers.
+		format.SetExtraFields(map[string]any{"schema": rawSchema})
 		params.OutputConfig = anthropic.OutputConfigParam{
-			Format: anthropic.JSONOutputFormatParam{
-				Type:   constant.JSONSchema("json_schema"),
-				Schema: schemaMap,
-			},
+			Format: format,
 		}
 	}
 
@@ -841,15 +887,29 @@ type streamingToolCall struct {
 // anthropicStreamParser manages the stateful translation of an Anthropic SSE stream
 // to an OpenAI-compatible SSE stream.
 type anthropicStreamParser struct {
-	buffer          bytes.Buffer
-	activeMessageID string
-	activeToolCalls map[int64]*streamingToolCall
-	toolIndex       int64
-	tokenUsage      metrics.TokenUsage
-	stopReason      anthropic.StopReason
-	requestModel    internalapi.RequestModel
-	sentFirstChunk  bool
-	created         openai.JSONUNIXTime
+	buffer             bytes.Buffer
+	activeMessageID    string
+	activeToolCalls    map[int64]*streamingToolCall
+	toolIndex          int64
+	tokenUsage         metrics.TokenUsage
+	stopReason         anthropic.StopReason
+	refusalExplanation string
+	refusalCategory    string
+	requestModel       internalapi.RequestModel
+	sentFirstChunk     bool
+	created            openai.JSONUNIXTime
+}
+
+// overloadedErrorType is the error type of Anthropic's in-stream overload event. The gateway sends the same
+// type to clients, which match on it, so it must not change.
+const overloadedErrorType = "overloaded_error"
+
+// anthropicStreamError is the error of an Anthropic SSE error event.
+type anthropicStreamError anthropicschema.ErrorResponseMessage
+
+// Error implements error.
+func (e *anthropicStreamError) Error() string {
+	return fmt.Sprintf("anthropic stream error: %s - %s", e.Type, e.Message)
 }
 
 // newAnthropicStreamParser creates a new parser for a streaming request.
@@ -865,6 +925,13 @@ func newAnthropicStreamParser(requestModel string) *anthropicStreamParser {
 func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error {
 	chunk, err := p.parseAndHandleEvent(eventBlock)
 	if err != nil {
+		var streamErr *anthropicStreamError
+		if errors.As(err, &streamErr) && streamErr.Type == overloadedErrorType {
+			if serializeErr := serializeOpenAIOverloadedStreamError(streamErr.Message, buf); serializeErr != nil {
+				return serializeErr
+			}
+			return &StreamOverloadedError{Err: streamErr}
+		}
 		return err
 	}
 	if chunk != nil {
@@ -873,6 +940,23 @@ func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error
 			return err
 		}
 	}
+	return nil
+}
+
+// serializeOpenAIOverloadedStreamError writes an OpenAI-style SSE error event for a mid-stream overload.
+func serializeOpenAIOverloadedStreamError(message string, buf *[]byte) error {
+	errorBytes, err := json.Marshal(struct {
+		Error openai.ErrorType `json:"error"`
+	}{
+		Error: openai.ErrorType{Type: overloadedErrorType, Message: message},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal overloaded stream error: %w", err)
+	}
+
+	*buf = append(*buf, sseDataPrefixSpace...)
+	*buf = append(*buf, errorBytes...)
+	*buf = append(*buf, '\n', '\n')
 	return nil
 }
 
@@ -991,8 +1075,8 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 				CompletionTokens: int(outputTokens),
 				TotalTokens:      int(totalTokens),
 				PromptTokensDetails: &openai.PromptTokensDetails{
-					CachedTokens:        int(cachedTokens),
-					CacheCreationTokens: int(cacheCreationTokens),
+					CachedTokens:     int(cachedTokens),
+					CacheWriteTokens: int(cacheCreationTokens),
 				},
 				CompletionTokensDetails: &openai.CompletionTokensDetails{
 					ReasoningTokens: int(reasoningTokens),
@@ -1189,6 +1273,10 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		}
 		if event.Delta.StopReason != "" {
 			p.stopReason = event.Delta.StopReason
+			if event.Delta.StopReason == anthropic.StopReasonRefusal {
+				p.refusalExplanation = event.Delta.StopDetails.Explanation
+				p.refusalCategory = string(event.Delta.StopDetails.Category)
+			}
 		}
 		return nil, nil
 
@@ -1199,8 +1287,15 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		}
 		switch event.Delta.Type {
 		case string(constant.ValueOf[constant.TextDelta]()), string(constant.ValueOf[constant.ThinkingDelta]()):
-			// Treat thinking_delta just like a text_delta.
-			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &event.Delta.Text}
+			// Treat thinking_delta just like a text_delta, but read the field
+			// that belongs to the variant: RawContentBlockDeltaUnion.Text is
+			// only populated for text_delta, and .Thinking only for
+			// thinking_delta.
+			text := event.Delta.Text
+			if event.Delta.Type == string(constant.ValueOf[constant.ThinkingDelta]()) {
+				text = event.Delta.Thinking
+			}
+			delta := openai.ChatCompletionResponseChunkChoiceDelta{Content: &text}
 			return p.constructOpenAIChatCompletionChunk(&delta, ""), nil
 		case string(constant.ValueOf[constant.InputJSONDelta]()):
 			tool, ok := p.activeToolCalls[p.toolIndex]
@@ -1244,14 +1339,18 @@ func (p *anthropicStreamParser) handleAnthropicStreamEvent(eventType []byte, dat
 		if err != nil {
 			return nil, err
 		}
-		return p.constructOpenAIChatCompletionChunk(&openai.ChatCompletionResponseChunkChoiceDelta{}, finishReason), nil
+		delta := &openai.ChatCompletionResponseChunkChoiceDelta{}
+		if p.stopReason == anthropic.StopReasonRefusal {
+			delta.Refusal, delta.RefusalCategory = refusalFields(p.refusalExplanation, p.refusalCategory)
+		}
+		return p.constructOpenAIChatCompletionChunk(delta, finishReason), nil
 
 	case string(constant.ValueOf[constant.Error]()):
-		var errEvent anthropic.ErrorResponse
+		var errEvent anthropicschema.ErrorResponse
 		if err := json.Unmarshal(data, &errEvent); err != nil {
 			return nil, fmt.Errorf("unparsable error event: %s", string(data))
 		}
-		return nil, fmt.Errorf("anthropic stream error: %s - %s", errEvent.Error.Type, errEvent.Error.Message)
+		return nil, (*anthropicStreamError)(&errEvent.Error)
 
 	case "ping":
 		// Anthropic sends ping events periodically to keep the stream alive.
@@ -1318,8 +1417,8 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 		PromptTokens:     int(inputTokens),
 		TotalTokens:      int(totalTokens),
 		PromptTokensDetails: &openai.PromptTokensDetails{
-			CachedTokens:        int(cachedTokens),
-			CacheCreationTokens: int(cacheCreationTokens),
+			CachedTokens:     int(cachedTokens),
+			CacheWriteTokens: int(cacheCreationTokens),
 		},
 		CompletionTokensDetails: &openai.CompletionTokensDetails{
 			ReasoningTokens: int(reasoningTokens),
@@ -1340,6 +1439,9 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 		Index:        0,
 		Message:      openai.ChatCompletionResponseChoiceMessage{Role: role},
 		FinishReason: finishReason,
+	}
+	if anthropicResp.StopReason == anthropic.StopReasonRefusal {
+		choice.Message.Refusal, choice.Message.RefusalCategory = refusalFields(anthropicResp.StopDetails.Explanation, string(anthropicResp.StopDetails.Category))
 	}
 
 	for i := range anthropicResp.Content { // NOTE: Content structure is massive, do not range over values.

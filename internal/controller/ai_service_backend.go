@@ -66,7 +66,7 @@ func (c *AIBackendController) Reconcile(ctx context.Context, req reconcile.Reque
 // This is decoupled from the Reconcile method to centralize the error handling and status updates.
 func (c *AIBackendController) syncAIServiceBackend(ctx context.Context, aiBackend *aigv1b1.AIServiceBackend) error {
 	var backendSecurityPolicyList aigv1b1.BackendSecurityPolicyList
-	key := fmt.Sprintf("%s.%s", aiBackend.Name, aiBackend.Namespace)
+	key := namespacedNameIndexKey(aiBackend.Name, aiBackend.Namespace)
 	if err := c.client.List(ctx, &backendSecurityPolicyList, client.InNamespace(aiBackend.Namespace),
 		client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingBackendSecurityPolicy: key}); err != nil {
 		return fmt.Errorf("failed to list BackendSecurityPolicyList: %w", err)
@@ -82,7 +82,9 @@ func (c *AIBackendController) syncAIServiceBackend(ctx context.Context, aiBacken
 	}
 
 	// Propagate the bsp events all the way up to relevant Gateways regardless of being deleted or not.
-	_ = handleFinalizer(ctx, c.client, c.logger, aiBackend, nil)
+	if _, err := handleFinalizer(ctx, c.client, c.logger, aiBackend, nil); err != nil {
+		return err
+	}
 	// Notify the AI Gateway Route controller about the AIServiceBackend change.
 	var aiGatewayRoutes aigv1b1.AIGatewayRouteList
 	err := c.client.List(ctx, &aiGatewayRoutes, client.MatchingFields{k8sClientIndexBackendToReferencingAIGatewayRoute: key})
@@ -102,6 +104,9 @@ func (c *AIBackendController) syncAIServiceBackend(ctx context.Context, aiBacken
 
 // updateAIServiceBackendStatus updates the status of the AIServiceBackend.
 func (c *AIBackendController) updateAIServiceBackendStatus(ctx context.Context, backend *aigv1b1.AIServiceBackend, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := backend.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: backend.Name, Namespace: backend.Namespace}, backend); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -109,7 +114,7 @@ func (c *AIBackendController) updateAIServiceBackendStatus(ctx context.Context, 
 			}
 			return err
 		}
-		backend.Status.Conditions = newConditions(conditionType, message)
+		backend.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, backend)
 	})
 	if err != nil {

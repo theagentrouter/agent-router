@@ -176,7 +176,7 @@ spec:
     group: gateway.envoyproxy.io
     namespace: default
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: openai-tls
@@ -267,7 +267,7 @@ spec:
         hostname: api.githubcopilot.com
         port: 443
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   name: github-tls

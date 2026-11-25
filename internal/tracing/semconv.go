@@ -14,6 +14,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/openai"
+	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/otelgenai"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
@@ -34,10 +35,12 @@ type recorderSet struct {
 	embeddings      tracingapi.EmbeddingsRecorder
 	imageGeneration tracingapi.ImageGenerationRecorder
 	responses       tracingapi.ResponsesRecorder
+	decisions       tracingapi.DecisionsRecorder
 	speech          tracingapi.SpeechRecorder
 	transcription   tracingapi.TranscriptionRecorder
 	translation     tracingapi.TranslationRecorder
 	rerank          tracingapi.RerankRecorder
+	systemOne       tracingapi.SystemOneRecorder
 	message         tracingapi.MessageRecorder
 	tokenize        tracingapi.TokenizeRecorder
 
@@ -108,10 +111,12 @@ func newOpenInferenceRecorders() recorderSet {
 		embeddings:      openai.NewEmbeddingsRecorder(cfg),
 		imageGeneration: openai.NewImageGenerationRecorder(cfg),
 		responses:       openai.NewResponsesRecorder(cfg),
+		decisions:       openai.NewDecisionsRecorder(cfg),
 		speech:          openai.NewSpeechRecorder(cfg),
 		transcription:   openai.NewTranscriptionRecorder(cfg),
 		translation:     openai.NewTranslationRecorder(cfg),
 		rerank:          cohere.NewRerankRecorder(cfg),
+		systemOne:       typesafe.NewSystemOneRecorder(cfg),
 		message:         anthropic.NewMessageRecorder(cfg),
 		tokenize:        openai.NewTokenizeRecorder(cfg),
 
@@ -136,10 +141,12 @@ func newOTelGenAIRecorders() recorderSet {
 		embeddings:      otelgenai.NewEmbeddingsRecorder(cfg),
 		imageGeneration: otelgenai.NewImageGenerationRecorder(cfg),
 		responses:       otelgenai.NewResponsesRecorder(cfg),
+		decisions:       otelgenai.NewDecisionsRecorder(cfg),
 		speech:          otelgenai.NewSpeechRecorder(cfg),
 		transcription:   otelgenai.NewTranscriptionRecorder(cfg),
 		translation:     otelgenai.NewTranslationRecorder(cfg),
 		rerank:          otelgenai.NewRerankRecorder(cfg),
+		systemOne:       otelgenai.NewSystemOneRecorder(cfg),
 		message:         otelgenai.NewMessageRecorder(cfg),
 		tokenize:        otelgenai.NewTokenizeRecorder(cfg),
 

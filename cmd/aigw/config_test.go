@@ -8,6 +8,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,7 @@ func TestReadConfig(t *testing.T) {
 		envVars         map[string]string
 		expectHostnames []string
 		expectPort      string
+		expectInOrder   []string
 		expectError     string
 	}{
 		{
@@ -79,13 +81,14 @@ func TestReadConfig(t *testing.T) {
 			expectPort:      "443",
 		},
 		{
-			name: "OpenAI takes precedence when both are set",
+			name: "routes Claude models to Anthropic and the rest to OpenAI when both are set",
 			envVars: map[string]string{
 				"OPENAI_API_KEY":    "test-key",
 				"ANTHROPIC_API_KEY": "sk-ant-test123",
 			},
-			expectHostnames: []string{"api.openai.com"},
+			expectHostnames: []string{"api.openai.com", "api.anthropic.com"},
 			expectPort:      "443",
+			expectInOrder:   []string{`value: "claude-.*"`, "name: anthropic", `value: ".*"`, "name: openai"},
 		},
 		{
 			name: "configures OTEL access logs when OTLP endpoint is set",
@@ -104,7 +107,7 @@ func TestReadConfig(t *testing.T) {
 				t.Setenv(k, v)
 			}
 
-			config, err := readConfig(tt.path, tt.mcpServers, false)
+			config, err := readConfig(tt.path, tt.mcpServers, false, nil)
 			if tt.expectError != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tt.expectError)
@@ -114,18 +117,32 @@ func TestReadConfig(t *testing.T) {
 					require.Contains(t, config, "hostname: "+expectHostname)
 				}
 				require.Contains(t, config, "port: "+tt.expectPort)
+				rest := config
+				for _, want := range tt.expectInOrder {
+					i := strings.Index(rest, want)
+					require.GreaterOrEqual(t, i, 0, "%q not found in order", want)
+					rest = rest[i+len(want):]
+				}
 			}
 		})
 	}
 
 	t.Run("error when file and no OPENAI_API_KEY", func(t *testing.T) {
-		_, err := readConfig("", nil, false)
+		_, err := readConfig("", nil, false, nil)
 		require.Error(t, err)
-		require.EqualError(t, err, "you must supply at least OPENAI_API_KEY, AZURE_OPENAI_API_KEY, ANTHROPIC_API_KEY, or a config file path")
+		require.ErrorIs(t, err, errNoConfig)
+	})
+
+	t.Run("includes ENVOY_VERSION in inline MCP autoconfig", func(t *testing.T) {
+		t.Setenv("ENVOY_VERSION", "1.2.3")
+
+		config, err := readConfig("", testMcpServers, false, nil)
+		require.NoError(t, err)
+		require.Contains(t, config, `envoyVersion: "1.2.3"`)
 	})
 
 	t.Run("error when file does not exist", func(t *testing.T) {
-		_, err := readConfig("/non/existent/file.yaml", nil, false)
+		_, err := readConfig("/non/existent/file.yaml", nil, false, nil)
 		require.Error(t, err)
 		require.EqualError(t, err, "error reading config: open /non/existent/file.yaml: no such file or directory")
 	})

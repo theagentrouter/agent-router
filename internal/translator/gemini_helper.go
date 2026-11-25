@@ -223,11 +223,40 @@ func userMsgToGeminiParts(msg openai.ChatCompletionUserMessageParam, requestMode
 				}
 				parts = append(parts, p)
 			case content.OfInputAudio != nil:
-				// Audio content is currently not supported in this implementation.
-				return nil, fmt.Errorf("%w: audio content not supported yet", internalapi.ErrInvalidRequestBody)
+				audio := content.OfInputAudio.InputAudio
+				if audio.Data == "" {
+					return nil, fmt.Errorf("%w: audio content must provide data", internalapi.ErrInvalidRequestBody)
+				}
+				var mimeType string
+				switch audio.Format {
+				case openai.ChatCompletionContentPartInputAudioInputAudioFormatWAV:
+					mimeType = mimeTypeAudioWAV
+				case openai.ChatCompletionContentPartInputAudioInputAudioFormatMP3:
+					mimeType = mimeTypeAudioMP3
+				default:
+					return nil, fmt.Errorf("%w: unsupported audio format: %q", internalapi.ErrInvalidRequestBody, audio.Format)
+				}
+				audioBytes, err := base64.StdEncoding.DecodeString(audio.Data)
+				if err != nil {
+					return nil, fmt.Errorf("%w: invalid audio data encoding: %w", internalapi.ErrInvalidRequestBody, err)
+				}
+				parts = append(parts, genai.NewPartFromBytes(audioBytes, mimeType))
 			case content.OfFile != nil:
-				// File content is currently not supported in this implementation.
-				return nil, fmt.Errorf("%w: file content not supported yet", internalapi.ErrInvalidRequestBody)
+				file := content.OfFile.File
+				if file.FileID != "" {
+					return nil, fmt.Errorf("%w: file_id is not supported yet", internalapi.ErrInvalidRequestBody)
+				}
+				if file.FileData == "" {
+					return nil, fmt.Errorf("%w: file content must provide file_data", internalapi.ErrInvalidRequestBody)
+				}
+				mimeType, fileBytes, err := parseDataURI(file.FileData)
+				if err != nil {
+					return nil, fmt.Errorf("%w: invalid file data URI: %w", internalapi.ErrInvalidRequestBody, err)
+				}
+				if mimeType == "" {
+					return nil, fmt.Errorf("%w: file data URI must specify a MIME type", internalapi.ErrInvalidRequestBody)
+				}
+				parts = append(parts, genai.NewPartFromBytes(fileBytes, mimeType))
 			}
 		}
 	default:
@@ -429,7 +458,7 @@ func assistantMsgToGeminiParts(msg *openai.ChatCompletionAssistantMessageParam) 
 //	}
 //
 // ].
-func openAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAvailable bool) ([]genai.Tool, error) {
+func openAIToolsToGeminiTools(openaiTools []openai.Tool) ([]genai.Tool, error) {
 	if len(openaiTools) == 0 {
 		return nil, nil
 	}
@@ -448,21 +477,7 @@ func openAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAva
 					Description: tool.Function.Description,
 				}
 
-				if parametersJSONSchemaAvailable {
-					functionDecl.ParametersJsonSchema = tool.Function.Parameters
-				} else if tool.Function.Parameters != nil {
-					paramsMap, ok := tool.Function.Parameters.(map[string]any)
-					if !ok {
-						return nil, fmt.Errorf("%w: tool %s parameters must be a JSON object", internalapi.ErrInvalidRequestBody, tool.Function.Name)
-					}
-
-					if len(paramsMap) > 0 {
-						var err error
-						if functionDecl.Parameters, err = jsonSchemaToGemini(paramsMap); err != nil {
-							return nil, fmt.Errorf("invalid JSON schema for parameters in tool %s: %w", tool.Function.Name, err)
-						}
-					}
-				}
+				functionDecl.ParametersJsonSchema = tool.Function.Parameters
 				functionDecls = append(functionDecls, functionDecl)
 			}
 		case openai.ToolTypeImageGeneration:
@@ -581,11 +596,6 @@ func openAIToolChoiceToGeminiToolConfig(toolChoice *openai.ChatCompletionToolCho
 // Check and Update these functions when new Gemini model versions are released
 // and their feature support changes.
 
-// it only works with models after gemini2.5 according to https://ai.google.dev/gemini-api/docs/structured-output#json-schema, separate it as a small function to make it easier to maintain
-func responseJSONSchemaAvailable(requestModel internalapi.RequestModel) bool {
-	return strings.Contains(requestModel, "gemini") && (strings.Contains(requestModel, "2.5") || strings.Contains(requestModel, "3"))
-}
-
 // mediaResolutionAvailable checks if the model supports media resolution settings.
 // Only Gemini 3.0+ models support this feature for controlling image/video quality.
 func mediaResolutionAvailable(requestModel internalapi.RequestModel) bool {
@@ -603,12 +613,21 @@ func isGeminiFlashModel(model internalapi.RequestModel) bool {
 	return strings.Contains(strings.ToLower(model), "flash")
 }
 
+// supportsMediumThinkingLevel reports whether the model accepts the "medium" thinking level.
+// Gemini 3 Pro only lists "low" and "high", and Gemini 3.1 Flash-Lite Image only "minimal" and "high";
+// Flash and Gemini 3.1 Pro also list "medium".
+// https://ai.google.dev/gemini-api/docs/thinking#thinking-levels
+func supportsMediumThinkingLevel(model internalapi.RequestModel) bool {
+	m := strings.ToLower(model)
+	return !strings.Contains(m, "gemini-3-pro") && !strings.Contains(m, "flash-lite-image")
+}
+
 // mapReasoningEffortToThinkingLevel converts OpenAI reasoning effort levels to Gemini thinking levels.
 // The mapping depends on the model type:
 // - "none" → ThinkingLevelMinimal (Gemini Flash only)
 // - "low" → ThinkingLevelLow
-// - "medium" → ThinkingLevelMedium for Flash, ThinkingLevelHigh for Pro
-// - "high" → ThinkingLevelHigh
+// - "medium" → ThinkingLevelMedium, except ThinkingLevelHigh for Gemini 3 Pro and 3.1 Flash-Lite Image, which have no medium level
+// - "high" → ThinkingLevelHigh (every Gemini 3 model; it is the Pro default)
 // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/start/get-started-with-gemini-3#openai-example
 func mapReasoningEffortToThinkingLevel(reasonEffort openai.ReasoningEffort, model internalapi.RequestModel) (genai.ThinkingLevel, error) {
 	isFlash := isGeminiFlashModel(model)
@@ -622,14 +641,11 @@ func mapReasoningEffortToThinkingLevel(reasonEffort openai.ReasoningEffort, mode
 	case openai.ReasoningEffortLow:
 		return genai.ThinkingLevelLow, nil
 	case openai.ReasoningEffortMedium:
-		if isFlash {
+		if supportsMediumThinkingLevel(model) {
 			return genai.ThinkingLevelMedium, nil
 		}
 		return genai.ThinkingLevelHigh, nil
 	case openai.ReasoningEffortHigh:
-		if !isFlash {
-			return "", fmt.Errorf("%w: reasoning effort 'high' is only supported for Gemini Flash models", internalapi.ErrInvalidRequestBody)
-		}
 		return genai.ThinkingLevelHigh, nil
 	default:
 		return "", fmt.Errorf("%w: unsupported reasoning effort level: %q (supported: none, low, medium, high)", internalapi.ErrInvalidRequestBody, reasonEffort)
@@ -683,20 +699,30 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 
 			responseMode = responseModeJSON
 
-			if responseJSONSchemaAvailable(requestModel) {
-				gc.ResponseJsonSchema = schemaMap
-			} else {
-				convertedSchema, err := jsonSchemaToGemini(schemaMap)
-				if err != nil {
-					return nil, responseMode, fmt.Errorf("invalid JSON schema: %w", err)
-				}
-				gc.ResponseSchema = convertedSchema
-
-			}
+			gc.ResponseJsonSchema = schemaMap
 		}
 	}
 
-	if openAIReq.GuidedChoice != nil {
+	// structured_outputs (vLLM v0.12.0+) supersedes the deprecated top-level guided_* fields.
+	// Resolve the effective values, preferring structured_outputs when present. Reject the
+	// sub-fields that have no Gemini equivalent.
+	guidedChoice, guidedRegex, guidedJSON := openAIReq.GuidedChoice, openAIReq.GuidedRegex, openAIReq.GuidedJSON
+	if so := openAIReq.StructuredOutputs; so != nil {
+		if so.Grammar != "" || len(so.StructuralTag) > 0 || so.WhitespacePattern != "" {
+			return nil, responseMode, fmt.Errorf("%w: structured_outputs grammar/structural_tag/whitespace_pattern are not supported on GCP/Gemini", internalapi.ErrInvalidRequestBody)
+		}
+		if so.Choice != nil {
+			guidedChoice = so.Choice
+		}
+		if so.Regex != "" {
+			guidedRegex = so.Regex
+		}
+		if len(so.JSON) > 0 {
+			guidedJSON = so.JSON
+		}
+	}
+
+	if guidedChoice != nil {
 		formatSpecifiedCount++
 		if existSchema := gc.ResponseSchema != nil || gc.ResponseJsonSchema != nil; existSchema {
 			return nil, responseMode, fmt.Errorf("%w: duplicate json schema specifications", internalapi.ErrInvalidRequestBody)
@@ -704,18 +730,18 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 
 		responseMode = responseModeEnum
 		gc.ResponseMIMEType = mimeTypeApplicationEnum
-		gc.ResponseSchema = &genai.Schema{Type: "STRING", Enum: openAIReq.GuidedChoice}
+		gc.ResponseSchema = &genai.Schema{Type: "STRING", Enum: guidedChoice}
 	}
-	if openAIReq.GuidedRegex != "" {
+	if guidedRegex != "" {
 		formatSpecifiedCount++
 		if existSchema := gc.ResponseSchema != nil || gc.ResponseJsonSchema != nil; existSchema {
 			return nil, responseMode, fmt.Errorf("%w: duplicate json schema specifications", internalapi.ErrInvalidRequestBody)
 		}
 		responseMode = responseModeRegex
 		gc.ResponseMIMEType = mimeTypeApplicationJSON
-		gc.ResponseSchema = &genai.Schema{Type: "STRING", Pattern: openAIReq.GuidedRegex}
+		gc.ResponseSchema = &genai.Schema{Type: "STRING", Pattern: guidedRegex}
 	}
-	if openAIReq.GuidedJSON != nil {
+	if guidedJSON != nil {
 		formatSpecifiedCount++
 		if existSchema := gc.ResponseSchema != nil || gc.ResponseJsonSchema != nil; existSchema {
 			return nil, responseMode, fmt.Errorf("%w: duplicate json schema specifications", internalapi.ErrInvalidRequestBody)
@@ -723,7 +749,7 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 		responseMode = responseModeJSON
 
 		gc.ResponseMIMEType = mimeTypeApplicationJSON
-		gc.ResponseJsonSchema = openAIReq.GuidedJSON
+		gc.ResponseJsonSchema = guidedJSON
 	}
 	if openAIReq.ReasoningEffort != "" && reasoningEffortAvailable(requestModel) {
 		thinkLevel, err := mapReasoningEffortToThinkingLevel(openAIReq.ReasoningEffort, requestModel)

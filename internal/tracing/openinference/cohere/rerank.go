@@ -129,6 +129,10 @@ func buildRerankResponseAttributes(resp *cohereschema.RerankV2Response, config *
 
 		// Record individual rerank results as output documents when outputs are not hidden.
 		for i, rres := range resp.Results {
+			// Results are pointers, so a null element decodes to nil.
+			if rres == nil {
+				continue
+			}
 			attrs = append(attrs, attribute.Float64(openinference.RerankerOutputDocumentAttribute(i, openinference.DocumentScore), rres.RelevanceScore))
 		}
 	}

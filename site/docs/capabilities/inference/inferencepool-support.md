@@ -90,16 +90,17 @@ sequenceDiagram
 
 ## Integration Approaches
 
-Envoy AI Gateway supports two ways to use InferencePool:
+Agent Router supports two ways to use InferencePool:
 
 ### 1. HTTPRoute + InferencePool
 
-Direct integration with standard Gateway API HTTPRoute for simple inference routing scenarios.
+Direct integration with standard Gateway API HTTPRoute for simple inference routing scenarios. A single HTTPRoute rule can reference multiple InferencePools with different weights to split traffic between them — see [Weighted Routing Across Multiple InferencePools](./httproute-inferencepool.md#weighted-routing-across-multiple-inferencepools).
 
 **Use Cases:**
 
 - Simple inference workloads without complex AI-specific requirements
 - Direct OpenAI-compatible API forwarding
+- Canary rollouts or gradual traffic shifting between two or more InferencePools
 
 ### 2. AIGatewayRoute + InferencePool
 
@@ -133,7 +134,7 @@ AIGatewayRoute provides several advantages over standard HTTPRoute when used wit
 
 ## Getting Started
 
-To use InferencePool with Envoy AI Gateway, you'll need to:
+To use InferencePool with Agent Router, you'll need to:
 
 1. **Install Prerequisites**:
    - Deploy Gateway API Inference Extension CRD.

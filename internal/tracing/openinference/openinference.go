@@ -51,6 +51,8 @@ const (
 	LLMSystemCohere = "cohere"
 	// LLMSystemAnthropic for Anthropic systems.
 	LLMSystemAnthropic = "anthropic"
+	// LLMSystemTypeSafe for TypeSafe AI systems.
+	LLMSystemTypeSafe = "typesafe"
 )
 
 // Input/Output constants.

@@ -9,7 +9,7 @@ volumes:
 
 services:
   extproc-build:
-    image: golang:1.26
+    image: golang:1.27
     container_name: extproc-build
     working_dir: /workspace
     volumes:
@@ -31,11 +31,12 @@ services:
     volumes:
       - extproc-target:/app
       - ./extproc.yaml:/etc/extproc/config.yaml:ro
+      - ./extproc-index.yaml:/etc/extproc/index.yaml:ro
     # ExtProc ports (internal to Docker network, consumed by Envoy):
     # - 1063: gRPC service
     # - 1064: admin server (/metrics and /health endpoints)
     working_dir: /app
-    command: ["./extproc", "-configPath", "/etc/extproc/config.yaml"]
+    command: ["./extproc", "-configBundlePath", "/etc/extproc"]
 
   ollama-pull:
     image: alpine/ollama
@@ -66,7 +67,7 @@ services:
     command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "debug"]
 
   openai-client:
-    image: golang:1.26
+    image: golang:1.27
     container_name: openai-client
     profiles: ["test"]
     env_file:

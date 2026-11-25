@@ -140,20 +140,16 @@ func (o *openAIToOpenAITranslatorV1Speech) handleBinaryResponse(body io.Reader, 
 // recordSSEChunksToSpan records SSE streaming chunks to the tracing span.
 func (o *openAIToOpenAITranslatorV1Speech) recordSSEChunksToSpan(span tracingapi.SpeechSpan) {
 	for {
-		// SSE event boundary is a blank line: "data: {json}\n\n".
-		i := bytes.Index(o.buffered, []byte("\n\n"))
-		if i == -1 {
+		event, remaining, ok := nextSSEEvent(o.buffered)
+		if !ok {
 			return
 		}
-		event := o.buffered[:i]
-		o.buffered = o.buffered[i+2:]
+		o.buffered = remaining
 		for line := range bytes.SplitSeq(event, []byte("\n")) {
-			// Look for lines carrying the "data" field.
 			data, ok := cutSSEDataPrefix(line)
 			if !ok {
 				continue
 			}
-
 			if len(data) == 0 || bytes.Equal(data, sseDoneMessage) {
 				continue
 			}

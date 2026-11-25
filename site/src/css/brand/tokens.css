@@ -1,0 +1,292 @@
+/* ============================================================================
+   Agent Router — Design Tokens v1.1
+   Anchor: Marquee Orange #FF5500
+   Palette: "Life of a Showgirl" — copper marquee orange oxidising to verdigris
+   v1.1 — accents promoted from "one per composition" to "one per SECTION", plus
+          cream neutrals and a section-ground rhythm. Two colours read as monotone;
+          six reads as a system.
+   ----------------------------------------------------------------------------
+   Contrast ratios in comments are WCAG 2.1 relative-luminance, computed values.
+   AA body text needs 4.5 · AA large text (>=24px or >=19px bold) needs 3.0
+   AA non-text (icons, borders, focus rings) needs 3.0
+   ========================================================================== */
+
+:root {
+  /* ---------------------------------------------------------- 1. MARQUEE
+     The anchor. Hue 20°. Named for the bulb-lit theatre marquee.
+     #FF5500 is 3.21:1 on white — it is a LARGE-TEXT / UI colour, never body copy.
+     Use Marquee 700 when orange has to carry small text on light.           */
+  --ar-marquee-050: #FFF3EC;
+  --ar-marquee-100: #FFE4D6;
+  --ar-marquee-200: #FFC7A6;
+  --ar-marquee-300: #FFA066;   /*  9.47 on ink  — dark-mode display type     */
+  --ar-marquee-400: #FF7A33;   /*  7.31 on ink  — dark-mode links, hover     */
+  --ar-marquee-500: #FF5500;   /*  ANCHOR. 3.21 on paper · 5.92 on ink       */
+  --ar-marquee-600: #E04400;   /*  4.20 on paper — large text, hover states  */
+  --ar-marquee-700: #B83700;   /*  5.86 on paper — SAFE orange body text     */
+  --ar-marquee-800: #8A2900;   /*  8.76 on paper                             */
+  --ar-marquee-900: #4A1600;   /* 14.94 on paper — warm deep ground          */
+
+  /* -------------------------------------------------------- 2. VERDIGRIS
+     The secondary. Hue 170°. What copper becomes under stage lights.
+     Doubles as the "healthy / routed / success" colour.
+     Hue-audited: 27° from NGINX, 88° from NVIDIA, 22° from Traefik.         */
+  --ar-verdigris-050: #E8F6F3;
+  --ar-verdigris-400: #31C4AA;  /*  8.68 on ink — dark-mode accent + links   */
+  --ar-verdigris-500: #1A937F;  /*  3.80 on paper · 4.99 on ink — one value  */
+  --ar-verdigris-700: #116355;  /*  7.14 on paper — safe green body text     */
+  --ar-verdigris-900: #0B3B33;  /* 12.44 on paper — deep ground              */
+
+  /* ------------------------------------------------- 2b. THE MARK'S HEXAGONS
+     "Ember". The three hexagons are three colours, not one colour faded — hue
+     rotates 20° -> 7° -> 356° and darkens as it recedes. Fixed values, so the
+     recession reads the same on any ground; an opacity ramp inverts on dark.
+     Modelled on Envoy's own mark, which does the same thing in magenta.        */
+  --ar-hex-front:  #FF5500;   /* = Marquee 500, the anchor                   */
+  --ar-hex-middle: #E8442E;   /* H 7°  · ΔE 22 from the front                */
+  --ar-hex-back:   #A62B33;   /* H 356° · ΔE 30 from the middle              */
+
+  /* ------------------------------------------------------ 2c. DANGER / ERROR
+     Moved off Curtain. Ember's back hexagon measured ΔE 7.9 from Curtain 500 —
+     below 10 two colours read as the same colour, so the logo would have been
+     wearing the error colour. Raspberry sits at H 334°, ΔE 32.5 clear of every
+     hexagon in the mark, and still reads as an alert rather than a brand hue.   */
+  --ar-raspberry-100: #F9DCE9;   /* danger surfaces                      */
+  --ar-raspberry-300: #EB70A5;   /* 6.68 on ink  — dark-mode danger text */
+  --ar-raspberry-400: #E1478A;   /* 4.94 on ink  — dark-mode, AA body    */
+  --ar-raspberry-500: #DC186D;   /* 4.52 on cream — light-mode, AA body  */
+  --ar-raspberry-700: #9E0A4A;   /* 7.64 on cream — emphasis, AAA        */
+  --ar-raspberry-900: #550729;   /* deep ground                          */
+
+  /* --------------------------------------------------- 3. SHOWGIRL ACCENTS
+     Rationing rule: at most ONE accent per composition, never in the logo.  */
+  --ar-gilt-100:    #F8EDD5;   /* gilt tint surface                          */
+  --ar-gilt-300:    #EBCB8B;   /* gilt on dark grounds                       */
+  --ar-gilt-500:    #D9A441;   /* 8.44 on ink  — celebration, releases, gold */
+  --ar-gilt-700:    #9A6F1E;   /* 4.50 on paper — but only 4.25 on cream     */
+  --ar-gilt-750:    #8A6318;   /* 5.12 on CREAM — use this one on cream      */
+  --ar-curtain-100: #F7E3E2;   /* curtain tint surface                       */
+  --ar-curtain-400: #D06E6D;   /* curtain on dark grounds                    */
+  --ar-curtain-500: #B24342;   /* 5.56 on paper — DECORATIVE ONLY now. It sits
+                                  ΔE 7.9 from the mark's back hexagon, so it
+                                  can no longer carry the danger role.      */
+  --ar-curtain-700: #832D2C;   /* 8.35 on cream — danger text                */
+  --ar-velvet-100:  #EFE6EC;   /* velvet tint surface                        */
+  --ar-velvet-400:  #8A6A7E;   /* velvet on dark grounds                     */
+  --ar-velvet-500:  #5F4256;   /* 8.75 on paper — plum ground, "backstage"   */
+  --ar-velvet-600:  #55394C;   /* 9.56 on cream — velvet text                */
+  --ar-velvet-900:  #2A1C27;   /* deep velvet ground for hero sections       */
+  --ar-spotlight-100: #E4E7F3; /* spotlight tint surface                     */
+  --ar-spotlight-300: #A3ACD4; /* 8.51 on ink — spotlight on dark grounds    */
+  --ar-spotlight-500: #6E7AAA; /* 4.18 on paper — icons, borders, chart mark */
+  --ar-spotlight-700: #454F7D; /* 7.44 on CREAM — info text                  */
+
+  /* ------------------------------------------------------------ 4. NEUTRALS
+     Warm-shifted greys. A cold grey next to #FF5500 reads dirty.            */
+  --ar-ink-900: #12100E;       /* 18.98 on paper — primary text, dark ground */
+  --ar-ink-800: #241F1B;       /* 16.32 — elevated dark surface              */
+  --ar-ink-600: #4A423C;       /*  9.83 — secondary text                     */
+  --ar-ink-400: #8A7F76;       /*  3.90 — muted text (large only), borders   */
+  --ar-ink-200: #D6CFC8;       /* hairlines, dividers                        */
+  --ar-stage-100: #F5F5F5;     /* the off-white the mark is presented on     */
+  --ar-paper:     #FFFFFF;     /* cards and raised surfaces                  */
+  /* cream — the default page ground from v1.1. Warm, so #FF5500 sits in it
+     rather than shouting out of it. 17.94:1 with ink.                        */
+  --ar-cream:     #FBF8F5;
+  --ar-cream-2:   #F4EEE7;     /* banded / alternating sections               */
+  --ar-cream-3:   #EAE1D7;     /* borders and hairlines on cream              */
+
+  /* ------------------------------------------------- 5. TRANSITION ONLY
+     Envoy magenta. Allowed on migration banners, "formerly Envoy AI Gateway"
+     badges and the rebrand post. NEVER in the mark, favicon, UI or merch.   */
+  --envoy-magenta: #AC6199;
+
+  /* ------------------------------------------------------- 6. SEMANTIC MAP */
+  --ar-fg:            var(--ar-ink-900);
+  --ar-fg-muted:      var(--ar-ink-600);
+  --ar-fg-subtle:     var(--ar-ink-400);
+  --ar-bg:            var(--ar-paper);
+  --ar-bg-subtle:     var(--ar-stage-100);
+  --ar-bg-tint:       var(--ar-marquee-050);
+  --ar-border:        var(--ar-ink-200);
+  --ar-brand:         var(--ar-marquee-500);
+  --ar-brand-text:    var(--ar-marquee-700);   /* orange that passes AA body */
+  --ar-brand-on:      var(--ar-ink-900);       /* text ON orange — NOT white */
+  --ar-accent:        var(--ar-verdigris-500);
+  --ar-success:       var(--ar-verdigris-700);
+  --ar-warning:       var(--ar-gilt-700);
+  --ar-danger:        var(--ar-raspberry-500);
+  --ar-info:          var(--ar-spotlight-500);
+  --ar-focus:         var(--ar-marquee-600);
+
+  /* ------------------------------------------------------- 7. TYPOGRAPHY */
+  --ar-font-wordmark: "MuseoModerno", ui-sans-serif, sans-serif;
+  /* agent = wght 800, router = wght 400, set solid, tracking -0.004em.
+     SIL OFL 1.1 (Omnibus-Type). Shipped lockups are outlined, not live text. */
+  --ar-wordmark-agent:  800;
+  --ar-wordmark-router: 400;
+  --ar-wordmark-track:  -0.004em;
+  --ar-font-display:  "Archivo", "Space Grotesk", ui-sans-serif, sans-serif;
+  --ar-font-ui:       "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --ar-font-mono:     "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --ar-text-xs:   0.75rem;   /* 12 — labels, table meta      */
+  --ar-text-sm:   0.875rem;  /* 14 — captions, code inline   */
+  --ar-text-base: 1rem;      /* 16 — body                    */
+  --ar-text-lg:   1.125rem;  /* 18 — lead                    */
+  --ar-text-xl:   1.5rem;    /* 24 — h3                      */
+  --ar-text-2xl:  2rem;      /* 32 — h2                      */
+  --ar-text-3xl:  2.75rem;   /* 44 — h1                      */
+  --ar-text-4xl:  4rem;      /* 64 — hero                    */
+  --ar-text-5xl:  6rem;      /* 96 — marquee display         */
+
+  --ar-leading-tight: 1.08;
+  --ar-leading-snug:  1.3;
+  --ar-leading-body:  1.6;
+  --ar-tracking-display: -0.02em;
+  --ar-tracking-label:    0.09em;
+
+  /* --------------------------------------------------- 8. SPACE / SHAPE
+     4px base. The hexagon wants soft-but-not-round corners.                 */
+  --ar-space-1: 4px;   --ar-space-2: 8px;   --ar-space-3: 12px;
+  --ar-space-4: 16px;  --ar-space-5: 24px;  --ar-space-6: 32px;
+  --ar-space-7: 48px;  --ar-space-8: 64px;  --ar-space-9: 96px;
+
+  --ar-radius-sm: 4px;
+  --ar-radius-md: 8px;
+  --ar-radius-lg: 14px;
+  --ar-radius-xl: 22px;
+  --ar-radius-app: 22.5%;      /* app-icon squircle, matches the SVG        */
+
+  --ar-border-hairline: 1px;
+  --ar-border-strong:   2px;
+
+  /* --------------------------------------------------- 9. STAGE LIGHTING
+     The one place the showgirl reference is allowed to be literal.
+     Use at most ONE of these per screen, behind the hero.                   */
+  --ar-glow-marquee:
+    radial-gradient(60% 80% at 50% 0%, rgba(255,85,0,0.28) 0%, rgba(255,85,0,0) 70%);
+  --ar-glow-verdigris:
+    radial-gradient(50% 70% at 80% 10%, rgba(49,196,170,0.22) 0%, rgba(49,196,170,0) 70%);
+  --ar-gradient-marquee: linear-gradient(135deg, #FF5500 0%, #FF8A3D 100%);
+  --ar-gradient-oxidise: linear-gradient(120deg, #FF5500 0%, #B83700 42%, #1A937F 100%);
+  --ar-gradient-curtain: linear-gradient(180deg, #2A1C27 0%, #12100E 100%);
+  /* "sequin" — a 45° micro-grid. Opacity ceiling 0.06 on ink, 0.04 on paper */
+  --ar-texture-sequin:
+    repeating-linear-gradient(45deg, rgba(255,85,0,0.06) 0 1px, transparent 1px 7px),
+    repeating-linear-gradient(-45deg, rgba(255,85,0,0.06) 0 1px, transparent 1px 7px);
+
+  /* ────────────────────────── 9b. SECTION GROUNDS (new in v1.1)
+     The fix for "it feels monotone". A page is a sequence of grounds, not one
+     ground with accents dropped on it. Rotate through these in order; never
+     put two of the same next to each other.
+       cream → cream-2 → mint → cream → velvet(dark) → cream → peach → teal(dark)  */
+  --ar-ground-cream:  #FBF8F5;   /* default                                   */
+  --ar-ground-cream2: #F4EEE7;   /* banded, e.g. adopter strips               */
+  --ar-ground-mint:   #E8F6F3;   /* verdigris-050 — capability / product      */
+  --ar-ground-peach:  #FFF3EC;   /* marquee-050 — editorial, blog             */
+  --ar-ground-lilac:  #E4E7F3;   /* spotlight-100 — reference, docs index     */
+  --ar-ground-velvet: #2A1C27;   /* dark break — install, code-heavy          */
+  --ar-ground-teal:   #0B3B33;   /* dark break — footer                       */
+
+  /* Accent text steps, cream-safe. Pair each ground with ONE of these.        */
+  --ar-on-cream-marquee:   #B83700;   /* 5.54 */
+  --ar-on-cream-verdigris: #116355;   /* 6.75 */
+  --ar-on-cream-spotlight: #454F7D;   /* 7.44 */
+  --ar-on-cream-gilt:      #8A6318;   /* 5.12 */
+  --ar-on-cream-curtain:   #832D2C;   /* 8.35 */
+  --ar-on-cream-velvet:    #55394C;   /* 9.56 */
+
+  /* ────────────────────── 9c. CARD CORNER TREATMENT (new in v1.1)
+     Cards carry their accent as a bottom-right corner glow over an
+     accent-tinted 45° sequin texture — NOT as a top rule or a left rule.
+     Two layers, both masked to the same corner so the card face stays clean:
+       ::before  radial-gradient(122% 100% at 100% 100%, <accent @ .26>, transparent 64%)
+       ::after   sequin crosshatch in <accent @ .16>, mask-image the same shape
+     Set `isolation:isolate` on the card and `z-index:-1` on both layers so
+     content sits above them without needing its own stacking context.
+     Hover raises the glow to ~.40 alpha and widens it; nothing else moves.
+     Dark grounds need roughly the same alpha — the glow reads more, so the
+     tint values drop slightly rather than rise.                              */
+  --ar-glow-corner:  122% 100% at 100% 100%;   /* gradient geometry           */
+  --ar-glow-alpha:        0.26;                 /* rest                        */
+  --ar-glow-alpha-hover:  0.40;                 /* hover                       */
+  --ar-sequin-alpha:      0.16;                 /* texture lines               */
+  --ar-sequin-pitch:      8px;                  /* line spacing, 1px lines     */
+  --ar-corner-mask: radial-gradient(108% 88% at 100% 100%, #000 0%, transparent 58%);
+
+  --ar-shadow-sm: 0 1px 2px rgba(18,16,14,0.06), 0 1px 1px rgba(18,16,14,0.04);
+  --ar-shadow-md: 0 4px 14px rgba(18,16,14,0.08);
+  --ar-shadow-lg: 0 18px 48px rgba(18,16,14,0.14);
+  --ar-shadow-marquee: 0 6px 24px rgba(255,85,0,0.30);
+
+  --ar-focus-ring: 0 0 0 2px var(--ar-paper), 0 0 0 4px var(--ar-marquee-600);
+}
+
+/* ============================================================ DARK / BACKSTAGE
+   Marquee 500 holds at 5.92 on ink, so the mark does not change value.
+   Text and links step UP the ramp, not down.                                */
+[data-theme="dark"], .ar-dark {
+  --ar-fg:         #F3EFEB;
+  --ar-fg-muted:   #B8AFA6;
+  --ar-fg-subtle:  #8A7F76;
+  --ar-bg:         var(--ar-ink-900);
+  --ar-bg-subtle:  var(--ar-ink-800);
+  --ar-bg-tint:    rgba(255,85,0,0.10);
+  --ar-border:     rgba(243,239,235,0.14);
+  --ar-brand:      var(--ar-marquee-500);
+  --ar-brand-text: var(--ar-marquee-400);
+  --ar-brand-on:   var(--ar-ink-900);
+  --ar-accent:     var(--ar-verdigris-400);
+  --ar-success:    var(--ar-verdigris-400);
+  --ar-warning:    var(--ar-gilt-500);
+  --ar-danger:     #E2716F;
+  --ar-info:       #9AA5CE;
+  --ar-focus:      var(--ar-marquee-400);
+  --ar-focus-ring: 0 0 0 2px var(--ar-ink-900), 0 0 0 4px var(--ar-marquee-400);
+  --ar-shadow-lg:  0 18px 48px rgba(0,0,0,0.55);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+  }
+}
+
+/* ================================================================ PRIMITIVES */
+.ar-btn-primary {
+  background: var(--ar-marquee-500);
+  color: var(--ar-brand-on);            /* ink on orange = 5.92, white = 3.21 */
+  font: 600 var(--ar-text-base)/1 var(--ar-font-ui);
+  padding: var(--ar-space-3) var(--ar-space-5);
+  border: 0; border-radius: var(--ar-radius-md);
+  box-shadow: var(--ar-shadow-marquee);
+  cursor: pointer;
+}
+.ar-btn-primary:hover  { background: var(--ar-marquee-600); }
+.ar-btn-primary:focus-visible { outline: 0; box-shadow: var(--ar-focus-ring); }
+
+.ar-btn-secondary {
+  background: transparent;
+  color: var(--ar-brand-text);
+  border: var(--ar-border-strong) solid var(--ar-marquee-500);
+  border-radius: var(--ar-radius-md);
+  padding: var(--ar-space-3) var(--ar-space-5);
+  font: 600 var(--ar-text-base)/1 var(--ar-font-ui);
+}
+
+.ar-label {
+  font: 600 var(--ar-text-xs)/1 var(--ar-font-ui);
+  letter-spacing: var(--ar-tracking-label);
+  text-transform: uppercase;
+  color: var(--ar-fg-subtle);
+}
+
+.ar-code {
+  font-family: var(--ar-font-mono);
+  font-size: var(--ar-text-sm);
+  background: var(--ar-bg-subtle);
+  border: 1px solid var(--ar-border);
+  border-radius: var(--ar-radius-sm);
+  padding: 0.15em 0.4em;
+}

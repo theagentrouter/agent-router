@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"k8s.io/utils/ptr"
 
@@ -24,6 +25,7 @@ import (
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
+	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
@@ -77,6 +79,13 @@ type (
 		// The returned request preserves the structure but removes actual sensitive data, making it
 		// safe to include in logs. It should NOT be used for actual AI provider requests.
 		//
+		// What to redact: the redacted request is written to debug logs, which more people can read and which are kept longer than the request. Classify each field by what its value is, not by who sets it:
+		// * Redact caller content: prompts, messages, instructions, documents, media, tool arguments.
+		// * Redact end-user identifiers and free-form annotations (`user`, `safety_identifier`, `metadata` values), even when the application sets them: the gateway cannot tell whether they were hashed.
+		// * Keep model and format configuration: model, sampling parameters, stop sequences, tool definitions, schemas. Fields inside them that authenticate (MCP tokens, headers) are credentials and are redacted.
+		//
+		// Fields an implementation does not name are logged as sent, so classify every new field.
+		//
 		// Parameters:
 		// * req: The original request to redact.
 		//
@@ -105,10 +114,14 @@ type (
 	ImageGenerationEndpointSpec struct{}
 	// ResponsesEndpointSpec implements EndpointSpec for /v1/responses.
 	ResponsesEndpointSpec struct{}
+	// DecisionsEndpointSpec implements EndpointSpec for /v1/decisions.
+	DecisionsEndpointSpec struct{}
 	// MessagesEndpointSpec implements EndpointSpec for /v1/messages.
 	MessagesEndpointSpec struct{}
 	// RerankEndpointSpec implements EndpointSpec for /v2/rerank.
 	RerankEndpointSpec struct{}
+	// SystemOneEndpointSpec implements EndpointSpec for TypeSafe's /v1/systemone.
+	SystemOneEndpointSpec struct{}
 	// SpeechEndpointSpec implements EndpointSpec for /v1/audio/speech.
 	SpeechEndpointSpec struct{}
 	// TranscriptionEndpointSpec implements EndpointSpec for /v1/audio/transcriptions.
@@ -142,17 +155,51 @@ func (ChatCompletionsEndpointSpec) ParseBody(
 		// Rewrite the original bytes to include the stream_options.include_usage=true so that forcing the request body
 		// mutation, which uses this raw body, will also result in the stream_options.include_usage=true.
 		var err error
-		mutatedBody, err = sjson.SetBytesOptions(body, "stream_options.include_usage", true, &sjson.Options{
-			Optimistic: true,
-			// Note: it is safe to do in-place replacement since this route level processor is executed once per request,
-			// and the result can be safely shared among possible multiple retries.
-			ReplaceInPlace: true,
-		})
+		mutatedBody, err = forceStreamOptionsIncludeUsage(body)
 		if err != nil {
 			return "", nil, false, nil, fmt.Errorf("%w: failed to set stream_options.include_usage", internalapi.ErrMalformedRequest)
 		}
 	}
 	return req.Model, &req, req.Stream, mutatedBody, nil
+}
+
+// forceStreamOptionsIncludeUsage rewrites body so that it has exactly one top-level
+// "stream_options" key with include_usage forced to true. Other fields on it (e.g. vLLM's
+// continuous_usage_stats) are preserved. If the body contains duplicate top-level
+// "stream_options" keys, only the last one is kept -- matching the semantics of
+// json.Unmarshal, which is what populates the already-parsed request -- so that the mutated
+// body cannot disagree with the parsed request about which stream_options applies.
+func forceStreamOptionsIncludeUsage(body []byte) ([]byte, error) {
+	mutatedBody := body
+	streamOptions := "{}"
+	for {
+		res := gjson.GetBytes(mutatedBody, "stream_options")
+		if !res.Exists() {
+			break
+		}
+		streamOptions = res.Raw
+		var err error
+		mutatedBody, err = sjson.DeleteBytes(mutatedBody, "stream_options")
+		if err != nil {
+			return nil, fmt.Errorf("failed to remove existing stream_options: %w", err)
+		}
+	}
+
+	streamOptions, err := sjson.SetRawOptions(streamOptions, "include_usage", "true", &sjson.Options{Optimistic: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to set include_usage on stream_options: %w", err)
+	}
+
+	mutatedBody, err = sjson.SetRawBytesOptions(mutatedBody, "stream_options", []byte(streamOptions), &sjson.Options{
+		Optimistic: true,
+		// Note: it is safe to do in-place replacement since this route level processor is executed once per request,
+		// and the result can be safely shared among possible multiple retries.
+		ReplaceInPlace: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to set stream_options.include_usage: %w", err)
+	}
+	return mutatedBody, nil
 }
 
 // ParseMultipartBody implements [Spec.ParseMultipartBody].
@@ -165,6 +212,8 @@ func (ChatCompletionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISc
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return translator.NewChatCompletionOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+	case filterapi.APISchemaAWSOpenAI:
+		return translator.NewChatCompletionOpenAIToAWSOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	case filterapi.APISchemaAWSBedrock:
 		return translator.NewChatCompletionOpenAIToAWSBedrockTranslator(modelNameOverride), nil
 	case filterapi.APISchemaAWSAnthropic:
@@ -176,7 +225,7 @@ func (ChatCompletionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISc
 	case filterapi.APISchemaGCPAnthropic:
 		return translator.NewChatCompletionOpenAIToGCPAnthropicTranslator(schema.Version, modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -198,9 +247,23 @@ func (ChatCompletionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Ch
 		redacted.PredictionContent = &redactedPrediction
 	}
 
+	// User is an end-user identifier set by the application — redact it.
+	redacted.User = redaction.RedactString(req.User)
+
+	// The web search user location is the end user's approximate location — redact it, keep the type.
+	if req.WebSearchOptions != nil && req.WebSearchOptions.UserLocation != nil {
+		redactedOptions := *req.WebSearchOptions
+		redactedLocation := *req.WebSearchOptions.UserLocation
+		approximate := &redactedLocation.Approximate
+		redactInPlace(&approximate.City, &approximate.Region, &approximate.Country)
+		redactedOptions.UserLocation = &redactedLocation
+		redacted.WebSearchOptions = &redactedOptions
+	}
+
 	// Tool definitions (name, description, parameters) are developer-authored schema metadata,
 	// not user data — kept as-is.
-	// Response format schemas and guided_json are developer-authored — kept as-is.
+	// Response format schemas and guided_json are developer-authored — kept as-is. So are the
+	// other vLLM output constraints (guided_choice, guided_regex, structured_outputs).
 
 	return &redacted, nil
 }
@@ -228,17 +291,20 @@ func (CompletionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema
 	case filterapi.APISchemaOpenAI:
 		return translator.NewCompletionOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
 // RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
 func (CompletionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.CompletionRequest) (redactedReq *openai.CompletionRequest, err error) {
-	// The prompt is user-supplied text (string / []string / token arrays). Its value is a
-	// bare interface{} populated by a custom unmarshaler, so redact it via the generic
-	// JSON-tree redactor rather than enumerating every union variant.
+	// The prompt is user-supplied text (string / []string) or token IDs ([]int64 / [][]int64), held in a bare interface{} populated by a custom unmarshaler.
 	redacted := *req
-	redacted.Prompt = openai.PromptUnion{Value: redactInterfaceValue(req.Prompt.Value)}
+	redacted.Prompt = openai.PromptUnion{Value: redactTextOrTokens(req.Prompt.Value)}
+	// User is an end-user identifier set by the application — redact it.
+	redacted.User = redaction.RedactString(req.User)
+	// Suffix is the text after the insertion point, so it is prompt content — redact it.
+	redacted.Suffix = redaction.RedactString(req.Suffix)
+	// Stop sequences are generation config, like sampling parameters — kept as-is.
 	return &redacted, nil
 }
 
@@ -271,7 +337,7 @@ func (EmbeddingsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema,
 	case filterapi.APISchemaAWSBedrock:
 		return translator.NewEmbeddingOpenAIToAWSBedrockTranslator(modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -280,9 +346,11 @@ func (EmbeddingsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Embeddi
 	redacted := *req
 	switch {
 	case req.OfCompletion != nil:
-		// Input is user-supplied text (string / []string / objects) in a bare-any union.
+		// Input is user-supplied text (string / []string / objects) or token IDs in a bare-any union.
 		redactedOfCompletion := *req.OfCompletion
-		redactedOfCompletion.Input = openai.EmbeddingRequestInput{Value: redactInterfaceValue(req.OfCompletion.Input.Value)}
+		redactedOfCompletion.Input = openai.EmbeddingRequestInput{Value: redactTextOrTokens(req.OfCompletion.Input.Value)}
+		redactedOfCompletion.User = redactOptionalString(req.OfCompletion.User)
+		redactedOfCompletion.GCPVertexAIEmbeddingVendorFields = redactEmbeddingVendorFields(req.OfCompletion.GCPVertexAIEmbeddingVendorFields)
 		redacted.OfCompletion = &redactedOfCompletion
 		redacted.OfChat = nil
 	case req.OfChat != nil:
@@ -292,10 +360,25 @@ func (EmbeddingsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Embeddi
 		for i, msg := range req.OfChat.Messages {
 			redactedOfChat.Messages[i] = redactMessage(msg)
 		}
+		redactedOfChat.User = redactOptionalString(req.OfChat.User)
+		redactedOfChat.GCPVertexAIEmbeddingVendorFields = redactEmbeddingVendorFields(req.OfChat.GCPVertexAIEmbeddingVendorFields)
 		redacted.OfChat = &redactedOfChat
 		redacted.OfCompletion = nil
 	}
+	// User and the vendor fields are marshaled from whichever variant is set (or from the base fields if neither is), so redact every copy.
+	redacted.User = redactOptionalString(req.User)
+	redacted.GCPVertexAIEmbeddingVendorFields = redactEmbeddingVendorFields(req.GCPVertexAIEmbeddingVendorFields)
 	return &redacted, nil
+}
+
+// redactEmbeddingVendorFields returns a copy of the GCP Vertex AI embedding vendor fields with the title redacted. The title describes the document being embedded, so it is caller content; auto_truncate and task_type are config and are kept. The struct is copied because every copy of the parsed request shares one pointer to it, and the original is sent upstream.
+func redactEmbeddingVendorFields(fields *openai.GCPVertexAIEmbeddingVendorFields) *openai.GCPVertexAIEmbeddingVendorFields {
+	if fields == nil {
+		return nil
+	}
+	redacted := *fields
+	redacted.Title = redaction.RedactString(fields.Title)
+	return &redacted
 }
 
 func (ImageGenerationEndpointSpec) ParseBody(
@@ -320,7 +403,7 @@ func (ImageGenerationEndpointSpec) GetTranslator(schema filterapi.VersionedAPISc
 	case filterapi.APISchemaOpenAI:
 		return translator.NewImageGenerationOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -329,6 +412,8 @@ func (ImageGenerationEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Im
 	// The prompt is user-supplied text describing the desired image; redact it.
 	redacted := *req
 	redacted.Prompt = redaction.RedactString(req.Prompt)
+	// User is an end-user identifier set by the application — redact it.
+	redacted.User = redaction.RedactString(req.User)
 	return &redacted, nil
 }
 
@@ -354,10 +439,12 @@ func (ResponsesEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, 
 	switch schema.Name {
 	case filterapi.APISchemaOpenAI:
 		return translator.NewResponsesOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+	case filterapi.APISchemaAWSOpenAI:
+		return translator.NewResponsesOpenAIToAWSOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	case filterapi.APISchemaAzureOpenAI:
 		return translator.NewResponsesOpenAIToAzureOpenAITranslator(schema.Version, modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -367,10 +454,123 @@ func (ResponsesEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.Response
 	// Instructions and User are user-supplied text / PII.
 	redacted.Instructions = redaction.RedactString(req.Instructions)
 	redacted.User = redaction.RedactString(req.User)
+	// SafetyIdentifier identifies the end user; PromptCacheKey is often built per user or per session; Metadata is a free-form client map that can hold user IDs or similar. Metadata keys are kept and only the values are redacted.
+	redacted.SafetyIdentifier = redaction.RedactString(req.SafetyIdentifier)
+	redacted.PromptCacheKey = redaction.RedactString(req.PromptCacheKey)
+	// Metadata values are redacted one by one rather than with redactUnionField, whose JSON-tree redactor keeps any value under a "type" key as a union discriminator.
+	if req.Metadata != nil {
+		redacted.Metadata = make(map[string]string, len(req.Metadata))
+		for k, v := range req.Metadata {
+			redacted.Metadata[k] = redaction.RedactString(v)
+		}
+	}
 	// Input and Prompt are JSON unions holding conversation items / content — redact every
 	// nested string leaf via the generic redactor so user content inside any item type is caught.
 	redacted.Input = redactUnionField(req.Input)
 	redacted.Prompt = redactUnionField(req.Prompt)
+	// A prompt variable can be named "type", whose value the JSON-tree redactor would keep as a discriminator, so string variables are redacted directly.
+	if len(req.Prompt.Variables) > 0 {
+		redacted.Prompt.Variables = make(map[string]openai.ResponsePromptVariableUnionParam, len(req.Prompt.Variables))
+		for name, v := range req.Prompt.Variables {
+			if v.OfString != nil {
+				redacted.Prompt.Variables[name] = openai.ResponsePromptVariableUnionParam{OfString: ptr.To(redaction.RedactString(*v.OfString))}
+				continue
+			}
+			redacted.Prompt.Variables[name] = redactUnionField(v)
+		}
+	}
+	// Tool definitions are kept as config, except where a tool carries credentials.
+	if len(req.Tools) > 0 {
+		redacted.Tools = make([]openai.ResponseToolUnion, len(req.Tools))
+		for i := range req.Tools {
+			redacted.Tools[i] = redactResponseTool(&req.Tools[i])
+		}
+	}
+	return &redacted, nil
+}
+
+// redactResponseTool redacts the parts of a Responses tool definition that carry credentials or end-user data. MCP tools hold an OAuth access token in Authorization, may authenticate through Headers, and may embed a key in ServerURL. Web search tools carry the end user's location. A tool of unrecognized type is opaque, so it is redacted whole. Everything else is developer-authored config and is kept.
+func redactResponseTool(tool *openai.ResponseToolUnion) openai.ResponseToolUnion {
+	switch {
+	case tool.OfMcp != nil:
+		mcp := *tool.OfMcp
+		mcp.Authorization = redaction.RedactString(tool.OfMcp.Authorization)
+		mcp.ServerURL = redaction.RedactString(tool.OfMcp.ServerURL)
+		if len(tool.OfMcp.Headers) > 0 {
+			mcp.Headers = make(map[string]string, len(tool.OfMcp.Headers))
+			for k, v := range tool.OfMcp.Headers {
+				mcp.Headers[k] = redaction.RedactString(v)
+			}
+		}
+		return openai.ResponseToolUnion{OfMcp: &mcp}
+	case tool.OfWebSearch != nil:
+		webSearch := *tool.OfWebSearch
+		location := &webSearch.UserLocation
+		redactInPlace(&location.City, &location.Region, &location.Country, &location.Timezone)
+		return openai.ResponseToolUnion{OfWebSearch: &webSearch}
+	case tool.OfWebSearchPreview != nil:
+		webSearch := *tool.OfWebSearchPreview
+		location := &webSearch.UserLocation
+		redactInPlace(&location.City, &location.Region, &location.Country, &location.Timezone)
+		return openai.ResponseToolUnion{OfWebSearchPreview: &webSearch}
+	case tool.OfUnknown != nil:
+		return openai.ResponseToolUnion{OfUnknown: redactUnknownTool(tool.OfUnknown)}
+	default:
+		return *tool
+	}
+}
+
+// ParseBody implements [EndpointSpec.ParseBody]. Decisions is a non-streaming endpoint.
+func (DecisionsEndpointSpec) ParseBody(body []byte, _ bool) (internalapi.OriginalModel, *openai.DecisionRequest, bool, []byte, error) {
+	var req openai.DecisionRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", nil, false, nil, fmt.Errorf("%w: failed to parse JSON for /v1/decisions: %w", internalapi.ErrMalformedRequest, err)
+	}
+	return req.Model, &req, false, nil, nil
+}
+
+func (DecisionsEndpointSpec) ParseMultipartBody([]byte, string, bool) (internalapi.OriginalModel, *openai.DecisionRequest, bool, []byte, error) {
+	return "", nil, false, nil, errMultipartNotSupported
+}
+
+func (DecisionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, modelNameOverride string) (translator.OpenAIDecisionsTranslator, error) {
+	switch schema.Name {
+	case filterapi.APISchemaOpenAI:
+		return translator.NewDecisionsOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
+	case filterapi.APISchemaAzureOpenAI:
+		// Azure serves Decisions only on its v1 API: deployment name in the body, no api-version.
+		return translator.NewDecisionsOpenAIToOpenAITranslator("openai/v1", modelNameOverride), nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
+	}
+}
+
+// RedactSensitiveInfoFromRequest removes evidence and rubric content while
+// retaining the model, question names, and discriminators needed for debugging.
+func (DecisionsEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.DecisionRequest) (*openai.DecisionRequest, error) {
+	redacted := *req
+	redacted.Input = redactRawJSON(req.Input)
+	redacted.SafetyIdentifier = redaction.RedactString(req.SafetyIdentifier)
+	redacted.Questions = make([]openai.DecisionQuestion, len(req.Questions))
+	for i := range req.Questions {
+		q := req.Questions[i]
+		q.Instructions = redactRawJSON(q.Instructions)
+		q.Choices = make([]openai.DecisionChoiceOption, len(req.Questions[i].Choices))
+		for j := range req.Questions[i].Choices {
+			q.Choices[j] = openai.DecisionChoiceOption{
+				Value:       redactRawJSON(req.Questions[i].Choices[j].Value),
+				Description: redaction.RedactString(req.Questions[i].Choices[j].Description),
+			}
+		}
+		q.Levels = make([]openai.DecisionScoreLevel, len(req.Questions[i].Levels))
+		for j := range req.Questions[i].Levels {
+			q.Levels[j] = openai.DecisionScoreLevel{
+				Label:       redaction.RedactString(req.Questions[i].Levels[j].Label),
+				Description: redaction.RedactString(req.Questions[i].Levels[j].Description),
+			}
+		}
+		redacted.Questions[i] = q
+	}
 	return &redacted, nil
 }
 
@@ -413,25 +613,121 @@ func (MessagesEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, m
 	case filterapi.APISchemaAWSBedrock:
 		return translator.NewAnthropicToAWSBedrockTranslator(modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("/v1/messages endpoint only supports backends that return native Anthropic format (Anthropic, GCPAnthropic, AWSAnthropic). OpenAI and AWSBedrock translation is also supported. Backend %s uses different model format", schema.Name)
+		return nil, fmt.Errorf("%w: /v1/messages endpoint only supports backends that return native Anthropic format (Anthropic, GCPAnthropic, AWSAnthropic). OpenAI and AWSBedrock translation is also supported. Backend %s uses different model format", internalapi.ErrInvalidRequestBody, schema.Name)
 	}
 }
 
 // RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
 func (MessagesEndpointSpec) RedactSensitiveInfoFromRequest(req *anthropic.MessagesRequest) (redactedReq *anthropic.MessagesRequest, err error) {
 	redacted := *req
-	// Message content (text or []ContentBlockParam) and the system prompt hold user/developer
-	// text. They are JSON unions, so redact every nested string leaf generically.
-	redacted.Messages = make([]anthropic.MessageParam, len(req.Messages))
-	for i, msg := range req.Messages {
+	redacted.Messages, redacted.System = redactAnthropicMessagesAndSystem(req.Messages, req.System)
+	// metadata.user_id is an end-user identifier set by the application — redact it.
+	if req.Metadata != nil {
+		redactedMetadata := *req.Metadata
+		redactedMetadata.UserID = redactOptionalString(req.Metadata.UserID)
+		redacted.Metadata = &redactedMetadata
+	}
+	if len(req.MCPServers) > 0 {
+		redacted.MCPServers = make([]anthropic.MCPServer, len(req.MCPServers))
+		for i, server := range req.MCPServers {
+			redacted.MCPServers[i] = redactMCPServer(server)
+		}
+	}
+	redacted.Tools = redactAnthropicTools(req.Tools)
+	// Container (a container id and skills to load) and ContextManagement (context-editing config) are provider ids and config — kept as-is.
+	return &redacted, nil
+}
+
+// redactAnthropicMessagesAndSystem returns redacted copies of Anthropic messages and system prompt.
+// Message content (text or []ContentBlockParam) and the system prompt hold user/developer
+// text. They are JSON unions, so redact every nested string leaf generically.
+func redactAnthropicMessagesAndSystem(msgs []anthropic.MessageParam, system *anthropic.SystemPrompt) ([]anthropic.MessageParam, *anthropic.SystemPrompt) {
+	redactedMsgs := make([]anthropic.MessageParam, len(msgs))
+	for i, msg := range msgs {
 		redactedMsg := msg
 		redactedMsg.Content = redactUnionField(msg.Content)
-		redacted.Messages[i] = redactedMsg
+		redactedMsgs[i] = redactedMsg
 	}
-	if req.System != nil {
-		redacted.System = ptr.To(redactUnionField(*req.System))
+	var redactedSystem *anthropic.SystemPrompt
+	if system != nil {
+		redactedSystem = ptr.To(redactUnionField(*system))
 	}
-	return &redacted, nil
+	return redactedMsgs, redactedSystem
+}
+
+// redactAnthropicTools returns a copy of the tool definitions with the web search tool's end-user location redacted. Every other tool definition is config and is kept.
+func redactAnthropicTools(tools []anthropic.ToolUnion) []anthropic.ToolUnion {
+	if len(tools) == 0 {
+		return tools
+	}
+	redacted := make([]anthropic.ToolUnion, len(tools))
+	for i := range tools {
+		redacted[i] = redactAnthropicTool(&tools[i])
+	}
+	return redacted
+}
+
+// redactAnthropicTool redacts the end user's location from a web search tool definition and keeps every other tool definition as-is.
+func redactAnthropicTool(tool *anthropic.ToolUnion) anthropic.ToolUnion {
+	if tool.WebSearchTool == nil || tool.WebSearchTool.UserLocation == nil {
+		return *tool
+	}
+	webSearch := *tool.WebSearchTool
+	location := *tool.WebSearchTool.UserLocation
+	redactInPlace(&location.City, &location.Region, &location.Country, &location.Timezone)
+	webSearch.UserLocation = &location
+	return anthropic.ToolUnion{WebSearchTool: &webSearch}
+}
+
+// redactInPlace replaces each string with its redacted placeholder. Callers pass fields of a copy, never of the original request.
+func redactInPlace(fields ...*string) {
+	for _, f := range fields {
+		*f = redaction.RedactString(*f)
+	}
+}
+
+// mcpServerKeptKeys are the mcp_servers entry keys that describe which server and tools to use rather than how to authenticate. Every other key is redacted, so a credential field added to the API later is not logged by default.
+var mcpServerKeptKeys = map[string]bool{"type": true, "name": true, "tool_configuration": true}
+
+// redactMCPServer redacts an Anthropic mcp_servers entry. MCPServer is untyped, so without this the caller's object, including authorization_token (an OAuth bearer token for the MCP server) and url (which can embed a key), would be logged as received.
+func redactMCPServer(server anthropic.MCPServer) anthropic.MCPServer {
+	entry, ok := server.(map[string]any)
+	if !ok {
+		return redactWholeValue(server)
+	}
+	redacted := make(map[string]any, len(entry))
+	for k, v := range entry {
+		if mcpServerKeptKeys[k] {
+			redacted[k] = v
+			continue
+		}
+		redacted[k] = redactWholeValue(v)
+	}
+	return redacted
+}
+
+// redactWholeValue replaces v with a single placeholder for its JSON encoding. Unlike [redactInterfaceValue] it keeps nothing from v: [redaction.RedactJSONTree] keeps numbers and "type" values, which in a credential field would be the credential itself.
+func redactWholeValue(v any) any {
+	switch val := v.(type) {
+	case nil:
+		return nil
+	case string:
+		// Hash the string itself, not its quoted JSON form, so the placeholder matches other redacted fields holding the same value.
+		return redaction.RedactString(val)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return redaction.RedactString("redaction-error")
+	}
+	return redaction.RedactString(string(b))
+}
+
+// redactOptionalString returns a pointer to the redacted value of s, or nil if s is nil.
+func redactOptionalString(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	return ptr.To(redaction.RedactString(*s))
 }
 
 // ParseBody implements [EndpointSpec.ParseBody].
@@ -462,7 +758,7 @@ func (MessagesCountTokensEndpointSpec) GetTranslator(schema filterapi.VersionedA
 	case filterapi.APISchemaAnthropic:
 		return translator.NewCountTokensToAnthropicTranslator(modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for /v1/messages/count_tokens: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for /v1/messages/count_tokens: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -473,7 +769,11 @@ func (MessagesCountTokensEndpointSpec) ParseMultipartBody([]byte, string, bool) 
 
 // RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
 func (MessagesCountTokensEndpointSpec) RedactSensitiveInfoFromRequest(req *anthropic.CountTokensRequest) (redactedReq *anthropic.CountTokensRequest, err error) {
-	return req, nil
+	redacted := *req
+	// Same message/system and tool shapes as /v1/messages.
+	redacted.Messages, redacted.System = redactAnthropicMessagesAndSystem(req.Messages, req.System)
+	redacted.Tools = redactAnthropicTools(req.Tools)
+	return &redacted, nil
 }
 
 // ParseBody implements [EndpointSpec.ParseBody].
@@ -499,7 +799,7 @@ func (RerankEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, mod
 	case filterapi.APISchemaCohere:
 		return translator.NewRerankCohereToCohereTranslator(schema.Version, modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -513,6 +813,74 @@ func (RerankEndpointSpec) RedactSensitiveInfoFromRequest(req *cohereschema.Reran
 		redacted.Documents[i] = redaction.RedactString(doc)
 	}
 	return &redacted, nil
+}
+
+// ParseBody implements [EndpointSpec.ParseBody].
+func (SystemOneEndpointSpec) ParseBody(
+	body []byte,
+	_ bool,
+) (internalapi.OriginalModel, *typesafeschema.SystemOneRequest, bool, []byte, error) {
+	var req typesafeschema.SystemOneRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", nil, false, nil, fmt.Errorf("%w: failed to parse JSON for /v1/systemone: %w", internalapi.ErrMalformedRequest, err)
+	}
+	return req.Model, &req, false, nil, nil
+}
+
+// ParseMultipartBody implements [Spec.ParseMultipartBody].
+func (SystemOneEndpointSpec) ParseMultipartBody([]byte, string, bool) (internalapi.OriginalModel, *typesafeschema.SystemOneRequest, bool, []byte, error) {
+	return "", nil, false, nil, errMultipartNotSupported
+}
+
+// GetTranslator implements [EndpointSpec.GetTranslator].
+func (SystemOneEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, modelNameOverride string) (translator.TypeSafeSystemOneTranslator, error) {
+	switch schema.Name {
+	case filterapi.APISchemaTypeSafe:
+		return translator.NewSystemOneTypeSafeToTypeSafeTranslator(schema.Version, modelNameOverride), nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported API schema: backend=%s", internalapi.ErrInvalidRequestBody, schema)
+	}
+}
+
+// RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
+// The state and every question's instructions and criteria are user content;
+// the model, question ids and question types are kept for debugging.
+func (SystemOneEndpointSpec) RedactSensitiveInfoFromRequest(req *typesafeschema.SystemOneRequest) (redactedReq *typesafeschema.SystemOneRequest, err error) {
+	redacted := *req
+	redacted.State = redactRawJSON(req.State)
+	if req.Questions != nil {
+		redacted.Questions = make(map[string]typesafeschema.SystemOneQuestion, len(req.Questions))
+		for id, q := range req.Questions {
+			q.Instructions = redactRawJSON(q.Instructions)
+			q.Criteria = redactRawJSON(q.Criteria)
+			redacted.Questions[id] = q
+		}
+	}
+	return &redacted, nil
+}
+
+// redactRawJSON collapses a raw JSON value into a JSON string placeholder
+// carrying only its length and hash. Unlike redactUnionField it does not keep
+// the JSON shape, because object keys (state fields, choice options) are user
+// content here. Empty values are left as they are.
+func redactRawJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	placeholder, _ := json.Marshal(redaction.RedactString(string(raw)))
+	return placeholder
+}
+
+// redactUnknownTool redacts a Responses tool whose type the gateway does not recognize. The "type" value is kept so the log still shows which tool the caller sent; everything else is collapsed into one placeholder, because the gateway does not know which of the tool's fields are configuration and which are caller data. If the tool is not an object with a string "type", the whole value is collapsed like [redactRawJSON].
+func redactUnknownTool(raw json.RawMessage) json.RawMessage {
+	var tool struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &tool); err != nil || tool.Type == "" {
+		return redactRawJSON(raw)
+	}
+	redacted, _ := json.Marshal(map[string]string{"type": tool.Type, "redacted": redaction.RedactString(string(raw))})
+	return redacted
 }
 
 // ParseBody implements [EndpointSpec.ParseBody].
@@ -556,7 +924,7 @@ func (TokenizeEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, m
 	case filterapi.APISchemaAWSBedrock:
 		return translator.NewTokenizeToAWSBedrockTranslator(modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for tokenize endpoint: backend=%s", schema.Name)
+		return nil, fmt.Errorf("%w: unsupported API schema for tokenize endpoint: backend=%s", internalapi.ErrInvalidRequestBody, schema.Name)
 	}
 }
 
@@ -577,6 +945,9 @@ func (TokenizeEndpointSpec) RedactSensitiveInfoFromRequest(req *tokenize.Request
 		for i, msg := range req.Messages {
 			redactedOfChat.Messages[i] = redactMessage(msg)
 		}
+		// Template kwargs are rendered into the prompt and may carry user data.
+		redactedOfChat.ChatTemplateKwargs = redactUnionField(req.ChatTemplateKwargs)
+		// ChatTemplate, Tools, and MmProcessorKwargs are developer-authored format/schema/processor config, not user data — kept as-is.
 		redacted.ChatRequest = &redactedOfChat
 		redacted.CompletionRequest = nil
 	}
@@ -611,6 +982,8 @@ func redactMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatComple
 func redactUserMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfUser
 	redactedMsg.Content = redactStringOrUserRoleContentUnion(msg.OfUser.Content)
+	// Name identifies the participant, typically the end user — redact it.
+	redactedMsg.Name = redaction.RedactString(msg.OfUser.Name)
 	return openai.ChatCompletionMessageParamUnion{OfUser: &redactedMsg}
 }
 
@@ -618,6 +991,9 @@ func redactUserMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCo
 func redactAssistantMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfAssistant
 	redactedMsg.Content = redactStringOrAssistantRoleContentUnion(msg.OfAssistant.Content)
+	// Name identifies the participant; Refusal is model-generated text, redacted like refusal content parts.
+	redactedMsg.Name = redaction.RedactString(msg.OfAssistant.Name)
+	redactedMsg.Refusal = redaction.RedactString(msg.OfAssistant.Refusal)
 	// Redact tool call arguments (may contain data derived from user messages).
 	// Function name is kept — it is the tool API name, not user data.
 	if len(msg.OfAssistant.ToolCalls) > 0 {
@@ -628,6 +1004,18 @@ func redactAssistantMessage(msg openai.ChatCompletionMessageParamUnion) openai.C
 			redactedMsg.ToolCalls[i] = redactedToolCall
 		}
 	}
+	// Thinking blocks echoed back by the client carry the model's previous reasoning, which often restates the user's prompt. Only the block type is structural; the text, signature and encrypted data are redacted.
+	if len(msg.OfAssistant.ThinkingBlocks) > 0 {
+		redactedMsg.ThinkingBlocks = make([]openai.ThinkingBlock, len(msg.OfAssistant.ThinkingBlocks))
+		for i, tb := range msg.OfAssistant.ThinkingBlocks {
+			redactedMsg.ThinkingBlocks[i] = openai.ThinkingBlock{
+				Type:      tb.Type,
+				Thinking:  redaction.RedactString(tb.Thinking),
+				Signature: redaction.RedactString(tb.Signature),
+				Data:      redaction.RedactString(tb.Data),
+			}
+		}
+	}
 	return openai.ChatCompletionMessageParamUnion{OfAssistant: &redactedMsg}
 }
 
@@ -635,6 +1023,8 @@ func redactAssistantMessage(msg openai.ChatCompletionMessageParamUnion) openai.C
 func redactSystemMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfSystem
 	redactedMsg.Content = redactContentUnion(msg.OfSystem.Content)
+	// Name identifies the participant — redact it.
+	redactedMsg.Name = redaction.RedactString(msg.OfSystem.Name)
 	return openai.ChatCompletionMessageParamUnion{OfSystem: &redactedMsg}
 }
 
@@ -642,6 +1032,8 @@ func redactSystemMessage(msg openai.ChatCompletionMessageParamUnion) openai.Chat
 func redactDeveloperMessage(msg openai.ChatCompletionMessageParamUnion) openai.ChatCompletionMessageParamUnion {
 	redactedMsg := *msg.OfDeveloper
 	redactedMsg.Content = redactContentUnion(msg.OfDeveloper.Content)
+	// Name identifies the participant — redact it.
+	redactedMsg.Name = redaction.RedactString(msg.OfDeveloper.Name)
 	return openai.ChatCompletionMessageParamUnion{OfDeveloper: &redactedMsg}
 }
 
@@ -748,6 +1140,18 @@ func redactUserContentPart(part openai.ChatCompletionContentPartUserUnionParam) 
 		redacted.OfInputAudio = &redactedAudio
 	}
 
+	// Redact audio and video URLs (may be data URLs with embedded base64 media)
+	if part.OfAudioURL != nil {
+		redactedAudioURL := *part.OfAudioURL
+		redactedAudioURL.AudioURL.URL = redaction.RedactString(part.OfAudioURL.AudioURL.URL)
+		redacted.OfAudioURL = &redactedAudioURL
+	}
+	if part.OfVideoURL != nil {
+		redactedVideoURL := *part.OfVideoURL
+		redactedVideoURL.VideoURL.URL = redaction.RedactString(part.OfVideoURL.VideoURL.URL)
+		redacted.OfVideoURL = &redactedVideoURL
+	}
+
 	// Redact file attachments (may contain sensitive documents or data)
 	if part.OfFile != nil {
 		redactedFile := *part.OfFile
@@ -778,6 +1182,15 @@ func redactInterfaceValue(v any) any {
 	var generic any
 	_ = json.Unmarshal(b, &generic)
 	return redaction.RedactJSONTree(generic)
+}
+
+// redactTextOrTokens redacts a prompt or input union that holds either text or token IDs. Token IDs decode back to the text with the model's public tokenizer, so a token array is collapsed into one placeholder; [redactInterfaceValue] would keep every number. Text shapes go through [redactInterfaceValue], which keeps the shape and redacts each string.
+func redactTextOrTokens(v any) any {
+	switch v.(type) {
+	case []int64, [][]int64:
+		return redactWholeValue(v)
+	}
+	return redactInterfaceValue(v)
 }
 
 // redactUnionField redacts a typed-struct field whose value is a JSON union
@@ -847,7 +1260,7 @@ func (SpeechEndpointSpec) GetTranslator(
 			modelNameOverride,
 		), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for speech: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for speech: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -978,7 +1391,7 @@ func (TranscriptionEndpointSpec) GetTranslator(
 	case filterapi.APISchemaOpenAI:
 		return translator.NewTranscriptionOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for audio transcription: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for audio transcription: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -986,6 +1399,8 @@ func (TranscriptionEndpointSpec) GetTranslator(
 func (TranscriptionEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.TranscriptionRequest) (*openai.TranscriptionRequest, error) {
 	redacted := *req
 	redacted.Prompt = redaction.RedactString(req.Prompt)
+	// FileName is the caller's upload file name, which often names a person or a meeting.
+	redacted.FileName = redaction.RedactString(req.FileName)
 	return &redacted, nil
 }
 
@@ -1083,7 +1498,7 @@ func (TranslationEndpointSpec) GetTranslator(
 	case filterapi.APISchemaOpenAI:
 		return translator.NewTranslationOpenAIToOpenAITranslator(schema.OpenAIPrefix(), modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for audio translation: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for audio translation: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -1091,6 +1506,8 @@ func (TranslationEndpointSpec) GetTranslator(
 func (TranslationEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.TranslationRequest) (*openai.TranslationRequest, error) {
 	redacted := *req
 	redacted.Prompt = redaction.RedactString(req.Prompt)
+	// FileName is the caller's upload file name, which often names a person or a meeting.
+	redacted.FileName = redaction.RedactString(req.FileName)
 	return &redacted, nil
 }
 
@@ -1117,7 +1534,7 @@ func (ResponsesInputTokensEndpointSpec) GetTranslator(
 	case filterapi.APISchemaAzureOpenAI:
 		return translator.NewResponsesInputTokensOpenAIToAzureOpenAITranslator(schema.Version, modelNameOverride), nil
 	default:
-		return nil, fmt.Errorf("unsupported API schema for /v1/responses/input_tokens: backend=%s", schema)
+		return nil, fmt.Errorf("%w: unsupported API schema for /v1/responses/input_tokens: backend=%s", internalapi.ErrInvalidRequestBody, schema)
 	}
 }
 
@@ -1128,7 +1545,8 @@ func (ResponsesInputTokensEndpointSpec) ParseMultipartBody([]byte, string, bool)
 
 // RedactSensitiveInfoFromRequest implements [EndpointSpec.RedactSensitiveInfoFromRequest].
 func (ResponsesInputTokensEndpointSpec) RedactSensitiveInfoFromRequest(req *openai.ResponseRequest) (*openai.ResponseRequest, error) {
-	return req, nil
+	// Same request schema as /v1/responses — reuse its redaction.
+	return ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
 }
 
 // readFormField reads the entire value of a multipart form field as a string.

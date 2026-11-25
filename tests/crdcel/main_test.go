@@ -96,6 +96,7 @@ func TestAIServiceBackends(t *testing.T) {
 		{name: "basic.yaml"},
 		{name: "anthropic-schema.yaml"},
 		{name: "basic-eg-backend-aws.yaml"},
+		{name: "aws-openai-schema.yaml"},
 		{name: "basic-eg-backend-azure.yaml"},
 		{
 			name:   "unknown_schema.yaml",
@@ -122,6 +123,38 @@ func TestAIServiceBackends(t *testing.T) {
 			} else {
 				require.NoError(t, c.Create(ctx, aiBackend))
 				require.NoError(t, c.Delete(ctx, aiBackend))
+			}
+		})
+	}
+}
+
+func TestGatewayConfigs(t *testing.T) {
+	c, _, _ := testsinternal.NewEnvTest(t)
+	ctx := t.Context()
+
+	for _, tc := range []struct {
+		name   string
+		expErr string
+	}{
+		{name: "metadata_forwarding_namespaces.yaml"},
+		{
+			name:   "bad_metadata_forwarding_namespace.yaml",
+			expErr: "metadata namespaces may only contain letters, digits, '.', '_', '/' and '-'",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := testdata.ReadFile(path.Join("testdata/gatewayconfigs", tc.name))
+			require.NoError(t, err)
+
+			gatewayConfig := &aigv1b1.GatewayConfig{}
+			err = yaml.UnmarshalStrict(data, gatewayConfig)
+			require.NoError(t, err)
+
+			if tc.expErr != "" {
+				require.ErrorContains(t, c.Create(ctx, gatewayConfig), tc.expErr)
+			} else {
+				require.NoError(t, c.Create(ctx, gatewayConfig))
+				require.NoError(t, c.Delete(ctx, gatewayConfig))
 			}
 		})
 	}
@@ -193,6 +226,10 @@ func TestBackendSecurityPolicies(t *testing.T) {
 			name:   "gcp_with_apikey.yaml",
 			expErr: "When type is GCPCredentials, only gcpCredentials field should be set",
 		},
+		{
+			name:   "oidc_invalid_issuer.yaml",
+			expErr: "spec.awsCredentials.oidcExchangeToken.oidc.provider.issuer in body should match",
+		},
 		{name: "azure_oidc.yaml"},
 		{name: "azure_valid_credentials.yaml"},
 		{name: "aws_credential_file.yaml"},
@@ -202,6 +239,32 @@ func TestBackendSecurityPolicies(t *testing.T) {
 		{name: "aws_credential_override.yaml"},
 		{name: "gcp_oidc.yaml"},
 		{name: "anthropic-apikey.yaml"},
+		{name: "openai_spiffe.yaml"},
+		{name: "openai_oidc.yaml"},
+		{
+			name:   "openai_missing_subject_token.yaml",
+			expErr: "Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified",
+		},
+		{
+			name:   "openai_multiple_subject_tokens.yaml",
+			expErr: "Exactly one of oidcExchangeToken or spiffeJWTSVID must be specified",
+		},
+		{
+			name:   "openai_missing_identity_provider_id.yaml",
+			expErr: "spec.openAICredentials.workloadIdentityFederationConfig.identityProviderID in body should be at least 1 chars long",
+		},
+		{
+			name:   "openai_invalid_socket_path.yaml",
+			expErr: "spec.openAICredentials.workloadIdentityFederationConfig.subjectToken.spiffeJWTSVID.socketPath in body should match",
+		},
+		{
+			name:   "openai_with_apikey.yaml",
+			expErr: "When type is OpenAICredentials, only openAICredentials field should be set",
+		},
+		{
+			name:   "apikey_with_openai_credentials.yaml",
+			expErr: "When type is APIKey, only apiKey field should be set",
+		},
 		{name: "targetrefs_basic.yaml"},
 		{name: "targetrefs_multiple.yaml"},
 		{name: "targetrefs_inferencepool.yaml"},
@@ -277,6 +340,11 @@ func TestMCPRoutes(t *testing.T) {
 			name:   "backend_api_key_both_header_and_query.yaml",
 			expErr: "only one of header or queryParam can be set",
 		},
+		{name: "backend_api_key_injection_if_not_present.yaml"},
+		{
+			name:   "backend_api_key_injection_if_not_present_query.yaml",
+			expErr: "injectionPolicy cannot be IfNotPresent when queryParam is set",
+		},
 		{
 			name:   "jwks_missing.yaml",
 			expErr: "spec.securityPolicy.oauth.jwks: Invalid value: \"object\": either remoteJWKS or localJWKS must be specified.",
@@ -287,8 +355,13 @@ func TestMCPRoutes(t *testing.T) {
 		},
 		{
 			name:   "authorization_with_jwt_without_oauth.yaml",
-			expErr: "spec.securityPolicy: Invalid value: \"object\": oauth must be configured when any authorization rule uses a jwt source",
+			expErr: "spec.securityPolicy: Invalid value: \"object\": oauth must be configured when any authorization rule uses a jwt source or references request.auth.jwt in a cel expression",
 		},
+		{
+			name:   "authorization_cel_jwt_without_oauth.yaml",
+			expErr: "spec.securityPolicy: Invalid value: \"object\": oauth must be configured when any authorization rule uses a jwt source or references request.auth.jwt in a cel expression",
+		},
+		{name: "authorization_cel_without_jwt_reference.yaml"},
 		{
 			name:   "authorization_claim_scope_reserved.yaml",
 			expErr: "spec.securityPolicy.authorization.rules[0].source.jwt.claims: Invalid value: \"array\": 'scope' claim name is reserved for OAuth scopes",
@@ -298,6 +371,20 @@ func TestMCPRoutes(t *testing.T) {
 			expErr: "spec.securityPolicy.authorization.rules[0].source.jwt: Invalid value: \"object\": either scopes or claims must be specified",
 		},
 		{name: "authorization_without_jwt_source.yaml"},
+		{
+			name:   "backend_selector_jwt_without_oauth.yaml",
+			expErr: "spec: Invalid value: \"object\": securityPolicy.oauth must be configured when a backendSelector rule's cel expression references request.auth.jwt",
+		},
+		{name: "backend_selector_jwt_with_oauth.yaml"},
+		{name: "mergetype_valid.yaml"},
+		{
+			name:   "mergetype_security_policy_replace_invalid.yaml",
+			expErr: "spec.securityPolicy.mergeType: Invalid value: \"string\": Replace is not a valid MergeType for SecurityPolicy",
+		},
+		{
+			name:   "mergetype_backend_traffic_policy_replace_invalid.yaml",
+			expErr: "spec.backendTrafficPolicy.mergeType: Invalid value: \"string\": Replace is not a valid MergeType for BackendTrafficPolicy",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := testdata.ReadFile(path.Join("testdata/mcpgatewayroutes", tc.name))

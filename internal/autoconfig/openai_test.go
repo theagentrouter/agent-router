@@ -37,11 +37,7 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
 			},
 		},
 		{
@@ -60,11 +56,7 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "AzureOpenAI",
-					Version:     "2024-02-15-preview",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "AzureOpenAI", Version: "2024-02-15-preview", ModelMatch: AllModels, APIKeyEnv: "AZURE_OPENAI_API_KEY"}},
 			},
 		},
 		{
@@ -85,11 +77,7 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "AzureOpenAI",
-					Version:     "2024-02-15-preview",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "AzureOpenAI", Version: "2024-02-15-preview", ModelMatch: AllModels, APIKeyEnv: "AZURE_OPENAI_API_KEY"}},
 			},
 		},
 		{
@@ -107,11 +95,7 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 						NeedsTLS: false,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
 			},
 		},
 		{
@@ -129,11 +113,7 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 						NeedsTLS: false,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
 			},
 		},
 		{
@@ -151,12 +131,7 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName:    "openai",
-					SchemaName:     "OpenAI",
-					Version:        "",
-					OrganizationID: "org-test123",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY", Headers: []Header{{Name: "OpenAI-Organization", Value: "org-test123"}}}},
 			},
 		},
 		{
@@ -174,12 +149,7 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-					ProjectID:   "proj_test456",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY", Headers: []Header{{Name: "OpenAI-Project", Value: "proj_test456"}}}},
 			},
 		},
 		{
@@ -198,13 +168,7 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName:    "openai",
-					SchemaName:     "OpenAI",
-					Version:        "",
-					OrganizationID: "org-test123",
-					ProjectID:      "proj_test456",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY", Headers: []Header{{Name: "OpenAI-Organization", Value: "org-test123"}, {Name: "OpenAI-Project", Value: "proj_test456"}}}},
 			},
 		},
 		{
@@ -239,7 +203,7 @@ func TestPopulateOpenAIEnvConfig(t *testing.T) {
 
 			// Test PopulateOpenAIEnvConfig
 			data := &ConfigData{}
-			err := PopulateOpenAIEnvConfig(data)
+			err := PopulateOpenAIEnvConfig(data, AllModels)
 
 			// Check result
 			if tt.expectedError != nil {

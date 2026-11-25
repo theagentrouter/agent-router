@@ -19,6 +19,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
@@ -333,6 +334,21 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 			expectErr: true,
 		},
 		{
+			name: "maps Anthropic web search tool",
+			openAIReq: &openai.ChatCompletionRequest{
+				Tools: []openai.Tool{{
+					Type: openai.ToolTypeAnthropicWebSearch,
+					Name: "web_search",
+				}},
+			},
+			expectedTools: []anthropic.ToolUnionParam{{
+				OfWebSearchTool20260209: &anthropic.WebSearchTool20260209Param{
+					Name: constant.WebSearch("web_search"),
+					Type: constant.WebSearch20260209("web_search_20260209"),
+				},
+			}},
+		},
+		{
 			name: "tool definition without type field",
 			openAIReq: &openai.ChatCompletionRequest{
 				Tools: []openai.Tool{
@@ -504,11 +520,11 @@ func TestTranslateOpenAItoAnthropicTools(t *testing.T) {
 					require.Equal(t, tt.expectedTools[0].GetName(), tools[0].GetName())
 					require.Equal(t, tt.expectedTools[0].GetType(), tools[0].GetType())
 					require.Equal(t, tt.expectedTools[0].GetDescription(), tools[0].GetDescription())
-					if tt.expectedTools[0].GetInputSchema().Properties != nil {
-						require.Equal(t, tt.expectedTools[0].GetInputSchema().Properties, tools[0].GetInputSchema().Properties)
+					if inputSchema := tt.expectedTools[0].GetInputSchema(); inputSchema != nil && inputSchema.Properties != nil {
+						require.Equal(t, inputSchema.Properties, tools[0].GetInputSchema().Properties)
 					}
-					if tt.expectedTools[0].GetInputSchema().ExtraFields != nil {
-						require.Equal(t, tt.expectedTools[0].GetInputSchema().ExtraFields, tools[0].GetInputSchema().ExtraFields)
+					if inputSchema := tt.expectedTools[0].GetInputSchema(); inputSchema != nil && inputSchema.ExtraFields != nil {
+						require.Equal(t, inputSchema.ExtraFields, tools[0].GetInputSchema().ExtraFields)
 					}
 				}
 			}
@@ -530,9 +546,24 @@ func TestFinishReasonTranslation(t *testing.T) {
 			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonLength,
 		},
 		{
+			name:                 "pause turn stop reason",
+			input:                anthropic.StopReasonPauseTurn,
+			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonPauseTurn,
+		},
+		{
 			name:                 "refusal stop reason",
 			input:                anthropic.StopReasonRefusal,
 			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonContentFilter,
+		},
+		{
+			name:                 "model context window exceeded stop reason",
+			input:                "model_context_window_exceeded",
+			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonContextWindowExceeded,
+		},
+		{
+			name:      "unknown stop reason",
+			input:     "unknown_reason",
+			expectErr: true,
 		},
 	}
 
@@ -812,6 +843,54 @@ func TestOutputConfigAvailable(t *testing.T) {
 			name:      "claude-fable-5 not supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-fable-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-opus-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-opus-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-opus-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-opus-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-opus-5-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-opus-5-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-opus-5-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-opus-5-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-sonnet-5-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-sonnet-5-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-sonnet-5-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-sonnet-5-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-haiku-5-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-haiku-5-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-haiku-5-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-haiku-5-5",
 			expected:  false,
 		},
 		// Unsupported models on either backend.
@@ -1226,6 +1305,26 @@ func TestEffortAvailable(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "claude-opus-5 supported",
+			model:    "claude-opus-5",
+			expected: true,
+		},
+		{
+			name:     "claude-opus-5-5 supported",
+			model:    "claude-opus-5-5",
+			expected: true,
+		},
+		{
+			name:     "claude-sonnet-5-5 supported",
+			model:    "claude-sonnet-5-5",
+			expected: true,
+		},
+		{
+			name:     "claude-haiku-5-5 supported",
+			model:    "claude-haiku-5-5",
+			expected: true,
+		},
+		{
 			name:     "claude-sonnet-4-5-20250514 not supported",
 			model:    "claude-sonnet-4-5-20250514",
 			expected: false,
@@ -1497,6 +1596,36 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 		require.NotNil(t, params.OutputConfig.Format.Schema)
 		require.Equal(t, constant.JSONSchema("json_schema"), params.OutputConfig.Format.Type)
 	})
+}
+
+func TestBuildAnthropicParamsPreservesStructuredOutputPropertyOrder(t *testing.T) {
+	rawSchema := json.RawMessage(`{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"},"middle":{"type":"boolean"}},"required":["zeta","alpha","middle"]}`)
+	request := &openai.ChatCompletionRequest{
+		Model:               "claude-sonnet-4-6",
+		MaxCompletionTokens: ptr.To(int64(1024)),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			{OfUser: &openai.ChatCompletionUserMessageParam{
+				Role:    "user",
+				Content: openai.StringOrUserRoleContentUnion{Value: "test"},
+			}},
+		},
+		ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
+			OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+				Type: "json_schema",
+				JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+					Name:   "ordered_schema",
+					Schema: rawSchema,
+				},
+			},
+		},
+	}
+
+	params, err := buildAnthropicParams(request, filterapi.APISchemaAWSAnthropic, "")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(params)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"schema":`+string(rawSchema))
 }
 
 func TestBuildAnthropicParamsWithReasoningEffort(t *testing.T) {
@@ -1963,4 +2092,263 @@ data:{"type":"message_stop"}
 	output, ok := tokenUsage.OutputTokens()
 	require.True(t, ok, "output tokens were not extracted")
 	require.Equal(t, uint32(16), output)
+}
+
+// TestAnthropicStreamParser_ThinkingDelta asserts that extended thinking
+// content reaches the OpenAI stream. text_delta and thinking_delta are
+// separate variants of RawContentBlockDeltaUnion and carry their payload
+// in different fields, so reading .Text for both streams every thinking
+// token as an empty string.
+func TestAnthropicStreamParser_ThinkingDelta(t *testing.T) {
+	p := newAnthropicStreamParser("claude-sonnet-4-5")
+
+	const stream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me work through it. "}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Two plus two is four."}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"c2ln"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"4"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":16}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+	_, body, _, _, err := p.Process(strings.NewReader(stream), true, nil)
+	require.NoError(t, err)
+
+	contents := streamedContent(t, body)
+	require.Equal(t, []string{
+		"Let me work through it. ",
+		"Two plus two is four.",
+		"4",
+	}, contents, "thinking content is dropped: every thinking_delta arrives as an empty string")
+}
+
+// TestAnthropicStreamParser_Refusal asserts that an Anthropic refusal maps to finish_reason content_filter and that the stop_details explanation and category reach the final OpenAI chunk only when present, so callers can tell refusal types apart without parsing the free-text explanation.
+func TestAnthropicStreamParser_Refusal(t *testing.T) {
+	tests := []struct {
+		name             string
+		stopDetails      string
+		expectedRefusal  *string
+		expectedCategory *string
+	}{
+		{
+			name:             "with category and explanation",
+			stopDetails:      `{"type":"refusal","category":"cyber","explanation":"This request was declined."}`,
+			expectedRefusal:  ptr.To("This request was declined."),
+			expectedCategory: ptr.To("cyber"),
+		},
+		{
+			name:        "null category and explanation",
+			stopDetails: `{"type":"refusal","category":null,"explanation":null}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newAnthropicStreamParser("claude-sonnet-4-5")
+
+			stream := `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"refusal","stop_details":` + tt.stopDetails + `},"usage":{"output_tokens":3}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+			_, body, _, _, err := p.Process(strings.NewReader(stream), true, nil)
+			require.NoError(t, err)
+
+			var final *openai.ChatCompletionResponseChunkChoice
+			for line := range strings.SplitSeq(string(body), "\n") {
+				payload, ok := strings.CutPrefix(line, "data: ")
+				if !ok || payload == "[DONE]" {
+					continue
+				}
+				var chunk openai.ChatCompletionResponseChunk
+				require.NoError(t, json.Unmarshal([]byte(payload), &chunk), "payload: %s", payload)
+				for i := range chunk.Choices {
+					if chunk.Choices[i].FinishReason != "" {
+						final = &chunk.Choices[i]
+					}
+				}
+			}
+			require.NotNil(t, final, "no chunk carried a finish_reason")
+			require.Equal(t, openai.ChatCompletionChoicesFinishReasonContentFilter, final.FinishReason)
+			require.NotNil(t, final.Delta)
+			require.Equal(t, tt.expectedRefusal, final.Delta.Refusal)
+			require.Equal(t, tt.expectedCategory, final.Delta.RefusalCategory)
+		})
+	}
+}
+
+func TestMessageToChatCompletion_Refusal(t *testing.T) {
+	var msg anthropic.Message
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber","explanation":"This request was declined."},"usage":{"input_tokens":9,"output_tokens":3}}`), &msg))
+
+	resp, _, err := messageToChatCompletion(&msg, "claude-sonnet-4-5")
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	require.Equal(t, openai.ChatCompletionChoicesFinishReasonContentFilter, resp.Choices[0].FinishReason)
+	require.Equal(t, ptr.To("This request was declined."), resp.Choices[0].Message.Refusal)
+	require.Equal(t, ptr.To("cyber"), resp.Choices[0].Message.RefusalCategory)
+}
+
+// TestMessageToChatCompletion_RefusalWithoutCategory covers a refusal that does not map to a named category, where Anthropic returns null category and explanation: neither refusal nor refusal_category is emitted, and content_filter still signals it.
+func TestMessageToChatCompletion_RefusalWithoutCategory(t *testing.T) {
+	var msg anthropic.Message
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":null,"explanation":null},"usage":{"input_tokens":9,"output_tokens":0}}`), &msg))
+
+	resp, _, err := messageToChatCompletion(&msg, "claude-sonnet-4-5")
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	require.Equal(t, openai.ChatCompletionChoicesFinishReasonContentFilter, resp.Choices[0].FinishReason)
+	require.Nil(t, resp.Choices[0].Message.Refusal)
+	require.Nil(t, resp.Choices[0].Message.RefusalCategory)
+}
+
+// streamedContent collects the non-empty delta.content values from an
+// OpenAI SSE stream, in order.
+func streamedContent(t *testing.T, body []byte) []string {
+	t.Helper()
+	var out []string
+	for line := range strings.SplitSeq(string(body), "\n") {
+		payload, ok := strings.CutPrefix(line, "data: ")
+		if !ok || payload == "[DONE]" {
+			continue
+		}
+		var chunk openai.ChatCompletionResponseChunk
+		require.NoError(t, json.Unmarshal([]byte(payload), &chunk), "payload: %s", payload)
+		for _, c := range chunk.Choices {
+			if c.Delta != nil && c.Delta.Content != nil && *c.Delta.Content != "" {
+				out = append(out, *c.Delta.Content)
+			}
+		}
+	}
+	return out
+}
+
+func TestAnthropicStreamParser_ErrorEvent(t *testing.T) {
+	const wantErrorEvent = "data: {\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"
+	tests := []struct {
+		name   string
+		stream string
+	}{
+		{
+			name: "error only",
+			stream: `event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`,
+		},
+		{
+			name: "message start followed by error",
+			stream: `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newAnthropicStreamParser("claude-sonnet-4-5")
+			_, body, _, _, err := p.Process(strings.NewReader(tt.stream), false, nil)
+
+			var streamErr *StreamOverloadedError
+			require.ErrorAs(t, err, &streamErr)
+			var anthropicErr *anthropicStreamError
+			require.ErrorAs(t, err, &anthropicErr)
+			require.Equal(t, "overloaded_error", anthropicErr.Type)
+			require.Equal(t, "Overloaded", anthropicErr.Message)
+			require.Equal(t, wantErrorEvent, string(body))
+		})
+	}
+
+	t.Run("after translated content", func(t *testing.T) {
+		p := newAnthropicStreamParser("claude-sonnet-4-5")
+		const content = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}
+
+`
+		_, body, _, _, err := p.Process(strings.NewReader(content), false, nil)
+		require.NoError(t, err)
+		require.Contains(t, string(body), `"content":"partial"`)
+
+		const overload = `event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`
+		_, body, _, _, err = p.Process(strings.NewReader(overload), false, nil)
+		var streamErr *StreamOverloadedError
+		require.ErrorAs(t, err, &streamErr)
+		require.Equal(t, wantErrorEvent, string(body))
+	})
+
+	t.Run("after translated content in the same callback", func(t *testing.T) {
+		p := newAnthropicStreamParser("claude-sonnet-4-5")
+		const stream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+`
+		_, body, _, _, err := p.Process(strings.NewReader(stream), false, nil)
+		var streamErr *StreamOverloadedError
+		require.ErrorAs(t, err, &streamErr)
+		require.Contains(t, string(body), `"content":"partial"`)
+		require.True(t, strings.HasSuffix(string(body), wantErrorEvent))
+		require.NotContains(t, string(body), "[DONE]")
+	})
+
+	t.Run("non-overload error is not serialized", func(t *testing.T) {
+		p := newAnthropicStreamParser("claude-sonnet-4-5")
+		const stream = `event: error
+data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
+
+`
+		_, body, _, _, err := p.Process(strings.NewReader(stream), false, nil)
+		var streamErr *StreamOverloadedError
+		require.NotErrorAs(t, err, &streamErr)
+		var anthropicErr *anthropicStreamError
+		require.ErrorAs(t, err, &anthropicErr)
+		require.Equal(t, "api_error", anthropicErr.Type)
+		require.Empty(t, body)
+	})
 }

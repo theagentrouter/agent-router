@@ -261,6 +261,31 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_AnthropicBetaHeader(t *te
 			expected: []string{"context-1m-2025-08-07", "interleaved-thinking-2025-05-14", "fine-grained-tool-streaming-2025-05-14", "token-efficient-tools-2025-02-19", "tool-search-tool-2025-10-19"},
 		},
 		{
+			name:     "afk mode flag is forwarded",
+			headers:  map[string]string{"anthropic-beta": "afk-mode-2026-01-31"},
+			expected: []string{"afk-mode-2026-01-31"},
+		},
+		{
+			name:     "dangerous tool use flag is forwarded",
+			headers:  map[string]string{"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+			expected: []string{"dangerous-tool-use-2026-09-03"},
+		},
+		{
+			name:     "thinking binding controls flag is forwarded",
+			headers:  map[string]string{"anthropic-beta": "thinking-binding-controls-2026-08-01"},
+			expected: []string{"thinking-binding-controls-2026-08-01"},
+		},
+		{
+			name:     "thinking token count flag is forwarded",
+			headers:  map[string]string{"anthropic-beta": "thinking-token-count-2026-05-13"},
+			expected: []string{"thinking-token-count-2026-05-13"},
+		},
+		{
+			name:     "newer flags combined with other supported flags",
+			headers:  map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,afk-mode-2026-01-31,dangerous-tool-use-2026-09-03,thinking-binding-controls-2026-08-01,thinking-token-count-2026-05-13"},
+			expected: []string{"interleaved-thinking-2025-05-14", "afk-mode-2026-01-31", "dangerous-tool-use-2026-09-03", "thinking-binding-controls-2026-08-01", "thinking-token-count-2026-05-13"},
+		},
+		{
 			name:     "unsupported flags are dropped",
 			headers:  map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,prompt-caching-2024-07-31,tool-search-tool-2025-10-19"},
 			expected: []string{"interleaved-thinking-2025-05-14", "tool-search-tool-2025-10-19"},
@@ -358,13 +383,12 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_HeaderValueFilter(t *test
 		wantBetaHeader   string
 		wantHeaderChange bool
 	}{
-		// NOTE: SetRequestHeaders already applies awsBedrockSupportedAnthropicBetas (and the
-		// Anthropic-API-name aliases) before any of this runs, so these cases deliberately use
-		// values that survive that allowlist. Using a non-allowlisted value here would pass
-		// vacuously — the value would already be gone before the operator filter saw it.
+		// NOTE: a configured anthropic-beta filter replaces the deprecated
+		// awsBedrockSupportedAnthropicBetas fallback, so values outside that set reach the filter.
 		{
-			name:           "no filter configured forwards all allowlisted betas unchanged",
-			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,context-1m-2025-08-07"},
+			// The fallback only filters the body, so the forwarded header is left untouched.
+			name:           "no filter configured applies the built-in fallback",
+			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,prompt-caching-2024-07-31,context-1m-2025-08-07"},
 			wantBody:       []string{"interleaved-thinking-2025-05-14", "context-1m-2025-08-07"},
 		},
 		{
@@ -391,9 +415,9 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_HeaderValueFilter(t *test
 		},
 		{
 			// The setter is called for every configured filter, so a filter on an unrelated header
-			// must not reach the body's anthropic_beta field.
+			// must not reach the body's anthropic_beta field, nor disable the built-in fallback.
 			name:           "filter on a different header is ignored",
-			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,context-1m-2025-08-07"},
+			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,context-1m-2025-08-07,prompt-caching-2024-07-31"},
 			filterHeader:   "x-some-other-header",
 			filterMode:     "Denylist",
 			filterValues:   []string{"context-1m-2025-08-07"},
@@ -410,14 +434,37 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_HeaderValueFilter(t *test
 			wantHeaderChange: true,
 		},
 		{
-			// The built-in allowlist runs first, so a value it strips never reaches the operator
-			// filter: denying an already-stripped value is a no-op, not a second drop.
-			name:           "value already stripped by the built-in allowlist never reaches the filter",
-			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13"},
+			// With a filter configured the built-in fallback is not applied, so a flag Bedrock
+			// rejects has to be dropped by the operator's denylist.
+			name:             "denylist drops a flag outside the built-in fallback",
+			requestHeaders:   map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,prompt-caching-2024-07-31"},
+			filterHeader:     "anthropic-beta",
+			filterMode:       "Denylist",
+			filterValues:     []string{"prompt-caching-2024-07-31"},
+			wantBody:         []string{"interleaved-thinking-2025-05-14"},
+			wantBetaHeader:   "interleaved-thinking-2025-05-14",
+			wantHeaderChange: true,
+		},
+		{
+			// A configured filter fully replaces the built-in fallback: values the fallback would
+			// have stripped are forwarded unless the filter lists them.
+			name:           "configured filter replaces the built-in fallback",
+			requestHeaders: map[string]string{"anthropic-beta": "interleaved-thinking-2025-05-14,prompt-caching-2024-07-31,files-api-2025-04-14"},
 			filterHeader:   "anthropic-beta",
 			filterMode:     "Denylist",
-			filterValues:   []string{"thinking-token-count-2026-05-13"},
-			wantBody:       []string{"interleaved-thinking-2025-05-14"},
+			filterValues:   []string{"memory-2025-08-18"},
+			wantBody:       []string{"interleaved-thinking-2025-05-14", "prompt-caching-2024-07-31", "files-api-2025-04-14"},
+		},
+		{
+			// An allowlist is the config-driven equivalent of the built-in fallback.
+			name:             "allowlist can name flags outside the built-in fallback",
+			requestHeaders:   map[string]string{"anthropic-beta": "advanced-tool-use-2025-11-20,code-execution-2025-08-25,files-api-2025-04-14"},
+			filterHeader:     "anthropic-beta",
+			filterMode:       "Allowlist",
+			filterValues:     []string{"tool-search-tool-2025-10-19", "files-api-2025-04-14"},
+			wantBody:         []string{"tool-search-tool-2025-10-19", "files-api-2025-04-14"},
+			wantBetaHeader:   "tool-search-tool-2025-10-19,files-api-2025-04-14",
+			wantHeaderChange: true,
 		},
 		{
 			// advanced-tool-use-2025-11-20 is aliased to tool-search-tool-2025-10-19 before the
@@ -483,6 +530,70 @@ func TestAnthropicToAWSAnthropicTranslator_RequestBody_HeaderValueFilter(t *test
 			}
 		})
 	}
+}
+
+// Bedrock sends ping events while a large tool call is still being generated.
+// They must reach the client, otherwise the stream is silent for minutes.
+func TestAnthropicToAWSAnthropicTranslator_ResponseBody_Ping(t *testing.T) {
+	const sse = `event: message_start
+data: {"type":"message_start","message":{"model":"claude-opus-5-5","id":"msg_bdrk_01","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_bdrk_01","name":"write_file","input":{}}}
+
+event: ping
+data: {"type":"ping"}
+
+event: ping
+data: {"type":"ping"}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"/tmp/a\"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":15}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+	stream, err := wrapAnthropicSSEInEventStream(sse)
+	require.NoError(t, err)
+
+	translator := NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+	translator.(*anthropicToAWSAnthropicTranslator).stream = true
+
+	var got []byte
+	var tokenUsage metrics.TokenUsage
+	for i := range stream {
+		var body []byte
+		_, body, tokenUsage, _, err = translator.ResponseBody(nil, bytes.NewReader(stream[i:i+1]), i == len(stream)-1, nil)
+		require.NoError(t, err)
+		got = append(got, body...)
+	}
+
+	require.Equal(t, sse, string(got))
+	inputTokens, ok := tokenUsage.InputTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(10), inputTokens)
+	outputTokens, ok := tokenUsage.OutputTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(15), outputTokens)
+}
+
+// The frame is a ping captured from a live Bedrock InvokeModelWithResponseStream response.
+func TestAnthropicToAWSAnthropicTranslator_ResponseBody_PingRealFrame(t *testing.T) {
+	frame, err := base64.StdEncoding.DecodeString("AAAAjwAAAEu3mmAyCzpldmVudC10eXBlBwAFY2h1bmsNOmNvbnRlbnQtdHlwZQcAEGFwcGxpY2F0aW9uL2pzb24NOm1lc3NhZ2UtdHlwZQcABWV2ZW50eyJieXRlcyI6ImV5SjBlWEJsSWpvaWNHbHVaeUo5IiwicCI6ImFiY2RlZmdoaWprbG0ifSWey0A=")
+	require.NoError(t, err)
+
+	translator := NewAnthropicToAWSAnthropicTranslator("bedrock-2023-05-31", "")
+	translator.(*anthropicToAWSAnthropicTranslator).stream = true
+	_, body, _, _, err := translator.ResponseBody(nil, bytes.NewReader(frame), false, nil)
+	require.NoError(t, err)
+	require.Equal(t, "event: ping\ndata: {\"type\":\"ping\"}\n\n", string(body))
 }
 
 func TestAnthropicToAWSAnthropicTranslator_ResponseBody(t *testing.T) {

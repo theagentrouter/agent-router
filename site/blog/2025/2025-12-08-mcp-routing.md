@@ -4,10 +4,10 @@ title: The Reality and Performance of MCP Traffic Routing with Envoy AI Gateway
 authors: [nacx, missberg]
 tags: [features]
 description: In this article explore how Envoy AI Gateway handles stateful MCP sessions, keeps performance competitive, and stays aligned with the broader Envoy ecosystem.
-image: /img/blog/mcp-routing-feature.png
+image: /img/og/blog/mcp-in-envoy-ai-gateway.png
 ---
 
-![](/img/blog/mcp-routing-feature.png)
+![](/img/og/blog/mcp-in-envoy-ai-gateway.png)
 
 Envoy AI Gateway (AIGW) provides a production-ready bridge between AI agents and their tools by handling Model Context Protocol (MCP) traffic. As teams adopt MCP, questions about scale, performance, and architecture naturally arise.
 

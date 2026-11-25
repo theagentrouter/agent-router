@@ -23,6 +23,8 @@ const (
 	mimeTypeTextPlain       = "text/plain"
 	mimeTypeApplicationJSON = "application/json"
 	mimeTypeApplicationEnum = "text/x.enum"
+	mimeTypeAudioWAV        = "audio/wav"
+	mimeTypeAudioMP3        = "audio/mp3"
 )
 
 var (
@@ -49,6 +51,22 @@ func cutSSEFieldPrefix(line, fieldName []byte) ([]byte, bool) {
 // cutSSEDataPrefix is cutSSEFieldPrefix for the "data" field.
 func cutSSEDataPrefix(line []byte) ([]byte, bool) {
 	return cutSSEFieldPrefix(line, sseDataPrefix)
+}
+
+// nextSSEEvent returns the next complete SSE event and preserves partial events in buffer.
+// SSE permits either LF or CRLF line endings.
+func nextSSEEvent(buffer []byte) (event, remaining []byte, ok bool) {
+	lfEnd := bytes.Index(buffer, []byte("\n\n"))
+	crlfEnd := bytes.Index(buffer, []byte("\r\n\r\n"))
+
+	switch {
+	case crlfEnd >= 0 && (lfEnd < 0 || crlfEnd < lfEnd):
+		return buffer[:crlfEnd], buffer[crlfEnd+len("\r\n\r\n"):], true
+	case lfEnd >= 0:
+		return buffer[:lfEnd], buffer[lfEnd+len("\n\n"):], true
+	default:
+		return nil, buffer, false
+	}
 }
 
 // regDataURI follows the web uri regex definition.

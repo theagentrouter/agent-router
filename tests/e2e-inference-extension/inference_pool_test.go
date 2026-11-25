@@ -23,30 +23,33 @@ import (
 	"github.com/envoyproxy/ai-gateway/tests/internal/e2elib"
 )
 
+// For InferencePool integration tests, we change to use Envoy Gateway GNM(gateway namespace mode).
+// The namespace of the Gateway resources(e.g. Deployment, Service) changed from "envoy-gateway-system" to "default" namespace.
+const inferenceGatewayNamespace = "default"
+
 // TestInferencePoolIntegration tests the InferencePool integration with AI Gateway.
 func TestInferencePoolIntegration(t *testing.T) {
 	// Apply the base test manifest.
 	const baseManifest = "../../examples/inference-pool/base.yaml"
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), baseManifest))
-
 	// Test inferencePool with AIGatewayRoute.
 	const aiGWRouteManifest = "../../examples/inference-pool/aigwroute.yaml"
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), aiGWRouteManifest))
 
 	egSelector := "gateway.envoyproxy.io/owning-gateway-name=inference-pool-with-aigwroute"
-	e2elib.RequireWaitForGatewayPodReady(t, egSelector)
+	e2elib.RequireWaitForGatewayPodReadyWithNamespace(t, inferenceGatewayNamespace, egSelector)
 
 	// Verify InferencePool status is correctly set for the Gateway.
 	t.Run("verify_inference_pool_status", func(t *testing.T) {
 		// Verify that the mistral InferencePool has correct status for the Gateway.
-		requireInferencePoolStatusValid(t, "default", "mistral", "inference-pool-with-aigwroute")
+		requireInferencePoolStatusValid(t, inferenceGatewayNamespace, "mistral", "inference-pool-with-aigwroute")
 
 		// Verify that the vllm-llama3-8b-instruct InferencePool has correct status for the Gateway.
 		// Note: This InferencePool is referenced in the AIGatewayRoute but may not exist in base.yaml.
 		// We'll check if it exists first.
-		status, err := getInferencePoolStatus(t.Context(), "default", "vllm-llama3-8b-instruct")
+		status, err := getInferencePoolStatus(t.Context(), inferenceGatewayNamespace, "vllm-llama3-8b-instruct")
 		if err == nil && status != nil {
-			requireInferencePoolStatusValid(t, "default", "vllm-llama3-8b-instruct", "inference-pool-with-aigwroute")
+			requireInferencePoolStatusValid(t, inferenceGatewayNamespace, "vllm-llama3-8b-instruct", "inference-pool-with-aigwroute")
 		} else {
 			t.Logf("InferencePool vllm-llama3-8b-instruct not found, skipping status validation: %v", err)
 		}
@@ -103,13 +106,13 @@ func TestInferencePoolIntegration(t *testing.T) {
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), httpRouteManifest))
 
 	egSelector = "gateway.envoyproxy.io/owning-gateway-name=inference-pool-with-httproute"
-	e2elib.RequireWaitForPodReady(t, e2elib.EnvoyGatewayNamespace, egSelector)
+	e2elib.RequireWaitForPodReady(t, inferenceGatewayNamespace, egSelector)
 
 	// Verify InferencePool status is correctly set for the HTTPRoute Gateway.
 	t.Run("verify_inference_pool_status_httproute", func(t *testing.T) {
 		// For HTTPRoute, the referenced InferencePool is "vllm-llama3-8b-instruct".
 		// The HTTPRoute Gateway name should be "inference-pool-with-httproute".
-		requireInferencePoolStatusValid(t, "default", "vllm-llama3-8b-instruct", "inference-pool-with-httproute")
+		requireInferencePoolStatusValid(t, inferenceGatewayNamespace, "vllm-llama3-8b-instruct", "inference-pool-with-httproute")
 	})
 
 	// Test connectivity to inferencePool + inference pods with valid metrics.
@@ -120,6 +123,82 @@ func TestInferencePoolIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		_ = e2elib.KubectlDeleteManifest(context.Background(), httpRouteManifest)
 	})
+
+	// Test an InferencePool without an endpointPickerRef: its share of a rule's traffic fails with
+	// a 500, as an invalid backendRef's does, while the rule's other backends keep their share.
+	// Every other backend here has ready endpoints; otherwise Envoy would answer the failed share
+	// with the route-wide 503 instead.
+	noEPPCases := []struct {
+		name, testCase string
+		wantOK         bool
+	}{
+		{"httproute_service_and_inference_pool_without_epp", "service-and-no-epp-pool", true},
+		{"httproute_inference_pools_with_and_without_epp", "epp-pool-and-no-epp-pool", true},
+		{"httproute_only_inference_pool_without_epp", "only-no-epp-pool", false},
+	}
+	// The manifest has rules with two InferencePools. On older Envoy Gateway releases the extension
+	// server rejects those rules with a 500 instead of splitting them, so don't apply it.
+	supported := e2elib.EnvoyGatewaySupportsMultipleInferencePoolsPerRule()
+	if supported {
+		const noEPPManifest = "testdata/inference-pool-without-epp.yaml"
+		require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), noEPPManifest))
+		t.Cleanup(func() {
+			_ = e2elib.KubectlDeleteManifest(context.Background(), noEPPManifest)
+		})
+	}
+
+	for _, tc := range noEPPCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !supported {
+				t.Skipf("needs Envoy Gateway v1.11.0-rc.1 or later, have %s", e2elib.EnvoyGatewayVersion())
+			}
+			requireInferenceGatewayStatusSplit(t, egSelector, tc.testCase, tc.wantOK)
+		})
+	}
+}
+
+// requireInferenceGatewayStatusSplit sends requests matching the x-test-case rule of
+// testdata/inference-pool-without-epp.yaml until their statuses show the share of the InferencePool
+// without an endpoint picker failing with a 500. With wantOK, the rule's other backend must keep
+// its share, answering 200; otherwise every request must fail with a 500.
+func requireInferenceGatewayStatusSplit(t *testing.T, egSelector, testCase string, wantOK bool) {
+	const requestsPerAttempt = 20
+	require.Eventually(t, func() bool {
+		fwd := e2elib.RequireNewHTTPPortForwarder(t, inferenceGatewayNamespace, egSelector, e2elib.EnvoyGatewayDefaultServicePort)
+		defer fwd.Kill()
+
+		statuses := make(map[int]int)
+		for range requestsPerAttempt {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, fwd.Address()+"/v1/chat/completions",
+				strings.NewReader(`{"model":"meta-llama/Llama-3.1-8B-Instruct","messages":[{"role":"user","content":"Say this is a test"}]}`))
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("x-test-case", testCase)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				cancel()
+				t.Logf("request failed: %v", err)
+				return false
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			cancel()
+			statuses[resp.StatusCode]++
+		}
+		t.Logf("%s: response statuses %v", testCase, statuses)
+
+		// Until the route is programmed, requests fall through to the catch-all rule with a 200.
+		if statuses[http.StatusInternalServerError] == 0 {
+			return false
+		}
+		if !wantOK {
+			return statuses[http.StatusInternalServerError] == requestsPerAttempt
+		}
+		// Weights 1:1, so 20 requests all landing on one side is a ~1e-6 chance.
+		return statuses[http.StatusOK] > 0 &&
+			statuses[http.StatusOK]+statuses[http.StatusInternalServerError] == requestsPerAttempt
+	}, 2*time.Minute, 5*time.Second, "unexpected response statuses for %s", testCase)
 }
 
 // testInferenceGatewayConnectivityByModel tests that the Gateway is accessible and returns a 200 status code.
@@ -132,7 +211,7 @@ func testInferenceGatewayConnectivityByModel(t *testing.T, egSelector, model str
 // testInferenceGatewayConnectivity tests that the InferenceGateway is working as expected and returns a expected status code.
 func testInferenceGatewayConnectivity(t *testing.T, egSelector, body string, additionalHeaders map[string]string, expectedStatusCode int) {
 	require.Eventually(t, func() bool {
-		fwd := e2elib.RequireNewHTTPPortForwarder(t, e2elib.EnvoyGatewayNamespace, egSelector, e2elib.EnvoyGatewayDefaultServicePort)
+		fwd := e2elib.RequireNewHTTPPortForwarder(t, inferenceGatewayNamespace, egSelector, e2elib.EnvoyGatewayDefaultServicePort)
 		defer fwd.Kill()
 
 		// Set timeout context.

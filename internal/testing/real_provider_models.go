@@ -20,7 +20,7 @@ const (
 	// Chat completion models (one per real provider).
 
 	// OpenAIModelName is the OpenAI chat completion model.
-	OpenAIModelName = "gpt-4o-mini"
+	OpenAIModelName = "gpt-5-nano"
 	// AWSBedrockModelName is the AWS Bedrock chat completion model.
 	AWSBedrockModelName = "us.amazon.nova-micro-v1:0"
 	// AzureOpenAIModelName is the Azure OpenAI chat completion model.
@@ -35,6 +35,8 @@ const (
 	SambaNovaModelName = "Meta-Llama-3.1-8B-Instruct"
 	// DeepInfraModelName is the DeepInfra chat completion model.
 	DeepInfraModelName = "meta-llama/Meta-Llama-3-8B-Instruct"
+	// OpenRouterModelName is the OpenRouter chat completion model.
+	OpenRouterModelName = "openai/gpt-4o-mini"
 
 	// Embeddings models (one per real provider that supports embeddings).
 

@@ -21,6 +21,7 @@ import (
 
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference"
@@ -875,10 +876,12 @@ func TestNewTracingFromEnv_everyTracerWired(t *testing.T) {
 			require.NotNil(t, tracing.EmbeddingsTracer(), "EmbeddingsTracer")
 			require.NotNil(t, tracing.ImageGenerationTracer(), "ImageGenerationTracer")
 			require.NotNil(t, tracing.ResponsesTracer(), "ResponsesTracer")
+			require.NotNil(t, tracing.DecisionsTracer(), "DecisionsTracer")
 			require.NotNil(t, tracing.SpeechTracer(), "SpeechTracer")
 			require.NotNil(t, tracing.TranscriptionTracer(), "TranscriptionTracer")
 			require.NotNil(t, tracing.TranslationTracer(), "TranslationTracer")
 			require.NotNil(t, tracing.RerankTracer(), "RerankTracer")
+			require.NotNil(t, tracing.SystemOneTracer(), "SystemOneTracer")
 			require.NotNil(t, tracing.MessageTracer(), "MessageTracer")
 			require.NotNil(t, tracing.TokenizeTracer(), "TokenizeTracer")
 			require.NotNil(t, tracing.ResponsesInputTokensTracer(), "ResponsesInputTokensTracer")
@@ -897,14 +900,17 @@ func TestTracingImpl_Shutdown_withoutProvider(t *testing.T) {
 func TestTracingImpl_Getters_ImageGenerationAndRerank(t *testing.T) {
 	ig := tracingapi.NoopTracer[openai.ImageGenerationRequest, openai.ImageGenerationResponse, struct{}]{}
 	rr := tracingapi.NoopTracer[cohereschema.RerankV2Request, cohereschema.RerankV2Response, struct{}]{}
+	so := tracingapi.NoopTracer[typesafeschema.SystemOneRequest, typesafeschema.SystemOneResponse, struct{}]{}
 
 	ti := &tracingImpl{
 		imageGenerationTracer: ig,
 		rerankTracer:          rr,
+		systemOneTracer:       so,
 	}
 
 	require.Equal(t, ig, ti.ImageGenerationTracer())
 	require.Equal(t, rr, ti.RerankTracer())
+	require.Equal(t, so, ti.SystemOneTracer())
 }
 
 func TestTracingImpl_Getters_TranscriptionAndTranslation(t *testing.T) {

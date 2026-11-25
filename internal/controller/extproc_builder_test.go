@@ -7,9 +7,11 @@ package controller
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -18,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
@@ -35,6 +38,10 @@ func newTestBuilder() *extProcBuilder {
 		MCPSessionEncryptionIterations:         100,
 		MCPFallbackSessionEncryptionSeed:       "fallback",
 		MCPFallbackSessionEncryptionIterations: 200,
+		FileIDEncryptionSeed:                   "file-seed",
+		FileIDEncryptionIterations:             100,
+		FileIDFallbackEncryptionSeed:           "file-fallback",
+		FileIDFallbackEncryptionIterations:     200,
 	}
 	return newExtProcBuilder(opts, false, ctrl.Log)
 }
@@ -79,7 +86,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	input := extProcContainerInput{}
 	baseHash := base.extProcContainerHash(input)
 	require.NotEmpty(t, baseHash)
-	require.Equal(t, 20, reflect.TypeOf(extProcBuilder{}).NumField(),
+	require.Equal(t, 24, reflect.TypeOf(extProcBuilder{}).NumField(),
 		"update drift coverage when extProcBuilder fields change")
 
 	// Helper: mutate a copy of the builder, recompute, expect a different hash.
@@ -175,34 +182,47 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 		b.extProcAsSideCar = true
 		return b
 	}())
-	// mcpSessionEncryptionSeed only enters the container args when needMCP is
-	// true, so verify drift under that input.
-	assertDriftsMCP := func(name string, mutated *extProcBuilder) {
+	// The MCP session encryption config is delivered through the filter config Secrets, not the
+	// container, so it must not alter the hash: the hash is stored in a pod-template annotation and
+	// would otherwise be an offline guessing oracle for the seed.
+	assertNoDriftMCP := func(name string, mutated *extProcBuilder) {
 		t.Helper()
 		mcpInput := extProcContainerInput{needMCP: true}
-		require.NotEqual(t, base.extProcContainerHash(mcpInput), mutated.extProcContainerHash(mcpInput),
-			"%s change must alter the config hash when MCP is enabled", name)
+		require.Equal(t, base.extProcContainerHash(mcpInput), mutated.extProcContainerHash(mcpInput),
+			"%s change must not alter the config hash", name)
 	}
-	assertDriftsMCP("mcpSessionEncryptionSeed", func() *extProcBuilder {
+	assertNoDriftMCP("mcpSessionEncryptionSeed", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.mcpSessionEncryptionSeed = "different-seed"
 		return b
 	}())
-	assertDriftsMCP("mcpSessionEncryptionIterations", func() *extProcBuilder {
+	assertNoDriftMCP("mcpSessionEncryptionIterations", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.mcpSessionEncryptionIterations = 101
 		return b
 	}())
-	assertDriftsMCP("mcpFallbackSessionEncryptionSeed", func() *extProcBuilder {
+	assertNoDriftMCP("mcpFallbackSessionEncryptionSeed", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.mcpFallbackSessionEncryptionSeed = "different-fallback"
 		return b
 	}())
-	assertDriftsMCP("mcpFallbackSessionEncryptionIterations", func() *extProcBuilder {
+	assertNoDriftMCP("mcpFallbackSessionEncryptionIterations", func() *extProcBuilder {
 		b := newTestBuilder()
 		b.mcpFallbackSessionEncryptionIterations = 201
 		return b
 	}())
+	// The file id encryption config is also delivered through the filter config Secrets, for the
+	// same reason.
+	for name, mutate := range map[string]func(*extProcBuilder){
+		"fileIDEncryptionSeed":               func(b *extProcBuilder) { b.fileIDEncryptionSeed = "rotated" },
+		"fileIDEncryptionIterations":         func(b *extProcBuilder) { b.fileIDEncryptionIterations = 7 },
+		"fileIDFallbackEncryptionSeed":       func(b *extProcBuilder) { b.fileIDFallbackEncryptionSeed = "older" },
+		"fileIDFallbackEncryptionIterations": func(b *extProcBuilder) { b.fileIDFallbackEncryptionIterations = 7 },
+	} {
+		b := newTestBuilder()
+		mutate(b)
+		require.Equal(t, baseHash, b.extProcContainerHash(input), "%s change must not alter the config hash", name)
+	}
 
 	// GatewayConfig-driven fields move the hash too (resources / securityContext
 	// / volumeMounts / env override / image override), proving the reconciler
@@ -233,7 +253,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 }
 
 // TestExtProcContainerHash_ExcludesConfigRoutingArgs ensures the secret-
-// presence-driven -configPath / -configBundlePath args are NOT part of the hash
+// presence-driven -configBundlePath args are NOT part of the hash
 // (they are added by the webhook after buildExtProcContainer returns). The base
 // container's Args must contain neither flag, so secret-existence transitions
 // do not spuriously trigger rollouts.
@@ -245,7 +265,6 @@ func TestExtProcContainerHash_ExcludesConfigRoutingArgs(t *testing.T) {
 
 	container := b.buildExtProcContainer(input)
 	for _, a := range container.Args {
-		require.NotEqual(t, "-configPath", a)
 		require.NotEqual(t, "-configBundlePath", a)
 	}
 	require.Equal(t, baseHash, b.extProcContainerHash(input),
@@ -374,4 +393,63 @@ func TestImageTagOrDigest(t *testing.T) {
 			require.Equal(t, tt.expected, imageTagOrDigest(tt.image))
 		})
 	}
+}
+
+func TestExtProcBuilder_mcpSessionEncryption(t *testing.T) {
+	t.Run("nil builder", func(t *testing.T) {
+		var b *extProcBuilder
+		require.Nil(t, b.mcpSessionEncryption())
+	})
+	t.Run("no seed", func(t *testing.T) {
+		b := newExtProcBuilder(&Options{MCPSessionEncryptionIterations: 100}, false, logr.Discard())
+		require.Nil(t, b.mcpSessionEncryption())
+	})
+	t.Run("seed without fallback", func(t *testing.T) {
+		b := newExtProcBuilder(&Options{
+			MCPSessionEncryptionSeed:               "seed",
+			MCPSessionEncryptionIterations:         100,
+			MCPFallbackSessionEncryptionIterations: 200,
+		}, false, logr.Discard())
+		require.Equal(t, &filterapi.MCPSessionEncryption{Seed: "seed", Iterations: 100}, b.mcpSessionEncryption())
+	})
+	t.Run("seed with fallback", func(t *testing.T) {
+		b := newExtProcBuilder(&Options{
+			MCPSessionEncryptionSeed:               "seed",
+			MCPSessionEncryptionIterations:         100,
+			MCPFallbackSessionEncryptionSeed:       "fallback",
+			MCPFallbackSessionEncryptionIterations: 200,
+		}, false, logr.Discard())
+		require.Equal(t, &filterapi.MCPSessionEncryption{
+			Seed:               "seed",
+			Iterations:         100,
+			FallbackSeed:       "fallback",
+			FallbackIterations: 200,
+		}, b.mcpSessionEncryption())
+	})
+}
+
+// TestBuildExtProcBaseArgs_NoFileIDSeed verifies the file id seeds are never passed as arguments,
+// where they would be visible in the Pod spec.
+func TestBuildExtProcBaseArgs_NoFileIDSeed(t *testing.T) {
+	b := newTestBuilder()
+	for _, needMCP := range []bool{false, true} {
+		args := strings.Join(b.buildExtProcBaseArgs(needMCP), " ")
+		require.NotContains(t, args, "fileID")
+		require.NotContains(t, args, "file-seed")
+		require.NotContains(t, args, "file-fallback")
+	}
+}
+
+func TestExtProcBuilder_fileIDEncryption(t *testing.T) {
+	var nilBuilder *extProcBuilder
+	require.Nil(t, nilBuilder.fileIDEncryption())
+	require.Nil(t, newExtProcBuilder(&Options{FileIDEncryptionIterations: 100}, false, logr.Discard()).fileIDEncryption())
+
+	b := newTestBuilder()
+	require.Equal(t, &filterapi.FileIDEncryption{
+		Seed: "file-seed", Iterations: 100, FallbackSeed: "file-fallback", FallbackIterations: 200,
+	}, b.fileIDEncryption())
+
+	b.fileIDFallbackEncryptionSeed = ""
+	require.Equal(t, &filterapi.FileIDEncryption{Seed: "file-seed", Iterations: 100}, b.fileIDEncryption())
 }

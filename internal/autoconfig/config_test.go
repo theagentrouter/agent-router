@@ -70,6 +70,9 @@ var (
 	//go:embed testdata/anthropic.yaml
 	anthropicYAML string
 
+	//go:embed testdata/anthropic-prefix.yaml
+	anthropicPrefixYAML string
+
 	//go:embed testdata/openai-otel.yaml
 	openaiOTELYAML string
 
@@ -94,12 +97,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: openaiDefaultYAML,
 		},
@@ -121,11 +120,7 @@ func TestWriteConfig(t *testing.T) {
 						IsTelemetry: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
 				OTELLog: &otelLogConfig{
 					Exporter:    "otlp",
 					BackendName: "otel",
@@ -159,11 +154,7 @@ func TestWriteConfig(t *testing.T) {
 						IsTelemetry: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
 				OTELLog: &otelLogConfig{
 					Exporter:    "otlp",
 					BackendName: "otel",
@@ -182,12 +173,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "AzureOpenAI",
-					Version:     "2024-02-15-preview",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "AzureOpenAI", Version: "2024-02-15-preview", ModelMatch: AllModels, APIKeyEnv: "AZURE_OPENAI_API_KEY"}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: azureOpenAIYAML,
 		},
@@ -202,12 +189,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: false,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: ollamaLocalYAML,
 		},
@@ -222,12 +205,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: tarsYAML,
 		},
@@ -242,12 +221,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "api/v1",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", Version: "api/v1", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: openrouterYAML,
 		},
@@ -262,12 +237,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: false,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "v1/openai/v1",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", Version: "v1/openai/v1", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: llamastackYAML,
 		},
@@ -282,13 +253,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName:    "openai",
-					SchemaName:     "OpenAI",
-					Version:        "",
-					OrganizationID: "org-test123",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY", Headers: []Header{{Name: "OpenAI-Organization", Value: "org-test123"}}}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: openaiWithOrgYAML,
 		},
@@ -303,13 +269,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-					ProjectID:   "proj_test456",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY", Headers: []Header{{Name: "OpenAI-Project", Value: "proj_test456"}}}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: openaiWithProjectYAML,
 		},
@@ -324,14 +285,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName:    "openai",
-					SchemaName:     "OpenAI",
-					Version:        "",
-					OrganizationID: "org-test123",
-					ProjectID:      "proj_test456",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY", Headers: []Header{{Name: "OpenAI-Organization", Value: "org-test123"}, {Name: "OpenAI-Project", Value: "proj_test456"}}}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: openaiWithOrgAndProjectYAML,
 		},
@@ -346,14 +301,8 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName:    "openai",
-					SchemaName:     "AzureOpenAI",
-					Version:        "2024-02-15-preview",
-					OrganizationID: "org-test123",
-					ProjectID:      "proj_test456",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "openai", SchemaName: "AzureOpenAI", Version: "2024-02-15-preview", ModelMatch: AllModels, APIKeyEnv: "AZURE_OPENAI_API_KEY", Headers: []Header{{Name: "OpenAI-Organization", Value: "org-test123"}, {Name: "OpenAI-Project", Value: "proj_test456"}}}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: azureOpenAIWithOrgAndProjectYAML,
 		},
@@ -368,11 +317,7 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
+				Providers:    []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
 				Debug:        true,
 				EnvoyVersion: "1.35.0",
 				OTELLog:      &otelLogConfig{Exporter: "console"},
@@ -417,11 +362,7 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				OpenAI: &OpenAIConfig{
-					BackendName: "openai",
-					SchemaName:  "OpenAI",
-					Version:     "",
-				},
+				Providers: []Provider{{Name: "openai", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY"}},
 				MCPBackendRefs: []MCPBackendRef{
 					{
 						BackendName:  "github",
@@ -445,14 +386,26 @@ func TestWriteConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				Anthropic: &AnthropicConfig{
-					BackendName: "anthropic",
-					SchemaName:  "Anthropic",
-					Version:     "",
-				},
-				OTELLog: &otelLogConfig{Exporter: "console"},
+				Providers: []Provider{{Name: "anthropic", SchemaName: "Anthropic", ModelMatch: AllModels, APIKeyEnv: "ANTHROPIC_API_KEY"}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
 			},
 			expected: anthropicYAML,
+		},
+		{
+			name: "Anthropic (path prefix)",
+			input: ConfigData{
+				Backends: []Backend{
+					{
+						Name:     "anthropic",
+						Hostname: "api.anthropic.com",
+						Port:     443,
+						NeedsTLS: true,
+					},
+				},
+				Providers: []Provider{{Name: "anthropic", SchemaName: "Anthropic", Version: "api/v1", ModelMatch: AllModels, APIKeyEnv: "ANTHROPIC_API_KEY"}},
+				OTELLog:   &otelLogConfig{Exporter: "console"},
+			},
+			expected: anthropicPrefixYAML,
 		},
 	}
 
@@ -535,6 +488,11 @@ func TestParseURL(t *testing.T) {
 		{
 			name:          "unsupported scheme",
 			baseURL:       "ftp://example.com",
+			expectedError: fmt.Errorf("invalid base URL: unsupported scheme \"ftp\""),
+		},
+		{
+			name:          "unsupported scheme with explicit port",
+			baseURL:       "ftp://example.com:21",
 			expectedError: fmt.Errorf("invalid base URL: unsupported scheme \"ftp\""),
 		},
 	}
