@@ -684,12 +684,13 @@ func referenceGrantToTargetKindIndexFunc(o client.Object) []string {
 	return keys
 }
 
-// newConditions creates a new condition with the given type and message.
+// newConditions creates a new condition with the given type and message, observed at the given
+// generation of the object.
 //
 // Currently, we only set one condition at a time either "Accepted" or "NotAccepted".
 // In the future, if we can have multiple conditions like multiple errors, we can make changes here.
-func newConditions(conditionType, message string) []metav1.Condition {
-	condition := metav1.Condition{Message: message, LastTransitionTime: metav1.Now()}
+func newConditions(generation int64, conditionType, message string) []metav1.Condition {
+	condition := metav1.Condition{Message: message, LastTransitionTime: metav1.Now(), ObservedGeneration: generation}
 	// Note: we use the fixed reason for now since the message is enough to describe the error and
 	// reason doesn't fit the entire message.
 	switch conditionType {
