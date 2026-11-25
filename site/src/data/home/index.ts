@@ -2,6 +2,10 @@
  * Homepage content — edit copy here, not in the components.
  * Components live in src/components/home/.
  */
+import vars from '@site/docs/_vars.json';
+
+/** Selects the Envoy pods of the gateway deployed by the basic example. */
+const basicGatewaySelector = 'gateway.envoyproxy.io/owning-gateway-name=envoy-ai-gateway-basic';
 
 export type Cta = { label: string; to: string };
 
@@ -131,14 +135,16 @@ export const quickstart = {
       label: 'On your laptop',
       cta: { label: 'Read the guide', to: '/docs/cli/aigwrun' },
       terminal: [
-        { kind: 'comment', text: '# 1 — start the router locally' },
-        { kind: 'command', text: 'OPENAI_API_KEY=sk-... aigw run' },
+        { kind: 'comment', text: '# 1 — install the router' },
+        { kind: 'command', text: 'curl -sSL https://theagentrouter.ai/install.sh | sh' },
+        { kind: 'command', text: 'export PATH="$HOME/.local/bin:$PATH"' },
         { kind: 'blank' },
-        { kind: 'comment', text: '# 2 — the only change your agent needs' },
-        { kind: 'command', text: 'export OPENAI_BASE_URL=http://localhost:1975/v1' },
+        { kind: 'comment', text: '# 2 — start it, then pick your providers and paste their API keys' },
+        { kind: 'command', text: 'aigw run' },
         { kind: 'blank' },
-        { kind: 'comment', text: '# 3 — add MCP tools (same mcpServers file as Cursor / Claude Desktop)' },
-        { kind: 'command', text: 'aigw run --mcp-config mcp-servers.json' },
+        { kind: 'comment', text: '# 3 — from another terminal, send a request (OpenAI or Tetrate Agent Router Service)' },
+        { kind: 'command', text: 'curl http://localhost:1975/v1/chat/completions -H "Content-Type: application/json" \\' },
+        { kind: 'command', text: `  -d '{"model": "gpt-5-mini", "messages": [{"role": "user", "content": "Hello!"}]}'` },
       ],
     },
     {
@@ -146,16 +152,35 @@ export const quickstart = {
       label: 'On Kubernetes',
       cta: { label: 'Read the guide', to: '/docs/getting-started/' },
       terminal: [
-        { kind: 'comment', text: '# 1 — install the gateway' },
-        { kind: 'command', text: 'helm install aigw oci://docker.io/envoyproxy/ai-gateway-helm \\' },
-        { kind: 'command', text: '  --namespace envoy-ai-gateway-system --create-namespace' },
+        { kind: 'comment', text: '# 1 — install Envoy Gateway and Agent Router' },
+        { kind: 'command', text: `helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm --version v${vars.egVersion} \\` },
+        { kind: 'command', text: '  -n envoy-gateway-system --create-namespace \\' },
+        {
+          kind: 'command',
+          text: `  -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/manifests/envoy-gateway-values.yaml`,
+        },
+        { kind: 'command', text: `helm upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm --version v${vars.aigwVersion} \\` },
+        { kind: 'command', text: '  -n envoy-ai-gateway-system --create-namespace' },
+        { kind: 'command', text: `helm upgrade -i aieg oci://docker.io/envoyproxy/ai-gateway-helm --version v${vars.aigwVersion} \\` },
+        { kind: 'command', text: '  -n envoy-ai-gateway-system --create-namespace' },
+        { kind: 'comment', text: '# wait until the pods in envoy-ai-gateway-system are ready' },
         { kind: 'blank' },
-        { kind: 'comment', text: '# 2 — declare a route' },
-        { kind: 'command', text: 'kubectl apply -f aigatewayroute.yaml' },
+        { kind: 'comment', text: '# 2 — deploy a gateway with a mock model' },
+        {
+          kind: 'command',
+          text: `kubectl apply -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/basic/basic.yaml`,
+        },
+        { kind: 'comment', text: '# wait until the gateway pods in envoy-gateway-system are ready' },
         { kind: 'blank' },
         { kind: 'comment', text: '# 3 — send a request' },
-        { kind: 'command', text: 'curl $GATEWAY/v1/chat/completions \\' },
-        { kind: 'command', text: `  -d '{"model": "claude-sonnet-5", "messages": [...]}'` },
+        { kind: 'command', text: 'kubectl port-forward -n envoy-gateway-system $(kubectl get svc -n envoy-gateway-system -o name \\' },
+        { kind: 'command', text: `  -l ${basicGatewaySelector}) 8080:80 &` },
+        { kind: 'command', text: 'curl -sS --retry 60 --retry-all-errors --retry-delay 2 http://localhost:8080/v1/chat/completions \\' },
+        { kind: 'command', text: '  -H "Content-Type: application/json" \\' },
+        {
+          kind: 'command',
+          text: `  -d '{"model": "some-cool-self-hosted-model", "messages": [{"role": "user", "content": "Hello!"}]}'`,
+        },
       ],
     },
     {
@@ -172,8 +197,11 @@ export const quickstart = {
         { kind: 'blank' },
         { kind: 'comment', text: '# 3 — send a request' },
         { kind: 'command', text: 'curl $OPENAI_BASE_URL/chat/completions \\' },
-        { kind: 'command', text: '  -H "Authorization: Bearer $OPENAI_API_KEY" \\' },
-        { kind: 'command', text: `  -d '{"model": "claude-sonnet-5", "messages": [...]}'` },
+        { kind: 'command', text: '  -H "Authorization: Bearer $OPENAI_API_KEY" -H "Content-Type: application/json" \\' },
+        {
+          kind: 'command',
+          text: `  -d '{"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "Hello!"}]}'`,
+        },
       ],
     },
   ] satisfies QuickstartTab[],
