@@ -51,6 +51,7 @@ type (
 		RunID     string `name:"run-id" env:"AIGW_RUN_ID" help:"Run identifier for this invocation. Defaults to timestamp-based ID or $AIGW_RUN_ID. Use '0' for Docker/Kubernetes."`
 
 		MCPSessionEncryptionIterations int `name:"mcp-session-encryption-iterations" help:"Number of iterations for MCP session encryption key derivation." default:"100000"`
+		FileIDEncryptionIterations     int `name:"file-id-encryption-iterations" help:"Number of iterations for Files/Batch API id encryption key derivation." default:"100000"`
 
 		mcpConfig *autoconfig.MCPServers `kong:"-"` // Internal field: normalized MCP JSON data
 		dirs      *xdg.Directories       `kong:"-"` // Internal field: XDG directories, set by BeforeApply
@@ -126,8 +127,10 @@ func (c *cmdRun) Validate() error {
 	if c.McpConfig != "" && c.McpJSON != "" {
 		return fmt.Errorf("mcp-config and mcp-json are mutually exclusive")
 	}
-	if c.Path == "" && os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("AZURE_OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" && c.McpConfig == "" && c.McpJSON == "" {
-		return fmt.Errorf("you must supply at least OPENAI_API_KEY, AZURE_OPENAI_API_KEY, ANTHROPIC_API_KEY, or a config file path")
+	// Without any configuration, "aigw run" asks for it interactively, which needs a terminal.
+	if c.Path == "" && os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("AZURE_OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" && c.McpConfig == "" && c.McpJSON == "" &&
+		!isTerminal(os.Stdin) {
+		return errNoConfig
 	}
 
 	c.McpConfig = expandPath(c.McpConfig)

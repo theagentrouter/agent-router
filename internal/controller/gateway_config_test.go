@@ -368,9 +368,33 @@ func TestGatewayConfigController_GatewayReferencesNonExistingConfig(t *testing.T
 }
 
 func TestGatewayConfigConditionsNotAccepted(t *testing.T) {
-	conds := gatewayConfigConditions(aigv1b1.ConditionTypeNotAccepted, "nope")
+	conds := gatewayConfigConditions(3, aigv1b1.ConditionTypeNotAccepted, "nope")
 	require.Len(t, conds, 1)
 	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, conds[0].Type)
 	require.Equal(t, metav1.ConditionFalse, conds[0].Status)
 	require.Equal(t, "nope", conds[0].Message)
+	require.Equal(t, int64(3), conds[0].ObservedGeneration)
+}
+
+func TestGatewayConfigController_updateGatewayConfigStatus(t *testing.T) {
+	fakeClient := requireNewFakeClientForGatewayConfig(t)
+	c := &GatewayConfigController{client: fakeClient, logger: ctrl.Log}
+
+	gatewayConfig := &aigv1b1.GatewayConfig{ObjectMeta: metav1.ObjectMeta{Name: "gatewayConfig1", Namespace: "default", Generation: 1}}
+	require.NoError(t, fakeClient.Create(t.Context(), gatewayConfig))
+
+	// The reconcile processed generation 1, and the spec is edited to generation 2 before the
+	// status is written. The conditions describe generation 1, not the generation the status write
+	// re-reads.
+	processed := gatewayConfig.DeepCopy()
+	gatewayConfig.Generation = 2
+	require.NoError(t, fakeClient.Update(t.Context(), gatewayConfig))
+	for _, conditionType := range []string{aigv1b1.ConditionTypeNotAccepted, aigv1b1.ConditionTypeAccepted} {
+		c.updateGatewayConfigStatus(t.Context(), processed.DeepCopy(), conditionType, "result")
+		var current aigv1b1.GatewayConfig
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(gatewayConfig), &current))
+		require.Len(t, current.Status.Conditions, 1)
+		require.Equal(t, conditionType, current.Status.Conditions[0].Type)
+		require.Equal(t, int64(1), current.Status.Conditions[0].ObservedGeneration)
+	}
 }

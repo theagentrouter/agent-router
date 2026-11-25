@@ -125,6 +125,24 @@ func TestMCPProxy_HTTPMethods(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "method not allowed")
 }
 
+func TestMCPProxy_ModernGETAndDELETERejected(t *testing.T) {
+	l := slog.Default()
+	_, mux, err := NewMCPProxy(l, stubMetrics{}, noopTracer, NewPBKDF2AesGcmSessionCrypto("test", 100), nil)
+	require.NoError(t, err)
+
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/mcp", nil)
+			req.Header.Set(mcpProtocolVersionHeader, protocolVersion20260728)
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, req)
+			require.Equal(t, http.StatusMethodNotAllowed, rr.Code, "modern clients must not hit legacy session handlers")
+			require.Contains(t, rr.Body.String(), "method not allowed")
+			require.NotContains(t, rr.Body.String(), "missing session ID")
+		})
+	}
+}
+
 func Test_applyLogHeaderMappings(t *testing.T) {
 	logAttrs := map[string]string{"agent-session-id": "session.id"}
 	proxyCfg := &ProxyConfig{logRequestHeaderAttributes: logAttrs}
@@ -358,7 +376,7 @@ func TestSessionFromID_ValidID(t *testing.T) {
 	// Create a valid session ID.
 	sessionID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("test-session")))
 	eventID := secureID(t, proxy, "@@backend1:"+base64.StdEncoding.EncodeToString([]byte("_1")))
-	session, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID), "")
+	session, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), secureClientToGatewayEventID(eventID), "", "")
 
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -370,7 +388,7 @@ func TestSessionFromID_InvalidID(t *testing.T) {
 
 	// Create an invalid session ID.
 	sessionID := secureID(t, proxy, "invalid-session-id")
-	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", "")
+	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", "", "")
 
 	require.Error(t, err)
 	require.Nil(t, s)
@@ -387,16 +405,40 @@ func TestSessionFromID_SubjectMismatch(t *testing.T) {
 	// https://modelcontextprotocol.io/specification/2025-06-18/basic/security_best_practices#session-hijacking
 	for _, currentSubject := range []string{"user-b", "", "user-a "} {
 		t.Run(currentSubject, func(t *testing.T) {
-			s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", currentSubject)
+			s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", "route", currentSubject)
 			require.ErrorIs(t, err, errSessionSubjectMismatch)
 			require.Nil(t, s)
 		})
 	}
 
 	// Resuming with the matching subject succeeds.
-	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", "user-a")
+	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", "route", "user-a")
 	require.NoError(t, err)
 	require.NotNil(t, s)
+}
+
+func TestSessionFromID_RouteMismatch(t *testing.T) {
+	proxy := newTestMCPProxy()
+
+	// Session ID was minted on "test-route" for "user-a".
+	sessionID := secureID(t, proxy, "test-route@user-a@backend1:"+base64.StdEncoding.EncodeToString([]byte("test-session")))
+
+	// Resuming it through any other route must be rejected, even for the same subject: the
+	// session carries the original route's config, which must only be applied to requests that
+	// went through that route's Envoy-side security policy.
+	for _, currentRoute := range []string{"test-route-another", "", "test-route "} {
+		t.Run(currentRoute, func(t *testing.T) {
+			s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", currentRoute, "user-a")
+			require.ErrorIs(t, err, errSessionRouteMismatch)
+			require.Nil(t, s)
+		})
+	}
+
+	// Resuming through the same route succeeds.
+	s, err := proxy.sessionFromID(secureClientToGatewaySessionID(sessionID), "", "test-route", "user-a")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.Equal(t, "test-route", s.route)
 }
 
 func TestInitializeSession_Success(t *testing.T) {
