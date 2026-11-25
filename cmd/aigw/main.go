@@ -127,8 +127,10 @@ func (c *cmdRun) Validate() error {
 	if c.McpConfig != "" && c.McpJSON != "" {
 		return fmt.Errorf("mcp-config and mcp-json are mutually exclusive")
 	}
-	if c.Path == "" && os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("AZURE_OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" && c.McpConfig == "" && c.McpJSON == "" {
-		return fmt.Errorf("you must supply at least OPENAI_API_KEY, AZURE_OPENAI_API_KEY, ANTHROPIC_API_KEY, or a config file path")
+	// Without any configuration, "aigw run" asks for it interactively, which needs a terminal.
+	if c.Path == "" && os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("AZURE_OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" && c.McpConfig == "" && c.McpJSON == "" &&
+		!isTerminal(os.Stdin) {
+		return errNoConfig
 	}
 
 	c.McpConfig = expandPath(c.McpConfig)

@@ -4,6 +4,45 @@ title: Installation
 sidebar_position: 1
 ---
 
+## Install script
+
+The quickest way to install `aigw` on Linux (amd64, arm64) and macOS (Apple
+silicon) is the install script. It downloads the latest build of the `main`
+branch to `~/.local/bin` and pre-downloads Envoy:
+
+```shell
+curl -sSL https://theagentrouter.ai/install.sh | sh
+```
+
+Set `AIGW_VERSION` to `latest` to install the latest stable release instead, or
+to a release tag (for example `v1.3.0`) to install a specific release. Set
+`AIGW_INSTALL_DIR` to install somewhere else:
+
+```shell
+curl -sSL https://theagentrouter.ai/install.sh | AIGW_VERSION=v1.3.0 AIGW_INSTALL_DIR=/usr/local/bin sh
+```
+
+The script needs `curl` or `wget`. It verifies the binary against the SHA-256
+checksum published with it (`checksums.txt`, or the digest GitHub reports for
+releases that predate it), using `sha256sum` or `shasum`, and does not install
+it if they differ.
+
+If the checksum cannot be fetched (a network error, a release that is being
+updated, or the GitHub API rate limit), the script stops without installing
+anything: run it again, or set `GITHUB_TOKEN` to authenticate the GitHub API
+request. It installs without verifying, and prints a warning, only in these
+cases:
+
+- The release has no checksum at all, which is only possible for releases that
+  predate `checksums.txt`.
+- Neither `sha256sum` nor `shasum` is installed.
+- You set `AIGW_SKIP_CHECKSUM=1`.
+
+The script downloads into the install directory and moves the binary into place
+in one step, so an interrupted install never leaves a partial `aigw` behind. It
+never uses `sudo`: if the install directory is not writable, set
+`AIGW_INSTALL_DIR` to one that is.
+
 ## Official CLI binaries
 
 Each release includes the binaries for the `aigw` CLI build for different platforms.<br/>
