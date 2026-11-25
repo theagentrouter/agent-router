@@ -9,7 +9,8 @@ The [Technical Charter](Technical_Charter.pdf) defines Contributors and Maintain
 Technical Steering Committee (TSC) add roles as long as they are documented from the
 CONTRIBUTING file. The TSC adopts and amends this document under section 2 of the charter.
 
-The [OWNERS](OWNERS) file is the source of truth for who holds the Reviewer and Maintainer
+Frequent Contributors are the members of the `@theagentrouter/agent-router-assignable` GitHub
+team. The [OWNERS](OWNERS) file is the source of truth for who holds the Reviewer and Maintainer
 roles, which company each person works for, and their areas. [MAINTAINERS.md](MAINTAINERS.md)
 is the readable version of the same list.
 
@@ -39,8 +40,9 @@ issues and reviews.
 
 **Privileges**
 
-- Read access to the repository through the project's GitHub organization, which means issues
-  and pull requests can be assigned to you and you can be requested as a reviewer.
+- Membership in the `@theagentrouter/agent-router-assignable` team, which gives Read access to
+  the repository. Issues and pull requests can be assigned to you, and you can be requested as a
+  reviewer.
 
 **Responsibilities**
 
@@ -57,12 +59,14 @@ issues and reviews.
 
 **How to become one**
 
-Ask a Maintainer, or a Maintainer can invite you. One Maintainer's sponsorship is enough.
+Ask a Maintainer, or a Maintainer can invite you. One Maintainer's sponsorship is enough. The
+sponsoring Maintainer asks an organization admin to add you to the
+`@theagentrouter/agent-router-assignable` team.
 
 **Stepping back**
 
-Frequent Contributor access is removed after about 12 months without activity. You can ask for
-it again at any time.
+Frequent Contributors are removed from the team after about 12 months without activity. You can
+ask to rejoin at any time.
 
 ## Reviewer
 

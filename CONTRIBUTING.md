@@ -1,8 +1,8 @@
 # Contributing
 
-We welcome contributions from the community. Please read the following guidelines carefully to maximize the chances of your PR being merged.
+We welcome contributions to Agent Router (formerly Envoy AI Gateway) from the community. Please read the following guidelines carefully to maximize the chances of your PR being merged.
 
-## Local development of Envoy AI Gateway project
+## Local development of Agent Router
 
 First of all, there are only three minimal prerequisites to contribute to the project:
 
@@ -55,7 +55,7 @@ want to run these tests locally, please prepare the necessary credentials by you
 
 ### Goals
 
-- Keep Envoy AI Gateway code consistent and high-quality.
+- Keep Agent Router code consistent and high-quality.
 - Save reviewers time. Reviewers are often in short supply and time, so try to avoid wasted time.
 
 ### What is allowed
@@ -142,4 +142,5 @@ The community has four roles: Contributor, Frequent Contributor, Reviewer, and M
 and how to move from one role to the next. It is adopted by the Technical Steering Committee under
 the project's [Technical Charter](./Technical_Charter.pdf) and is part of this contributing guide.
 
-The [OWNERS](./OWNERS) file lists the current Reviewers and Maintainers.
+The [OWNERS](./OWNERS) file lists the current Reviewers and Maintainers. Frequent Contributors are
+the members of the `@theagentrouter/agent-router-assignable` GitHub team.
