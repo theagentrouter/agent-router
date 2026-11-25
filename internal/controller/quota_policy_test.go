@@ -921,3 +921,26 @@ func TestTargetNamespace(t *testing.T) {
 func ptrTo[T any](v T) *T {
 	return &v
 }
+
+func TestQuotaPolicyController_updateQuotaPolicyStatus(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	c := &QuotaPolicyController{client: fakeClient, logger: ctrl.Log}
+
+	policy := &aigv1a1.QuotaPolicy{ObjectMeta: metav1.ObjectMeta{Name: "policy1", Namespace: "default", Generation: 1}}
+	require.NoError(t, fakeClient.Create(t.Context(), policy))
+
+	// The reconcile processed generation 1, and the spec is edited to generation 2 before the
+	// status is written. The conditions describe generation 1, not the generation the status write
+	// re-reads.
+	processed := policy.DeepCopy()
+	policy.Generation = 2
+	require.NoError(t, fakeClient.Update(t.Context(), policy))
+	for _, conditionType := range []string{aigv1a1.ConditionTypeNotAccepted, aigv1a1.ConditionTypeAccepted} {
+		c.updateQuotaPolicyStatus(t.Context(), processed.DeepCopy(), conditionType, "Reason", "result")
+		var current aigv1a1.QuotaPolicy
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(policy), &current))
+		require.Len(t, current.Status.Conditions, 1)
+		require.Equal(t, conditionType, current.Status.Conditions[0].Type)
+		require.Equal(t, int64(1), current.Status.Conditions[0].ObservedGeneration)
+	}
+}
