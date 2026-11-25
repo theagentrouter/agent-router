@@ -17,7 +17,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
@@ -244,7 +243,7 @@ func NewTracingFromEnv(ctx context.Context, stdout io.Writer, headerAttributeMap
 	// Use provided header attribute mapping.
 	headerAttrs := headerAttributeMapping
 
-	var tracer trace.Tracer = tp.Tracer("envoyproxy/ai-gateway")
+	tracer := tp.Tracer("envoyproxy/ai-gateway")
 	// See the constant's doc for why a caller's remote context may be
 	// recorded as a link on a new root span instead of as the parent.
 	if os.Getenv(envRemoteParentAsLink) == "true" {
