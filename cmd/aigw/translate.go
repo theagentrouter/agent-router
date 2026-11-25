@@ -259,7 +259,7 @@ func translateCustomResourceObjects(
 		}, &controller.Options{
 			ExtProcImage:    "docker.io/envoyproxy/ai-gateway-extproc:latest",
 			ExtProcLogLevel: "debug",
-		}, false,
+		}, false, nil,
 	)
 	// Pre-create Gateways (without reconciling) before reconciling resources so that
 	// syncGateways can resolve the parent Gateway via the fake client.
