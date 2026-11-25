@@ -316,6 +316,13 @@ func TestThinkingUnion_UnmarshalJSON(t *testing.T) {
 			},
 		},
 		{
+			name: "between_tools",
+			data: `{"type":"between_tools"}`,
+			expect: ThinkingUnion{
+				OfBetweenTools: &ThinkingBetweenTools{Type: "between_tools"},
+			},
+		},
+		{
 			name: "enabled with display",
 			data: `{"type":"enabled","budget_tokens":1024,"display":"omitted"}`,
 			expect: ThinkingUnion{
@@ -644,6 +651,13 @@ func TestThinkingUnion_MarshalJSON(t *testing.T) {
 				OfAdaptive: &ThinkingAdaptive{Type: "adaptive"},
 			},
 			expect: `{"type":"adaptive"}`,
+		},
+		{
+			name: "between_tools",
+			input: ThinkingUnion{
+				OfBetweenTools: &ThinkingBetweenTools{Type: "between_tools"},
+			},
+			expect: `{"type":"between_tools"}`,
 		},
 		{
 			name: "enabled with display",

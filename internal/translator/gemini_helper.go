@@ -223,11 +223,40 @@ func userMsgToGeminiParts(msg openai.ChatCompletionUserMessageParam, requestMode
 				}
 				parts = append(parts, p)
 			case content.OfInputAudio != nil:
-				// Audio content is currently not supported in this implementation.
-				return nil, fmt.Errorf("%w: audio content not supported yet", internalapi.ErrInvalidRequestBody)
+				audio := content.OfInputAudio.InputAudio
+				if audio.Data == "" {
+					return nil, fmt.Errorf("%w: audio content must provide data", internalapi.ErrInvalidRequestBody)
+				}
+				var mimeType string
+				switch audio.Format {
+				case openai.ChatCompletionContentPartInputAudioInputAudioFormatWAV:
+					mimeType = mimeTypeAudioWAV
+				case openai.ChatCompletionContentPartInputAudioInputAudioFormatMP3:
+					mimeType = mimeTypeAudioMP3
+				default:
+					return nil, fmt.Errorf("%w: unsupported audio format: %q", internalapi.ErrInvalidRequestBody, audio.Format)
+				}
+				audioBytes, err := base64.StdEncoding.DecodeString(audio.Data)
+				if err != nil {
+					return nil, fmt.Errorf("%w: invalid audio data encoding: %w", internalapi.ErrInvalidRequestBody, err)
+				}
+				parts = append(parts, genai.NewPartFromBytes(audioBytes, mimeType))
 			case content.OfFile != nil:
-				// File content is currently not supported in this implementation.
-				return nil, fmt.Errorf("%w: file content not supported yet", internalapi.ErrInvalidRequestBody)
+				file := content.OfFile.File
+				if file.FileID != "" {
+					return nil, fmt.Errorf("%w: file_id is not supported yet", internalapi.ErrInvalidRequestBody)
+				}
+				if file.FileData == "" {
+					return nil, fmt.Errorf("%w: file content must provide file_data", internalapi.ErrInvalidRequestBody)
+				}
+				mimeType, fileBytes, err := parseDataURI(file.FileData)
+				if err != nil {
+					return nil, fmt.Errorf("%w: invalid file data URI: %w", internalapi.ErrInvalidRequestBody, err)
+				}
+				if mimeType == "" {
+					return nil, fmt.Errorf("%w: file data URI must specify a MIME type", internalapi.ErrInvalidRequestBody)
+				}
+				parts = append(parts, genai.NewPartFromBytes(fileBytes, mimeType))
 			}
 		}
 	default:
@@ -429,7 +458,7 @@ func assistantMsgToGeminiParts(msg *openai.ChatCompletionAssistantMessageParam) 
 //	}
 //
 // ].
-func openAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAvailable bool) ([]genai.Tool, error) {
+func openAIToolsToGeminiTools(openaiTools []openai.Tool) ([]genai.Tool, error) {
 	if len(openaiTools) == 0 {
 		return nil, nil
 	}
@@ -448,21 +477,7 @@ func openAIToolsToGeminiTools(openaiTools []openai.Tool, parametersJSONSchemaAva
 					Description: tool.Function.Description,
 				}
 
-				if parametersJSONSchemaAvailable {
-					functionDecl.ParametersJsonSchema = tool.Function.Parameters
-				} else if tool.Function.Parameters != nil {
-					paramsMap, ok := tool.Function.Parameters.(map[string]any)
-					if !ok {
-						return nil, fmt.Errorf("%w: tool %s parameters must be a JSON object", internalapi.ErrInvalidRequestBody, tool.Function.Name)
-					}
-
-					if len(paramsMap) > 0 {
-						var err error
-						if functionDecl.Parameters, err = jsonSchemaToGemini(paramsMap); err != nil {
-							return nil, fmt.Errorf("%w: invalid JSON schema for parameters in tool %s: %w", internalapi.ErrInvalidRequestBody, tool.Function.Name, err)
-						}
-					}
-				}
+				functionDecl.ParametersJsonSchema = tool.Function.Parameters
 				functionDecls = append(functionDecls, functionDecl)
 			}
 		case openai.ToolTypeImageGeneration:
@@ -581,11 +596,6 @@ func openAIToolChoiceToGeminiToolConfig(toolChoice *openai.ChatCompletionToolCho
 // Check and Update these functions when new Gemini model versions are released
 // and their feature support changes.
 
-// it only works with models after gemini2.5 according to https://ai.google.dev/gemini-api/docs/structured-output#json-schema, separate it as a small function to make it easier to maintain
-func responseJSONSchemaAvailable(requestModel internalapi.RequestModel) bool {
-	return strings.Contains(requestModel, "gemini") && (strings.Contains(requestModel, "2.5") || strings.Contains(requestModel, "3"))
-}
-
 // mediaResolutionAvailable checks if the model supports media resolution settings.
 // Only Gemini 3.0+ models support this feature for controlling image/video quality.
 func mediaResolutionAvailable(requestModel internalapi.RequestModel) bool {
@@ -689,16 +699,7 @@ func openAIReqToGeminiGenerationConfig(openAIReq *openai.ChatCompletionRequest, 
 
 			responseMode = responseModeJSON
 
-			if responseJSONSchemaAvailable(requestModel) {
-				gc.ResponseJsonSchema = schemaMap
-			} else {
-				convertedSchema, err := jsonSchemaToGemini(schemaMap)
-				if err != nil {
-					return nil, responseMode, fmt.Errorf("%w: invalid JSON schema: %w", internalapi.ErrInvalidRequestBody, err)
-				}
-				gc.ResponseSchema = convertedSchema
-
-			}
+			gc.ResponseJsonSchema = schemaMap
 		}
 	}
 

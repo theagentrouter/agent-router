@@ -115,6 +115,15 @@ mohitgurnani:
   socials:
     github: mohitgurnani
     linkedin: https://www.linkedin.com/in/mohitgurnani94/
+arif:
+  name: Nurul Arif Setiawan
+  title: Product Manager - Tetrate
+  url: https://github.com/arifsetiawan
+  image_url: https://github.com/arifsetiawan.png
+  page: true
+  socials:
+    github: arifsetiawan
+    linkedin: https://www.linkedin.com/in/nurularifsetiawan/
 maintainers:
   name: Agent Router Maintainers
   title: The Agent Router maintainer team

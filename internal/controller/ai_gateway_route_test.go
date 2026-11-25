@@ -356,8 +356,9 @@ func TestAIGatewayRouteController_updateAIGatewayRouteStatus(t *testing.T) {
 
 	r := &aigv1b1.AIGatewayRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "route1",
-			Namespace: "default",
+			Name:       "route1",
+			Namespace:  "default",
+			Generation: 1,
 		},
 	}
 	err := s.client.Create(t.Context(), r, &client.CreateOptions{})
@@ -371,6 +372,7 @@ func TestAIGatewayRouteController_updateAIGatewayRouteStatus(t *testing.T) {
 	require.Len(t, updatedRoute.Status.Conditions, 1)
 	require.Equal(t, "err", updatedRoute.Status.Conditions[0].Message)
 	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updatedRoute.Status.Conditions[0].Type)
+	require.Equal(t, int64(1), updatedRoute.Status.Conditions[0].ObservedGeneration)
 
 	s.updateAIGatewayRouteStatus(t.Context(), &updatedRoute, aigv1b1.ConditionTypeAccepted, "ok")
 	err = s.client.Get(t.Context(), client.ObjectKey{Name: "route1", Namespace: "default"}, &updatedRoute)
@@ -378,6 +380,22 @@ func TestAIGatewayRouteController_updateAIGatewayRouteStatus(t *testing.T) {
 	require.Len(t, updatedRoute.Status.Conditions, 1)
 	require.Equal(t, "ok", updatedRoute.Status.Conditions[0].Message)
 	require.Equal(t, aigv1b1.ConditionTypeAccepted, updatedRoute.Status.Conditions[0].Type)
+	require.Equal(t, int64(1), updatedRoute.Status.Conditions[0].ObservedGeneration)
+
+	// The reconcile processed generation 1, and the spec is edited to generation 2 before the
+	// status is written. The conditions describe generation 1, not the generation the status write
+	// re-reads.
+	processed := updatedRoute.DeepCopy()
+	updatedRoute.Generation = 2
+	require.NoError(t, s.client.Update(t.Context(), &updatedRoute))
+	for _, conditionType := range []string{aigv1b1.ConditionTypeNotAccepted, aigv1b1.ConditionTypeAccepted} {
+		s.updateAIGatewayRouteStatus(t.Context(), processed.DeepCopy(), conditionType, "result")
+		var current aigv1b1.AIGatewayRoute
+		require.NoError(t, s.client.Get(t.Context(), client.ObjectKeyFromObject(r), &current))
+		require.Len(t, current.Status.Conditions, 1)
+		require.Equal(t, conditionType, current.Status.Conditions[0].Type)
+		require.Equal(t, int64(1), current.Status.Conditions[0].ObservedGeneration)
+	}
 }
 
 func Test_buildPriorityAnnotation(t *testing.T) {
@@ -1395,6 +1413,35 @@ func Test_computeQuotaPolicyHash(t *testing.T) {
 		after, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
 		require.NoError(t, err)
 		require.NotEqual(t, before, after, "a structural change must change the hash")
+	})
+
+	t.Run("fromMetadata-only change produces different hash", func(t *testing.T) {
+		fakeClient := requireNewFakeClientWithIndexes(t)
+		c := newController(fakeClient)
+		qp := newQuotaPolicy("qp", ns, 100, "apple")
+		qp.Spec.PerModelQuotas = []aigv1a1.PerModelQuota{{
+			ModelName: ptr.To("gpt-4"),
+			Quota: aigv1a1.QuotaDefinition{
+				DefaultBucket: aigv1a1.QuotaValue{
+					Limit: 10, Duration: "1m",
+					FromMetadata: &aigv1a1.QuotaLimitFromMetadata{
+						Namespace: "envoy.filters.http.ext_authz",
+						Key:       "total_limit",
+					},
+				},
+			},
+		}}
+		require.NoError(t, fakeClient.Create(t.Context(), qp))
+		before, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(qp), qp))
+		qp.Spec.PerModelQuotas[0].Quota.DefaultBucket.FromMetadata.Key = "other_limit"
+		require.NoError(t, fakeClient.Update(t.Context(), qp))
+
+		after, err := c.computeQuotaPolicyHash(t.Context(), newRoute())
+		require.NoError(t, err)
+		require.NotEqual(t, before, after, "changing only fromMetadata.key must change the hash")
 	})
 
 	t.Run("terminating policy is ignored", func(t *testing.T) {
