@@ -413,7 +413,8 @@ func TestAIGatewayRouteController(t *testing.T) {
 			if len(r.Status.Conditions) != 1 {
 				return false
 			}
-			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted
+			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted &&
+				r.Status.Conditions[0].ObservedGeneration == r.Generation
 		}, 30*time.Second, 200*time.Millisecond)
 	})
 
@@ -565,7 +566,8 @@ func TestBackendSecurityPolicyController(t *testing.T) {
 			if len(r.Status.Conditions) != 1 {
 				return false
 			}
-			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted
+			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted &&
+				r.Status.Conditions[0].ObservedGeneration == r.Generation
 		}, 30*time.Second, 200*time.Millisecond)
 	})
 
@@ -718,7 +720,8 @@ func TestAIServiceBackendController(t *testing.T) {
 			if len(r.Status.Conditions) != 1 {
 				return false
 			}
-			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted
+			return r.Status.Conditions[0].Type == aigv1b1.ConditionTypeAccepted &&
+				r.Status.Conditions[0].ObservedGeneration == r.Generation
 		}, 30*time.Second, 200*time.Millisecond)
 	})
 
