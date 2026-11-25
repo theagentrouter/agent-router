@@ -67,6 +67,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 			rootPrefix       string
 			logLevel         slog.Level
 			logFormat        string
+			falURLScheme     string
 			enableRedaction  bool
 		}{
 			{
@@ -88,6 +89,15 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				logLevel:         slog.LevelInfo,
 				logFormat:        "json",
 				enableRedaction:  false,
+			},
+			{
+				name:             "fal URL scheme http",
+				args:             []string{"-configBundlePath", "/path/to/config-bundle", "-falURLScheme", "http"},
+				configBundlePath: "/path/to/config-bundle",
+				addr:             ":1063",
+				rootPrefix:       "/",
+				logLevel:         slog.LevelInfo,
+				falURLScheme:     "http",
 			},
 			{
 				name:             "custom addr",
@@ -228,6 +238,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 					wantLogFormat = "text"
 				}
 				require.Equal(t, wantLogFormat, flags.logFormat)
+				require.Equal(t, tc.falURLScheme, flags.falURLScheme)
 				require.Equal(t, tc.enableRedaction, flags.enableRedaction)
 				require.Equal(t, tc.rootPrefix, flags.rootPrefix)
 			})
@@ -251,9 +262,14 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				expectedError: `invalid log format: "yaml", must be "text" or "json"`,
 			},
 			{
+				name:          "invalid fal URL scheme",
+				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-falURLScheme", "ftp"},
+				expectedError: `invalid fal URL scheme: "ftp", must be empty, "https" or "http"`,
+			},
+			{
 				name:          "invalid endpoint prefixes - unknown key",
 				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-endpointPrefixes", "foo:/x"},
-				expectedError: "failed to parse endpoint prefixes: unknown endpointPrefixes key \"foo\" at position 1 (allowed: openai, cohere, anthropic, typesafe)",
+				expectedError: "failed to parse endpoint prefixes: unknown endpointPrefixes key \"foo\" at position 1 (allowed: openai, cohere, anthropic, typesafe, fal)",
 			},
 			{
 				name:          "invalid endpoint prefixes - missing colon",

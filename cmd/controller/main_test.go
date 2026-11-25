@@ -73,6 +73,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 		require.Equal(t, "envoy-gateway-system", f.envoyGatewayNamespace)
 		require.Equal(t, "info", f.extProcLogLevel)
 		require.Equal(t, "text", f.extProcLogFormat)
+		require.Empty(t, f.extProcFalURLScheme)
 		require.Equal(t, "text", f.logFormat)
 		require.False(t, f.extProcEnableRedaction)
 		require.Equal(t, "docker.io/envoyproxy/ai-gateway-extproc:latest", f.extProcImage)
@@ -103,6 +104,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 					tc.dash + "envoyGatewayNamespace=eg-system",
 					tc.dash + "extProcLogLevel=debug",
 					tc.dash + "extProcLogFormat=json",
+					tc.dash + "extProcFalURLScheme=http",
 					tc.dash + "logFormat=json",
 					tc.dash + "extProcEnableRedaction=true",
 					tc.dash + "extProcImage=example.com/extproc:latest",
@@ -129,6 +131,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				require.Equal(t, "eg-system", f.envoyGatewayNamespace)
 				require.Equal(t, "debug", f.extProcLogLevel)
 				require.Equal(t, "json", f.extProcLogFormat)
+				require.Equal(t, "http", f.extProcFalURLScheme)
 				require.Equal(t, "json", f.logFormat)
 				require.True(t, f.extProcEnableRedaction)
 				require.Equal(t, "example.com/extproc:latest", f.extProcImage)
@@ -228,6 +231,11 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				name:   "invalid extproc log format",
 				flags:  []string{"--extProcLogFormat=yaml"},
 				expErr: `external processor: invalid log format: "yaml", must be "text" or "json"`,
+			},
+			{
+				name:   "invalid extproc fal URL scheme",
+				flags:  []string{"--extProcFalURLScheme=ftp"},
+				expErr: `external processor: invalid fal URL scheme: "ftp", must be empty, "https" or "http"`,
 			},
 			{
 				name:   "invalid mcp session encryption iterations",

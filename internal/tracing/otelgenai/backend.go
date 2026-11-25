@@ -32,6 +32,7 @@ var providerBySchema = map[string]Provider{
 	"Anthropic":    ProviderAnthropic,
 	"Cohere":       ProviderCohere,
 	"TypeSafe":     ProviderTypeSafe,
+	"Fal":          ProviderFal,
 }
 
 // ProviderForSchema returns the GenAI provider name for a backend API schema.

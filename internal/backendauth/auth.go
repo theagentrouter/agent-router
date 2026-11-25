@@ -51,6 +51,9 @@ func NewHandler(ctx context.Context, config *filterapi.BackendAuth) (filterapi.B
 	case config.AnthropicAPIKey != nil:
 		inner, err = newAnthropicAPIKeyHandler(config.AnthropicAPIKey)
 		applyFn = applyAnthropicCredential
+	case config.FalAPIKey != nil:
+		inner, err = newFalAPIKeyHandler(config.FalAPIKey)
+		applyFn = applyFalCredential
 	default:
 		return nil, errors.New("no backend auth handler found")
 	}
