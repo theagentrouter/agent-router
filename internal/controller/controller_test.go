@@ -506,11 +506,12 @@ func Test_handleFinalizer(t *testing.T) {
 		name               string
 		hasFinalizer       bool
 		hasDeletionTS      bool
-		clientUpdateError  bool
+		clientPatchError   bool
 		onDeletionFnError  bool
 		expectedOnDelete   bool
 		expectedFinalizers []string
 		expectCallback     bool
+		expectErr          bool
 	}{
 		{
 			name:               "add finalizer to new object",
@@ -520,12 +521,13 @@ func Test_handleFinalizer(t *testing.T) {
 			expectedFinalizers: []string{aiGatewayControllerFinalizer},
 		},
 		{
-			name:               "add finalizer to new object with update error",
+			name:               "add finalizer to new object with patch error",
 			hasFinalizer:       false,
 			hasDeletionTS:      false,
-			clientUpdateError:  true,
+			clientPatchError:   true,
 			expectedOnDelete:   false,
 			expectedFinalizers: []string{aiGatewayControllerFinalizer},
+			expectErr:          true,
 		},
 		{
 			name:               "object already has finalizer",
@@ -552,13 +554,21 @@ func Test_handleFinalizer(t *testing.T) {
 			expectCallback:     true,
 		},
 		{
-			name:               "object being deleted, client update error",
+			name:               "object being deleted, client patch error",
 			hasFinalizer:       true,
 			hasDeletionTS:      true,
-			clientUpdateError:  true,
+			clientPatchError:   true,
 			expectedOnDelete:   true,
 			expectedFinalizers: []string{},
 			expectCallback:     true,
+			expectErr:          true,
+		},
+		{
+			name:             "object being deleted, finalizer already removed",
+			hasFinalizer:     false,
+			hasDeletionTS:    true,
+			clientPatchError: true, // must not be called
+			expectedOnDelete: true,
 		},
 	}
 
@@ -587,8 +597,13 @@ func Test_handleFinalizer(t *testing.T) {
 					return nil
 				}
 			}
-			onDelete := handleFinalizer(context.Background(),
-				&mockClient{updateErr: tc.clientUpdateError}, logr.Discard(), obj, onDeletionFn)
+			onDelete, err := handleFinalizer(context.Background(),
+				&mockClient{patchErr: tc.clientPatchError}, logr.Discard(), obj, onDeletionFn)
+			if tc.expectErr {
+				require.ErrorContains(t, err, "mock patch error")
+			} else {
+				require.NoError(t, err)
+			}
 			require.Equal(t, tc.expectedOnDelete, onDelete)
 			require.Equal(t, tc.expectedFinalizers, obj.Finalizers)
 			require.Equal(t, tc.expectCallback, callbackExecuted)
@@ -596,16 +611,16 @@ func Test_handleFinalizer(t *testing.T) {
 	}
 }
 
-// mockClients implements client.Client with a custom Update method for testing purposes.
+// mockClients implements client.Client with a custom Patch method for testing purposes.
 type mockClient struct {
 	client.Client
-	updateErr bool
+	patchErr bool
 }
 
-// Updates implements the client.Client interface for the mock client.
-func (m *mockClient) Update(context.Context, client.Object, ...client.UpdateOption) error {
-	if m.updateErr {
-		return fmt.Errorf("mock update error")
+// Patch implements the client.Client interface for the mock client.
+func (m *mockClient) Patch(context.Context, client.Object, client.Patch, ...client.PatchOption) error {
+	if m.patchErr {
+		return fmt.Errorf("mock patch error")
 	}
 	return nil
 }

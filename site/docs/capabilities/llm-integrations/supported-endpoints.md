@@ -355,24 +355,26 @@ curl -H "Content-Type: application/json" \
 
 **Endpoint:** `POST /v1/decisions`
 
-**Status:** ✅ Supported for OpenAI backends (beta)
+**Status:** ✅ Supported for OpenAI and Azure OpenAI backends
 
-**Description:** Evaluate shared text or image evidence against typed questions and return probabilities, fixed choices, or rubric scores. The request and response use the native OpenAI Decisions API format. OpenAI offers this API as a beta, so its request and response formats may change.
+**Description:** Evaluate shared text or image evidence against typed questions and return probabilities, fixed choices, or rubric scores. The request and response use the native OpenAI Decisions API format.
 
 **Features:**
 
 - ✅ `predicate`, `choice`, and `score` questions, including multiple independent questions in one request
 - ✅ `refusal` answers when the model declines an individual question
-- ✅ Text input and user messages containing text and inline base64 images
+- ✅ Question `instructions` as a string or as an array of `input_text` and `input_image` parts, to give each question its own images
+- ✅ Text input and user messages containing text, JSON, and images as inline base64 data URLs or public HTTP or HTTPS URLs
 - ✅ Model selection via request body or `x-ai-eg-model` header
 - ✅ Model name virtualization, provider fallback, and load balancing
 - ✅ Token usage and model metadata from the upstream response
 - ❌ Streaming (not documented by the OpenAI Decisions API)
-- ❌ Hosted image URLs and file IDs (not supported by the OpenAI Decisions API)
+- ❌ `file_id` inputs (not supported by the OpenAI Decisions API)
 
 **Supported Providers:**
 
 - OpenAI
+- Azure OpenAI, through the v1 API at `/openai/v1/decisions` without an `api-version` query parameter. Set `model` (or `modelNameOverride`) to the name of your `gpt-6-luna` deployment. For region availability, see the [Azure OpenAI Decisions API guide](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/decisions).
 
 **Example:**
 
@@ -702,6 +704,7 @@ The following table summarizes which providers support which endpoints:
 | [Mistral](https://docs.mistral.ai/api/)                                                               |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
 | [DeepInfra](https://deepinfra.com/docs/inference)                                                     |        ✅        |     ⚠️      |     ✅     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
 | [DeepSeek](https://api-docs.deepseek.com/)                                                            |        ⚠️        |     ⚠️      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
+| [FlexAI](https://docs.flex.ai/inference-api/overview)                                                 |        ⚠️        |     ⚠️      |     ⚠️     |        ⚠️        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ⚠️   | Via OpenAI-compatible API; also serves `/v1/audio/transcriptions` and `/v1/audio/speech`                             |
 | [Heabsy](https://api.heabsy.com/docs)                                                                 |        ⚠️        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
 | [Hunyuan](https://cloud.tencent.com/document/product/1729/111007)                                     |        ⚠️        |     ⚠️      |     ⚠️     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |
 | [Tencent LLM Knowledge Engine](https://www.tencentcloud.com/document/product/1255/70381)              |        ⚠️        |     ❌      |     ❌     |        ❌        |         ❌         |      ❌      |   ❌   |     ❌     |    ❌    |  ❌   | Via OpenAI-compatible API                                                                                            |

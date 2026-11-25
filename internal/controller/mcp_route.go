@@ -96,14 +96,18 @@ func (c *MCPRouteController) Reconcile(ctx context.Context, req reconcile.Reques
 func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
 	// On deletion, propagate to the referenced Gateways and clean up the shared Backend if this
 	// is the last MCPRoute in the namespace.
-	if handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted) {
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted)
+	if err != nil {
+		return err
+	}
+	if onDelete {
 		return nil
 	}
 
 	// Validate prefixMode=Never (whether set per-backend or inherited from the route-level
 	// default): each effectively-Never backend must declare toolSelector.include, and tool
 	// names must be unique across all effectively-Never backends on the route.
-	if err := validatePerBackendPrefixMode(mcpRoute); err != nil {
+	if err = validatePerBackendPrefixMode(mcpRoute); err != nil {
 		return err
 	}
 
@@ -536,6 +540,9 @@ func (c *MCPRouteController) syncGateway(ctx context.Context, namespace, name st
 
 // updateMCPRouteStatus updates the status of the MCPRoute.
 func (c *MCPRouteController) updateMCPRouteStatus(ctx context.Context, route *aigv1b1.MCPRoute, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := route.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -544,7 +551,7 @@ func (c *MCPRouteController) updateMCPRouteStatus(ctx context.Context, route *ai
 			return err
 		}
 
-		route.Status.Conditions = newConditions(conditionType, message)
+		route.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, route)
 	})
 	if err != nil {
