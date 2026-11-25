@@ -61,7 +61,10 @@ func (a *anthropicToOpenAIV1ChatCompletionTranslator) RequestBody(_ []byte, body
 	a.requestModel = cmp.Or(a.modelNameOverride, body.Model)
 
 	// Convert Anthropic message request body to OpenAI format.
-	openAIReq := buildOpenAIChatCompletionRequest(body, a.modelNameOverride)
+	openAIReq, err := buildOpenAIChatCompletionRequest(body, a.modelNameOverride)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	newBody, err = json.Marshal(openAIReq)
 	if err != nil {
@@ -275,6 +278,7 @@ func (a *anthropicToOpenAIV1ChatCompletionTranslator) RedactAnthropicBody(resp *
 			redacted.Content[i] = redactAnthropicContent(&resp.Content[i])
 		}
 	}
+	redacted.StopDetails = redactRefusalStopDetails(resp.StopDetails)
 
 	return &redacted
 }

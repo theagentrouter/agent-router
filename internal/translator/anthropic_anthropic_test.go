@@ -11,11 +11,13 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"k8s.io/utils/ptr"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
+	"github.com/envoyproxy/ai-gateway/internal/redaction"
 )
 
 func TestAnthropicToAnthropic_RequestBody(t *testing.T) {
@@ -412,5 +414,82 @@ func TestAnthropicMessagesTranslators_ResponseBody_non_streaming_withoutUsage(t 
 				}
 			})
 		}
+	}
+}
+
+func TestRedactAnthropicBody_CitationsAndWebSearch(t *testing.T) {
+	// Every *-marker value is caller content or derived from it and must not be logged; every *-kept value is metadata.
+	const body = `{"id":"msg-kept","type":"message","role":"assistant","model":"model-kept","content":[` +
+		`{"type":"server_tool_use","id":"srvtool-kept","name":"web_search","input":{"query":"query-marker"}},` +
+		`{"type":"web_search_tool_result","tool_use_id":"srvtool-kept","content":[{"type":"web_search_result","title":"result-title-marker","url":"https://result-url-marker.example","encrypted_content":"encrypted-content-marker","page_age":"page-age-kept"}]},` +
+		`{"type":"web_search_tool_result","tool_use_id":"srvtool-kept","content":{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}},` +
+		`{"type":"text","text":"text-marker","citations":[` +
+		`{"type":"char_location","cited_text":"char-cited-marker","document_index":0,"document_title":"char-title-marker","start_char_index":0,"end_char_index":5},` +
+		`{"type":"page_location","cited_text":"page-cited-marker","document_index":0,"document_title":"page-title-marker","start_page_number":1,"end_page_number":2},` +
+		`{"type":"content_block_location","cited_text":"block-cited-marker","document_index":0,"start_block_index":0,"end_block_index":1},` +
+		`{"type":"web_search_result_location","cited_text":"web-cited-marker","encrypted_index":"encrypted-index-kept","title":"web-title-marker","url":"https://web-url-marker.example"},` +
+		`{"type":"search_result_location","cited_text":"search-cited-marker","title":"search-title-marker","source":"search-source-marker","start_block_index":0,"end_block_index":1,"search_result_index":0}` +
+		`]}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
+	for _, tc := range []struct {
+		name       string
+		translator interface {
+			RedactAnthropicBody(*anthropicschema.MessagesResponse) *anthropicschema.MessagesResponse
+		}
+	}{
+		{name: "anthropic to anthropic", translator: &anthropicToAnthropicTranslator{}},
+		{name: "anthropic to openai", translator: &anthropicToOpenAIV1ChatCompletionTranslator{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp anthropicschema.MessagesResponse
+			require.NoError(t, json.Unmarshal([]byte(body), &resp))
+
+			out, err := json.Marshal(tc.translator.RedactAnthropicBody(&resp))
+			require.NoError(t, err)
+
+			require.NotContains(t, string(out), "-marker")
+			for _, kept := range []string{"msg-kept", "srvtool-kept", "web_search", "page-age-kept", "max_uses_exceeded", "encrypted-index-kept"} {
+				require.Contains(t, string(out), kept)
+			}
+			require.Contains(t, string(out), redaction.RedactString("char-cited-marker"))
+			require.Contains(t, string(out), redaction.RedactString("https://web-url-marker.example"))
+			original, err := json.Marshal(&resp)
+			require.NoError(t, err)
+			require.Contains(t, string(original), "char-cited-marker", "original must not be mutated")
+			require.Contains(t, string(original), "result-title-marker", "original must not be mutated")
+		})
+	}
+}
+
+func TestRedactAnthropicBody_RefusalStopDetails(t *testing.T) {
+	const explanation = "explanation-marker"
+	for _, tc := range []struct {
+		name       string
+		translator interface {
+			RedactAnthropicBody(*anthropicschema.MessagesResponse) *anthropicschema.MessagesResponse
+		}
+	}{
+		{name: "anthropic to anthropic", translator: &anthropicToAnthropicTranslator{}},
+		{name: "anthropic to openai", translator: &anthropicToOpenAIV1ChatCompletionTranslator{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &anthropicschema.MessagesResponse{
+				StopReason: ptr.To(anthropicschema.StopReasonRefusal),
+				StopDetails: &anthropicschema.RefusalStopDetails{
+					Type:        "refusal",
+					Category:    ptr.To("category-kept"),
+					Explanation: ptr.To(explanation),
+				},
+			}
+
+			redacted := tc.translator.RedactAnthropicBody(resp)
+
+			require.Equal(t, &anthropicschema.RefusalStopDetails{
+				Type:        "refusal",
+				Category:    ptr.To("category-kept"),
+				Explanation: ptr.To(redaction.RedactString(explanation)),
+			}, redacted.StopDetails)
+			require.Equal(t, explanation, *resp.StopDetails.Explanation, "original must not be mutated")
+			require.Nil(t, tc.translator.RedactAnthropicBody(&anthropicschema.MessagesResponse{}).StopDetails)
+		})
 	}
 }
