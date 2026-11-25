@@ -965,6 +965,14 @@ func TestMCPRouteController_ReferenceGrantRevocation(t *testing.T) {
 	})
 
 	t.Run("revoked", func(t *testing.T) {
+		// The grant has been reconciled and carries the controller's finalizer, so the delete below only
+		// marks it. The API server bumps metadata.generation in that write, which is what lets the update
+		// through the controller's GenerationChangedPredicate.
+		require.Eventually(t, func() bool {
+			var current gwapiv1b1.ReferenceGrant
+			return c.Get(t.Context(), client.ObjectKeyFromObject(newGrant()), &current) == nil &&
+				slices.Contains(current.Finalizers, "aigateway.envoyproxy.io/finalizer")
+		}, 30*time.Second, 200*time.Millisecond)
 		require.NoError(t, c.Delete(t.Context(), newGrant()))
 		requireState(t, aigv1b1.ConditionTypeNotAccepted, "is not permitted", false)
 		// The ReferenceGrant controller's finalizer releases the object once the routes were woken up.
