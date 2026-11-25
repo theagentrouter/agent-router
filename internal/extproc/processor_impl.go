@@ -665,6 +665,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 
 	// Translator reports the latest cumulative token usage which we use to override existing costs.
 	u.costs.Override(tokenUsage)
+	if s, ok := any(u.parent.span).(tracingapi.CacheTokenUsageSpan); ok {
+		s.RecordCacheTokenUsage(&u.costs)
+	}
 
 	// Set the response model for metrics
 	u.metrics.SetResponseModel(responseModel)

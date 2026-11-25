@@ -14,7 +14,9 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/metrics"
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
+	"github.com/envoyproxy/ai-gateway/internal/tracing/openinference"
 	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
@@ -83,6 +85,37 @@ func TestChatCompletionSpan_RecordBackend(t *testing.T) {
 // convention also records the resolved backend.
 type testBackendChatCompletionRecorder struct {
 	testChatCompletionRecorder
+}
+
+type testCacheChatCompletionRecorder struct {
+	testChatCompletionRecorder
+	openinference.CacheTokenUsageRecorder
+}
+
+func TestChatCompletionSpan_RecordCacheTokenUsage(t *testing.T) {
+	usage := &metrics.TokenUsage{}
+	usage.SetCacheCreation1hInputTokens(2)
+	for _, tc := range []struct {
+		name     string
+		recorder tracingapi.ChatCompletionRecorder
+		want     []attribute.KeyValue
+	}{
+		{
+			name:     "supported convention",
+			recorder: testCacheChatCompletionRecorder{},
+			want:     []attribute.KeyValue{attribute.Int64(openinference.LLMTokenCountPromptCacheWrite1h, 2)},
+		},
+		{name: "unsupported convention", recorder: testChatCompletionRecorder{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+				s := &chatCompletionSpan{span: span, recorder: tc.recorder}
+				s.RecordCacheTokenUsage(usage)
+				return false
+			})
+			require.Equal(t, tc.want, actualSpan.Attributes)
+		})
+	}
 }
 
 func (testBackendChatCompletionRecorder) RecordBackend(span oteltrace.Span, backend tracingapi.Backend) {

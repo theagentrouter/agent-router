@@ -40,6 +40,13 @@ func (s *span[RespT, ChunkT]) RecordBackend(backend tracingapi.Backend) {
 	}
 }
 
+// RecordCacheTokenUsage implements [tracingapi.CacheTokenUsageSpan].
+func (s *span[RespT, ChunkT]) RecordCacheTokenUsage(usage tracingapi.CacheTokenUsage) {
+	if r, ok := s.recorder.(tracingapi.CacheTokenUsageRecorder); ok {
+		r.RecordCacheTokenUsage(s.span, usage)
+	}
+}
+
 // EndSpan implements [tracingapi.Span.EndSpan]
 func (s *span[RespT, ChunkT]) EndSpan() {
 	if len(s.chunks) > 0 {

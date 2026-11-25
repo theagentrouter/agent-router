@@ -21,6 +21,7 @@ import (
 
 // MessageRecorder implements recorders for OpenInference chat completion spans.
 type MessageRecorder struct {
+	openinference.CacheTokenUsageRecorder
 	traceConfig *openinference.TraceConfig
 }
 

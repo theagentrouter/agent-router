@@ -20,6 +20,7 @@ import (
 
 // ChatCompletionRecorder implements recorders for OpenInference chat completion spans.
 type ChatCompletionRecorder struct {
+	openinference.CacheTokenUsageRecorder
 	traceConfig *openinference.TraceConfig
 }
 
