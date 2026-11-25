@@ -563,3 +563,74 @@ func TestFiles_ClientModelHeaderIsOverwritten(t *testing.T) {
 		requireOverwritten(t, resp, "content-length", strconv.Itoa(len(resp.GetRequestBody().GetResponse().GetBodyMutation().GetBody())))
 	})
 }
+
+// newBatchCreateViaSetBackend runs a create request through the router processor and links an
+// upstream processor to it via the real SetBackend with the given backend body mutation.
+func newBatchCreateViaSetBackend(t *testing.T, mutation *filterapi.HTTPBodyMutation, h filterapi.BackendAuthHandler) *batchesProcessor {
+	t.Helper()
+	codec := newTestCodec()
+	fileID := encodeGatewayID(t, codec, idcodec.KindFile, "ns", "apple", "m1", "file-native")
+	rp := newBatchesProcessorForPath(codec, http.MethodPost, "/v1/batches")
+	_, err := rp.ProcessRequestHeaders(context.Background(), nil)
+	require.NoError(t, err)
+	_, err = rp.ProcessRequestBody(context.Background(), &extprocv3.HttpBody{
+		Body: []byte(`{"input_file_id":"` + fileID + `","endpoint":"/v1/chat/completions","completion_window":"24h","metadata":{"team":"a"}}`),
+	})
+	require.NoError(t, err)
+	b := openAIBackend("ns", "apple", 0)
+	b.Backend.BodyMutation = mutation
+	b.Handler = h
+	up := &batchesProcessor{isUpstreamFilter: true, logger: slog.Default(), requestHeaders: map[string]string{}}
+	require.NoError(t, up.SetBackend(context.Background(), b, "route", rp))
+	return up
+}
+
+func TestBatches_Upstream_AppliesBodyMutationBeforeAuth(t *testing.T) {
+	mutation := &filterapi.HTTPBodyMutation{
+		Set:    []filterapi.HTTPBodyField{{Path: "completion_window", Value: `"48h"`}},
+		Remove: []string{"metadata"},
+	}
+	h := &fakeAuthHandler{}
+	up := newBatchCreateViaSetBackend(t, mutation, h)
+	resp, err := up.ProcessRequestHeaders(context.Background(), nil)
+	require.NoError(t, err)
+	require.Nil(t, resp.GetImmediateResponse())
+
+	common := resp.GetRequestHeaders().GetResponse()
+	require.Equal(t, extprocv3.CommonResponse_CONTINUE_AND_REPLACE, common.GetStatus())
+	body := common.GetBodyMutation().GetBody()
+	require.Equal(t, "48h", gjson.GetBytes(body, "completion_window").String())
+	require.False(t, gjson.GetBytes(body, "metadata").Exists())
+	// The native file id substitution is preserved under the mutation.
+	require.Equal(t, "file-native", gjson.GetBytes(body, "input_file_id").String())
+	cl, ok := overwriteHeaderValue(resp, "content-length")
+	require.True(t, ok)
+	require.Equal(t, strconv.Itoa(len(body)), cl)
+	// A signing handler must see exactly the body that is forwarded.
+	require.Equal(t, body, h.gotBody)
+}
+
+func TestBatches_Upstream_NoBodyMutationKeepsBody(t *testing.T) {
+	h := &fakeAuthHandler{}
+	up := newBatchCreateViaSetBackend(t, nil, h)
+	require.False(t, up.bodyMutator.HasMutations())
+	resp, err := up.ProcessRequestHeaders(context.Background(), nil)
+	require.NoError(t, err)
+	// The OpenAI create translator returns no body, so the native-id body is signed and the router's
+	// body mutation is left in place.
+	require.Equal(t, extprocv3.CommonResponse_CONTINUE, resp.GetRequestHeaders().GetResponse().GetStatus())
+	require.Equal(t, "24h", gjson.GetBytes(h.gotBody, "completion_window").String())
+	require.Equal(t, "file-native", gjson.GetBytes(h.gotBody, "input_file_id").String())
+}
+
+func TestBatches_SetBackend_BodyMutatorOnlyForCreate(t *testing.T) {
+	mutation := &filterapi.HTTPBodyMutation{Remove: []string{"metadata"}}
+	for _, op := range []batchesOperation{batchesOpList, batchesOpRetrieve, batchesOpCancel} {
+		rp := &batchesProcessor{op: op, logger: slog.Default(), requestHeaders: map[string]string{}}
+		up := &batchesProcessor{isUpstreamFilter: true, logger: slog.Default()}
+		b := openAIBackend("ns", "apple", 0)
+		b.Backend.BodyMutation = mutation
+		require.NoError(t, up.SetBackend(context.Background(), b, "route", rp))
+		require.Nil(t, up.bodyMutator, "op %d", op)
+	}
+}

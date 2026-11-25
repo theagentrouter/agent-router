@@ -21,6 +21,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
+	"github.com/envoyproxy/ai-gateway/internal/bodymutator"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/headermutator"
 	"github.com/envoyproxy/ai-gateway/internal/idcodec"
@@ -112,6 +113,9 @@ type batchesProcessor struct {
 	// headerMutator applies the selected backend's configured header mutation, set by SetBackend on
 	// the upstream filter.
 	headerMutator *headermutator.HeaderMutator
+	// bodyMutator applies the selected backend's configured body mutation to a create request, set
+	// by SetBackend on the upstream filter.
+	bodyMutator *bodymutator.BodyMutator
 }
 
 var _ Processor = (*batchesProcessor)(nil)
@@ -165,6 +169,18 @@ func (p *batchesProcessor) translateUpstreamRequest(ctx context.Context) (*extpr
 			return createUserFacingErrorResponse(http.StatusUnprocessableEntity, "UnprocessableEntity", userFacingErr.Error()), nil
 		}
 		return nil, fmt.Errorf("failed to transform batches request: %w", err)
+	}
+	if p.bodyMutator.HasMutations() {
+		// Apply the configured body mutation after the native input_file_id substitution and before
+		// auth, so that request signing covers the body actually sent upstream.
+		if newBody == nil {
+			newBody = rp.requestBody
+		}
+		if mutated, mutErr := p.bodyMutator.Mutate(newBody); mutErr != nil {
+			p.logger.Error("failed to apply body mutation to batches request", slog.String("error", mutErr.Error()))
+		} else {
+			newBody = mutated
+		}
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
 	applyBackendHeaderMutation(p.headerMutator, p.requestHeaders, headerMutation)
@@ -498,6 +514,10 @@ func (p *batchesProcessor) SetBackend(_ context.Context, backend *filterapi.Runt
 	p.routeProcessor = rp
 	p.handler = backend.Handler
 	p.headerMutator = headermutator.NewHeaderMutator(backend.Backend.HeaderMutation, rp.requestHeaders)
+	if rp.op == batchesOpCreate {
+		// Only create carries a JSON body; the other operations have none to mutate.
+		p.bodyMutator = bodymutator.NewBodyMutator(backend.Backend.BodyMutation, rp.requestBody)
+	}
 
 	if err := rp.resolveTranslator(backend.Backend.Schema); err != nil {
 		return fmt.Errorf("batch API not supported for schema %s: %w", backend.Backend.Schema.Name, err)
