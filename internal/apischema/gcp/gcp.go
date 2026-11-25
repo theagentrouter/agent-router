@@ -6,6 +6,8 @@
 package gcp
 
 import (
+	"time"
+
 	"google.golang.org/genai"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -39,6 +41,11 @@ type GenerateContentRequest struct {
 	//
 	// https://github.com/googleapis/go-genai/blob/6a8184fcaf8bf15f0c566616a7b356560309be9b/types.go#L1057
 	SafetySettings []*genai.SafetySetting `json:"safetySettings,omitempty"`
+	// Optional. The name of a pre-existing cached content resource to use as context for generation.
+	// Format: "projects/{project}/locations/{location}/cachedContents/{cache_id}"
+	//
+	// https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/context-cache/context-cache-overview
+	CachedContent string `json:"cachedContent,omitempty"`
 }
 
 // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api#syntax
@@ -170,4 +177,83 @@ type CountTokenRequest struct {
 
 	// Optional. Configuration that the model uses to generate the response.
 	GenerationConfig *genai.GenerationConfig `json:"generationConfig,omitempty"`
+}
+
+// CreateCachedContent represents the request body for creating a cached content resource in GCP Vertex AI.
+type CreateCachedContent struct {
+	// Required. The model to use for generating the cached content.
+	Model string `json:"model"`
+	// Optional. The user-generated meaningful display name of the cached content.
+	DisplayName string `json:"displayName,omitempty"`
+	// Optional. The TTL for this resource. The expiration time is computed: now + TTL.
+	// Value must be a string in GCP duration format, e.g. "300s".
+	TTL string `json:"ttl,omitempty"`
+	// Optional. Timestamp of when this resource is considered expired.
+	// A pointer so that it is omitted when unset: omitempty has no effect on a
+	// time.Time value, which would otherwise serialize as "0001-01-01T00:00:00Z".
+	ExpireTime *time.Time `json:"expireTime,omitempty"`
+	// The content to cache.
+	Contents []genai.Content `json:"contents"`
+	// Optional. Developer set system instruction.
+	SystemInstruction *genai.Content `json:"systemInstruction,omitempty"`
+	// Optional. A list of `Tools` the model may use to generate the next response.
+	Tools []genai.Tool `json:"tools,omitempty"`
+	// Optional. Configuration for the tools to use. This config is shared for all tools.
+	ToolConfig *genai.ToolConfig `json:"toolConfig,omitempty"`
+	// Optional. The Cloud KMS resource identifier of the customer managed
+	// encryption key used to protect a resource.
+	// The key needs to be in the same region as where the compute resource is
+	// created. See
+	// https://cloud.google.com/vertex-ai/docs/general/cmek for more
+	// details. If this is set, then all created CachedContent objects
+	// will be encrypted with the provided encryption key.
+	// Allowed formats: projects/{project}/locations/{location}/keyRings/{key_ring}/cryptoKeys/{crypto_key}
+	EncryptionSpec *EncryptionSpec `json:"encryption_spec,omitempty"`
+}
+
+// EncryptionSpec specifies the encryption key that will be used to protect the resource.
+type EncryptionSpec struct {
+	// Required. The Cloud KMS resource identifier of the customer managed
+	// encryption key used to protect a resource.
+	// The key needs to be in the same region as where the compute resource is
+	// created. See
+	// https://cloud.google.com/vertex-ai/docs/general/cmek for more
+	// details. If this is set, then all created CachedContent objects
+	// will be encrypted with the provided encryption key.
+	// Allowed formats: projects/{project}/locations/{location}/keyRings/{key_ring}/cryptoKeys/{crypto_key}
+	KmsKeyName string `json:"kmsKeyName"`
+}
+
+// A resource used in LLM queries for users to explicitly specify what to cache.
+// https://github.com/googleapis/go-genai/blob/5fa73d012b899ad08135ce9439b88f592acdc5a8/types.go#L6476-L6492
+type CachedContent struct {
+	// Optional. The server-generated resource name of the cached content.
+	Name string `json:"name,omitempty"`
+	// Optional. The user-generated meaningful display name of the cached content.
+	DisplayName string `json:"displayName,omitempty"`
+	// Optional. The name of the publisher model to use for cached content.
+	Model string `json:"model,omitempty"`
+	// Optional. Creation time of the cache entry.
+	CreateTime time.Time `json:"createTime,omitempty"`
+	// Optional. When the cache entry was last updated in UTC time.
+	UpdateTime time.Time `json:"updateTime,omitempty"`
+	// Optional. Expiration time of the cached content.
+	ExpireTime time.Time `json:"expireTime,omitempty"`
+	// Optional. Metadata on the usage of the cached content.
+	UsageMetadata *CachedContentUsageMetadata `json:"usageMetadata,omitempty"`
+}
+
+// Metadata on the usage of the cached content.
+// https://github.com/googleapis/go-genai/blob/5fa73d012b899ad08135ce9439b88f592acdc5a8/types.go#L6462-L6474
+type CachedContentUsageMetadata struct {
+	// Duration of audio in seconds. This field is not supported in Gemini API.
+	AudioDurationSeconds int32 `json:"audioDurationSeconds,omitempty"`
+	// Number of images. This field is not supported in Gemini API.
+	ImageCount int32 `json:"imageCount,omitempty"`
+	// Number of text characters. This field is not supported in Gemini API.
+	TextCount int32 `json:"textCount,omitempty"`
+	// Total number of tokens that the cached content consumes.
+	TotalTokenCount int32 `json:"totalTokenCount,omitempty"`
+	// Duration of video in seconds. This field is not supported in Gemini API.
+	VideoDurationSeconds int32 `json:"videoDurationSeconds,omitempty"`
 }
