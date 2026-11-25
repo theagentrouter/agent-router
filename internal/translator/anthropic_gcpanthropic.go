@@ -74,6 +74,7 @@ func (a *anthropicToGCPAnthropicTranslator) RequestBody(raw []byte, req *anthrop
 	newBody, _ = sjson.DeleteBytesOptions(mutatedBody, "model",
 		// It is safe to use sjsonOptionsInPlace here since we have already created a new mutatedBody above.
 		sjsonOptionsInPlace)
+	newBody = moveOutputFormatToOutputConfig(newBody)
 
 	// Determine the GCP path based on whether streaming is requested.
 	specifier := "rawPredict"

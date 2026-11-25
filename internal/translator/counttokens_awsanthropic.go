@@ -57,6 +57,7 @@ func (t *countTokensToAWSAnthropicTranslator) RequestBody(rawBody []byte, body *
 	}
 	invokeBody, _ = sjson.DeleteBytesOptions(invokeBody, "model", sjsonOptionsInPlace)
 	invokeBody, _ = sjson.DeleteBytesOptions(invokeBody, "stream", sjsonOptionsInPlace)
+	invokeBody = moveOutputFormatToOutputConfig(invokeBody)
 
 	// Bedrock's CountTokens with invokeModel format validates the body as if it were
 	// a real InvokeModel request. Anthropic requires max_tokens, but count_tokens

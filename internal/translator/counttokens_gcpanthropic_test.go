@@ -72,7 +72,7 @@ func TestCountTokensToGCPAnthropic_RequestBody(t *testing.T) {
 			translator := NewCountTokensToGCPAnthropicTranslator("vertex-2023-10-16", tt.override)
 			require.NotNil(t, translator)
 
-			raw := []byte(`{"model":"` + tt.model + `","messages":[{"role":"user","content":"hello"}]}`)
+			raw := []byte(`{"model":"` + tt.model + `","messages":[{"role":"user","content":"hello"}],"output_format":{"type":"json_schema"}}`)
 			req := &anthropicschema.CountTokensRequest{Model: tt.model}
 
 			headerMutation, bodyMutation, err := translator.RequestBody(raw, req, false)
@@ -90,6 +90,8 @@ func TestCountTokensToGCPAnthropic_RequestBody(t *testing.T) {
 			require.NoError(t, json.Unmarshal(bodyMutation, &parsed))
 			assert.Equal(t, "vertex-2023-10-16", parsed["anthropic_version"])
 			assert.Equal(t, tt.expModel, parsed["model"])
+			assert.Equal(t, map[string]any{"format": map[string]any{"type": "json_schema"}}, parsed["output_config"])
+			assert.NotContains(t, parsed, "output_format")
 		})
 	}
 }
