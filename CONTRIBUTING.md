@@ -2,7 +2,7 @@
 
 We welcome contributions from the community. Please read the following guidelines carefully to maximize the chances of your PR being merged.
 
-## Local development of Envoy AI Gateway project
+## Local development of the Agent Router project
 
 First of all, there are only three minimal prerequisites to contribute to the project:
 
@@ -55,7 +55,7 @@ want to run these tests locally, please prepare the necessary credentials by you
 
 ### Goals
 
-- Keep Envoy AI Gateway code consistent and high-quality.
+- Keep Agent Router code consistent and high-quality.
 - Save reviewers time. Reviewers are often in short supply and time, so try to avoid wasted time.
 
 ### What is allowed
@@ -123,7 +123,7 @@ make sure that these automated checks pass after you open a PR by following the 
 - During the review, address the comments and commit the changes
   **without squashing the commits, force pushing, or rebasing the branch**.
   This facilitates incremental reviews since the reviewer does not go through all the code again to find out
-  what has changed since the last review. When a change goes out of sych with master, please use `git merge`
+  what has changed since the last review. When a change goes out of sync with main, please use `git merge`
   to avoid force pushing.
   - The only exception to this rule is when you mistakenly pushed a non-signoff commit.
     In this case, you can amend the commit with the signoff line and force push.
