@@ -8,7 +8,6 @@ package tracing
 import (
 	"bytes"
 	"context"
-	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
 	"io"
 	"strings"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/propagation"
+	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
