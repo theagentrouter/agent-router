@@ -33,6 +33,17 @@ const (
 	InternalMetadataUpstreamHostKey = "upstream_host"
 	// InternalMetadataRouteNameKey is the key used to store the route name.
 	InternalMetadataRouteNameKey = "aigw_route_name"
+	// InternalMetadataShortBackendNameKey is the key used to store the short "namespace/name"
+	// backend identity on endpoint metadata. It is the primary host key the Envoy host_allowlist
+	// load balancing policy matches against the rate limit service's backend_name descriptor in the
+	// passedBackends candidate list for quota-aware routing. Its value must match the rate limit
+	// descriptor value produced by the translator (translator.BackendDomainValue).
+	InternalMetadataShortBackendNameKey = "backend_name"
+	// InternalMetadataModelNameOverrideKey is the key used to store the backend's model name override
+	// on endpoint metadata. It is the secondary host key the Envoy host_allowlist load balancing
+	// policy matches against the rate limit service's model_name_override descriptor in the
+	// passedBackends candidate list for quota-aware routing.
+	InternalMetadataModelNameOverrideKey = "model_name_override"
 	// UpstreamHostHeader carries the upstream host resolved at config time from the upstream ext_proc
 	// filter to backend auth handlers. The AWS handler derives its SigV4 signing region from this host,
 	// so there is no separate region header.
@@ -92,6 +103,12 @@ func AWSCredentialOverrideHeaderNames(prefix string) (accessKeyID, secretAccessK
 	return prefix + "access-key-id", prefix + "secret-access-key", prefix + "session-token"
 }
 
+// MCPProxyAddr is the address the MCP proxy listens on. It is loopback-only: its only client is the
+// Envoy proxy in the same pod (the extension server points the MCP main route's cluster at
+// 127.0.0.1), and it trusts the route and subject headers that Envoy's frontend sets after enforcing
+// the MCPRoute's security policy, so it must not be reachable from other pods.
+var MCPProxyAddr = fmt.Sprintf("127.0.0.1:%d", MCPProxyPort)
+
 // MCPInternalHeadersToMetadata maps special MCP headers to metadata keys.
 //
 // Only headers that do not survive to the router belong here. Headers the MCP proxy sets and leaves
@@ -104,6 +121,49 @@ var MCPInternalHeadersToMetadata = map[string]string{
 	MCPMetadataHeaderRequestID:   "mcp_request_id",
 	MCPMetadataHeaderToolName:    "mcp_tool_name",
 	MCPMetadataHeaderResourceURI: "mcp_resource_uri",
+}
+
+// OAuthProtectedResourceMetadataPath is the well-known path prefix that serves the OAuth
+// Protected Resource Metadata document.
+//
+// References:
+// * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
+// * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-server-location
+const OAuthProtectedResourceMetadataPath = "/.well-known/oauth-protected-resource"
+
+// OAuthProtectedResourceMetadataURL returns the URL of the Protected Resource Metadata document
+// for an RFC 9728 resource identifier, by inserting the well-known path between the identifier's
+// authority and its path component. A trailing slash on the identifier is dropped first.
+//
+// The controller uses it for the 401 challenge of a route that pins its resource, and the MCP
+// proxy for the 403 challenge, so both advertise the same URL for the same identifier.
+//
+// References:
+// * https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
+// * https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#protected-resource-metadata-discovery-requirements
+func OAuthProtectedResourceMetadataURL(resource string) string {
+	resourceURL := strings.TrimSuffix(resource, "/")
+
+	prefixLen := 0
+	switch {
+	case strings.HasPrefix(resourceURL, "https://"):
+		prefixLen = len("https://")
+	case strings.HasPrefix(resourceURL, "http://"):
+		prefixLen = len("http://")
+	}
+
+	baseURL, pathComponent := resourceURL, ""
+	if idx := strings.IndexByte(resourceURL[prefixLen:], '/'); idx != -1 {
+		baseURL = resourceURL[:prefixLen+idx]
+		pathComponent = resourceURL[prefixLen+idx:]
+	}
+
+	// Some agents do not expect the path component to be included in the resource_metadata URL, but according to the
+	// spec https://mcp.mintlify.app/specification/2025-11-25/basic/authorization#protected-resource-metadata-discovery-requirements
+	// they should honor the value returned here.
+	// We can't expose these resource at the root, because there may be multiple MCP routes with different OAuth settings, so we need
+	// to rely on clients properly implementing the spec and using this value returned in the header.
+	return baseURL + OAuthProtectedResourceMetadataPath + pathComponent
 }
 
 const (
@@ -155,6 +215,17 @@ func AIServiceBackendName(perRouteRuleRefBackendName string) string {
 		return parts[0] + "/" + parts[1]
 	}
 	return perRouteRuleRefBackendName
+}
+
+// NamespaceAndNameFromBackendName parses the AIServiceBackend namespace and name from a
+// composite backend name produced by PerRouteRuleRefBackendName ("<ns>/<name>/route/...").
+// It returns ok=false if the input is not in the expected form.
+func NamespaceAndNameFromBackendName(backendName string) (namespace, name string, ok bool) {
+	parts := strings.SplitN(backendName, "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 // awsBedrockHostRE matches an AWS Bedrock runtime host — public, FIPS, PrivateLink (VPCE), or the

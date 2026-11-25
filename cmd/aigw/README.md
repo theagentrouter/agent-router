@@ -8,7 +8,8 @@
 - **aigw** (port 1975): Envoy AI Gateway CLI (standalone mode)
 - **chat-completion**: curl command making a simple chat completion
 
-The simplest way to get started is to have `aigw` generate a configuration for
+Run `aigw run` in a terminal with no configuration to set up the providers
+interactively. In Docker, have `aigw` generate a configuration for
 your OpenAI-compatible backend. This happens when there is no configuration
 file and at least the `OPENAI_API_KEY` environment variable is set.
 

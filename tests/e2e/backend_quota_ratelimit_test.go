@@ -27,25 +27,38 @@ import (
 // using the QuotaPolicy CRD. This verifies that the upstream rate limit filter
 // enforces per-model token quotas on requests to AIServiceBackends.
 func Test_Examples_BackendQuotaRateLimit(t *testing.T) {
+	const (
+		redisManifest     = "../../examples/token_ratelimit/redis.yaml"
+		ratelimitManifest = "testdata/ai_gateway_ratelimit.yaml"
+		manifest          = "testdata/backend_quota_ratelimit.yaml"
+	)
+
 	// Apply Redis manifest (shared with token rate limit tests).
-	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), "../../examples/token_ratelimit/redis.yaml"))
+	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), redisManifest))
 	t.Cleanup(func() {
-		_ = e2elib.KubectlDeleteManifest(context.Background(), "../../examples/token_ratelimit/redis.yaml")
+		_ = e2elib.KubectlDeleteManifest(context.Background(), redisManifest)
 	})
 
 	// Wait for the redis pod to be ready so that the rate limit service can connect.
 	e2elib.RequireWaitForPodReady(t, "redis-system", "app=redis")
 
-	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), "testdata/backend_quota_ratelimit.yaml"))
+	// Shared AI Gateway rate limit service (also used by cross-namespace QuotaPolicy e2e).
+	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), ratelimitManifest))
 	t.Cleanup(func() {
-		_ = e2elib.KubectlDeleteManifest(context.Background(), "testdata/backend_quota_ratelimit.yaml")
+		_ = e2elib.KubectlDeleteManifest(context.Background(), ratelimitManifest)
+	})
+	// Restart so RLS reconnects after Redis is ready (same pattern as token ratelimit e2e).
+	require.NoError(t, e2elib.KubectlRestartDeployment(t.Context(), e2elib.EnvoyGatewayNamespace, "envoy-ai-gateway-ratelimit"))
+	require.NoError(t, e2elib.Kubectl(t.Context(), "rollout", "status",
+		"deployment/envoy-ai-gateway-ratelimit", "-n", e2elib.EnvoyGatewayNamespace, "--timeout=2m").Run())
+
+	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), manifest))
+	t.Cleanup(func() {
+		_ = e2elib.KubectlDeleteManifest(context.Background(), manifest)
 	})
 
 	const egSelector = "gateway.envoyproxy.io/owning-gateway-name=envoy-ai-gateway-quota-ratelimit"
 	e2elib.RequireWaitForGatewayPodReady(t, egSelector)
-
-	// Wait for the AI Gateway rate limit service to be ready.
-	e2elib.RequireWaitForPodReady(t, e2elib.EnvoyGatewayNamespace, "app=envoy-ai-gateway-ratelimit")
 
 	// Flush any existing quota keys in Redis to start with a clean state.
 	flushQuotaKeys(t)

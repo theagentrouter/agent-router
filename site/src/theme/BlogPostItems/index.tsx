@@ -34,7 +34,10 @@ export default function BlogPostItems({items}: Props): React.ReactElement {
             to={permalink}
             className={clsx(styles.card, featured && styles.featured)}>
             {image ? (
-              <div className={styles.imageContainer}>
+              <div
+                className={styles.imageContainer}
+                // featured: the image is shown whole (contain) over a blurred copy of itself
+                style={featured ? ({'--og-image': `url("${image}")`} as React.CSSProperties) : undefined}>
                 <img src={image} alt="" className={styles.image} loading={featured ? 'eager' : 'lazy'} />
               </div>
             ) : (

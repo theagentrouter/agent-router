@@ -13,6 +13,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
 func TestOpenAIToOpenAIImageTranslator_RequestBody_ModelOverrideAndPath(t *testing.T) {
@@ -178,4 +179,24 @@ func TestOpenAIToOpenAIImageTranslator_ResponseBody_Usage(t *testing.T) {
 	_, _, usage, _, err := tr.ResponseBody(map[string]string{}, bytes.NewReader(buf), true, nil)
 	require.NoError(t, err)
 	require.Equal(t, tokenUsageFrom(40, -1, -1, 60, 100, -1), usage)
+}
+
+func TestOpenAIToOpenAIImageTranslator_ResponseBody_NullBody(t *testing.T) {
+	// A literal JSON `null` decodes to a nil response without an error; it must not panic
+	// and should report no usage.
+	tr := NewImageGenerationOpenAIToOpenAITranslator("v1", "")
+	req := &openai.ImageGenerationRequest{Model: openai.ModelGPTImage1Mini, Prompt: "a cat"}
+	original, _ := json.Marshal(req)
+	_, _, err := tr.RequestBody(original, req, false)
+	require.NoError(t, err)
+
+	mockSpan := &mockImageGenerationSpan{}
+	var usage metrics.TokenUsage
+	var respModel string
+	require.NotPanics(t, func() {
+		_, _, usage, respModel, err = tr.ResponseBody(map[string]string{}, bytes.NewReader([]byte("null")), true, mockSpan)
+	})
+	require.NoError(t, err)
+	require.True(t, usage.IsZero())
+	require.Equal(t, openai.ModelGPTImage1Mini, respModel)
 }

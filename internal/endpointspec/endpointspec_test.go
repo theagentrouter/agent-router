@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"mime/multipart"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -517,7 +518,15 @@ func TestDecisionsEndpointSpec(t *testing.T) {
 		require.False(t, stream)
 		require.Nil(t, mutated)
 		require.JSONEq(t, `"charged twice"`, string(req.Input))
+		require.JSONEq(t, `"route it"`, string(req.Questions[0].Instructions))
 		require.JSONEq(t, `"billing"`, string(req.Questions[0].Choices[0].Value))
+	})
+
+	t.Run("parse instructions as content parts", func(t *testing.T) {
+		body := []byte(`{"model":"gpt-6-luna","input":"candidate photo","questions":[{"type":"predicate","name":"match","instructions":[{"type":"input_text","text":"same item as the reference?"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]}]}`)
+		_, req, _, _, err := spec.ParseBody(body, false)
+		require.NoError(t, err)
+		require.JSONEq(t, `[{"type":"input_text","text":"same item as the reference?"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]`, string(req.Questions[0].Instructions))
 	})
 
 	t.Run("parse boolean choice values", func(t *testing.T) {
@@ -550,13 +559,56 @@ func TestDecisionsEndpointSpec(t *testing.T) {
 		_, err := spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI}, "override")
 		require.NoError(t, err)
 
-		_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaTypeSafe}, "override")
-		require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody)
+		unsupportedSchemas := []filterapi.APISchemaName{
+			filterapi.APISchemaAWSOpenAI,
+			filterapi.APISchemaTypeSafe,
+		}
+		for _, schema := range unsupportedSchemas {
+			_, err = spec.GetTranslator(filterapi.VersionedAPISchema{Name: schema}, "override")
+			require.ErrorIs(t, err, internalapi.ErrInvalidRequestBody, "schema %s", schema)
+		}
+	})
+
+	t.Run("azure openai uses the v1 path without api-version", func(t *testing.T) {
+		azure := filterapi.VersionedAPISchema{Name: filterapi.APISchemaAzureOpenAI, Version: "2025-01-01-preview"}
+		const reqBody = `{"model":"gpt-6-luna","input":"charged twice"}`
+		const overriddenBody = `{"model":"my-luna-deployment","input":"charged twice"}`
+
+		for _, tc := range []struct {
+			name          string
+			modelOverride string
+			expHeaders    []internalapi.Header
+			expBody       string // empty when the original body is forwarded as is
+		}{
+			{
+				name:       "no override leaves the body untouched",
+				expHeaders: []internalapi.Header{{":path", "/openai/v1/decisions"}},
+			},
+			{
+				name:          "override sets the deployment name",
+				modelOverride: "my-luna-deployment",
+				expHeaders: []internalapi.Header{
+					{":path", "/openai/v1/decisions"},
+					{"content-length", strconv.Itoa(len(overriddenBody))},
+				},
+				expBody: overriddenBody,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				tr, err := spec.GetTranslator(azure, tc.modelOverride)
+				require.NoError(t, err)
+
+				headers, body, err := tr.RequestBody([]byte(reqBody), &openai.DecisionRequest{Model: "gpt-6-luna"}, false)
+				require.NoError(t, err)
+				require.Equal(t, tc.expHeaders, headers)
+				require.Equal(t, tc.expBody, string(body))
+			})
+		}
 	})
 }
 
 func TestDecisionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
-	body := []byte(`{"model":"gpt-6-luna","input":"customer complaint","safety_identifier":"user-hash-123","questions":[{"type":"choice","name":"department","instructions":"route this complaint","choices":[{"value":"billing","description":"payment issues"}]},{"type":"score","name":"severity","instructions":"score it","levels":[{"label":"critical","description":"no workaround"}]}]}`)
+	body := []byte(`{"model":"gpt-6-luna","input":"customer complaint","safety_identifier":"user-hash-123","questions":[{"type":"choice","name":"department","instructions":"route this complaint","choices":[{"value":"billing","description":"payment issues"}]},{"type":"score","name":"severity","instructions":"score it","levels":[{"label":"critical","description":"no workaround"}]},{"type":"predicate","name":"match","instructions":[{"type":"input_text","text":"compare to reference"},{"type":"input_image","image_url":"https://example.com/ref.jpg"}]}]}`)
 	_, req, _, _, err := DecisionsEndpointSpec{}.ParseBody(body, false)
 	require.NoError(t, err)
 	redacted, err := DecisionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
@@ -569,6 +621,9 @@ func TestDecisionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 	require.NotContains(t, text, "customer complaint")
 	require.NotContains(t, text, "payment issues")
 	require.NotContains(t, text, "critical")
+	require.NotContains(t, text, "route this complaint")
+	require.NotContains(t, text, "compare to reference")
+	require.NotContains(t, text, "example.com/ref.jpg")
 	require.NotContains(t, text, "user-hash-123")
 	require.Contains(t, text, `"safety_identifier":"[REDACTED LENGTH=`)
 	require.Contains(t, text, `"model":"gpt-6-luna"`)
@@ -1740,9 +1795,38 @@ func TestCompletionsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 		require.NotContains(t, out, marker)
 		require.Contains(t, out, "[REDACTED")
 	})
+
+	// Token IDs decode back to the prompt text, and RedactJSONTree keeps numbers, so token arrays must be collapsed as a whole.
+	for _, tc := range []struct{ name, prompt string }{
+		{"token array prompt", `[987654321,987654322]`},
+		{"nested token array prompt", `[[987654321],[987654322]]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, req, _, _, err := CompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","prompt":`+tc.prompt+`}`), false)
+			require.NoError(t, err)
+			redacted, err := CompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+			require.NoError(t, err)
+			out := mustMarshal(t, redacted)
+			require.NotContains(t, out, "987654321")
+			require.NotContains(t, out, "987654322")
+			require.Contains(t, out, redaction.RedactString(tc.prompt))
+			require.Contains(t, mustMarshal(t, req), "987654321", "original must not be mutated")
+		})
+	}
 }
 
 func TestEmbeddingsEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("token array input", func(t *testing.T) {
+		_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(`{"model":"m","input":[[987654321],[987654322]]}`), false)
+		require.NoError(t, err)
+		redacted, err := EmbeddingsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, "987654321")
+		require.NotContains(t, out, "987654322")
+		require.Contains(t, out, redaction.RedactString(`[[987654321],[987654322]]`))
+	})
+
 	t.Run("completion input string", func(t *testing.T) {
 		const marker = "embed-this-marker"
 		_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(`{"model":"text-embedding-3-small","input":"`+marker+`"}`), false)
@@ -1835,6 +1919,383 @@ func TestMessagesEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 		require.NotContains(t, out, marker)
 		require.Contains(t, out, "[REDACTED")
 	})
+
+	t.Run("array system text blocks", func(t *testing.T) {
+		const marker1 = "marker-system-block-1"
+		const marker2 = "marker-system-block-2"
+		body := `{"model":"claude-3-5-sonnet","max_tokens":10,"messages":[{"role":"user","content":"hi"}],"system":[{"type":"text","text":"` + marker1 + `"},{"type":"text","text":"` + marker2 + `","cache_control":{"type":"ephemeral","ttl":"5m"}}]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotNil(t, redacted.System)
+		require.Empty(t, redacted.System.Text)
+		require.Len(t, redacted.System.Texts, 2)
+		for _, b := range redacted.System.Texts {
+			require.Equal(t, "text", b.Type)
+			require.Contains(t, b.Text, "[REDACTED")
+		}
+		require.NotNil(t, redacted.System.Texts[1].CacheControl)
+		require.NotNil(t, redacted.System.Texts[1].CacheControl.Ephemeral)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker1)
+		require.NotContains(t, out, marker2)
+		require.Contains(t, mustMarshal(t, req), marker1, "original must not be mutated")
+	})
+}
+
+// TestRedactSensitiveInfoFromRequest_EndUserIdentifiers verifies that end-user identifiers and
+// free-form caller annotations are redacted even though the application, not the end user, sets them.
+func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
+	const marker = "end-user-marker@example.com"
+
+	t.Run("chat completions user", func(t *testing.T) {
+		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"user":"`+marker+`"}`), false)
+		require.NoError(t, err)
+		redacted, err := ChatCompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotContains(t, mustMarshal(t, redacted), marker)
+		require.Equal(t, redaction.RedactString(marker), redacted.User)
+		require.Contains(t, mustMarshal(t, req), marker, "original must not be mutated")
+	})
+
+	t.Run("chat completions message name and assistant refusal", func(t *testing.T) {
+		const refusalMarker = "I cannot help with the marker request"
+		body := `{"model":"m","messages":[` +
+			`{"role":"system","name":"sys-` + marker + `","content":"s"},` +
+			`{"role":"developer","name":"dev-` + marker + `","content":"d"},` +
+			`{"role":"user","name":"user-` + marker + `","content":"u"},` +
+			`{"role":"assistant","name":"asst-` + marker + `","refusal":"` + refusalMarker + `"}]}`
+		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ChatCompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.NotContains(t, out, refusalMarker)
+		require.Equal(t, redaction.RedactString("sys-"+marker), redacted.Messages[0].OfSystem.Name)
+		require.Equal(t, redaction.RedactString("dev-"+marker), redacted.Messages[1].OfDeveloper.Name)
+		require.Equal(t, redaction.RedactString("user-"+marker), redacted.Messages[2].OfUser.Name)
+		require.Equal(t, redaction.RedactString("asst-"+marker), redacted.Messages[3].OfAssistant.Name)
+		require.Equal(t, redaction.RedactString(refusalMarker), redacted.Messages[3].OfAssistant.Refusal)
+		require.Contains(t, mustMarshal(t, req), refusalMarker, "original must not be mutated")
+	})
+
+	t.Run("chat completions assistant thinking_blocks", func(t *testing.T) {
+		const thinkingMarker = "The user asked about account marker-12345"
+		const signatureMarker = "sig-marker"
+		const dataMarker = "ZGF0YS1tYXJrZXI="
+		body := `{"model":"m","messages":[{"role":"user","content":"u"},` +
+			`{"role":"assistant","content":"a","thinking_blocks":[` +
+			`{"type":"thinking","thinking":"` + thinkingMarker + `","signature":"` + signatureMarker + `"},` +
+			`{"type":"redacted_thinking","data":"` + dataMarker + `"}]}]}`
+		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ChatCompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, thinkingMarker)
+		require.NotContains(t, out, signatureMarker)
+		require.NotContains(t, out, dataMarker)
+		require.Equal(t, []openai.ThinkingBlock{
+			{Type: "thinking", Thinking: redaction.RedactString(thinkingMarker), Signature: redaction.RedactString(signatureMarker)},
+			{Type: "redacted_thinking", Data: redaction.RedactString(dataMarker)},
+		}, redacted.Messages[1].OfAssistant.ThinkingBlocks)
+		require.Contains(t, mustMarshal(t, req), thinkingMarker, "original must not be mutated")
+	})
+
+	t.Run("chat completions audio_url and video_url parts", func(t *testing.T) {
+		const audioMarker = "https://example.com/audio-marker.wav"
+		const videoMarker = "data:video/mp4;base64,dmlkZW8tbWFya2Vy"
+		body := `{"model":"m","messages":[{"role":"user","content":[` +
+			`{"type":"audio_url","audio_url":{"url":"` + audioMarker + `"}},` +
+			`{"type":"video_url","video_url":{"url":"` + videoMarker + `"}}]}]}`
+		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ChatCompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, audioMarker)
+		require.NotContains(t, out, videoMarker)
+		require.Contains(t, out, redaction.RedactString(audioMarker))
+		require.Contains(t, out, redaction.RedactString(videoMarker))
+		require.Contains(t, mustMarshal(t, req), audioMarker, "original must not be mutated")
+	})
+
+	t.Run("completions user", func(t *testing.T) {
+		_, req, _, _, err := CompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","prompt":"hi","user":"`+marker+`"}`), false)
+		require.NoError(t, err)
+		redacted, err := CompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotContains(t, mustMarshal(t, redacted), marker)
+		require.Equal(t, redaction.RedactString(marker), redacted.User)
+		require.Contains(t, mustMarshal(t, req), marker, "original must not be mutated")
+	})
+
+	for _, tc := range []struct {
+		name string
+		stop string
+	}{
+		{name: "completions stop kept (string)", stop: `"stop-marker-1"`},
+		{name: "completions stop kept (array)", stop: `["stop-marker-1","stop-marker-2"]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, req, _, _, err := CompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","prompt":"hi","stop":`+tc.stop+`}`), false)
+			require.NoError(t, err)
+			redacted, err := CompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+			require.NoError(t, err)
+			out := mustMarshal(t, redacted)
+			require.Contains(t, out, "stop-marker-1", "stop is generation config and is kept")
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "embeddings completion user", body: `{"model":"m","input":"hi","user":"` + marker + `"}`},
+		{name: "embeddings chat user", body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"user":"` + marker + `"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(tc.body), false)
+			require.NoError(t, err)
+			redacted, err := EmbeddingsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+			require.NoError(t, err)
+			out := mustMarshal(t, redacted)
+			require.NotContains(t, out, marker)
+			require.Contains(t, out, redaction.RedactString(marker))
+			require.Contains(t, mustMarshal(t, req), marker, "original must not be mutated")
+		})
+	}
+
+	t.Run("image generation user", func(t *testing.T) {
+		req := &openai.ImageGenerationRequest{Model: "m", Prompt: "p", User: marker}
+		redacted, err := ImageGenerationEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.Equal(t, redaction.RedactString(marker), redacted.User)
+		require.Equal(t, marker, req.User, "original must not be mutated")
+	})
+
+	t.Run("responses safety_identifier, prompt_cache_key and metadata", func(t *testing.T) {
+		const metadataMarker = "tenant-marker-42"
+		const cacheKeyMarker = "cache-key-marker-42"
+		body := `{"model":"m","input":"hi","safety_identifier":"` + marker + `","prompt_cache_key":"` + cacheKeyMarker + `","metadata":{"tenant":"` + metadataMarker + `","type":"type-value-marker"}}`
+		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.NotContains(t, out, metadataMarker)
+		require.NotContains(t, out, "type-value-marker", "a metadata key named type is not a union discriminator")
+		require.NotContains(t, out, cacheKeyMarker)
+		require.Equal(t, redaction.RedactString(marker), redacted.SafetyIdentifier)
+		require.Equal(t, redaction.RedactString(cacheKeyMarker), redacted.PromptCacheKey)
+		require.Equal(t, map[string]string{"tenant": redaction.RedactString(metadataMarker), "type": redaction.RedactString("type-value-marker")}, redacted.Metadata, "keys are kept, values redacted")
+		require.Contains(t, mustMarshal(t, req), metadataMarker, "original must not be mutated")
+	})
+
+	t.Run("anthropic messages metadata.user_id", func(t *testing.T) {
+		body := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"` + marker + `"}}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotContains(t, mustMarshal(t, redacted), marker)
+		require.Equal(t, redaction.RedactString(marker), *redacted.Metadata.UserID)
+		require.Equal(t, marker, *req.Metadata.UserID, "original must not be mutated")
+	})
+
+	t.Run("completions suffix", func(t *testing.T) {
+		_, req, _, _, err := CompletionsEndpointSpec{}.ParseBody([]byte(`{"model":"m","prompt":"hi","suffix":"`+marker+`"}`), false)
+		require.NoError(t, err)
+		redacted, err := CompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotContains(t, mustMarshal(t, redacted), marker)
+		require.Equal(t, redaction.RedactString(marker), redacted.Suffix)
+		require.Equal(t, marker, req.Suffix, "original must not be mutated")
+	})
+
+	t.Run("transcription and translation file_name", func(t *testing.T) {
+		transcription, err := TranscriptionEndpointSpec{}.RedactSensitiveInfoFromRequest(&openai.TranscriptionRequest{Model: "m", FileName: marker})
+		require.NoError(t, err)
+		require.Equal(t, redaction.RedactString(marker), transcription.FileName)
+		translation, err := TranslationEndpointSpec{}.RedactSensitiveInfoFromRequest(&openai.TranslationRequest{Model: "m", FileName: marker})
+		require.NoError(t, err)
+		require.Equal(t, redaction.RedactString(marker), translation.FileName)
+	})
+
+	t.Run("responses mcp tool credentials and unknown tools", func(t *testing.T) {
+		const tokenMarker = "mcp-token-marker"
+		const headerMarker = "mcp-header-marker"
+		const urlMarker = "https://mcp.example.com/sse?key=url-marker"
+		const unknownMarker = "unknown-tool-secret-marker"
+		body := `{"model":"m","input":"hi","tools":[` +
+			`{"type":"mcp","server_label":"label-kept","server_url":"` + urlMarker + `","authorization":"` + tokenMarker + `","headers":{"X-Key":"` + headerMarker + `"}},` +
+			`{"type":"function","name":"fn-kept","parameters":{}},` +
+			`{"type":"vendor_tool","secret":"` + unknownMarker + `"}]}`
+		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		for _, m := range []string{tokenMarker, headerMarker, urlMarker, unknownMarker} {
+			require.NotContains(t, out, m)
+		}
+		require.Equal(t, redaction.RedactString(tokenMarker), redacted.Tools[0].OfMcp.Authorization)
+		require.Equal(t, redaction.RedactString(urlMarker), redacted.Tools[0].OfMcp.ServerURL)
+		require.Equal(t, map[string]string{"X-Key": redaction.RedactString(headerMarker)}, redacted.Tools[0].OfMcp.Headers)
+		require.Contains(t, out, "label-kept", "server_label is config and is kept")
+		require.Contains(t, out, "fn-kept", "function tool definitions are kept")
+		require.JSONEq(t, `{"type":"vendor_tool","redacted":"`+redaction.RedactString(`{"type":"vendor_tool","secret":"`+unknownMarker+`"}`)+`"}`, string(redacted.Tools[2].OfUnknown), "the unknown tool type is kept")
+		require.Contains(t, mustMarshal(t, req), tokenMarker, "original must not be mutated")
+	})
+
+	t.Run("responses unknown tool without a string type", func(t *testing.T) {
+		raw := json.RawMessage(`{"type":42,"secret":"unknown-tool-secret-marker"}`)
+		require.Equal(t, redactRawJSON(raw), redactUnknownTool(raw))
+	})
+
+	t.Run("anthropic messages mcp_servers", func(t *testing.T) {
+		const tokenMarker = "mcp-token-marker"
+		const urlMarker = "https://mcp.example.com/sse?key=url-marker"
+		body := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"hi"}],"mcp_servers":[` +
+			`{"type":"url","url":"` + urlMarker + `","name":"server-kept","authorization_token":"` + tokenMarker + `","tool_configuration":{"enabled":true,"allowed_tools":["tool-kept"]}}]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, tokenMarker)
+		require.NotContains(t, out, urlMarker)
+		require.Contains(t, out, redaction.RedactString(tokenMarker))
+		require.Contains(t, out, "server-kept", "name is config and is kept")
+		require.Contains(t, out, "tool-kept", "tool_configuration is config and is kept")
+		require.Contains(t, mustMarshal(t, req), tokenMarker, "original must not be mutated")
+	})
+
+	t.Run("anthropic messages mcp_servers non-string credentials", func(t *testing.T) {
+		// RedactJSONTree keeps numbers and "type" values, so a credential sent as a number or nested under "type" must be collapsed as a whole.
+		body := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"hi"}],"mcp_servers":[` +
+			`{"type":"url","name":"server-kept","authorization_token":987654321,"headers":{"type":"secret-type-marker"}},987654322]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, "987654321")
+		require.NotContains(t, out, "987654322")
+		require.NotContains(t, out, "secret-type-marker")
+		require.Contains(t, out, redaction.RedactString("987654321"))
+		require.Contains(t, out, redaction.RedactString(`{"type":"secret-type-marker"}`))
+		require.Contains(t, out, "server-kept")
+	})
+
+	const cityMarker = "city-marker"
+	const timezoneMarker = "timezone-marker"
+
+	t.Run("chat completions web_search_options user_location", func(t *testing.T) {
+		body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"web_search_options":{"user_location":{"type":"approximate","approximate":{"city":"` + cityMarker + `","country":"country-marker"}}}}`
+		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ChatCompletionsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, cityMarker)
+		require.NotContains(t, out, "country-marker")
+		require.Equal(t, redaction.RedactString(cityMarker), redacted.WebSearchOptions.UserLocation.Approximate.City)
+		require.Equal(t, "approximate", redacted.WebSearchOptions.UserLocation.Type, "type is structural and is kept")
+		require.Equal(t, cityMarker, req.WebSearchOptions.UserLocation.Approximate.City, "original must not be mutated")
+	})
+
+	t.Run("responses web search tools user_location", func(t *testing.T) {
+		body := `{"model":"m","input":"hi","tools":[` +
+			`{"type":"web_search","user_location":{"type":"approximate","city":"` + cityMarker + `","timezone":"` + timezoneMarker + `"}},` +
+			`{"type":"web_search_preview","user_location":{"type":"approximate","city":"` + cityMarker + `","timezone":"` + timezoneMarker + `"}}]}`
+		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, cityMarker)
+		require.NotContains(t, out, timezoneMarker)
+		require.Equal(t, redaction.RedactString(cityMarker), redacted.Tools[0].OfWebSearch.UserLocation.City)
+		require.Equal(t, redaction.RedactString(timezoneMarker), redacted.Tools[1].OfWebSearchPreview.UserLocation.Timezone)
+		require.Equal(t, cityMarker, req.Tools[0].OfWebSearch.UserLocation.City, "original must not be mutated")
+	})
+
+	t.Run("anthropic messages web search tool user_location", func(t *testing.T) {
+		body := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"hi"}],"tools":[` +
+			`{"type":"web_search_20250305","name":"web_search","user_location":{"type":"approximate","city":"` + cityMarker + `","timezone":"` + timezoneMarker + `"}}]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, cityMarker)
+		require.NotContains(t, out, timezoneMarker)
+		require.Equal(t, redaction.RedactString(cityMarker), redacted.Tools[0].WebSearchTool.UserLocation.City)
+		require.Contains(t, out, "web_search", "the tool definition is kept")
+		require.Equal(t, cityMarker, req.Tools[0].WebSearchTool.UserLocation.City, "original must not be mutated")
+	})
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "embeddings vertex title (input form)", body: `{"model":"m","input":"hi","task_type":"RETRIEVAL_DOCUMENT","title":"title-marker"}`},
+		{name: "embeddings vertex title (messages form)", body: `{"model":"m","messages":[{"role":"user","content":"hi"}],"task_type":"RETRIEVAL_DOCUMENT","title":"title-marker"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, req, _, _, err := EmbeddingsEndpointSpec{}.ParseBody([]byte(tc.body), false)
+			require.NoError(t, err)
+			redacted, err := EmbeddingsEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+			require.NoError(t, err)
+			out := mustMarshal(t, redacted)
+			require.NotContains(t, out, "title-marker")
+			require.Contains(t, out, redaction.RedactString("title-marker"))
+			require.Contains(t, out, "RETRIEVAL_DOCUMENT", "task_type is config and is kept")
+			require.Equal(t, "title-marker", req.Title, "the request sent upstream must keep the real title")
+			require.Contains(t, mustMarshal(t, req), "title-marker", "the request sent upstream must keep the real title")
+		})
+	}
+
+	t.Run("anthropic count_tokens web search tool user_location", func(t *testing.T) {
+		body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[` +
+			`{"type":"web_search_20250305","name":"web_search","user_location":{"type":"approximate","city":"` + cityMarker + `"}}]}`
+		_, req, _, _, err := MessagesCountTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesCountTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotContains(t, mustMarshal(t, redacted), cityMarker)
+		require.Equal(t, redaction.RedactString(cityMarker), redacted.Tools[0].WebSearchTool.UserLocation.City)
+		require.Equal(t, cityMarker, req.Tools[0].WebSearchTool.UserLocation.City, "original must not be mutated")
+	})
+
+	t.Run("responses prompt variable named type", func(t *testing.T) {
+		body := `{"model":"m","prompt":{"id":"p1","variables":{"type":"variable-marker","name":{"type":"input_text","text":"text-marker"}}}}`
+		_, req, _, _, err := ResponsesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, "variable-marker")
+		require.NotContains(t, out, "text-marker")
+		require.Equal(t, redaction.RedactString("variable-marker"), *redacted.Prompt.Variables["type"].OfString)
+		require.Equal(t, "variable-marker", *req.Prompt.Variables["type"].OfString, "original must not be mutated")
+	})
+
+	t.Run("anthropic messages tool_use input with a type argument", func(t *testing.T) {
+		body := `{"model":"m","max_tokens":10,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"lookup","input":{"type":"argument-marker"}}]}]}`
+		_, req, _, _, err := MessagesEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, "argument-marker")
+		require.Contains(t, out, redaction.RedactString("argument-marker"))
+		require.Contains(t, out, `"tool_use"`, "the block discriminator is kept")
+	})
 }
 
 func TestRerankEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
@@ -1896,6 +2357,103 @@ func TestTokenizeEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
 		out := mustMarshal(t, redacted)
 		require.NotContains(t, out, marker)
 		require.Contains(t, out, "[REDACTED")
+	})
+
+	t.Run("chat template kwargs", func(t *testing.T) {
+		const markerTmpl = "tokenize-template-kwarg-marker"
+		body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"chat_template_kwargs":{"documents":["` + markerTmpl + `"]}}`
+		_, req, _, _, err := TokenizeEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := TokenizeEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, markerTmpl)
+		require.Contains(t, out, "[REDACTED")
+		require.Contains(t, mustMarshal(t, req), markerTmpl, "original must not be mutated")
+	})
+}
+
+func TestResponsesInputTokensEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("instructions/user/string input", func(t *testing.T) {
+		const markerInstr = "marker-instructions"
+		const markerUser = "user-pii-123"
+		const markerInput = "marker-input-text"
+		body := `{"model":"gpt-4o","instructions":"` + markerInstr + `","user":"` + markerUser + `","input":"` + markerInput + `"}`
+		_, req, _, _, err := ResponsesInputTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesInputTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, markerInstr)
+		require.NotContains(t, out, markerUser)
+		require.NotContains(t, out, markerInput)
+		require.Contains(t, out, "[REDACTED")
+		require.Contains(t, mustMarshal(t, req), markerInstr, "original must not be mutated")
+	})
+
+	t.Run("input as item array", func(t *testing.T) {
+		const marker = "marker-array-input-content"
+		body := `{"model":"gpt-4o","input":[{"type":"message","role":"user","content":"` + marker + `"}]}`
+		_, req, _, _, err := ResponsesInputTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := ResponsesInputTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+	})
+}
+
+func TestMessagesCountTokensEndpointSpec_RedactSensitiveInfoFromRequest(t *testing.T) {
+	t.Run("string content + string system", func(t *testing.T) {
+		const markerContent = "marker-user-message"
+		const markerSystem = "marker-system-prompt"
+		body := `{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"` + markerContent + `"}],"system":"` + markerSystem + `"}`
+		_, req, _, _, err := MessagesCountTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesCountTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, markerContent)
+		require.NotContains(t, out, markerSystem)
+		require.Contains(t, out, "[REDACTED")
+		require.Equal(t, "claude-3-5-sonnet", redacted.Model)
+		require.Contains(t, mustMarshal(t, req), markerContent, "original must not be mutated")
+	})
+
+	t.Run("array content blocks", func(t *testing.T) {
+		const marker = "marker-block-text"
+		body := `{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":[{"type":"text","text":"` + marker + `"}]}]}`
+		_, req, _, _, err := MessagesCountTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesCountTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker)
+		require.Contains(t, out, "[REDACTED")
+	})
+
+	t.Run("array system text blocks", func(t *testing.T) {
+		const marker1 = "marker-system-block-1"
+		const marker2 = "marker-system-block-2"
+		body := `{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"hi"}],"system":[{"type":"text","text":"` + marker1 + `"},{"type":"text","text":"` + marker2 + `","cache_control":{"type":"ephemeral","ttl":"5m"}}]}`
+		_, req, _, _, err := MessagesCountTokensEndpointSpec{}.ParseBody([]byte(body), false)
+		require.NoError(t, err)
+		redacted, err := MessagesCountTokensEndpointSpec{}.RedactSensitiveInfoFromRequest(req)
+		require.NoError(t, err)
+		require.NotNil(t, redacted.System)
+		require.Empty(t, redacted.System.Text)
+		require.Len(t, redacted.System.Texts, 2)
+		for _, b := range redacted.System.Texts {
+			require.Equal(t, "text", b.Type)
+			require.Contains(t, b.Text, "[REDACTED")
+		}
+		require.NotNil(t, redacted.System.Texts[1].CacheControl)
+		require.NotNil(t, redacted.System.Texts[1].CacheControl.Ephemeral)
+		out := mustMarshal(t, redacted)
+		require.NotContains(t, out, marker1)
+		require.NotContains(t, out, marker2)
+		require.Contains(t, mustMarshal(t, req), marker1, "original must not be mutated")
 	})
 }
 
