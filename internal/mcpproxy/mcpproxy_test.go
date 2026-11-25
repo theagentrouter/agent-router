@@ -125,6 +125,24 @@ func TestMCPProxy_HTTPMethods(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "method not allowed")
 }
 
+func TestMCPProxy_ModernGETAndDELETERejected(t *testing.T) {
+	l := slog.Default()
+	_, mux, err := NewMCPProxy(l, stubMetrics{}, noopTracer, NewPBKDF2AesGcmSessionCrypto("test", 100), nil)
+	require.NoError(t, err)
+
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/mcp", nil)
+			req.Header.Set(mcpProtocolVersionHeader, protocolVersion20260728)
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, req)
+			require.Equal(t, http.StatusMethodNotAllowed, rr.Code, "modern clients must not hit legacy session handlers")
+			require.Contains(t, rr.Body.String(), "method not allowed")
+			require.NotContains(t, rr.Body.String(), "missing session ID")
+		})
+	}
+}
+
 func Test_applyLogHeaderMappings(t *testing.T) {
 	logAttrs := map[string]string{"agent-session-id": "session.id"}
 	proxyCfg := &ProxyConfig{logRequestHeaderAttributes: logAttrs}
