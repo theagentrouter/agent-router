@@ -2384,8 +2384,8 @@ References:
 <ApiField
   name="resource"
   type="string"
-  required="true"
-  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`."
+  required="false"
+  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Leave it unset unless the gateway is fronted by something that rewrites the<br />externally visible URL in a way the forwarded headers do not reflect.<br />The derived identifier names the request's Host. Set Hostnames to restrict which hosts<br />it can name: the metadata endpoint is only reachable on hosts Hostnames matches. Without<br />Hostnames, every authority the Gateway listener accepts is reflected as-is.<br />Audiences need not be the resource URL; it is whatever the authorization server puts in<br />the token's `aud`. Only an authorization server that honours RFC 8707 binds `aud` to the<br />`resource` parameter, which clients set to the advertised identifier. With such a server<br />and a non-empty Audiences, a derived identifier has to agree with Audiences, so list every<br />address the route is reachable on, or set Resource explicitly."
 /><ApiField
   name="resourceName"
   type="string"
@@ -3473,7 +3473,7 @@ AIServiceBackendSpec details the AIServiceBackend configuration.
   name="headerValueFilters"
   type="[HTTPHeaderValueFilter](#github-com-envoyproxy-ai-gateway-api-v1beta1-httpheadervaluefilter) array"
   required="false"
-  description="HeaderValueFilters filter individual values out of multi-valued request headers before sending<br />the request to this backend, so that one value an upstream provider does not accept does not<br />fail the whole request. At most one filter per header name.<br />Only GCPAnthropic and AWSAnthropic backends honor this, and today only for the<br />`anthropic-beta` header — a filter naming any other header is accepted but has no effect.<br />Setting it on a backend with any other schema is rejected."
+  description="HeaderValueFilters filter individual values out of multi-valued request headers before sending<br />the request to this backend, so that one value an upstream provider does not accept does not<br />fail the whole request. At most one filter per header name.<br />Only GCPAnthropic and AWSAnthropic backends honor this, and today only for the<br />`anthropic-beta` header — a filter naming any other header is accepted but has no effect.<br />Setting it on a backend with any other schema is rejected.<br />On AWSAnthropic backends, filter values are matched after Anthropic-API-only flag names are<br />rewritten to their Bedrock equivalents (e.g. `advanced-tool-use-2025-11-20` becomes<br />`tool-search-tool-2025-10-19`), so filters must name the Bedrock value. When no `anthropic-beta`<br />filter is configured, AWSAnthropic backends fall back to a built-in list of flags known to be<br />accepted by Bedrock. This fallback is deprecated and will be removed in a future release;<br />configure an `anthropic-beta` filter to opt out of it now."
 />
 
 
@@ -5392,8 +5392,8 @@ References:
 <ApiField
   name="resource"
   type="string"
-  required="true"
-  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`."
+  required="false"
+  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Leave it unset unless the gateway is fronted by something that rewrites the<br />externally visible URL in a way the forwarded headers do not reflect.<br />The derived identifier names the request's Host. Set Hostnames to restrict which hosts<br />it can name: the metadata endpoint is only reachable on hosts Hostnames matches. Without<br />Hostnames, every authority the Gateway listener accepts is reflected as-is.<br />Audiences need not be the resource URL; it is whatever the authorization server puts in<br />the token's `aud`. Only an authorization server that honours RFC 8707 binds `aud` to the<br />`resource` parameter, which clients set to the advertised identifier. With such a server<br />and a non-empty Audiences, a derived identifier has to agree with Audiences, so list every<br />address the route is reachable on, or set Resource explicitly."
 /><ApiField
   name="resourceName"
   type="string"

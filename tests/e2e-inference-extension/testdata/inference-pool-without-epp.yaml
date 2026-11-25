@@ -1,0 +1,81 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# An InferencePool without an endpointPickerRef, which isn't supported for routing: its share of a
+# rule's traffic must fail with a 500, as an invalid backendRef's does, while the rule's other
+# backends keep theirs. The HTTPRoute attaches to the Gateway of examples/inference-pool/httproute.yaml
+# and selects each rule with the x-test-case header, so it takes precedence over that example's
+# catch-all rule.
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: no-epp-pool
+  namespace: default
+spec:
+  targetPorts:
+    - number: 8080
+  selector:
+    matchLabels:
+      app: mistral-upstream
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: inference-pool-without-epp
+  namespace: default
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: inference-pool-with-httproute
+      namespace: default
+  rules:
+    # A Service and a pool without an endpoint picker: the Service keeps its share.
+    - matches:
+        - headers:
+            - name: x-test-case
+              value: service-and-no-epp-pool
+      backendRefs:
+        - name: envoy-ai-gateway-basic-testupstream
+          namespace: default
+          port: 80
+          weight: 1
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: no-epp-pool
+          namespace: default
+          weight: 1
+      timeouts:
+        request: 60s
+    # A pool with an endpoint picker and one without: the former keeps its share.
+    - matches:
+        - headers:
+            - name: x-test-case
+              value: epp-pool-and-no-epp-pool
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: vllm-llama3-8b-instruct
+          namespace: default
+          weight: 1
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: no-epp-pool
+          namespace: default
+          weight: 1
+      timeouts:
+        request: 60s
+    # Only a pool without an endpoint picker: every request fails.
+    - matches:
+        - headers:
+            - name: x-test-case
+              value: only-no-epp-pool
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: no-epp-pool
+          namespace: default
+      timeouts:
+        request: 60s

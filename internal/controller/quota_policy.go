@@ -102,13 +102,17 @@ func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Req
 	}
 	c.logger.Info("Reconciling QuotaPolicy", "namespace", req.Namespace, "name", req.Name)
 
-	if handleFinalizer(ctx, c.client, c.logger, &quotaPolicy, func(ctx context.Context, policy *aigv1a1.QuotaPolicy) error {
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, &quotaPolicy, func(ctx context.Context, policy *aigv1a1.QuotaPolicy) error {
 		// Notify the AIGatewayRoutes targeting this policy's backends so their derived HTTPRoutes are
 		// re-reconciled (re-stamping the quota-policy-hash annotation) and Envoy Gateway re-translates
 		// without the deleted policy.
 		c.notifyAIGatewayRoutes(ctx, policy)
 		return c.deleteQuotaPolicyConfig(ctx, req.NamespacedName)
-	}) {
+	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if onDelete {
 		return ctrl.Result{}, nil
 	}
 
@@ -123,7 +127,7 @@ func (c *QuotaPolicyController) Reconcile(ctx context.Context, req reconcile.Req
 	// Deletion has a separate full-sweep fallback because the deleted object no
 	// longer contains its target references.
 
-	err := c.syncQuotaPolicy(ctx, &quotaPolicy)
+	err = c.syncQuotaPolicy(ctx, &quotaPolicy)
 	if err != nil {
 		reason := "ReconciliationFailed"
 		var referenceErr *ReferenceNotPermittedError
@@ -361,6 +365,9 @@ func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, polic
 
 // updateQuotaPolicyStatus updates the status of the QuotaPolicy.
 func (c *QuotaPolicyController) updateQuotaPolicyStatus(ctx context.Context, policy *aigv1a1.QuotaPolicy, conditionType, reason, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := policy.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: policy.Name, Namespace: policy.Namespace}, policy); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -373,6 +380,7 @@ func (c *QuotaPolicyController) updateQuotaPolicyStatus(ctx context.Context, pol
 			Status:             conditionStatus(conditionType),
 			Reason:             reason,
 			Message:            message,
+			ObservedGeneration: observedGeneration,
 			LastTransitionTime: metav1.Now(),
 		}}
 		return c.client.Status().Update(ctx, policy)

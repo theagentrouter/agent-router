@@ -26,6 +26,7 @@ import (
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/controller/rotators"
 	"github.com/envoyproxy/ai-gateway/internal/controller/tokenprovider"
+	"github.com/envoyproxy/ai-gateway/internal/inferencepool"
 )
 
 const (
@@ -34,9 +35,9 @@ const (
 	// aiServiceBackendKind is the kind for AIServiceBackend resources.
 	aiServiceBackendKind = "AIServiceBackend"
 	// inferencePoolGroup is the API group for InferencePool resources.
-	inferencePoolGroup = "inference.networking.k8s.io"
+	inferencePoolGroup = inferencepool.Group
 	// inferencePoolKind is the kind for InferencePool resources.
-	inferencePoolKind = "InferencePool"
+	inferencePoolKind = inferencepool.Kind
 )
 
 const (
@@ -103,7 +104,12 @@ func (c *BackendSecurityPolicyController) Reconcile(ctx context.Context, req ctr
 
 // reconcile reconciles BackendSecurityPolicy but extracted from Reconcile to centralize error handling.
 func (c *BackendSecurityPolicyController) reconcile(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy) (res ctrl.Result, err error) {
-	if handleFinalizer(ctx, c.client, c.logger, bsp, c.syncBackendSecurityPolicy) { // Propagate the bsp deletion all the way to relevant Gateways.
+	// Propagate the bsp deletion all the way to relevant Gateways.
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, bsp, c.syncBackendSecurityPolicy)
+	if err != nil {
+		return res, err
+	}
+	if onDelete {
 		return res, nil
 	}
 	// Determine if credential rotation is needed
@@ -448,6 +454,9 @@ func (c *BackendSecurityPolicyController) syncBackendSecurityPolicy(ctx context.
 
 // updateBackendSecurityPolicyStatus updates the status of the BackendSecurityPolicy.
 func (c *BackendSecurityPolicyController) updateBackendSecurityPolicyStatus(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := bsp.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: bsp.Name, Namespace: bsp.Namespace}, bsp); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -456,7 +465,7 @@ func (c *BackendSecurityPolicyController) updateBackendSecurityPolicyStatus(ctx 
 			return err
 		}
 
-		bsp.Status.Conditions = newConditions(conditionType, message)
+		bsp.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, bsp)
 	})
 	if err != nil {

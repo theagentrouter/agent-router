@@ -29,6 +29,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	fake2 "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -133,8 +134,10 @@ func newTestGatewayController(c client.Client, kube kubernetes.Interface, logger
 		MCPSessionEncryptionIterations:         100,
 		MCPFallbackSessionEncryptionSeed:       "fallback",
 		MCPFallbackSessionEncryptionIterations: 200,
+		FileIDEncryptionSeed:                   "file-seed",
+		FileIDEncryptionIterations:             100,
 	}
-	return NewGatewayController(c, kube, logger, ns, standAlone, uuidFn, opts, extProcAsSideCar)
+	return NewGatewayController(c, kube, logger, ns, standAlone, uuidFn, opts, extProcAsSideCar, nil)
 }
 
 func requireFilterConfigFromBundle(t *testing.T, kube kubernetes.Interface, namespace, gatewayName, gatewayNamespace string) filterapi.Config {
@@ -307,7 +310,7 @@ func TestGatewayController_Reconcile_GatewayConfigImageOverrideNoWorkloadPatch(t
 		globalImage = "docker.io/envoyproxy/ai-gateway-extproc:latest"
 	)
 	opts := newTestExtProcOptions(globalImage, "info")
-	c := NewGatewayController(fakeClient, fakeKube, ctrl.Log, egNamespace, false, func() string { return "uuid" }, opts, true)
+	c := NewGatewayController(fakeClient, fakeKube, ctrl.Log, egNamespace, false, func() string { return "uuid" }, opts, true, nil)
 
 	gatewayConfig := testGatewayConfig.DeepCopy()
 	gatewayConfig.Namespace = namespace
@@ -2837,6 +2840,114 @@ func TestGatewayController_checkPodHasSideCar(t *testing.T) {
 	})
 }
 
+func TestGatewayController_checkPodHasBundleSlots(t *testing.T) {
+	const image = "docker.io/envoyproxy/ai-gateway-extproc:latest"
+	for _, tc := range []struct {
+		name               string
+		maxSlots           int
+		podSlots           int // -1 omits the bundle volume.
+		wantHasBundleSlots bool
+	}{
+		{name: "fewer slots than configured", maxSlots: 16, podSlots: 12, wantHasBundleSlots: false},
+		{name: "configured slots", maxSlots: 16, podSlots: 16, wantHasBundleSlots: true},
+		{name: "more slots than configured", maxSlots: 8, podSlots: 12, wantHasBundleSlots: true},
+		{name: "no bundle volume", maxSlots: 16, podSlots: -1, wantHasBundleSlots: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestGatewayController(requireNewFakeClientWithIndexes(t), fake2.NewClientset(), ctrl.Log,
+				"envoy-gateway-system", image, "info", false, nil, false)
+			c.bundleMaxSlots = tc.maxSlots
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{
+				egOwningGatewayNameLabel: "gw", egOwningGatewayNamespaceLabel: "ns",
+			}}}
+			if tc.podSlots >= 0 {
+				pod.Spec.Volumes = []corev1.Volume{testBundleVolume("gw", "ns", tc.podSlots)}
+			}
+			require.Equal(t, tc.wantHasBundleSlots, c.checkPodHasBundleSlots(pod))
+		})
+	}
+}
+
+// testBundleVolume returns the filter config bundle volume the webhook projects with the given slots.
+func testBundleVolume(gwName, gwNamespace string, slots int) corev1.Volume {
+	sources := []corev1.VolumeProjection{{Secret: &corev1.SecretProjection{
+		LocalObjectReference: corev1.LocalObjectReference{Name: FilterConfigBundleIndexSecretName(gwName, gwNamespace)},
+		Items:                []corev1.KeyToPath{{Key: FilterConfigBundleIndexKey, Path: filterapi.ConfigBundleIndexFileName}},
+	}}}
+	for i := range slots {
+		sources = append(sources, corev1.VolumeProjection{Secret: &corev1.SecretProjection{
+			LocalObjectReference: corev1.LocalObjectReference{Name: filterConfigBundlePartSecretName(gwName, gwNamespace, i)},
+			Optional:             ptr.To(true),
+			Items:                []corev1.KeyToPath{{Key: FilterConfigBundlePartKey, Path: filterapi.ConfigBundlePartPath(i)}},
+		}})
+	}
+	return corev1.Volume{
+		Name:         filterConfigBundleVolumeName(gwName, gwNamespace),
+		VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: sources}},
+	}
+}
+
+// TestGatewayController_annotateGatewayPods_FewerBundleSlots covers raising the slot count back to
+// the value the template hash already records: the hash matches, but pods created while the slot
+// count was lower project too few slots and must still be rolled.
+func TestGatewayController_annotateGatewayPods_FewerBundleSlots(t *testing.T) {
+	egNamespace := "envoy-gateway-system"
+	labels := map[string]string{egOwningGatewayNameLabel: "gw", egOwningGatewayNamespaceLabel: "ns"}
+	const image = "docker.io/envoyproxy/ai-gateway-extproc:latest"
+
+	for _, tc := range []struct {
+		name     string
+		podSlots int
+		wantRoll bool
+	}{
+		{name: "pod with fewer slots is rolled", podSlots: 12, wantRoll: true},
+		{name: "pod with configured slots is not rolled", podSlots: 16, wantRoll: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kube := fake2.NewClientset()
+			c := newTestGatewayController(requireNewFakeClientWithIndexes(t), kube, ctrl.Log, egNamespace, image, "info", false, nil, false)
+			c.bundleMaxSlots = 16
+			desiredHash := c.extProcContainerHash(extProcContainerInput{})
+
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: egNamespace, Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{Name: extProcContainerName, Image: image, Args: []string{"-logLevel", "info"}}},
+					Volumes:    []corev1.Volume{testBundleVolume("gw", "ns", tc.podSlots)},
+				},
+			}
+			_, err := kube.CoreV1().Pods(egNamespace).Create(t.Context(), pod, metav1.CreateOptions{})
+			require.NoError(t, err)
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "dep", Namespace: egNamespace, Labels: labels},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr.To(int32(1)),
+					Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{
+						Annotations: map[string]string{extProcConfigHashAnnotationKey: desiredHash},
+					}},
+				},
+				Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1, Replicas: 1},
+			}
+			_, err = kube.AppsV1().Deployments(egNamespace).Create(t.Context(), deployment, metav1.CreateOptions{})
+			require.NoError(t, err)
+
+			result, err := c.annotateGatewayPods(t.Context(), []corev1.Pod{*pod}, []appsv1.Deployment{*deployment}, nil, "uuid-1", true, false, c.image, desiredHash)
+			require.NoError(t, err)
+			dep, err := kube.AppsV1().Deployments(egNamespace).Get(t.Context(), "dep", metav1.GetOptions{})
+			require.NoError(t, err)
+			_, rolled := dep.Spec.Template.Annotations[aigatewayUUIDAnnotationKey]
+			require.Equal(t, tc.wantRoll, rolled)
+			// A roll requeues so the replacement pods are checked again: an old controller replica can
+			// admit them with too few slots, and nothing else triggers a reconcile.
+			if tc.wantRoll {
+				require.Equal(t, ctrl.Result{RequeueAfter: 5 * time.Second}, result)
+			} else {
+				require.Equal(t, ctrl.Result{}, result)
+			}
+		})
+	}
+}
+
 func TestGatewayController_annotateGatewayPods_ConfigHashDrift(t *testing.T) {
 	egNamespace := "envoy-gateway-system"
 	gwName, gwNamespace := "gw", "ns"
@@ -2852,7 +2963,7 @@ func TestGatewayController_annotateGatewayPods_ConfigHashDrift(t *testing.T) {
 	const image = "docker.io/envoyproxy/ai-gateway-extproc:latest"
 	opts := newTestExtProcOptions(image, "info")
 	baseBuilder := newExtProcBuilder(opts, true, ctrl.Log)
-	c := NewGatewayController(fakeClient, kube, ctrl.Log, egNamespace, false, func() string { return "test-uuid" }, opts, true)
+	c := NewGatewayController(fakeClient, kube, ctrl.Log, egNamespace, false, func() string { return "test-uuid" }, opts, true, nil)
 	baseHash := baseBuilder.extProcContainerHash(extProcContainerInput{})
 
 	pod := &corev1.Pod{
@@ -3692,6 +3803,8 @@ func TestGatewayController_reconcileFilterMCPConfigSecret(t *testing.T) {
 		FallbackSeed:       "fallback",
 		FallbackIterations: 200,
 	}, cfg.MCPConfig.SessionEncryption)
+	// The file id encryption config is delivered through the filter config Secrets as well.
+	require.Equal(t, &filterapi.FileIDEncryption{Seed: "file-seed", Iterations: 100}, cfg.FileIDEncryption)
 }
 
 func TestGatewayController_writeFilterConfigBundleShards(t *testing.T) {
@@ -3735,7 +3848,7 @@ func TestGatewayController_writeFilterConfigBundleShards(t *testing.T) {
 	}
 	require.Equal(t, payload, reassembled.Bytes())
 	_, err = kube.CoreV1().Secrets(namespace).Get(t.Context(),
-		filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, maxFilterConfigBundleSlots-1), metav1.GetOptions{})
+		filterConfigBundlePartSecretName(gatewayName, gatewayNamespace, DefaultFilterConfigBundleMaxSlots-1), metav1.GetOptions{})
 	require.True(t, apierrors.IsNotFound(err))
 }
 
@@ -3746,9 +3859,138 @@ func TestGatewayController_writeFilterConfigBundleShards_Overflow(t *testing.T) 
 	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
 		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
 
-	payload := []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*(maxFilterConfigBundleSlots+1)))
+	payload := []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*(DefaultFilterConfigBundleMaxSlots+1)))
 	err := c.writeFilterConfigBundle(t.Context(), "cfg-gw", "cfg-ns", "ns", payload, "uuid-1")
-	require.ErrorContains(t, err, "exceeds max supported slots")
+	require.ErrorContains(t, err, fmt.Sprintf("filter config requires %d shards, exceeds max supported slots %d",
+		DefaultFilterConfigBundleMaxSlots+1, DefaultFilterConfigBundleMaxSlots))
+	require.ErrorContains(t, err, "raise --filterConfigBundleMaxSlots (Helm: controller.filterConfigBundleMaxSlots)")
+}
+
+func TestGatewayController_recordFilterConfigWriteError(t *testing.T) {
+	gw := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns"}}
+	tooLarge := &filterConfigBundleTooLargeError{parts: 12, maxSlots: 8}
+
+	t.Run("bundle too large", func(t *testing.T) {
+		recorder := events.NewFakeRecorder(10)
+		c := &GatewayController{eventRecorder: recorder}
+		c.recordFilterConfigWriteError(gw, fmt.Errorf("failed to write: %w", tooLarge))
+		require.Len(t, recorder.Events, 1)
+		require.Equal(t, "Warning FilterConfigBundleTooLarge "+tooLarge.Error()+
+			"; the extproc keeps its previous config until then", <-recorder.Events)
+	})
+	t.Run("other error", func(t *testing.T) {
+		recorder := events.NewFakeRecorder(10)
+		c := &GatewayController{eventRecorder: recorder}
+		c.recordFilterConfigWriteError(gw, fmt.Errorf("failed to get secret"))
+		require.Empty(t, recorder.Events)
+	})
+	t.Run("no recorder", func(t *testing.T) {
+		c := &GatewayController{}
+		require.NotPanics(t, func() { c.recordFilterConfigWriteError(gw, tooLarge) })
+	})
+}
+
+func TestGatewayController_writeFilterConfigBundleShards_ConfiguredMaxSlots(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	kube := fake2.NewClientset()
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+	c.bundleMaxSlots = DefaultFilterConfigBundleMaxSlots + 4
+
+	// One part more than the default allows fits under the raised limit.
+	parts := DefaultFilterConfigBundleMaxSlots + 1
+	payload := []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*parts))
+	require.NoError(t, c.writeFilterConfigBundle(t.Context(), "cfg-gw", "cfg-ns", "ns", payload, "uuid-1"))
+	_, err := kube.CoreV1().Secrets("ns").Get(t.Context(),
+		filterConfigBundlePartSecretName("cfg-gw", "cfg-ns", parts-1), metav1.GetOptions{})
+	require.NoError(t, err)
+
+	// Past the raised limit it still refuses rather than writing a partial bundle.
+	payload = []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*(c.bundleMaxSlots+1)))
+	err = c.writeFilterConfigBundle(t.Context(), "cfg-gw", "cfg-ns", "ns", payload, "uuid-2")
+	require.ErrorContains(t, err, fmt.Sprintf("exceeds max supported slots %d", c.bundleMaxSlots))
+}
+
+func TestGatewayController_writeFilterConfigBundleShards_LoweredMaxSlots(t *testing.T) {
+	const gwName, gwNamespace, ns = "cfg-gw", "cfg-ns", "ns"
+	payloadOf := func(parts int) []byte {
+		return []byte(strings.Repeat("x", filterConfigBundlePartSizeBytes*parts))
+	}
+	partExists := func(t *testing.T, kube kubernetes.Interface, i int) bool {
+		_, err := kube.CoreV1().Secrets(ns).Get(t.Context(), filterConfigBundlePartSecretName(gwName, gwNamespace, i), metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return false
+		}
+		require.NoError(t, err)
+		return true
+	}
+	readIndex := func(t *testing.T, kube kubernetes.Interface) *filterapi.ConfigBundleIndex {
+		secret, err := kube.CoreV1().Secrets(ns).Get(t.Context(), FilterConfigBundleIndexSecretName(gwName, gwNamespace), metav1.GetOptions{})
+		require.NoError(t, err)
+		index, err := filterConfigBundleIndexFromSecret(secret)
+		require.NoError(t, err)
+		return index
+	}
+	// newLoweredController writes a 12-part bundle with 16 slots, then lowers the slots to 8.
+	newLoweredController := func(t *testing.T) (*GatewayController, *fake2.Clientset) {
+		kube := fake2.NewClientset()
+		c := newTestGatewayController(requireNewFakeClientWithIndexes(t), kube, ctrl.Log, "envoy-gateway-system",
+			"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+		c.bundleMaxSlots = 16
+		require.NoError(t, c.writeFilterConfigBundle(t.Context(), gwName, gwNamespace, ns, payloadOf(12), "uuid-16"))
+		c.bundleMaxSlots = DefaultFilterConfigBundleMaxSlots
+		return c, kube
+	}
+
+	t.Run("refused write keeps the previous bundle", func(t *testing.T) {
+		c, kube := newLoweredController(t)
+		err := c.writeFilterConfigBundle(t.Context(), gwName, gwNamespace, ns, payloadOf(12), "uuid-8")
+		require.ErrorContains(t, err, "exceeds max supported slots 8")
+		index := readIndex(t, kube)
+		require.Equal(t, "uuid-16", index.UUID)
+		require.Len(t, index.Parts, 12)
+		for i := range 12 {
+			require.True(t, partExists(t, kube, i), "part %d must stay while the index lists it", i)
+		}
+	})
+
+	t.Run("smaller write deletes parts past the lowered slots", func(t *testing.T) {
+		c, kube := newLoweredController(t)
+		require.NoError(t, c.writeFilterConfigBundle(t.Context(), gwName, gwNamespace, ns, payloadOf(5), "uuid-8"))
+		require.Len(t, readIndex(t, kube).Parts, 5)
+		for i := range 12 {
+			require.Equal(t, i < 5, partExists(t, kube, i), "part %d", i)
+		}
+	})
+
+	t.Run("failed delete keeps the previous index", func(t *testing.T) {
+		c, kube := newLoweredController(t)
+		kube.PrependReactor("delete", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, fmt.Errorf("delete failed")
+		})
+		err := c.writeFilterConfigBundle(t.Context(), gwName, gwNamespace, ns, payloadOf(5), "uuid-8")
+		require.ErrorContains(t, err, "delete failed")
+		// The index still lists all 12 parts, so the next write retries their cleanup.
+		index := readIndex(t, kube)
+		require.Equal(t, "uuid-16", index.UUID)
+		require.Len(t, index.Parts, 12)
+	})
+
+	t.Run("unparsable index falls back to the slot count", func(t *testing.T) {
+		c, kube := newLoweredController(t)
+		indexName := FilterConfigBundleIndexSecretName(gwName, gwNamespace)
+		secret, err := kube.CoreV1().Secrets(ns).Get(t.Context(), indexName, metav1.GetOptions{})
+		require.NoError(t, err)
+		secret.StringData = map[string]string{FilterConfigBundleIndexKey: "not an index"}
+		_, err = kube.CoreV1().Secrets(ns).Update(t.Context(), secret, metav1.UpdateOptions{})
+		require.NoError(t, err)
+
+		require.NoError(t, c.writeFilterConfigBundle(t.Context(), gwName, gwNamespace, ns, payloadOf(5), "uuid-8"))
+		require.Len(t, readIndex(t, kube).Parts, 5)
+		for i := 5; i < DefaultFilterConfigBundleMaxSlots; i++ {
+			require.False(t, partExists(t, kube, i), "part %d", i)
+		}
+	})
 }
 
 func Test_mcpConfig_ToolSelectorExclude(t *testing.T) {
@@ -4069,6 +4311,72 @@ func Test_mcpConfig_APIKeyForwardClientIDHeader(t *testing.T) {
 		require.True(t, effective)
 		require.Len(t, mc.Routes, 1)
 		require.Equal(t, []string{"x-mcp-client-id"}, mc.Routes[0].ForwardHeaders)
+	})
+}
+
+func Test_mcpConfig_OAuth(t *testing.T) {
+	newRoute := func(sp *aigv1b1.MCPRouteSecurityPolicy) []aigv1b1.MCPRoute {
+		return []aigv1b1.MCPRoute{{
+			ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns"},
+			Spec: aigv1b1.MCPRouteSpec{
+				BackendRefs:    []aigv1b1.MCPRouteBackendRef{{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "b"}}},
+				SecurityPolicy: sp,
+			},
+		}}
+	}
+
+	t.Run("full metadata is propagated to the proxy", func(t *testing.T) {
+		mc, effective := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+			OAuth: &aigv1b1.MCPRouteOAuth{
+				Issuer: "https://auth.example.com",
+				ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+					ResourceName:                      ptr.To("My MCP Tools"),
+					ScopesSupported:                   []string{"read", "write"},
+					ResourceSigningAlgValuesSupported: []string{"RS256"},
+					ResourceDocumentation:             ptr.To("https://docs.example.com"),
+					ResourcePolicyURI:                 ptr.To("https://policy.example.com"),
+				},
+			},
+		}))
+		require.True(t, effective)
+		require.Equal(t, &filterapi.MCPRouteOAuthProtectedResourceMetadata{
+			Issuer:                            "https://auth.example.com",
+			ResourceName:                      "My MCP Tools",
+			ScopesSupported:                   []string{"read", "write"},
+			ResourceSigningAlgValuesSupported: []string{"RS256"},
+			ResourceDocumentation:             "https://docs.example.com",
+			ResourcePolicyURI:                 "https://policy.example.com",
+		}, mc.Routes[0].ProtectedResourceMetadata)
+		// Resource is left empty so the proxy derives it per request.
+		require.Empty(t, mc.Routes[0].ProtectedResourceMetadata.Resource)
+	})
+
+	t.Run("an explicitly configured resource is carried through as an override", func(t *testing.T) {
+		mc, _ := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+			OAuth: &aigv1b1.MCPRouteOAuth{
+				Issuer: "https://auth.example.com",
+				ProtectedResourceMetadata: aigv1b1.ProtectedResourceMetadata{
+					Resource: "https://api.example.com/mcp",
+				},
+			},
+		}))
+		require.Equal(t, "https://api.example.com/mcp", mc.Routes[0].ProtectedResourceMetadata.Resource)
+	})
+
+	t.Run("OAuth without authorization rules still serves metadata", func(t *testing.T) {
+		// The metadata document must be served whenever OAuth is configured, independently of
+		// whether the route also defines authorization rules.
+		mc, _ := mcpConfig(newRoute(&aigv1b1.MCPRouteSecurityPolicy{
+			OAuth: &aigv1b1.MCPRouteOAuth{Issuer: "https://auth.example.com"},
+		}))
+		require.Nil(t, mc.Routes[0].Authorization)
+		require.NotNil(t, mc.Routes[0].ProtectedResourceMetadata)
+		require.Equal(t, "https://auth.example.com", mc.Routes[0].ProtectedResourceMetadata.Issuer)
+	})
+
+	t.Run("no OAuth configured", func(t *testing.T) {
+		mc, _ := mcpConfig(newRoute(nil))
+		require.Nil(t, mc.Routes[0].ProtectedResourceMetadata)
 	})
 }
 

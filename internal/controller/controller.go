@@ -99,6 +99,12 @@ type Options struct {
 	ExtProcImagePullSecrets string
 	// ExtProcMaxRecvMsgSize is the maximum message size in bytes that the gRPC server can receive for extProc.
 	ExtProcMaxRecvMsgSize int
+	// FilterConfigBundleMaxSlots is the number of part Secrets the filter config bundle may be split into, and the
+	// number of optional part slots the webhook projects into every gateway pod.
+	// A change rolls the gateway pods, since a pod's slots are fixed at creation. A lowered value takes effect
+	// only once the filter config fits in it: until then the config is not written and the pods keep their
+	// previous config.
+	FilterConfigBundleMaxSlots int
 	// MCPSessionEncryptionSeed is the seed used to derive the encryption key for MCP session encryption.
 	MCPSessionEncryptionSeed string
 	// MCPSessionEncryptionIterations is the number of iterations to use for PBKDF2 key derivation for MCP session encryption.
@@ -107,6 +113,14 @@ type Options struct {
 	MCPFallbackSessionEncryptionSeed string
 	// MCPFallbackSessionEncryptionIterations is the number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.
 	MCPFallbackSessionEncryptionIterations int
+	// FileIDEncryptionSeed is the seed used to derive the encryption key for Files/Batch API ids.
+	FileIDEncryptionSeed string
+	// FileIDEncryptionIterations is the number of PBKDF2 iterations for Files/Batch API id encryption.
+	FileIDEncryptionIterations int
+	// FileIDFallbackEncryptionSeed is the optional fallback seed used for Files/Batch API id key rotation.
+	FileIDFallbackEncryptionSeed string
+	// FileIDFallbackEncryptionIterations is the number of PBKDF2 iterations for the fallback seed.
+	FileIDFallbackEncryptionIterations int
 	// EndpointPrefixes is the comma-separated key-value pairs for endpoint prefixes.
 	EndpointPrefixes string
 	// RateLimitRunner is the xDS runner that serves rate limit configs to the rate limit service.
@@ -143,7 +157,8 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	extProcBuilder := newExtProcBuilder(options, isKubernetes133OrLater(versionInfo, logger), logger)
 	gatewayC := NewGatewayController(c, kubernetes.NewForConfigOrDie(config),
 		logger.WithName("gateway"), options.EnvoyGatewayNamespace,
-		false, uuid.NewString, options, isKubernetes133OrLater(versionInfo, logger))
+		false, uuid.NewString, options, isKubernetes133OrLater(versionInfo, logger),
+		mgr.GetEventRecorder("envoy-ai-gateway-controller"))
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1.Gateway{}).
 		WatchesRawSource(source.Channel(
 			gatewayEventChan,
@@ -620,12 +635,13 @@ func referenceGrantToTargetKindIndexFunc(o client.Object) []string {
 	return keys
 }
 
-// newConditions creates a new condition with the given type and message.
+// newConditions creates a new condition with the given type and message, observed at the given
+// generation of the object.
 //
 // Currently, we only set one condition at a time either "Accepted" or "NotAccepted".
 // In the future, if we can have multiple conditions like multiple errors, we can make changes here.
-func newConditions(conditionType, message string) []metav1.Condition {
-	condition := metav1.Condition{Message: message, LastTransitionTime: metav1.Now()}
+func newConditions(generation int64, conditionType, message string) []metav1.Condition {
+	condition := metav1.Condition{Message: message, LastTransitionTime: metav1.Now(), ObservedGeneration: generation}
 	// Note: we use the fixed reason for now since the message is enough to describe the error and
 	// reason doesn't fit the entire message.
 	switch conditionType {
@@ -651,24 +667,27 @@ const aiGatewayControllerFinalizer = "aigateway.envoyproxy.io/finalizer"
 // onDeletionFn can be nil, in which case it will not be called. The function can return an error but should not
 // be a recoverable error. For example, onDeletionFn only propagates the deletion of the object to other resources.
 // See the call sites of this function for examples.
+//
+// The returned error is non-nil only when removing the finalizer fails. Callers must return it from Reconcile so that
+// the removal is retried: the object stays Terminating until it is reconciled again.
 func handleFinalizer[objType client.Object](
-	ctx context.Context, client client.Client,
+	ctx context.Context, c client.Client,
 	logger logr.Logger,
 	o objType,
 	onDeletionFn func(ctx context.Context, o objType) error,
-) (onDelete bool) {
+) (onDelete bool, err error) {
 	if o.GetDeletionTimestamp().IsZero() {
 		if !ctrlutil.ContainsFinalizer(o, aiGatewayControllerFinalizer) {
+			base := o.DeepCopyObject().(objType)
 			ctrlutil.AddFinalizer(o, aiGatewayControllerFinalizer)
-			if err := client.Update(ctx, o); err != nil {
-				// This shouldn't happen in normal operation, but if it does, we log the error.
-				logger.Error(err, "Failed to add finalizer to object",
-					"namespace", o.GetNamespace(), "name", o.GetName())
+			if err := c.Patch(ctx, o, client.MergeFrom(base)); err != nil {
+				return false, fmt.Errorf("failed to add finalizer to %s/%s: %w", o.GetNamespace(), o.GetName(), err)
 			}
 		}
-		return false
+		return false, nil
 	}
 	if ctrlutil.ContainsFinalizer(o, aiGatewayControllerFinalizer) {
+		base := o.DeepCopyObject().(objType)
 		ctrlutil.RemoveFinalizer(o, aiGatewayControllerFinalizer)
 		if onDeletionFn != nil {
 			if err := onDeletionFn(ctx, o); err != nil {
@@ -677,13 +696,11 @@ func handleFinalizer[objType client.Object](
 					"namespace", o.GetNamespace(), "name", o.GetName())
 			}
 		}
-		if err := client.Update(ctx, o); err != nil {
-			// This shouldn't happen in normal operation, but if it does, we log the error.
-			logger.Error(err, "Failed to remove finalizer from object",
-				"namespace", o.GetNamespace(), "name", o.GetName())
+		if err := c.Patch(ctx, o, client.MergeFrom(base)); err != nil {
+			return true, fmt.Errorf("failed to remove finalizer from %s/%s: %w", o.GetNamespace(), o.GetName(), err)
 		}
 	}
-	return true
+	return true, nil
 }
 
 // isKubernetes133OrLater returns true if the Kubernetes version is 1.33 or later.

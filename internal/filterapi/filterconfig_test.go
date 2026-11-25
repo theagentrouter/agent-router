@@ -101,6 +101,19 @@ func TestMCPSessionEncryptionLogValue(t *testing.T) {
 	}
 }
 
+func TestFileIDEncryptionLogValue(t *testing.T) {
+	e := filterapi.FileIDEncryption{Seed: "my-seed", Iterations: 100, FallbackSeed: "my-fallback", FallbackIterations: 200}
+	attrs := logAttrs(e.LogValue())
+	require.Equal(t, "[REDACTED]", attrs["seed"])
+	require.Equal(t, "100", attrs["iterations"])
+	require.Equal(t, "true", attrs["fallbackSeedSet"])
+	require.Equal(t, "200", attrs["fallbackIterations"])
+	for _, v := range attrs {
+		require.NotContains(t, v, "my-seed")
+		require.NotContains(t, v, "my-fallback")
+	}
+}
+
 func TestAPIKeyAuthLogValue(t *testing.T) {
 	a := filterapi.APIKeyAuth{Key: "my-api-key"}
 	attrs := logAttrs(a.LogValue())

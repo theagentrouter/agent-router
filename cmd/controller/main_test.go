@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
+	"github.com/envoyproxy/ai-gateway/internal/controller"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
@@ -85,6 +86,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 		require.Equal(t, "tls.key", f.tlsKeyName)
 		require.Equal(t, 9443, f.webhookPort)
 		require.Equal(t, 4*1024*1024, f.maxRecvMsgSize)
+		require.Equal(t, controller.DefaultFilterConfigBundleMaxSlots, f.filterConfigBundleMaxSlots)
 		require.Nil(t, f.spanRequestHeaderAttributes)
 		require.Nil(t, f.logRequestHeaderAttributes)
 		require.Equal(t, 5*time.Minute, f.credentialPreRotationWindow)
@@ -117,6 +119,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 					tc.dash + "logRequestHeaderAttributes=x-forwarded-proto:url.scheme",
 					tc.dash + "endpointPrefixes=openai:/v1,cohere:/cohere/v2,anthropic:/anthropic/v1",
 					tc.dash + "maxRecvMsgSize=33554432",
+					tc.dash + "filterConfigBundleMaxSlots=16",
 					tc.dash + "watchNamespaces=default,envoy-ai-gateway-system",
 					tc.dash + "cacheSyncTimeout=5m",
 					tc.dash + "credentialPreRotationWindow=15m",
@@ -146,6 +149,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				require.Equal(t, "x-forwarded-proto:url.scheme", *f.logRequestHeaderAttributes)
 				require.Equal(t, "openai:/v1,cohere:/cohere/v2,anthropic:/anthropic/v1", f.endpointPrefixes)
 				require.Equal(t, 32*1024*1024, f.maxRecvMsgSize)
+				require.Equal(t, 16, f.filterConfigBundleMaxSlots)
 				require.Equal(t, []string{"default", "envoy-ai-gateway-system"}, f.watchNamespaces)
 				require.Equal(t, 5*time.Minute, f.cacheSyncTimeout)
 				require.Equal(t, 15*time.Minute, f.credentialPreRotationWindow)
@@ -263,6 +267,16 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				name:   "negative credential pre-rotation window",
 				flags:  []string{"--credentialPreRotationWindow=-1m"},
 				expErr: "credential pre-rotation window must be positive: -1m0s",
+			},
+			{
+				name:   "zero filterConfigBundleMaxSlots",
+				flags:  []string{"--filterConfigBundleMaxSlots=0"},
+				expErr: "filterConfigBundleMaxSlots must be between 1 and 128, got 0",
+			},
+			{
+				name:   "too large filterConfigBundleMaxSlots",
+				flags:  []string{"--filterConfigBundleMaxSlots=129"},
+				expErr: "filterConfigBundleMaxSlots must be between 1 and 128, got 129",
 			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -386,6 +400,42 @@ func Test_parseAndValidateFlags_mcpSessionEncryptionSeedEnvVars(t *testing.T) {
 		t.Setenv(mcpFallbackSessionEncryptionSeedEnvVar, "env-fallback-seed")
 		_, err := parseAndValidateFlags([]string{"--mcpFallbackSessionEncryptionIterations=0"})
 		require.ErrorContains(t, err, "mcp fallback session encryption iterations must be positive")
+	})
+}
+
+func Test_parseAndValidateFlags_fileIDEncryptionSeedEnvVars(t *testing.T) {
+	t.Run("from env vars", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "env-seed")
+		t.Setenv(fileIDFallbackEncryptionSeedEnvVar, "env-fallback-seed")
+		f, err := parseAndValidateFlags([]string{"--fileIDFallbackEncryptionIterations=200"})
+		require.NoError(t, err)
+		require.Equal(t, "env-seed", f.fileIDEncryptionSeed)
+		require.Equal(t, "env-fallback-seed", f.fileIDFallbackEncryptionSeed)
+		require.Equal(t, 200, f.fileIDFallbackEncryptionIterations)
+	})
+	t.Run("flags take precedence", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "env-seed")
+		t.Setenv(fileIDFallbackEncryptionSeedEnvVar, "env-fallback-seed")
+		f, err := parseAndValidateFlags([]string{
+			"--fileIDEncryptionSeed=flag-seed",
+			"--fileIDFallbackEncryptionSeed=flag-fallback-seed",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "flag-seed", f.fileIDEncryptionSeed)
+		require.Equal(t, "flag-fallback-seed", f.fileIDFallbackEncryptionSeed)
+	})
+	t.Run("empty env vars are ignored", func(t *testing.T) {
+		t.Setenv(fileIDEncryptionSeedEnvVar, "")
+		t.Setenv(fileIDFallbackEncryptionSeedEnvVar, "")
+		f, err := parseAndValidateFlags(nil)
+		require.NoError(t, err)
+		require.Equal(t, "default-insecure-seed", f.fileIDEncryptionSeed)
+		require.Empty(t, f.fileIDFallbackEncryptionSeed)
+	})
+	t.Run("fallback iterations are validated for the env var seed", func(t *testing.T) {
+		t.Setenv(fileIDFallbackEncryptionSeedEnvVar, "env-fallback-seed")
+		_, err := parseAndValidateFlags([]string{"--fileIDFallbackEncryptionIterations=0"})
+		require.ErrorContains(t, err, "file id fallback encryption iterations must be positive")
 	})
 }
 

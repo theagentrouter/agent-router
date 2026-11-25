@@ -71,10 +71,15 @@ func newExtProcBuilder(options *Options, extProcAsSideCar bool, logger logr.Logg
 		imagePullSecrets:                       parsedImagePullSecrets,
 		maxRecvMsgSize:                         options.ExtProcMaxRecvMsgSize,
 		extProcAsSideCar:                       extProcAsSideCar,
+		bundleMaxSlots:                         options.FilterConfigBundleMaxSlots,
 		mcpSessionEncryptionSeed:               options.MCPSessionEncryptionSeed,
 		mcpSessionEncryptionIterations:         options.MCPSessionEncryptionIterations,
 		mcpFallbackSessionEncryptionSeed:       options.MCPFallbackSessionEncryptionSeed,
 		mcpFallbackSessionEncryptionIterations: options.MCPFallbackSessionEncryptionIterations,
+		fileIDEncryptionSeed:                   options.FileIDEncryptionSeed,
+		fileIDEncryptionIterations:             options.FileIDEncryptionIterations,
+		fileIDFallbackEncryptionSeed:           options.FileIDFallbackEncryptionSeed,
+		fileIDFallbackEncryptionIterations:     options.FileIDFallbackEncryptionIterations,
 	}
 }
 
@@ -100,11 +105,41 @@ type extProcBuilder struct {
 	imagePullSecrets []corev1.LocalObjectReference
 	maxRecvMsgSize   int
 	extProcAsSideCar bool
+	// bundleMaxSlots is the number of bundle part slots. The bundle writer and
+	// the webhook each build their extProcBuilder from the same Options, so
+	// within one controller process the parts written never exceed the slots a
+	// new pod projects. Pods that project fewer are rolled by
+	// checkPodHasBundleSlots.
+	bundleMaxSlots int
 
 	mcpSessionEncryptionSeed               string
 	mcpSessionEncryptionIterations         int
 	mcpFallbackSessionEncryptionSeed       string
 	mcpFallbackSessionEncryptionIterations int
+
+	fileIDEncryptionSeed               string
+	fileIDEncryptionIterations         int
+	fileIDFallbackEncryptionSeed       string
+	fileIDFallbackEncryptionIterations int
+}
+
+// filterConfigBundleMaxSlots returns the configured number of bundle part
+// slots, falling back to DefaultFilterConfigBundleMaxSlots when unset.
+func (b *extProcBuilder) filterConfigBundleMaxSlots() int {
+	if b == nil || b.bundleMaxSlots <= 0 {
+		return DefaultFilterConfigBundleMaxSlots
+	}
+	return b.bundleMaxSlots
+}
+
+// nonDefaultBundleMaxSlots returns the slot count for the config digest, or 0
+// when it is the default so the digest is unchanged for deployments that never
+// set it.
+func (b *extProcBuilder) nonDefaultBundleMaxSlots() int {
+	if n := b.filterConfigBundleMaxSlots(); n != DefaultFilterConfigBundleMaxSlots {
+		return n
+	}
+	return 0
 }
 
 // extProcContainerInput is the per-gateway input for extproc injection.
@@ -219,6 +254,23 @@ func (b *extProcBuilder) mcpSessionEncryption() *filterapi.MCPSessionEncryption 
 	return e
 }
 
+// fileIDEncryption returns the Files/Batch API id encryption configuration to deliver to the
+// extproc through the filter config, or nil if no seed is configured.
+func (b *extProcBuilder) fileIDEncryption() *filterapi.FileIDEncryption {
+	if b == nil || b.fileIDEncryptionSeed == "" {
+		return nil
+	}
+	e := &filterapi.FileIDEncryption{
+		Seed:       b.fileIDEncryptionSeed,
+		Iterations: b.fileIDEncryptionIterations,
+	}
+	if b.fileIDFallbackEncryptionSeed != "" {
+		e.FallbackSeed = b.fileIDFallbackEncryptionSeed
+		e.FallbackIterations = b.fileIDFallbackEncryptionIterations
+	}
+	return e
+}
+
 // extProcConfigDigest contains the config inputs that affect extproc injection.
 // It intentionally avoids hashing the full Kubernetes Container API object.
 type extProcConfigDigest struct {
@@ -242,6 +294,10 @@ type extProcConfigDigest struct {
 	ExtProcAsSideCar               bool
 	NeedMCP                        bool
 	GatewayConfigExtProc           *aigv1b1.GatewayConfigExtProc
+	// BundleMaxSlots is the number of bundle part slots the webhook projects. A pod's slots are
+	// fixed at creation, so a change must roll the pods or writes beyond the old count are
+	// invisible to them. Omitted at the default so existing deployments keep their hash.
+	BundleMaxSlots int `json:",omitempty"`
 }
 
 // extProcContainerHash returns a stable hash of the extproc injection inputs.
@@ -265,6 +321,7 @@ func (b *extProcBuilder) extProcContainerHash(input extProcContainerInput) strin
 		ExtProcAsSideCar:               b.extProcAsSideCar,
 		NeedMCP:                        input.needMCP,
 		GatewayConfigExtProc:           extProcSpecFromInput(input),
+		BundleMaxSlots:                 b.nonDefaultBundleMaxSlots(),
 	}
 	marshaled, _ := stdjson.Marshal(digest)
 	sum := sha256.Sum256(marshaled)
@@ -304,6 +361,8 @@ func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {
 		"-rootPrefix", b.rootPrefix,
 		"-maxRecvMsgSize", fmt.Sprintf("%d", b.maxRecvMsgSize),
 	}
+	// The Files/Batch API id encryption seeds are not passed as arguments, for the same reason as
+	// the MCP seeds below. They are delivered in the filter config Secrets (see fileIDEncryption).
 	if f := b.nonDefaultLogFormat(); f != "" {
 		args = append(args, "-logFormat", f)
 	}

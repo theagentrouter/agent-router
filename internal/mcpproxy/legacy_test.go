@@ -885,6 +885,71 @@ func TestHandleToolCallRequest_NoSession(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "no MCP session found for backend backend2")
 }
 
+func TestHandleToolCallRequest_InsufficientScope(t *testing.T) {
+	makeToken := func(scopes ...string) string {
+		token := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"scope": scopes})
+		signed, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+		return signed
+	}
+
+	auth, err := compileAuthorization(&filterapi.MCPRouteAuthorization{
+		DefaultAction: "Deny",
+		Rules: []filterapi.MCPRouteAuthorizationRule{{
+			Action: "Allow",
+			Source: &filterapi.MCPAuthorizationSource{
+				JWT: filterapi.JWTSource{Scopes: []string{"read", "write"}},
+			},
+			Target: &filterapi.MCPAuthorizationTarget{
+				Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "test-tool"}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	newDeniedCall := func(prm *filterapi.MCPRouteOAuthProtectedResourceMetadata) (*httptest.ResponseRecorder, error) {
+		proxy := newTestMCPProxy()
+		route := proxy.routes["test-route"]
+		route.authorization = auth
+		route.prm = prm
+		s := &session{
+			reqCtx: proxy,
+			perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
+				"backend1": {sessionID: "test-session"},
+			},
+			route: "test-route",
+		}
+		httpReq := httptest.NewRequest(http.MethodPost, "http://api.example.com:8443/mcp", nil)
+		httpReq.Host = "api.example.com:8443"
+		httpReq.Header.Set("x-forwarded-proto", "https")
+		httpReq.Header.Set("Authorization", "Bearer "+makeToken("read"))
+		rr := httptest.NewRecorder()
+		_, callErr := proxy.handleToolCallRequest(t.Context(), s, rr, &jsonrpc.Request{Method: "tools/call"},
+			&mcp.CallToolParams{Name: "backend1__test-tool"}, nil, httpReq)
+		return rr, callErr
+	}
+
+	t.Run("derived resource metadata is included when OAuth is configured", func(t *testing.T) {
+		rr, err := newDeniedCall(&filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
+		require.ErrorContains(t, err, "authorization failed")
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		require.Equal(t,
+			`Bearer error="insufficient_scope", scope="read write", resource_metadata="https://api.example.com:8443/.well-known/oauth-protected-resource/mcp", error_description="The token is missing required scopes"`,
+			rr.Header().Get("WWW-Authenticate"),
+		)
+	})
+
+	t.Run("resource metadata is omitted when OAuth is not configured", func(t *testing.T) {
+		rr, err := newDeniedCall(nil)
+		require.ErrorContains(t, err, "authorization failed")
+		require.Equal(t, http.StatusForbidden, rr.Code)
+		require.Equal(t,
+			`Bearer error="insufficient_scope", scope="read write", error_description="The token is missing required scopes"`,
+			rr.Header().Get("WWW-Authenticate"),
+		)
+	})
+}
+
 func TestHandleToolCallRequest_BackendError(t *testing.T) {
 	// Mock backend server that returns error.
 	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1402,6 +1467,15 @@ func Test_maybeResponseModify(t *testing.T) {
 		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
 		require.Contains(t, string(msg.Result), `"ttlMs":5000`)
 		require.Contains(t, string(msg.Result), `"cacheScope":"public"`)
+	})
+
+	t.Run("prompts/get rewrites resource link and embedded resource URIs", func(t *testing.T) {
+		msg := &jsonrpc.Response{Result: []byte(`{"messages":[{"role":"user","content":{"type":"resource_link","uri":"file:///data"}},{"role":"assistant","content":{"type":"resource","resource":{"uri":"ui://prefab/embed.html"}}}],"_meta":{"ui":{"resourceUri":"ui://app/view"}}}`)}
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "prompts/get"}, msg, backend))
+		body := string(msg.Result)
+		require.Contains(t, body, `"uri":"backend1+file:///data"`)
+		require.Contains(t, body, `"uri":"ui://backend1/prefab/embed.html"`)
+		require.Contains(t, body, `"resourceUri":"ui://backend1/app/view"`)
 	})
 }
 
@@ -2273,6 +2347,9 @@ func Test_parseParamsAndMaybeStartSpan(t *testing.T) {
 	require.NotNil(t, s)
 	// Make sure that traceparent is not empty, that's span started.
 	require.NotEmpty(t, p.GetMeta()["traceparent"])
+	// Injected _meta must be written back onto req.Params so modern handlers
+	// that re-marshal from the request forward the gateway's trace context.
+	require.Contains(t, string(req.Params), "traceparent")
 }
 
 func Test_parseParamsAndMaybeStartSpan_NilParam(t *testing.T) {
@@ -2345,6 +2422,11 @@ func Test_errorType(t *testing.T) {
 		{
 			name:     "invalid prompt name error",
 			err:      errInvalidPromptName,
+			expected: metrics.MCPErrorInvalidParam,
+		},
+		{
+			name:     "invalid resource URI error",
+			err:      errInvalidResourceURI,
 			expected: metrics.MCPErrorInvalidParam,
 		},
 		{
@@ -2737,7 +2819,9 @@ func TestHandlePromptGetRequest_PromptSelector(t *testing.T) {
 			_, err := proxy.handlePromptGetRequest(t.Context(), s, rr, &jsonrpc.Request{}, &mcp.GetPromptParams{Name: name})
 			require.ErrorIs(t, err, errInvalidPromptName)
 			require.Equal(t, http.StatusBadRequest, rr.Code)
+			require.Equal(t, "text/plain; charset=utf-8", rr.Header().Get("Content-Type"))
 			require.Contains(t, rr.Body.String(), "invalid prompt name")
+			require.NotContains(t, rr.Body.String(), "jsonrpc")
 		})
 	}
 	require.Zero(t, hits.Load(), "excluded prompts must not be forwarded to the backend")
@@ -2783,6 +2867,9 @@ func TestMCPProxy_handleCompletionComplete_PromptSelector(t *testing.T) {
 	}, nil)
 	require.ErrorIs(t, err, errInvalidPromptName)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, "text/plain; charset=utf-8", rr.Header().Get("Content-Type"))
+	require.Contains(t, rr.Body.String(), "invalid prompt name")
+	require.NotContains(t, rr.Body.String(), "jsonrpc")
 	require.Zero(t, hits.Load(), "excluded prompts must not be forwarded to the backend")
 
 	rr = httptest.NewRecorder()
