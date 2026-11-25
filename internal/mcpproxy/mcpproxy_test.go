@@ -126,6 +126,24 @@ func TestMCPProxy_HTTPMethods(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "method not allowed")
 }
 
+func TestMCPProxy_ModernGETAndDELETERejected(t *testing.T) {
+	l := slog.Default()
+	_, mux, err := NewMCPProxy(l, stubMetrics{}, noopTracer, NewPBKDF2AesGcmSessionCrypto("test", 100), nil)
+	require.NoError(t, err)
+
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/mcp", nil)
+			req.Header.Set(mcpProtocolVersionHeader, protocolVersion20260728)
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, req)
+			require.Equal(t, http.StatusMethodNotAllowed, rr.Code, "modern clients must not hit legacy session handlers")
+			require.Contains(t, rr.Body.String(), "method not allowed")
+			require.NotContains(t, rr.Body.String(), "missing session ID")
+		})
+	}
+}
+
 func TestMCPProxy_RequestBeforeFirstConfigLoad(t *testing.T) {
 	// The config bundle watcher tolerates an incomplete bundle on the initial load and retries on the next tick, so
 	// requests can arrive before any config is loaded. They must be answered with a 503, not a nil dereference.

@@ -98,10 +98,22 @@ func NewMCPProxy(l *slog.Logger, mcpMetrics metrics.MCPMetrics, tracer tracingap
 			case isProtectedResourceMetadataRequest(externalPath(r)):
 				serve = proxy.serveOAuthProtectedResourceMetadata
 			case r.Method == http.MethodGet:
+				// Modern Streamable HTTP removed the GET session stream. Reject
+				// before the legacy handler so a 2026-07-28 client does not get
+				// a confusing "missing session ID" 400.
+				if isModernProtocolVersion(r.Header.Get(mcpProtocolVersionHeader)) {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
 				serve = proxy.serveGET
 			case r.Method == http.MethodPost:
 				serve = proxy.servePOST
 			case r.Method == http.MethodDelete:
+				// Modern Streamable HTTP removed DELETE session teardown.
+				if isModernProtocolVersion(r.Header.Get(mcpProtocolVersionHeader)) {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
 				serve = proxy.serverDELETE
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -421,6 +433,8 @@ type backendReportedVersions struct {
 // minimum is a best-effort "honest floor" rather than a correctness guarantee;
 // mismatches across a breaking boundary are surfaced via the warnings below.
 func mergedProtocolVersion(l *slog.Logger, clientVersion string, backends []backendReportedVersions) string {
+	// floor is the oldest version this gateway will advertise. Keep it aligned
+	// with legacyProtocolVersions in era.go.
 	const floor = protocolVersion20250618
 
 	// Compute the minimum, across backends, of each backend's best (highest)
