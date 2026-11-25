@@ -365,6 +365,9 @@ func (c *QuotaPolicyController) notifyAIGatewayRoutes(ctx context.Context, polic
 
 // updateQuotaPolicyStatus updates the status of the QuotaPolicy.
 func (c *QuotaPolicyController) updateQuotaPolicyStatus(ctx context.Context, policy *aigv1a1.QuotaPolicy, conditionType, reason, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := policy.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: policy.Name, Namespace: policy.Namespace}, policy); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -377,6 +380,7 @@ func (c *QuotaPolicyController) updateQuotaPolicyStatus(ctx context.Context, pol
 			Status:             conditionStatus(conditionType),
 			Reason:             reason,
 			Message:            message,
+			ObservedGeneration: observedGeneration,
 			LastTransitionTime: metav1.Now(),
 		}}
 		return c.client.Status().Update(ctx, policy)
