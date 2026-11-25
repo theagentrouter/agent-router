@@ -18,7 +18,58 @@ Currently, `aigw run` supports Linux and macOS.
 
 ## Quick Start
 
-The simplest way to get started is to have `aigw` generate a configuration for
+### Interactive setup
+
+When no configuration file and no provider environment variables are set,
+`aigw run` starts an interactive setup in the terminal:
+
+```shell
+aigw run
+```
+
+1. Select the providers you want to use with the arrow keys and space:
+   OpenAI, Anthropic, Tetrate Agent Router Service, Azure OpenAI, Ollama, or any
+   other OpenAI-compatible API.
+2. Paste the API key of each provider (the input is masked), and the endpoint
+   for providers that need one. For Ollama and other OpenAI-compatible APIs, it
+   also asks for a model they serve, to print a request that works.
+3. Choose whether to save the configuration.
+
+Requests are routed to each provider by model name: for example `gpt-*` models
+go to OpenAI and `claude-*` models to Anthropic. Only one provider can receive
+all the models that don't match any other provider. When you select several
+providers that can serve any model (such as Tetrate Agent Router Service and
+Ollama), the setup asks which model names to route to each of them. When all the
+selected providers serve specific models (such as OpenAI and Anthropic), OpenAI
+receives the other models. For Azure OpenAI, the setup asks for the deployment
+names, which clients send as the model name. At the end, it prints the routing
+rules and a `curl` command to try them.
+
+If you save the configuration, it is written to `~/.config/aigw/config.yaml`
+(`$AIGW_CONFIG_HOME/config.yaml`), which `aigw run` uses by default from then on.
+Edit it to fine-tune the routing, or delete it to run the setup again.
+
+API keys are never written to the file. It reads them from environment variables
+instead, and the setup prints the ones to set for the next runs, for example in
+your shell profile:
+
+| Provider                     | Environment variable        |
+| ---------------------------- | --------------------------- |
+| OpenAI                       | `OPENAI_API_KEY`            |
+| Anthropic                    | `ANTHROPIC_API_KEY`         |
+| Tetrate Agent Router Service | `TARS_API_KEY`              |
+| Azure OpenAI                 | `AZURE_OPENAI_API_KEY`      |
+| Other OpenAI-compatible API  | `OPENAI_COMPATIBLE_API_KEY` |
+
+If a variable the saved configuration needs is not set, `aigw run` exits with an
+error naming it, rather than sending unauthenticated requests.
+
+The interactive setup needs a terminal. In scripts, containers and CI, configure
+`aigw run` with environment variables or a configuration file instead.
+
+### Auto-configuration from environment variables
+
+`aigw` can also generate a configuration for
 you using environment variables. `aigw` supports auto-configuration using the same
 environment variables as the OpenAI SDK, making it easy to integrate with existing
 tooling. Here are some examples:
@@ -77,6 +128,24 @@ When `AZURE_OPENAI_API_KEY` is set, the following environment variables are read
 | `OPENAI_ORG_ID`     | `org-...`  | Organization ID - adds `OpenAI-Organization` request header for billing and access control     |
 | `OPENAI_PROJECT_ID` | `proj_...` | Project ID - adds `OpenAI-Project` request header for project-level billing and access control |
 
+**Anthropic:**
+
+When `ANTHROPIC_API_KEY` is set, the following environment variables are read:
+
+| Variable             | Required | Example                        | Description                   |
+| -------------------- | -------- | ------------------------------ | ----------------------------- |
+| `ANTHROPIC_API_KEY`  | Yes      | `sk-ant-...`                   | API key for authentication    |
+| `ANTHROPIC_BASE_URL` | No       | `https://api.anthropic.com/v1` | Base URL of the Anthropic API |
+
+Anthropic models are served on the Anthropic Messages API, at
+`http://localhost:1975/anthropic/v1/messages`.
+
+**OpenAI and Anthropic together:**
+
+When both an OpenAI key (`OPENAI_API_KEY` or `AZURE_OPENAI_API_KEY`) and
+`ANTHROPIC_API_KEY` are set, `aigw` routes to both: `claude-*` models go to
+Anthropic, and every other model goes to OpenAI.
+
 ## Custom Configuration
 
 To run the AI Gateway with a custom configuration, provide the path to the configuration file as an argument to the `aigw run` command.
@@ -103,12 +172,12 @@ Next, let's say change the model matcher from `.*` (match all) to specifically m
 ```diff
 --- ollama.yaml
 +++ custom.yaml
-@@ -88,7 +88,7 @@
+@@ -135,7 +135,7 @@
          - headers:
              - type: RegularExpression
                name: x-ai-eg-model
--              value: .*
-+              value: deepseek-r1:1.5b
+-              value: ".*"
++              value: "deepseek-r1:1.5b"
 ```
 
 You can also use environment variable substitution (`envsubst`) to allow small
@@ -118,12 +187,12 @@ instead, to default the model to the `CHAT_MODEL` variable.
 ```diff
 --- ollama.yaml
 +++ custom.yaml
-@@ -88,7 +88,7 @@
+@@ -135,7 +135,7 @@
          - headers:
              - type: RegularExpression
                name: x-ai-eg-model
--              value: .*
-+              value: ${CHAT_MODEL:=deepseek-r1:1.5b}
+-              value: ".*"
++              value: "${CHAT_MODEL:=deepseek-r1:1.5b}"
 ```
 
 ### Run with the Custom Configuration
@@ -316,14 +385,23 @@ See [docker-compose-otel.yaml][docker-compose-otel.yaml] for a complete example 
 
 ### Encryption seeds
 
-`aigw run` encrypts Files/Batch API ids and MCP session ids with keys derived from seeds. By default
-it uses a well-known public seed, which lets anyone decrypt and forge these ids. Set your own secret,
-randomly generated seeds with these environment variables:
+`aigw run` encrypts Files/Batch API ids and MCP session ids with keys derived from seeds. Set your own
+secret, randomly generated seeds with these environment variables:
 
 | Environment Variable               | Purpose                                                                  |
 | ---------------------------------- | ------------------------------------------------------------------------ |
 | `AIGW_FILE_ID_ENCRYPTION_SEED`     | Seed for [Files API](../capabilities/llm-integrations/files-api.md) ids. |
 | `AIGW_MCP_SESSION_ENCRYPTION_SEED` | Seed for MCP session ids. Used only when MCP is configured.              |
+
+When `AIGW_FILE_ID_ENCRYPTION_SEED` is not set, `aigw run` uses a random seed: the first run generates
+it and saves it to `~/.config/aigw/file-id-encryption-seed` (`$AIGW_CONFIG_HOME/file-id-encryption-seed`),
+readable only by your user, and later runs reuse it, so file and batch ids stay valid across restarts.
+Setting the environment variable overrides the saved seed. Deleting the file rotates the seed on the
+next run, which invalidates all previously issued file and batch ids. If the seed cannot be saved,
+`aigw run` prints a warning and uses a random seed for that run only.
+
+When `AIGW_MCP_SESSION_ENCRYPTION_SEED` is not set, MCP session ids use a well-known public seed, which
+lets anyone decrypt and forge them.
 
 The seeds are passed to the external processor through its configuration file, not its command line.
 The key derivation iterations are set with `--file-id-encryption-iterations` and
@@ -353,6 +431,7 @@ Each invocation creates a unique run identifier (`runID`) in format `YYYYMMDD_HH
 | ------------------------- | ---------------------------------------- | ---------------------------------------------------------------- | ------- |
 | Default Config            | Configuration file location              | `${AIGW_CONFIG_HOME}/config.yaml`                                | CONFIG  |
 | Envoy Version Preference  | Selected Envoy version (via func-e)      | `${AIGW_CONFIG_HOME}/envoy-version`                              | CONFIG  |
+| File ID Encryption Seed   | Default Files/Batch API id seed          | `${AIGW_CONFIG_HOME}/file-id-encryption-seed`                    | CONFIG  |
 | Envoy Binaries            | Downloaded executables (via func-e)      | `${AIGW_DATA_HOME}/envoy-versions/{version}/bin/envoy`           | DATA    |
 | AIGW Logs                 | Gateway logs and stderr output           | `${AIGW_STATE_HOME}/runs/{runID}/aigw.log`                       | STATE   |
 | Envoy Gateway Config      | Generated EG configuration               | `${AIGW_STATE_HOME}/runs/{runID}/envoy-gateway-config.yaml`      | STATE   |
