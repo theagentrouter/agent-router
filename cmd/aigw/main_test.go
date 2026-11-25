@@ -22,6 +22,8 @@ import (
 
 func Test_doMain(t *testing.T) {
 	internaltesting.ClearTestEnv(t)
+	// Don't pick up a config.yaml saved in the real config home.
+	t.Setenv("AIGW_CONFIG_HOME", t.TempDir())
 	tests := []struct {
 		name         string
 		args         []string
@@ -409,7 +411,7 @@ func TestCmdRun_Validate(t *testing.T) {
 			name:          "no config and no env vars",
 			path:          "",
 			envVars:       map[string]string{},
-			expectedError: "you must supply at least OPENAI_API_KEY, AZURE_OPENAI_API_KEY, ANTHROPIC_API_KEY, or a config file path",
+			expectedError: errNoConfig.Error(),
 		},
 		{
 			name:    "config path provided",

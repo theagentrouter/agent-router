@@ -11,7 +11,7 @@
 GO_TOOL := go tool -modfile=tools/go.mod
 
 # This is the package that contains the version information for the build.
-VERSION_STRING:=$(shell git describe --tags --long)
+VERSION_STRING:=$(shell git describe --tags --long --match 'v*')
 VERSION_PACKAGE := github.com/envoyproxy/ai-gateway/internal/version
 GO_LDFLAGS += -X $(VERSION_PACKAGE).version=$(VERSION_STRING)
 
@@ -296,7 +296,7 @@ build.%: ## Build a binary for the given command under the internal/cmd director
 		for goarch in $(GOARCH_LIST); do \
 			echo "-> Building $(COMMAND_NAME) for $$goos/$$goarch"; \
 			CGO_ENABLED=0 GOOS=$$goos GOARCH=$$goarch go build -ldflags "$(GO_LDFLAGS)" \
-				-o $(OUTPUT_DIR)/$(COMMAND_NAME)-$$goos-$$goarch ./$(CMD_PATH_PREFIX)/$(COMMAND_NAME); \
+				-o $(OUTPUT_DIR)/$(COMMAND_NAME)-$$goos-$$goarch ./$(CMD_PATH_PREFIX)/$(COMMAND_NAME) || exit 1; \
 			echo "<- Built $(OUTPUT_DIR)/$(COMMAND_NAME)-$$goos-$$goarch"; \
 		done; \
 	done

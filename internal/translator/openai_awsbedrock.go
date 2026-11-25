@@ -317,8 +317,16 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) bedrockStopReasonToOpenAI
 		return openai.ChatCompletionChoicesFinishReasonContentFilter
 	case awsbedrock.StopReasonToolUse:
 		return openai.ChatCompletionChoicesFinishReasonToolCalls
+	case awsbedrock.StopReasonModelContextWindowExceeded:
+		return openai.ChatCompletionChoicesFinishReasonContextWindowExceeded
+	case awsbedrock.StopReasonMalformedToolUse:
+		return openai.ChatCompletionChoicesFinishReasonMalformedFunctionCall
+	case awsbedrock.StopReasonMalformedModelOutput:
+		return openai.ChatCompletionChoicesFinishReasonError
 	default:
-		return openai.ChatCompletionChoicesFinishReasonStop
+		// Unknown stop reasons are surfaced as an error rather than silently
+		// reported as a normal completion.
+		return openai.ChatCompletionChoicesFinishReasonError
 	}
 }
 
@@ -773,6 +781,8 @@ func redactAWSBedrockResponseMessage(msg *openai.ChatCompletionResponseChoiceMes
 	if msg.ReasoningContent != nil {
 		redactedMsg.ReasoningContent = redactReasoningContent(msg.ReasoningContent)
 	}
+	redactedMsg.ThinkingBlocks = redactThinkingBlocks(msg.ThinkingBlocks)
+	redactRefusalAndSources(msg, &redactedMsg)
 
 	return redactedMsg
 }

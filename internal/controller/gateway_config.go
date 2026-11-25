@@ -115,6 +115,9 @@ func (c *GatewayConfigController) notifyReferencingGateways(gatewayConfig *aigv1
 
 // updateGatewayConfigStatus updates the status of the GatewayConfig.
 func (c *GatewayConfigController) updateGatewayConfigStatus(ctx context.Context, gatewayConfig *aigv1b1.GatewayConfig, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := gatewayConfig.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: gatewayConfig.Name, Namespace: gatewayConfig.Namespace}, gatewayConfig); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -123,7 +126,7 @@ func (c *GatewayConfigController) updateGatewayConfigStatus(ctx context.Context,
 			return err
 		}
 
-		gatewayConfig.Status.Conditions = gatewayConfigConditions(conditionType, message)
+		gatewayConfig.Status.Conditions = gatewayConfigConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, gatewayConfig)
 	})
 	if err != nil {
@@ -132,7 +135,7 @@ func (c *GatewayConfigController) updateGatewayConfigStatus(ctx context.Context,
 }
 
 // gatewayConfigConditions creates new conditions for the GatewayConfig status.
-func gatewayConfigConditions(conditionType string, message string) []metav1.Condition {
+func gatewayConfigConditions(generation int64, conditionType string, message string) []metav1.Condition {
 	status := metav1.ConditionTrue
 	if conditionType == aigv1b1.ConditionTypeNotAccepted {
 		status = metav1.ConditionFalse
@@ -144,6 +147,7 @@ func gatewayConfigConditions(conditionType string, message string) []metav1.Cond
 			Status:             status,
 			Reason:             conditionType,
 			Message:            message,
+			ObservedGeneration: generation,
 			LastTransitionTime: metav1.Now(),
 		},
 	}
