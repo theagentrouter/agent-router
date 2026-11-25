@@ -37,11 +37,7 @@ func TestPopulateAnthropicEnvConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				Anthropic: &AnthropicConfig{
-					BackendName: "anthropic",
-					SchemaName:  "Anthropic",
-					Version:     "",
-				},
+				Providers: []Provider{{Name: "anthropic", SchemaName: "Anthropic", ModelMatch: AllModels, APIKeyEnv: "ANTHROPIC_API_KEY"}},
 			},
 		},
 		{
@@ -59,11 +55,7 @@ func TestPopulateAnthropicEnvConfig(t *testing.T) {
 						NeedsTLS: true,
 					},
 				},
-				Anthropic: &AnthropicConfig{
-					BackendName: "anthropic",
-					SchemaName:  "Anthropic",
-					Version:     "v2",
-				},
+				Providers: []Provider{{Name: "anthropic", SchemaName: "Anthropic", Version: "v2", ModelMatch: AllModels, APIKeyEnv: "ANTHROPIC_API_KEY"}},
 			},
 		},
 		{
@@ -81,11 +73,7 @@ func TestPopulateAnthropicEnvConfig(t *testing.T) {
 						NeedsTLS: false,
 					},
 				},
-				Anthropic: &AnthropicConfig{
-					BackendName: "anthropic",
-					SchemaName:  "Anthropic",
-					Version:     "",
-				},
+				Providers: []Provider{{Name: "anthropic", SchemaName: "Anthropic", ModelMatch: AllModels, APIKeyEnv: "ANTHROPIC_API_KEY"}},
 			},
 		},
 		{
@@ -104,7 +92,7 @@ func TestPopulateAnthropicEnvConfig(t *testing.T) {
 
 			// Test PopulateAnthropicEnvConfig
 			data := &ConfigData{}
-			err := PopulateAnthropicEnvConfig(data)
+			err := PopulateAnthropicEnvConfig(data, AllModels)
 
 			// Check result
 			if tt.expectedError != nil {

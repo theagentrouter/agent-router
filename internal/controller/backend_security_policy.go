@@ -454,6 +454,9 @@ func (c *BackendSecurityPolicyController) syncBackendSecurityPolicy(ctx context.
 
 // updateBackendSecurityPolicyStatus updates the status of the BackendSecurityPolicy.
 func (c *BackendSecurityPolicyController) updateBackendSecurityPolicyStatus(ctx context.Context, bsp *aigv1b1.BackendSecurityPolicy, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := bsp.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: bsp.Name, Namespace: bsp.Namespace}, bsp); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -462,7 +465,7 @@ func (c *BackendSecurityPolicyController) updateBackendSecurityPolicyStatus(ctx 
 			return err
 		}
 
-		bsp.Status.Conditions = newConditions(conditionType, message)
+		bsp.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, bsp)
 	})
 	if err != nil {

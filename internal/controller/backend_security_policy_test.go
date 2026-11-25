@@ -2026,3 +2026,26 @@ func TestBackendSecurityPolicyController_RotateCredential_GCPOIDCUsesPreRotation
 	// Expiration is in one hour, so the next rotation should be scheduled one hour minus the window from now.
 	require.InDelta(t, (time.Hour - preRotationWindow).Seconds(), res.RequeueAfter.Seconds(), 5)
 }
+
+func TestBackendSecurityPolicyController_updateBackendSecurityPolicyStatus(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	c := &BackendSecurityPolicyController{client: fakeClient, logger: ctrl.Log}
+
+	bsp := &aigv1b1.BackendSecurityPolicy{ObjectMeta: metav1.ObjectMeta{Name: "bsp1", Namespace: "default", Generation: 1}}
+	require.NoError(t, fakeClient.Create(t.Context(), bsp))
+
+	// The reconcile processed generation 1, and the spec is edited to generation 2 before the
+	// status is written. The conditions describe generation 1, not the generation the status write
+	// re-reads.
+	processed := bsp.DeepCopy()
+	bsp.Generation = 2
+	require.NoError(t, fakeClient.Update(t.Context(), bsp))
+	for _, conditionType := range []string{aigv1b1.ConditionTypeNotAccepted, aigv1b1.ConditionTypeAccepted} {
+		c.updateBackendSecurityPolicyStatus(t.Context(), processed.DeepCopy(), conditionType, "result")
+		var current aigv1b1.BackendSecurityPolicy
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(bsp), &current))
+		require.Len(t, current.Status.Conditions, 1)
+		require.Equal(t, conditionType, current.Status.Conditions[0].Type)
+		require.Equal(t, int64(1), current.Status.Conditions[0].ObservedGeneration)
+	}
+}
