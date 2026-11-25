@@ -132,14 +132,25 @@ func (a *anthropicToAWSBedrockTranslator) RequestBody(_ []byte, body *anthropics
 		if bedrockReq.AdditionalModelRequestFields == nil {
 			bedrockReq.AdditionalModelRequestFields = make(map[string]interface{})
 		}
-		if body.Thinking.Enabled != nil {
+		switch {
+		case body.Thinking.Enabled != nil:
 			bedrockReq.AdditionalModelRequestFields["thinking"] = map[string]any{
 				"type":          "enabled",
 				"budget_tokens": body.Thinking.Enabled.BudgetTokens,
 			}
-		} else if body.Thinking.Disabled != nil {
+		case body.Thinking.Disabled != nil:
 			bedrockReq.AdditionalModelRequestFields["thinking"] = map[string]any{
 				"type": "disabled",
+			}
+		case body.Thinking.Adaptive != nil:
+			thinkingMap := map[string]any{"type": "adaptive"}
+			if body.Thinking.Adaptive.Display != "" {
+				thinkingMap["display"] = body.Thinking.Adaptive.Display
+			}
+			bedrockReq.AdditionalModelRequestFields["thinking"] = thinkingMap
+		case body.Thinking.BetweenTools != nil:
+			bedrockReq.AdditionalModelRequestFields["thinking"] = map[string]any{
+				"type": "between_tools",
 			}
 		}
 	}

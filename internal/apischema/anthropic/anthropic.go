@@ -51,6 +51,10 @@ type MessagesRequest struct {
 	// https://docs.claude.com/en/api/messages#body-metadata
 	Metadata *MessagesMetadata `json:"metadata,omitempty"`
 
+	// OutputConfig configures the response format and reasoning effort.
+	// https://docs.claude.com/en/api/messages#body-output-config
+	OutputConfig *OutputConfig `json:"output_config,omitempty"`
+
 	// ServiceTier indicates the service tier for the request.
 	// https://docs.claude.com/en/api/messages#body-service-tier
 	ServiceTier *MessageServiceTier `json:"service_tier,omitempty"`
@@ -86,6 +90,32 @@ type MessagesRequest struct {
 
 	// TopK is the number of highest probability vocabulary tokens to keep for top-k-filtering.
 	TopK *int `json:"top_k,omitempty"`
+}
+
+// OutputConfig configures the format and reasoning effort of a Messages API response.
+type OutputConfig struct {
+	// Effort constrains the reasoning effort used for the response.
+	Effort OutputConfigEffort `json:"effort,omitempty"`
+
+	// Format constrains the response to the supplied JSON schema.
+	Format *JSONOutputFormat `json:"format,omitempty"`
+}
+
+// OutputConfigEffort is an Anthropic output effort level.
+type OutputConfigEffort string
+
+const (
+	OutputConfigEffortLow    OutputConfigEffort = "low"
+	OutputConfigEffortMedium OutputConfigEffort = "medium"
+	OutputConfigEffortHigh   OutputConfigEffort = "high"
+	OutputConfigEffortXhigh  OutputConfigEffort = "xhigh"
+	OutputConfigEffortMax    OutputConfigEffort = "max"
+)
+
+// JSONOutputFormat constrains a response to a JSON schema.
+type JSONOutputFormat struct {
+	Type   string          `json:"type"`
+	Schema json.RawMessage `json:"schema"`
 }
 
 // MessageParam represents a single message in the Anthropic Messages API.
@@ -1285,9 +1315,10 @@ type (
 	// This is not to be confused with the thinking block that is part of the response message's contentblock
 	// https://platform.claude.com/docs/en/api/messages#body-thinking
 	Thinking struct {
-		Enabled  *ThinkingEnabled
-		Disabled *ThinkingDisabled
-		Adaptive *ThinkingAdaptive
+		Enabled      *ThinkingEnabled
+		Disabled     *ThinkingDisabled
+		Adaptive     *ThinkingAdaptive
+		BetweenTools *ThinkingBetweenTools
 	}
 
 	// ThinkingEnabled enables extended thinking with a token budget.
@@ -1310,13 +1341,21 @@ type (
 		Type    string `json:"type"`              // Always "adaptive".
 		Display string `json:"display,omitempty"` // "summarized" or "omitted".
 	}
+
+	// ThinkingBetweenTools turns off up-front thinking while keeping progress updates between tool calls.
+	// It takes no other field. Only Claude Sonnet 5.5 accepts it, at effort high or below.
+	// https://platform.claude.com/docs/en/build-with-claude/thinking
+	ThinkingBetweenTools struct {
+		Type string `json:"type"` // Always "between_tools".
+	}
 )
 
 // Thinking config type constants used by Thinking.
 const (
-	thinkingConfigTypeEnabled  = "enabled"
-	thinkingConfigTypeDisabled = "disabled"
-	thinkingConfigTypeAdaptive = "adaptive"
+	thinkingConfigTypeEnabled      = "enabled"
+	thinkingConfigTypeDisabled     = "disabled"
+	thinkingConfigTypeAdaptive     = "adaptive"
+	thinkingConfigTypeBetweenTools = "between_tools"
 )
 
 func (t *Thinking) UnmarshalJSON(data []byte) error {
@@ -1343,6 +1382,12 @@ func (t *Thinking) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("failed to unmarshal thinking adaptive: %w", err)
 		}
 		t.Adaptive = &thinking
+	case thinkingConfigTypeBetweenTools:
+		var thinking ThinkingBetweenTools
+		if err := json.Unmarshal(data, &thinking); err != nil {
+			return fmt.Errorf("failed to unmarshal thinking between_tools: %w", err)
+		}
+		t.BetweenTools = &thinking
 	default:
 		// Ignore unknown types for forward compatibility.
 		return nil
@@ -1359,6 +1404,9 @@ func (t *Thinking) MarshalJSON() ([]byte, error) {
 	}
 	if t.Adaptive != nil {
 		return json.Marshal(t.Adaptive)
+	}
+	if t.BetweenTools != nil {
+		return json.Marshal(t.BetweenTools)
 	}
 	return nil, fmt.Errorf("thinking config must have a defined type")
 }
@@ -1435,6 +1483,9 @@ type MessagesResponse struct {
 	// StopSequence is the stop sequence that was encountered.
 	// https://docs.claude.com/en/api/messages#response-stop-sequence
 	StopSequence *string `json:"stop_sequence,omitempty"`
+	// StopDetails contains structured information about a refusal.
+	// https://platform.claude.com/docs/en/api/messages#response-stop-details
+	StopDetails *RefusalStopDetails `json:"stop_details,omitempty"`
 	// Usage contains token usage information for the response.
 	// https://docs.claude.com/en/api/messages#response-usage
 	Usage *Usage `json:"usage,omitempty"`
@@ -1445,6 +1496,19 @@ type ConstantMessagesResponseTypeMessages string
 
 // ConstantMessagesResponseRoleAssistant is the constant role for MessagesResponse, which is always "assistant".
 type ConstantMessagesResponseRoleAssistant string
+
+// RefusalStopDetails contains structured information about a refusal.
+type RefusalStopDetails struct {
+	// Type is always "refusal".
+	Type ConstantRefusalStopDetailsTypeRefusal `json:"type"`
+	// Category is the policy category that triggered the refusal, when available.
+	Category *string `json:"category"`
+	// Explanation is a human-readable description of the refusal, when available.
+	Explanation *string `json:"explanation"`
+}
+
+// ConstantRefusalStopDetailsTypeRefusal is the constant type for refusal stop details.
+type ConstantRefusalStopDetailsTypeRefusal string
 
 type (
 	// MessagesContentBlock represents a block of content in the Anthropic Messages API response.

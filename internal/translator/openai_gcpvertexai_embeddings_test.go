@@ -1282,10 +1282,11 @@ func TestResponseModel_GCPVertexAIEmbeddings(t *testing.T) {
 
 func TestCollectPartsFromMessages(t *testing.T) {
 	tests := []struct {
-		name      string
-		messages  []openai.ChatCompletionMessageParamUnion
-		wantParts int
-		wantError bool
+		name          string
+		messages      []openai.ChatCompletionMessageParamUnion
+		wantParts     int
+		wantMIMETypes []string
+		wantError     bool
 	}{
 		{
 			name: "single user message with text",
@@ -1363,6 +1364,37 @@ func TestCollectPartsFromMessages(t *testing.T) {
 			wantParts: 2,
 		},
 		{
+			name: "user message with audio, PDF, and video content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role: "user",
+					Content: openai.StringOrUserRoleContentUnion{Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{OfInputAudio: &openai.ChatCompletionContentPartInputAudioParam{
+							Type: "input_audio",
+							InputAudio: openai.ChatCompletionContentPartInputAudioInputAudioParam{
+								Data:   "ZmFrZS13YXY=",
+								Format: openai.ChatCompletionContentPartInputAudioInputAudioFormatWAV,
+							},
+						}},
+						{OfFile: &openai.ChatCompletionContentPartFileParam{
+							Type: "file",
+							File: openai.ChatCompletionContentPartFileFileParam{
+								FileData: "data:application/pdf;base64,ZmFrZS1wZGY=",
+							},
+						}},
+						{OfFile: &openai.ChatCompletionContentPartFileParam{
+							Type: "file",
+							File: openai.ChatCompletionContentPartFileFileParam{
+								FileData: "data:video/mp4;base64,ZmFrZS1tcDQ=",
+							},
+						}},
+					}},
+				}},
+			},
+			wantParts:     3,
+			wantMIMETypes: []string{"audio/wav", "application/pdf", "video/mp4"},
+		},
+		{
 			name: "user message with empty string content returns error",
 			messages: []openai.ChatCompletionMessageParamUnion{
 				{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1400,6 +1432,10 @@ func TestCollectPartsFromMessages(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Len(t, parts, tc.wantParts)
+			for i, want := range tc.wantMIMETypes {
+				require.NotNil(t, parts[i].InlineData)
+				require.Equal(t, want, parts[i].InlineData.MIMEType)
+			}
 		})
 	}
 }
