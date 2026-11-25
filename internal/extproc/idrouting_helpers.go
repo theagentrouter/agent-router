@@ -17,6 +17,7 @@ import (
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	"github.com/tidwall/gjson"
 
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -136,6 +137,24 @@ func setOverwriteHeader(headers *extprocv3.HeaderMutation, key, value string) {
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		Header:       &corev3.HeaderValue{Key: key, RawValue: []byte(value)},
 	})
+}
+
+// duplicateTopLevelKey reports the first top-level member name that appears more than once in a
+// JSON object. Names are compared after unescaping, so "a" and "\u0061" count as the same member.
+func duplicateTopLevelKey(body []byte) (string, bool) {
+	seen := make(map[string]struct{})
+	var dup string
+	found := false
+	gjson.ParseBytes(body).ForEach(func(key, _ gjson.Result) bool {
+		name := key.String()
+		if _, ok := seen[name]; ok {
+			dup, found = name, true
+			return false
+		}
+		seen[name] = struct{}{}
+		return true
+	})
+	return dup, found
 }
 
 // bodyMutationResponse returns a response-body processing result that replaces the body with

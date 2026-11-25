@@ -299,8 +299,16 @@ func (p *batchesProcessor) ProcessRequestBody(_ context.Context, rawBody *extpro
 		return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_RequestBody{}}, nil
 	}
 	body := rawBody.GetBody()
-	if !gjson.ValidBytes(body) {
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
 		return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error", "request body must be a JSON object"), nil
+	}
+	// gjson/sjson read and rewrite only the first occurrence of a member, while common upstream
+	// parsers use the last one. A repeated input_file_id could therefore pass the ownership check
+	// with a gateway id and have the provider use a later, unvalidated id, so reject duplicates.
+	if key, dup := duplicateTopLevelKey(body); dup {
+		p.logger.Info("rejecting batch create with duplicate member", slog.String("key", key))
+		return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error",
+			fmt.Sprintf("duplicate field %q in request body", key)), nil
 	}
 
 	// Endpoint support is provider-specific, so it is checked by the create translator in the

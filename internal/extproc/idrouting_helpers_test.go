@@ -634,3 +634,52 @@ func TestBatches_SetBackend_BodyMutatorOnlyForCreate(t *testing.T) {
 		require.Nil(t, up.bodyMutator, "op %d", op)
 	}
 }
+
+func TestDuplicateTopLevelKey(t *testing.T) {
+	tests := []struct {
+		name, body, wantKey string
+		wantDup             bool
+	}{
+		{"no duplicates", `{"a":1,"b":{"a":2}}`, "", false},
+		{"duplicate", `{"input_file_id":"x","endpoint":"e","input_file_id":"y"}`, "input_file_id", true},
+		{"escaped duplicate", `{"input_file_id":"x","\u0069nput_file_id":"y"}`, "input_file_id", true},
+		{"duplicate empty key", `{"":1,"":2}`, "", true},
+		{"nested duplicates are ignored", `{"metadata":{"k":1,"k":2}}`, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, dup := duplicateTopLevelKey([]byte(tt.body))
+			require.Equal(t, tt.wantDup, dup)
+			require.Equal(t, tt.wantKey, key)
+		})
+	}
+}
+
+func TestBatches_Create_RejectsDuplicateInputFileID(t *testing.T) {
+	codec := newTestCodec()
+	gatewayID := encodeGatewayID(t, codec, idcodec.KindFile, "ns", "apple", "m1", "file-native")
+	for _, body := range []string{
+		`{"input_file_id":"` + gatewayID + `","endpoint":"/v1/chat/completions","completion_window":"24h","input_file_id":"file-victim"}`,
+		`{"input_file_id":"` + gatewayID + `","endpoint":"/v1/chat/completions","completion_window":"24h","\u0069nput_file_id":"file-victim"}`,
+		`{"input_file_id":"` + gatewayID + `","endpoint":"/v1/chat/completions","endpoint":"/v1/embeddings","completion_window":"24h"}`,
+	} {
+		p := newBatchesProcessorForPath(codec, http.MethodPost, "/v1/batches")
+		_, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		resp, err := p.ProcessRequestBody(context.Background(), &extprocv3.HttpBody{Body: []byte(body)})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, immediateStatus(resp), body)
+		require.Nil(t, p.decodedBackend, "must reject before routing")
+	}
+}
+
+func TestBatches_Create_RejectsNonObjectBody(t *testing.T) {
+	for _, body := range []string{`[]`, `"x"`, `1`} {
+		p := newBatchesProcessorForPath(newTestCodec(), http.MethodPost, "/v1/batches")
+		_, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		resp, err := p.ProcessRequestBody(context.Background(), &extprocv3.HttpBody{Body: []byte(body)})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusBadRequest, immediateStatus(resp), body)
+	}
+}
