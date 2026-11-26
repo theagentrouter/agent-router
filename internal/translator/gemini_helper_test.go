@@ -1870,6 +1870,88 @@ func TestOpenAIReqToGeminiGenerationConfig(t *testing.T) {
 			requestModel:         "gemini-3-pro",
 		},
 		{
+			name: "low reasoning effort on gemini-4-hydrogen maps to ThinkingLevelLow",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortLow,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelLow,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "gemini-4-hydrogen",
+		},
+		{
+			name: "medium reasoning effort on gemini-4-carbon maps to ThinkingLevelMedium",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortMedium,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelMedium,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "gemini-4-carbon",
+		},
+		{
+			name: "medium reasoning effort on gemini-4-neon maps to ThinkingLevelMedium",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortMedium,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelMedium,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "gemini-4-neon",
+		},
+		{
+			name: "high reasoning effort on gemini-4-hydrogen maps to ThinkingLevelHigh",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortHigh,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelHigh,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "gemini-4-hydrogen",
+		},
+		{
+			name: "reasoning effort on publisher-prefixed Gemini 4 model is forwarded",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortLow,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{
+				ThinkingConfig: &genai.ThinkingConfig{
+					ThinkingLevel: genai.ThinkingLevelLow,
+				},
+			},
+			expectedResponseMode: responseModeNone,
+			requestModel:         "publishers/google/models/gemini-4-argon",
+		},
+		{
+			name: "none reasoning effort on Gemini 4 returns error because Gemini 4 has no minimal level",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortNone,
+			},
+			expectedErrMsg: "reasoning effort 'none' is only supported for Gemini Flash models",
+			requestModel:   "gemini-4-neon",
+		},
+		{
+			name: "reasoning effort is not forwarded to a Gemini 2.5 model whose name contains a 3",
+			input: &openai.ChatCompletionRequest{
+				ReasoningEffort: openai.ReasoningEffortHigh,
+			},
+			expectedGenerationConfig: &genai.GenerationConfig{},
+			expectedResponseMode:     responseModeNone,
+			requestModel:             "gemini-2.5-flash-preview-03-25",
+		},
+		{
 			name: "reasoning effort unsupported value",
 			input: &openai.ChatCompletionRequest{
 				ReasoningEffort: "invalid_value",
@@ -3211,6 +3293,18 @@ func TestMapReasoningEffortToThinkingLevel(t *testing.T) {
 			expectedErrorMsg: "reasoning effort 'none' is only supported for Gemini Flash models",
 		},
 		{
+			name:             "none effort on Gemini 4 returns error",
+			reasoningEffort:  "none",
+			model:            "gemini-4-hydrogen",
+			expectedErrorMsg: "reasoning effort 'none' is only supported for Gemini Flash models",
+		},
+		{
+			name:             "medium effort on Gemini 4 maps to ThinkingLevelMedium",
+			reasoningEffort:  openai.ReasoningEffortMedium,
+			model:            "gemini-4-carbon",
+			expectedThinking: genai.ThinkingLevelMedium,
+		},
+		{
 			name:             "low effort maps to ThinkingLevelLow",
 			reasoningEffort:  openai.ReasoningEffortLow,
 			model:            "gemini-3-flash",
@@ -3284,6 +3378,75 @@ func TestMapReasoningEffortToThinkingLevel(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, tc.expectedThinking, thinking)
 			}
+		})
+	}
+}
+
+func TestGeminiVersionGates(t *testing.T) {
+	tests := []struct {
+		model     internalapi.RequestModel
+		available bool
+	}{
+		{model: "gemini-4-carbon", available: true},
+		{model: "gemini-4-argon", available: true},
+		{model: "gemini-4-neon", available: true},
+		{model: "gemini-4-hydrogen", available: true},
+		{model: "publishers/google/models/gemini-4-neon", available: true},
+		{model: "Gemini-4-Neon", available: true},
+		{model: "gemini-10-pro", available: true},
+		{model: "gemini-3-pro", available: true},
+		{model: "gemini-3-pro-preview", available: true},
+		{model: "gemini-3.1-pro-preview", available: true},
+		{model: "gemini-3.5-flash", available: true},
+		{model: "gemini-3.1-flash-lite-image", available: true},
+		{model: "gemini-2.5-flash", available: false},
+		{model: "gemini-2.5-flash-preview-03-25", available: false},
+		{model: "gemini-2.0-flash-001", available: false},
+		{model: "gemini-1.5-pro-003", available: false},
+		{model: "gemini-embedding-exp-03-07", available: false},
+		{model: "gemini-pro", available: false},
+		{model: "gemini-flash", available: false},
+		{model: "gemini-robotics-er-2-preview", available: false},
+		{model: "claude-3-opus", available: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.model, func(t *testing.T) {
+			assert.Equal(t, tc.available, reasoningEffortAvailable(tc.model), "reasoningEffortAvailable")
+			assert.Equal(t, tc.available, mediaResolutionAvailable(tc.model), "mediaResolutionAvailable")
+		})
+	}
+}
+
+func TestUserMsgToGeminiPartsMediaResolutionByModelVersion(t *testing.T) {
+	msg := openai.ChatCompletionUserMessageParam{
+		Role: openai.ChatMessageRoleUser,
+		Content: openai.StringOrUserRoleContentUnion{
+			Value: []openai.ChatCompletionContentPartUserUnionParam{
+				{
+					OfImageURL: &openai.ChatCompletionContentPartImageParam{
+						Type: openai.ChatCompletionContentPartImageTypeImageURL,
+						ImageURL: openai.ChatCompletionContentPartImageImageURLParam{
+							URL:    "https://example.com/image.jpg",
+							Detail: openai.ChatCompletionContentPartImageImageURLDetailHigh,
+						},
+					},
+				},
+			},
+		},
+	}
+	tests := []struct {
+		model    internalapi.RequestModel
+		expected *genai.PartMediaResolution
+	}{
+		{model: "gemini-4-neon", expected: &genai.PartMediaResolution{Level: genai.PartMediaResolutionLevelMediaResolutionHigh}},
+		{model: "gemini-2.5-flash-preview-03-25", expected: nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.model, func(t *testing.T) {
+			parts, err := userMsgToGeminiParts(msg, tc.model)
+			require.NoError(t, err)
+			require.Len(t, parts, 1)
+			assert.Equal(t, tc.expected, parts[0].MediaResolution)
 		})
 	}
 }

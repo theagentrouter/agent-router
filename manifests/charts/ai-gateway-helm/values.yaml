@@ -298,6 +298,12 @@ controller:
   # resources (configuration) is big. Defaults to 4MB.
   # maxRecvMsgSize: "4194304"
 
+  # filterConfigBundleMaxSlots is the maximum number of Secrets (~700KiB each) the extproc filter
+  # config is split into. A larger config is not written and the extproc keeps its previous config,
+  # so raise this when the config grows past ~5.5MiB. Changing it rolls the gateway pods.
+  # Must be between 1 and 128. Defaults to 8.
+  # filterConfigBundleMaxSlots: 8
+
   # MCP Proxy settings
   mcp:
     # Configuration for MCP session encryption.
