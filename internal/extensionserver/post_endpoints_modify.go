@@ -70,6 +70,8 @@ func (s *Server) PostEndpointsModify(ctx context.Context, req *egextension.PostE
 		}
 	}
 
-	s.stampLoadAssignment(cla.ClusterName, cla, &aigwRoute, clusterName.ruleIndex, clusterName.backendRefIndex)
+	if err = s.stampLoadAssignment(ctx, cla.ClusterName, cla, &aigwRoute, clusterName.ruleIndex, clusterName.backendRefIndex); err != nil {
+		return nil, err
+	}
 	return &egextension.PostEndpointsModifyResponse{LoadAssignment: cla}, nil
 }
