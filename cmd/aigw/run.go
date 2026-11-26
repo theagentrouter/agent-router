@@ -451,13 +451,15 @@ func fileIDSeedForRun(seedPath string, stderr io.Writer) string {
 
 // mcpSessionSeedForRun returns the MCP session encryption seed to use when the environment does not
 // set one. It is read from seedPath; when missing or empty, a random seed is generated and saved
-// there, so MCP sessions survive a restart. If the seed cannot be saved, a warning is written to
-// stderr and the generated seed is used for this run only.
+// there, so session ids issued by one run can still be decrypted after a restart (the backend
+// sessions they refer to only survive if the backends keep them; stdio MCP servers do not). If the
+// seed cannot be saved, a warning is written to stderr and the generated seed is used for this run
+// only.
 func mcpSessionSeedForRun(seedPath string, stderr io.Writer) string {
 	seed, err := loadOrCreateSeed(seedPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "warning: failed to save the MCP session encryption seed (%v): "+
-			"MCP sessions will not be valid after a restart. Set %s to use a fixed seed.\n", err, mcpSessionEncryptionSeedEnvVar)
+			"MCP session ids will not be valid after a restart. Set %s to use a fixed seed.\n", err, mcpSessionEncryptionSeedEnvVar)
 	}
 	return seed
 }
