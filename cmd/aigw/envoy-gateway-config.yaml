@@ -41,6 +41,10 @@ extensionManager:
       post:
         - Translation
         - Cluster
+        # Always enabled in standalone mode, where Backends commonly use `ip` endpoints: it labels
+        # each EDS endpoint with its backend. It is opt-in on Kubernetes because of its cost on
+        # large Gateways (see manifests/envoy-gateway-values.yaml).
+        - Endpoints
         - Route
   service:
     fqdn:

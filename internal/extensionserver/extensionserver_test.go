@@ -249,27 +249,20 @@ func Test_maybeModifyCluster(t *testing.T) {
 		expected    *clusterv3.Cluster
 	}{
 		{
-			name: "nil LoadAssignment sets cluster metadata",
-			// In standalone mode (aigw run), EDS-managed endpoints have LoadAssignment=nil.
-			// The extension server must set cluster-level metadata so the upstream ext_proc
-			// filter can resolve the backend name via the cluster metadata fallback path.
+			name: "nil LoadAssignment with several backends does not set cluster metadata",
+			// EDS clusters (static IP endpoints, e.g. in standalone mode) have LoadAssignment=nil. Rule 0
+			// has two non-zero-weight backends sharing this cluster, so cluster-level metadata naming one
+			// of them would apply its configuration to the other's endpoints. The endpoints are
+			// stamped by PostEndpointsModify instead.
 			cluster: &clusterv3.Cluster{
 				Name: "httproute/ns/myroute/rule/0",
 			},
-			expectedLog: "msg=\"LoadAssignment is nil, setting cluster-level metadata\" logger=envoy-gateway-extension-server cluster_name=httproute/ns/myroute/rule/0\n",
+			expectedLog: "msg=\"LoadAssignment is nil and the cluster has several backends; not setting cluster-level metadata. " +
+				"Requests to this rule fail unless the Envoy Gateway \\\"Endpoints\\\" xDS translator hook is enabled " +
+				"(always in standalone mode, opt-in in the Envoy Gateway Helm values) or the Backends use fqdn endpoints\" " +
+				"logger=envoy-gateway-extension-server cluster_name=httproute/ns/myroute/rule/0\n",
 			expected: &clusterv3.Cluster{
 				Name: "httproute/ns/myroute/rule/0",
-				Metadata: &corev3.Metadata{
-					FilterMetadata: map[string]*structpb.Struct{
-						internalapi.InternalEndpointMetadataNamespace: {
-							Fields: map[string]*structpb.Value{
-								internalapi.InternalMetadataBackendNameKey: structpb.NewStringValue(
-									internalapi.PerRouteRuleRefBackendName("ns", "aaa", "myroute", 0, 0),
-								),
-							},
-						},
-					},
-				},
 				TypedExtensionProtocolOptions: map[string]*anypb.Any{
 					"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": mustToAny(t, &httpv3.HttpProtocolOptions{
 						UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{

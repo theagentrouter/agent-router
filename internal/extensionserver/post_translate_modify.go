@@ -392,72 +392,38 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	// Check if this rule has InferencePool backends.
 	pools := getInferencePoolsByMetadata(cluster.Metadata)
 	if len(pools) == 0 {
-		switch {
-		case cluster.LoadAssignment == nil:
-			// LoadAssignment is nil when the cluster's endpoints are EDS-managed: delivered out of band
-			// (e.g. standalone mode), not inlined at translate time. There is no LbEndpoint here, so we
-			// only set the backend name on cluster-level metadata; the upstream ext_proc filter resolves
-			// the backend via XDSClusterMetadataBackendNamePath.
+		if cluster.LoadAssignment == nil {
+			// LoadAssignment is nil when the cluster's endpoints are EDS-managed: Envoy Gateway turns
+			// static IP endpoints (Backend `ip` endpoints, Kubernetes Services) into an EDS cluster and
+			// delivers the ClusterLoadAssignment as a separate resource. The per-backend endpoint
+			// metadata is stamped on that resource by PostEndpointsModify; here there is no LbEndpoint.
+			// PostEndpointsModify only runs when the Envoy Gateway "Endpoints" xDS translator hook is
+			// registered: always in aigw run (standalone mode), but on Kubernetes only when users enable
+			// it explicitly in their Envoy Gateway Helm values (it is off by default for its cost).
 			//
-			// TODO(aws-signing): no LbEndpoint to stamp here, so an AWS backend on an EDS cluster falls
-			// back to the region-based default signing host and a VPCE host is lost. See ai-gateway#902 / #950.
-			s.log.Info("LoadAssignment is nil, setting cluster-level metadata", "cluster_name", cluster.Name)
-			if len(httpRouteRule.BackendRefs) > 0 {
-				backendRefIndex := 0
-				if clusterName.backendRefIndex != noBackendRefIndex {
-					backendRefIndex = clusterName.backendRefIndex
-				}
+			// Cluster-level metadata applies to every endpoint in the cluster, and the upstream ext_proc
+			// filter falls back to it when an endpoint carries no backend name. It is therefore only safe
+			// when the cluster maps to exactly one backendRef. When it can contain several backends,
+			// stamping one of them would make the ext_proc apply that backend's configuration, including
+			// its credentials, to requests sent to every other backend in the rule. Leave it unset so
+			// such requests fail closed (the upstream ext_proc finds no backend name) unless
+			// PostEndpointsModify stamped the endpoints.
+			//
+			// TODO(aws-signing): without the Endpoints hook there is no LbEndpoint to stamp, so an AWS
+			// backend on an EDS cluster falls back to the region-based default signing host and a VPCE
+			// host is lost. See ai-gateway#902 / #950.
+			if backendRefIndex, ok := singleBackendRefIndex(httpRouteRule, clusterName.backendRefIndex); ok {
+				s.log.Info("LoadAssignment is nil, setting cluster-level metadata", "cluster_name", cluster.Name)
 				backendRef := httpRouteRule.BackendRefs[backendRefIndex]
 				setClusterMetadataBackendName(cluster, aigwRoute.Namespace, backendRef.Name, aigwRoute.Name, httpRouteRuleIndex, backendRefIndex)
+			} else if len(httpRouteRule.BackendRefs) > 0 {
+				s.log.Info("LoadAssignment is nil and the cluster has several backends; not setting cluster-level metadata. "+
+					"Requests to this rule fail unless the Envoy Gateway \"Endpoints\" xDS translator hook is enabled "+
+					"(always in standalone mode, opt-in in the Envoy Gateway Helm values) or the Backends use fqdn endpoints",
+					"cluster_name", cluster.Name)
 			}
-		case clusterName.backendRefIndex != noBackendRefIndex:
-			backendRef := httpRouteRule.BackendRefs[clusterName.backendRefIndex]
-			for _, endpoints := range cluster.LoadAssignment.Endpoints {
-				s.applyLegacyBackendRefPriority(endpoints, backendRef.Priority, cluster.Name, backendRef.Name)
-				for _, endpoint := range endpoints.LbEndpoints {
-					setEndpointMetadataBackendName(endpoint, aigwRoute.Namespace, backendRef.Name, aigwRoute.Name, httpRouteRuleIndex, clusterName.backendRefIndex)
-					stampUpstreamHostMetadata(endpoint)
-				}
-			}
-		default:
-			// Populate the metadata for each endpoint in the LoadAssignment.
-			var lbEndpointIndex int
-			for i, backendRef := range httpRouteRule.BackendRefs {
-				// The weight of 0 means this backend is disabled and is not included in the LoadAssignment by EG,
-				// so we skip it here.
-				if backendRef.Weight != nil && *backendRef.Weight == 0 {
-					continue
-				}
-				// httpRouteRule.BackendRefs comes from a fresh
-				// s.k8sClient.Get(&aigwRoute); cluster.LoadAssignment is
-				// whatever Envoy Gateway translated for this cluster. The two
-				// can be a revision apart, so the rule can carry more
-				// non-zero-weight BackendRefs than the cluster has endpoint
-				// groups (e.g. an AIGatewayRoute gained a BackendRef whose
-				// AIServiceBackend does not resolve yet, so the generated
-				// HTTPRoute - and the cluster - stay a revision behind).
-				// lbEndpointIndex only increases, so once it is out of range
-				// every remaining backendRef is too; stop rather than index out
-				// of bounds. The rule and backendRef indices are already
-				// guarded the same way earlier in this function. The unmatched
-				// backend(s) get their endpoint metadata stamped on a later
-				// reconcile once the counts agree.
-				if lbEndpointIndex >= len(cluster.LoadAssignment.Endpoints) {
-					s.log.Info("cluster LoadAssignment has fewer endpoint groups than non-zero-weight backendRefs",
-						"cluster_name", cluster.Name, "backend_index", i,
-						"load_assignment_endpoints", len(cluster.LoadAssignment.Endpoints))
-					break
-				}
-				endpoints := cluster.LoadAssignment.Endpoints[lbEndpointIndex]
-				lbEndpointIndex++
-				name := backendRef.Name
-				namespace := aigwRoute.Namespace
-				s.applyLegacyBackendRefPriority(endpoints, backendRef.Priority, cluster.Name, name)
-				for _, endpoint := range endpoints.LbEndpoints {
-					setEndpointMetadataBackendName(endpoint, namespace, name, aigwRoute.Name, httpRouteRuleIndex, i)
-					stampUpstreamHostMetadata(endpoint)
-				}
-			}
+		} else {
+			s.stampLoadAssignment(cluster.Name, cluster.LoadAssignment, &aigwRoute, httpRouteRuleIndex, clusterName.backendRefIndex)
 		}
 	} else {
 		// we can only specify one backend in a rule for InferencePool.
@@ -601,6 +567,78 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	}
 	cluster.TypedExtensionProtocolOptions[httpProtocolOptionsKey] = poAny
 	return nil
+}
+
+// singleBackendRefIndex returns the index of the only backendRef whose endpoints a cluster of the
+// given rule can hold, and false when the cluster can hold the endpoints of several backendRefs.
+// A per-backend cluster (backendRefIndex set) holds a single backendRef. A rule-level cluster holds
+// every backendRef with a non-zero weight, since Envoy Gateway leaves zero-weight ones out.
+func singleBackendRefIndex(rule *aigv1b1.AIGatewayRouteRule, backendRefIndex int) (int, bool) {
+	if backendRefIndex != noBackendRefIndex {
+		return backendRefIndex, true
+	}
+	index := -1
+	for i, backendRef := range rule.BackendRefs {
+		if backendRef.Weight != nil && *backendRef.Weight == 0 {
+			continue
+		}
+		if index != -1 {
+			return 0, false
+		}
+		index = i
+	}
+	return index, index != -1
+}
+
+// stampLoadAssignment stamps the backend name, upstream host and priority of each backendRef of the
+// rule on the endpoints of the given ClusterLoadAssignment. It is used both for clusters with an
+// inline LoadAssignment and for EDS ClusterLoadAssignments (PostEndpointsModify, which only runs
+// when the Envoy Gateway "Endpoints" hook is enabled: always in standalone mode, opt-in on
+// Kubernetes).
+func (s *Server) stampLoadAssignment(clusterName string, cla *endpointv3.ClusterLoadAssignment, aigwRoute *aigv1b1.AIGatewayRoute, ruleIndex, backendRefIndex int) {
+	rule := &aigwRoute.Spec.Rules[ruleIndex]
+	if backendRefIndex != noBackendRefIndex {
+		backendRef := rule.BackendRefs[backendRefIndex]
+		for _, endpoints := range cla.Endpoints {
+			s.applyLegacyBackendRefPriority(endpoints, backendRef.Priority, clusterName, backendRef.Name)
+			for _, endpoint := range endpoints.LbEndpoints {
+				setEndpointMetadataBackendName(endpoint, aigwRoute.Namespace, backendRef.Name, aigwRoute.Name, ruleIndex, backendRefIndex)
+				stampUpstreamHostMetadata(endpoint)
+			}
+		}
+		return
+	}
+	// Populate the metadata for each endpoint in the LoadAssignment. Envoy Gateway builds one
+	// endpoint group per backendRef, in order.
+	var lbEndpointIndex int
+	for i, backendRef := range rule.BackendRefs {
+		// The weight of 0 means this backend is disabled and is not included in the LoadAssignment by EG,
+		// so we skip it here.
+		if backendRef.Weight != nil && *backendRef.Weight == 0 {
+			continue
+		}
+		// rule.BackendRefs comes from a fresh s.k8sClient.Get(&aigwRoute); the LoadAssignment is
+		// whatever Envoy Gateway translated for this cluster. The two can be a revision apart, so the
+		// rule can carry more non-zero-weight BackendRefs than the cluster has endpoint groups (e.g. an
+		// AIGatewayRoute gained a BackendRef whose AIServiceBackend does not resolve yet, so the
+		// generated HTTPRoute - and the cluster - stay a revision behind). lbEndpointIndex only
+		// increases, so once it is out of range every remaining backendRef is too; stop rather than
+		// index out of bounds. The unmatched backend(s) get their endpoint metadata stamped on a later
+		// reconcile once the counts agree.
+		if lbEndpointIndex >= len(cla.Endpoints) {
+			s.log.Info("cluster LoadAssignment has fewer endpoint groups than non-zero-weight backendRefs",
+				"cluster_name", clusterName, "backend_index", i,
+				"load_assignment_endpoints", len(cla.Endpoints))
+			break
+		}
+		endpoints := cla.Endpoints[lbEndpointIndex]
+		lbEndpointIndex++
+		s.applyLegacyBackendRefPriority(endpoints, backendRef.Priority, clusterName, backendRef.Name)
+		for _, endpoint := range endpoints.LbEndpoints {
+			setEndpointMetadataBackendName(endpoint, aigwRoute.Namespace, backendRef.Name, aigwRoute.Name, ruleIndex, i)
+			stampUpstreamHostMetadata(endpoint)
+		}
+	}
 }
 
 // metadataForwardingNamespacesForSnapshot returns the untyped dynamic metadata namespaces Envoy
