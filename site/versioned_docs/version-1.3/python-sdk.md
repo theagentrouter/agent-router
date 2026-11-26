@@ -84,6 +84,15 @@ See the SDK's
 
 ## Installation
 
+:::note
+
+The SDK is in alpha (`0.1.0` prereleases on PyPI): its API and behavior may
+still change, so test it before you rely on it in production. Its known limits
+are listed in
+[How the local gateway works](https://github.com/theagentrouter/agent-router-python/blob/main/docs/local-gateway.md).
+
+:::
+
 There are two packages, both imported as `import theagentrouter`:
 
 | Package               | What it installs                            | Use it on                                                                  |
@@ -153,15 +162,25 @@ endpoints, so any Agent Router configuration that serves them works:
 A call to a route sends the route's name, so the gateway's own route of that name
 applies. To run on a server the same routes and models you tested locally,
 `local_gateway.export_config()` returns an `aigw` configuration built from them.
-Save it to a file and run it with `aigw run`. The exported gateway checks one
-shared client key: set `AGENTROUTER_API_KEY` on the server too, to the same value
-your clients use, along with the provider keys:
+Save it to a file:
 
 ```python
 from pathlib import Path
 from theagentrouter import local_gateway
 
 Path("config.yaml").write_text(local_gateway.export_config())
+```
+
+The SDK's `aigw` is not on your `PATH` and does not reach the server, so
+[install `aigw`](./cli/installation.md) there, copy `config.yaml` over, and run
+it. The exported gateway checks one shared client key: set `AGENTROUTER_API_KEY`
+on the server to the same value your clients use, along with the provider keys:
+
+```shell
+curl -sSL https://theagentrouter.ai/install.sh | sh
+export AGENTROUTER_API_KEY=... # the key your clients use
+export ANTHROPIC_API_KEY=...   # and every provider key the routes need
+aigw run config.yaml
 ```
 
 ## Coming from LiteLLM
