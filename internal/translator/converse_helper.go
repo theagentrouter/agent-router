@@ -187,8 +187,8 @@ func openAIMessageToBedrockMessageRoleAssistant(
 
 	var contentParts []openai.ChatCompletionAssistantMessageParamContent
 	switch content := openAiMessage.Content.Value.(type) {
-	case string:
-		// With a string answer, signed reasoning is carried separately in thinking_blocks.
+	case nil, string:
+		// With string or omitted content, signed reasoning is carried separately in thinking_blocks.
 		for i := range openAiMessage.ThinkingBlocks {
 			block := &openAiMessage.ThinkingBlocks[i]
 			if block.Type == "thinking" && block.Signature != "" {
@@ -199,10 +199,10 @@ func openAIMessageToBedrockMessageRoleAssistant(
 				})
 			}
 		}
-		if content != "" {
+		if text, ok := content.(string); ok && text != "" {
 			contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{
 				Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
-				Text: &content,
+				Text: &text,
 			})
 		}
 	case openai.ChatCompletionAssistantMessageParamContent:

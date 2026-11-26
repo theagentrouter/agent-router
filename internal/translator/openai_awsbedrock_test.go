@@ -1461,49 +1461,81 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 }
 
 func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody_SignedThinkingHistory(t *testing.T) {
-	const request = `{
+	const textRequest = `{
 		"model": "something", "stream": false, "thinking": {"type": "enabled", "budget_tokens": 4096},
 		"messages": [{"role": "user", "content": "Say hello."}, %s, {"role": "user", "content": "Continue."}]
 	}`
-	const wantAssistant = `{
+	const toolRequest = `{
+		"model": "something", "stream": false, "thinking": {"type": "enabled", "budget_tokens": 4096},
+		"tools": [{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object", "properties": {"timezone": {"type": "string"}}, "required": ["timezone"]}}}],
+		"messages": [{"role": "user", "content": "What time is it in UTC?"}, %s, {"role": "tool", "tool_call_id": "call_clock_01", "content": "12:00:00Z"}]
+	}`
+	const toolHistoryFields = `"thinking_blocks": [{"type": "thinking", "thinking": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}],
+		"tool_calls": [{"type": "function", "id": "call_clock_01", "function": {"name": "get_time", "arguments": "{\"timezone\":\"UTC\"}"}}]`
+	const wantText = `{
 		"role": "assistant",
 		"content": [
 			{"reasoningContent": {"reasoningText": {"text": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}}},
 			{"text": "Hello!"}
 		]
 	}`
+	const wantTool = `{
+		"role": "assistant",
+		"content": [
+			{"reasoningContent": {"reasoningText": {"text": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}}},
+			{"toolUse": {"toolUseId": "call_clock_01", "name": "get_time", "input": {"timezone": "UTC"}}}
+		]
+	}`
 	for _, tc := range []struct {
-		name, assistant string
+		name, request, assistant, want string
 	}{
 		{
-			name: "content parts",
+			name:    "content parts",
+			request: textRequest,
+			want:    wantText,
 			assistant: `{"role": "assistant", "content": [
 				{"type": "thinking", "text": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"},
 				{"type": "text", "text": "Hello!"}
 			]}`,
 		},
 		{
-			name: "top-level thinking_blocks",
+			name:    "top-level thinking_blocks",
+			request: textRequest,
+			want:    wantText,
 			assistant: `{"role": "assistant", "content": "Hello!", "reasoning_content": "synthetic reasoning for turn one",
 				"thinking_blocks": [{"type": "thinking", "thinking": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}]
 			}`,
 		},
 		{
-			name: "same thinking block in content and thinking_blocks",
+			name:    "same thinking block in content and thinking_blocks",
+			request: textRequest,
+			want:    wantText,
 			assistant: `{"role": "assistant", "content": [
 				{"type": "thinking", "text": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"},
 				{"type": "text", "text": "Hello!"}
 			], "thinking_blocks": [{"type": "thinking", "thinking": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}]}`,
 		},
+		{
+			name:      "tool call with empty content",
+			request:   toolRequest,
+			want:      wantTool,
+			assistant: `{"role": "assistant", "content": "", ` + toolHistoryFields + `}`,
+		},
+		{
+			name:      "tool call with omitted content",
+			request:   toolRequest,
+			want:      wantTool,
+			assistant: `{"role": "assistant", ` + toolHistoryFields + `}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			raw := []byte(fmt.Sprintf(request, tc.assistant))
+			raw := []byte(fmt.Sprintf(tc.request, tc.assistant))
 			var req openai.ChatCompletionRequest
 			require.NoError(t, json.Unmarshal(raw, &req))
 			translator := NewChatCompletionOpenAIToAWSBedrockTranslator("")
 			_, body, err := translator.RequestBody(raw, &req, false)
 			require.NoError(t, err)
-			require.JSONEq(t, wantAssistant, gjson.GetBytes(body, "messages.1").Raw)
+			require.JSONEq(t, tc.want, gjson.GetBytes(body, "messages.1").Raw)
 		})
 	}
 }
