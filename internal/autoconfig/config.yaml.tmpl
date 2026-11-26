@@ -205,14 +205,20 @@ spec:
 {{- range .Providers }}
     - matches:
         - headers:
+{{- if .HeaderMatch }}
+            - type: Exact
+              name: {{ yamlString .HeaderMatch.Name }}
+              value: {{ yamlString .HeaderMatch.Value }}
+{{- else }}
             - type: RegularExpression
               name: x-ai-eg-model
               value: {{ yamlString .ModelMatch }}
+{{- end }}
       backendRefs:
         - name: {{ .Name }}
           namespace: default
       timeouts:
-        request: 120s
+        request: {{ if .RequestTimeout }}{{ .RequestTimeout }}{{ else }}120s{{ end }}
 {{- end }}
   # Configure the LLM request costs so they can be included in the Envoy access logs
   llmRequestCosts:
@@ -306,12 +312,20 @@ spec:
     kind: Backend
     group: gateway.envoyproxy.io
     namespace: default
-{{- if .Headers }}
+{{- if or .Headers .RemoveHeaders }}
   headerMutation:
+{{- if .Headers }}
     set:
 {{- range .Headers }}
       - name: {{ yamlString .Name }}
         value: {{ yamlString .Value }}
+{{- end }}
+{{- end }}
+{{- if .RemoveHeaders }}
+    remove:
+{{- range .RemoveHeaders }}
+      - {{ yamlString . }}
+{{- end }}
 {{- end }}
 {{- end }}
 ---

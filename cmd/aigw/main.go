@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -40,6 +41,16 @@ type (
 		Healthcheck cmdHealthcheck `cmd:"" help:"Docker HEALTHCHECK command."`
 		// DownloadEnvoy downloads the Envoy binary used by Envoy Gateway.
 		DownloadEnvoy cmdDownloadEnvoy `cmd:"" help:"Download Envoy binary for the Envoy Gateway default version."`
+		// Claude runs Claude Code through Agent Router.
+		Claude cmdAgent `cmd:"" help:"Run Claude Code through Agent Router, starting it in the background if needed."`
+		// Codex runs Codex through Agent Router.
+		Codex cmdAgent `cmd:"" help:"Run Codex through Agent Router, starting it in the background if needed."`
+		// Status shows the Agent Router started for the coding agents.
+		Status cmdStatus `cmd:"" help:"Show the Agent Router started by \"aigw claude\" or \"aigw codex\"."`
+		// Stop stops the Agent Router started for the coding agents.
+		Stop cmdStop `cmd:"" help:"Stop the Agent Router started by \"aigw claude\" or \"aigw codex\"."`
+
+		dirs *xdg.Directories `kong:"-"` // Internal field: XDG directories, set by BeforeApply
 	}
 	// cmdRun corresponds to `aigw run` command.
 	cmdRun struct {
@@ -90,12 +101,13 @@ func (c *cmd) BeforeApply(_ *kong.Context) error {
 	c.RuntimeDir = expandPath(c.RuntimeDir)
 
 	// Populate Run.dirs with expanded XDG directories for use in Run.BeforeApply
-	c.Run.dirs = &xdg.Directories{
+	c.dirs = &xdg.Directories{
 		ConfigHome: c.ConfigHome,
 		DataHome:   c.DataHome,
 		StateHome:  c.StateHome,
 		RuntimeDir: c.RuntimeDir,
 	}
+	c.Run.dirs = c.dirs
 	// Populate DownloadEnvoy dataHome with expanded data directory.
 	c.DownloadEnvoy.dataHome = c.DataHome
 
@@ -215,6 +227,30 @@ func doMain(ctx context.Context, stdout, stderr io.Writer, args []string, exitFn
 		err = df(ctx, &c.DownloadEnvoy, stdout, stderr)
 		if err != nil {
 			log.Fatalf("Download Envoy failed: %v", err)
+		}
+	case "claude", "claude <args>", "codex", "codex <args>":
+		a, cmdArgs := &claudeAgent, &c.Claude
+		if parsed.Selected().Name == codexAgent.name {
+			a, cmdArgs = &codexAgent, &c.Codex
+		}
+		err = runAgent(ctx, a, cmdArgs, c.dirs, stderr)
+		var exitErr errAgentExit
+		switch {
+		case errors.As(err, &exitErr):
+			exitFn(exitErr.code)
+		case errors.Is(err, errSetupAborted):
+			exitFn(130)
+		case err != nil:
+			_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
+			exitFn(1)
+		}
+	case "status":
+		if err = agentsStatus(c.dirs, stdout); err != nil {
+			log.Fatalf("Status failed: %v", err)
+		}
+	case "stop":
+		if err = stopAgents(c.dirs, stdout); err != nil {
+			log.Fatalf("Stop failed: %v", err)
 		}
 	default:
 		panic("unreachable")
