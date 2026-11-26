@@ -272,7 +272,7 @@ func (a *agentSpec) addProvider(data *autoconfig.ConfigData, s agentSettings) er
 	}
 	endpoint := strings.TrimSuffix(m.endpoint(s), "/") + m.apiPath
 	if err = autoconfig.AddProvider(data, &p, endpoint); err != nil {
-		return fmt.Errorf("invalid %s configuration: %w", a.title, err)
+		return fmt.Errorf("invalid %s configuration: %w. Run \"aigw %s --setup\" to choose again", a.title, err, a.name)
 	}
 	return nil
 }

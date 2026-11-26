@@ -79,6 +79,11 @@ func TestRunAgentSetup(t *testing.T) {
 			expOut: []string{"Agent Router URL [https://api.router.tetrate.ai]"},
 		},
 		{
+			name: "a url without host is asked again", agent: &codexAgent, input: "jj\rhttps://\rhttp://localhost:11434/v1\r\r",
+			exp: agentSettings{Mode: "openai-compatible", URL: "http://localhost:11434/v1", NoKey: true}, expKeys: map[string]string{},
+			expOut: []string{"enter a URL with a host"},
+		},
+		{
 			name: "codex openai", agent: &codexAgent, input: "\rsk-openai\r",
 			exp: agentSettings{Mode: "openai-api-key"}, expKeys: map[string]string{"OPENAI_API_KEY": "sk-openai"},
 		},
@@ -268,4 +273,12 @@ func TestAgentDescribe(t *testing.T) {
 func TestWrap(t *testing.T) {
 	require.Equal(t, []string{"aa bb", "cc"}, wrap("aa bb cc", 5))
 	require.Equal(t, []string{""}, wrap("", 5))
+}
+
+func TestValidURL(t *testing.T) {
+	require.NoError(t, validURL("https://api.example.com"))
+	require.NoError(t, validURL("http://localhost:11434/v1"))
+	for _, bad := range []string{"api.example.com", "https://", "http://:8080", "https:///v1"} {
+		require.Error(t, validURL(bad), bad)
+	}
 }

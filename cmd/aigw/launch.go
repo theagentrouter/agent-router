@@ -183,6 +183,10 @@ func runAgent(ctx context.Context, a *agentSpec, c *cmdAgent, dirs *xdg.Director
 		if current, keys, err = promptAgentSetup(ui, a, prev); err != nil {
 			return err
 		}
+		// Check that the gateway accepts the settings before saving them: a saved agent is not set up again.
+		if err = a.addProvider(&autoconfig.ConfigData{}, current); err != nil {
+			return err
+		}
 		settings[a.name] = current
 		if err = saveAgentSettings(settingsPath, settings); err != nil {
 			return err
@@ -390,28 +394,35 @@ func spawnAgentGateway(ctx context.Context, paths *agentPaths, dirs *xdg.Directo
 	if err = cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start Agent Router: %w", err)
 	}
+	// Reap the gateway if it exits while this process runs. It is not released: Wait does that.
+	pid := cmd.Process.Pid
 	exited := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
 		close(exited)
 	}()
 
-	state, err := json.Marshal(newAgentState(cmd.Process.Pid, routed, keys))
+	// A gateway that is not ready, or that "aigw stop" could not find, must not be left behind.
+	if err = startedAgentGateway(ctx, paths, pid, routed, keys, exited); err != nil {
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = os.Remove(paths.state)
+		return err
+	}
+	return nil
+}
+
+// startedAgentGateway saves the state of the started gateway process pid, and waits until it is ready.
+func startedAgentGateway(ctx context.Context, paths *agentPaths, pid int, routed map[string]agentSettings,
+	keys map[string]string, exited <-chan struct{},
+) error {
+	state, err := json.Marshal(newAgentState(pid, routed, keys))
 	if err != nil {
 		return err
 	}
 	if err = os.WriteFile(paths.state, state, 0o600); err != nil {
 		return fmt.Errorf("failed to save %s: %w", paths.state, err)
 	}
-
-	if err = waitGatewayReady(ctx, paths, exited); err != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		_ = os.Remove(paths.state)
-		return err
-	}
-	// The gateway runs on its own: stop waiting for it.
-	_ = cmd.Process.Release()
-	return nil
+	return waitGatewayReady(ctx, paths, exited)
 }
 
 // waitGatewayReady waits until the gateway serves requests, it exits, or agentGatewayStartTimeout.
@@ -482,13 +493,19 @@ func stopAgentGateway(paths *agentPaths, state *agentState) error {
 // stopAgents implements "aigw stop".
 func stopAgents(dirs *xdg.Directories, stdout io.Writer) error {
 	paths := newAgentPaths(dirs)
+	// Wait for a gateway being started, so that it is stopped too.
+	unlock, err := paths.lockGateway()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	state := paths.running()
 	if state == nil {
 		_ = os.Remove(paths.state)
 		_, _ = fmt.Fprintln(stdout, "Agent Router is not running.")
 		return nil
 	}
-	if err := stopAgentGateway(paths, state); err != nil {
+	if err = stopAgentGateway(paths, state); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintln(stdout, "✓ Agent Router stopped.")

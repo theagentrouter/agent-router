@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -204,6 +205,39 @@ func TestStopAndStatus(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestStopWaitsForStart(t *testing.T) {
+	useFreeAddr(t)
+	dirs := testDirs(t)
+	unlock, err := newAgentPaths(dirs).lockGateway()
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		_ = stopAgents(dirs, &bytes.Buffer{})
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("stop did not wait for the gateway being started")
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 20*time.Millisecond)
+}
+
+func TestStartedAgentGatewayStateError(t *testing.T) {
+	paths := newAgentPaths(testDirs(t)) // Its directory does not exist: the state can't be saved.
+	err := startedAgentGateway(t.Context(), paths, os.Getpid(), map[string]agentSettings{}, nil, nil)
+	require.ErrorContains(t, err, "failed to save")
+}
+
 func TestProcessRuns(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "config.yaml")
 	cmd := exec.Command("sh", "-c", "sleep 60", "aigw", "run", config)
@@ -227,4 +261,30 @@ func TestTail(t *testing.T) {
 	require.Equal(t, "b\nc", tail(path, 2))
 	require.Equal(t, "a\nb\nc", tail(path, 10))
 	require.Empty(t, tail(filepath.Join(t.TempDir(), "missing"), 2))
+}
+
+func TestDoMainAgentCommand(t *testing.T) {
+	dir := t.TempDir()
+	for _, k := range []string{"AIGW_CONFIG_HOME", "AIGW_DATA_HOME", "AIGW_STATE_HOME", "AIGW_RUNTIME_DIR"} {
+		t.Setenv(k, filepath.Join(dir, k))
+	}
+	fakeAgent(t, "claude", 0)
+	fakeAgent(t, "codex", 0)
+	for _, tt := range []struct {
+		args []string
+		exp  string
+	}{
+		{args: []string{"claude"}, exp: "Claude Code is not configured yet"},
+		{args: []string{"claude", "-p", "hi"}, exp: "Claude Code is not configured yet"},
+		{args: []string{"codex"}, exp: "Codex is not configured yet"},
+		{args: []string{"codex", "exec", "hi"}, exp: "Codex is not configured yet"},
+	} {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			stderr := &bytes.Buffer{}
+			code := -1
+			doMain(t.Context(), &bytes.Buffer{}, stderr, tt.args, func(c int) { code = c }, nil, nil, nil)
+			require.Equal(t, 1, code)
+			require.Contains(t, stderr.String(), tt.exp)
+		})
+	}
 }

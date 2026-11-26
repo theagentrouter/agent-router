@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -229,8 +230,9 @@ func doMain(ctx context.Context, stdout, stderr io.Writer, args []string, exitFn
 			log.Fatalf("Download Envoy failed: %v", err)
 		}
 	case "claude", "claude <args>", "codex", "codex <args>":
+		// The full command ("codex <args>") names the agent, whatever node Selected() returns.
 		a, cmdArgs := &claudeAgent, &c.Claude
-		if parsed.Selected().Name == codexAgent.name {
+		if strings.HasPrefix(parsed.Command(), codexAgent.name) {
 			a, cmdArgs = &codexAgent, &c.Codex
 		}
 		err = runAgent(ctx, a, cmdArgs, c.dirs, stderr)
