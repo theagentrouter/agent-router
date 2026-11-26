@@ -145,6 +145,8 @@ func writeProtocolError(w http.ResponseWriter, pe *protocolError, requestID *jso
 // touching the modern path.
 func (m *mcpRequestContext) servePOST(w http.ResponseWriter, r *http.Request) {
 	startAt := time.Now()
+	// Authorization of non-tool methods reads the HTTP-level attributes from this request.
+	m.httpRequest = r
 
 	limit := m.maxRequestBodySize
 	if limit <= 0 {

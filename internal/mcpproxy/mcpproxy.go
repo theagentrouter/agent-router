@@ -46,6 +46,12 @@ type mcpRequestContext struct {
 	extraHeaders           map[string]string
 	perBackendExtraHeaders map[filterapi.MCPBackendName]map[string]string
 	forwardHeadersResolved bool
+	// httpRequest is the incoming client request. It is used to populate the HTTP-level
+	// attributes (method, host, path) of authorization requests for MCP methods whose
+	// handlers do not otherwise receive the *http.Request. It is set by servePOST and may
+	// be nil in tests that invoke handlers directly; authorization then falls back to
+	// requestHeaders.
+	httpRequest *http.Request
 }
 
 // defaultMaxRequestBodySize is the default maximum allowed POST body size in bytes (4 MiB).

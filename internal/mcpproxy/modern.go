@@ -563,12 +563,19 @@ func (m *mcpRequestContext) handleModernResourcesList(ctx context.Context, w htt
 	m.perBackendMetricsRecorded = true
 	m.requestHeaders = r.Header
 
-	_, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
+	routeConfig, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
 	if err != nil {
 		return handlerResult{}, err
 	}
 
-	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListResourcesResult](ctx, m, req, route, selected, span)
+	authorized := m.authorizedModernBackends(routeConfig, req, selected, &mcp.ListResourcesParams{})
+	if len(authorized) == 0 {
+		// The authorization policy denies this method on every selected backend: answer with
+		// an empty list without contacting any backend, as the legacy fan-out does.
+		writeJSONRPCResult(w, req.ID, m.mergeResourceList(&session{route: route}, nil))
+		return handlerResult{}, nil
+	}
+	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListResourcesResult](ctx, m, req, route, authorized, span)
 	if err != nil {
 		onRequestError(w, http.StatusInternalServerError, -32603, "failed to list resources for all backends", req.ID)
 		return handlerResult{}, err
@@ -589,11 +596,18 @@ func (m *mcpRequestContext) handleModernResourceTemplatesList(ctx context.Contex
 	m.perBackendMetricsRecorded = true
 	m.requestHeaders = r.Header
 
-	_, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
+	routeConfig, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
 	if err != nil {
 		return handlerResult{}, err
 	}
-	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListResourceTemplatesResult](ctx, m, req, route, selected, span)
+	authorized := m.authorizedModernBackends(routeConfig, req, selected, &mcp.ListResourceTemplatesParams{})
+	if len(authorized) == 0 {
+		// The authorization policy denies this method on every selected backend: answer with
+		// an empty list without contacting any backend, as the legacy fan-out does.
+		writeJSONRPCResult(w, req.ID, m.mergeResourcesTemplateList(&session{route: route}, nil))
+		return handlerResult{}, nil
+	}
+	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListResourceTemplatesResult](ctx, m, req, route, authorized, span)
 	if err != nil {
 		onRequestError(w, http.StatusInternalServerError, -32603, "failed to list resource templates for all backends", req.ID)
 		return handlerResult{}, err
@@ -615,12 +629,19 @@ func (m *mcpRequestContext) handleModernPromptsList(ctx context.Context, w http.
 	m.perBackendMetricsRecorded = true
 	m.requestHeaders = r.Header
 
-	_, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
+	routeConfig, selected, err := m.resolveModernRouteBackends(w, route, req.ID)
 	if err != nil {
 		return handlerResult{}, err
 	}
 
-	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListPromptsResult](ctx, m, req, route, selected, span)
+	authorized := m.authorizedModernBackends(routeConfig, req, selected, &mcp.ListPromptsParams{})
+	if len(authorized) == 0 {
+		// The authorization policy denies this method on every selected backend: answer with
+		// an empty list without contacting any backend, as the legacy fan-out does.
+		writeJSONRPCResult(w, req.ID, m.mergePromptsList(&session{route: route}, nil))
+		return handlerResult{}, nil
+	}
+	responses, err := sendToAllModernBackendsAndAggregateResponses[mcp.ListPromptsResult](ctx, m, req, route, authorized, span)
 	if err != nil {
 		onRequestError(w, http.StatusInternalServerError, -32603, "failed to list prompts for all backends", req.ID)
 		return handlerResult{}, err
@@ -760,6 +781,9 @@ func (m *mcpRequestContext) handleModernResourcesRead(ctx context.Context, w htt
 	if err != nil {
 		return result, err
 	}
+	if !m.authorizeModernMethod(w, r, req, routeConfig, backendName, &params) {
+		return result, errAuthorizationDenied
+	}
 
 	params.URI = upstreamURI
 	rewrittenParams, err := json.Marshal(params)
@@ -862,6 +886,9 @@ func (m *mcpRequestContext) handleModernPromptsGet(ctx context.Context, w http.R
 		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid prompt name: %s", upstreamName), req.ID)
 		return result, fmt.Errorf("%w: %s", errInvalidPromptName, upstreamName)
 	}
+	if !m.authorizeModernMethod(w, r, req, routeConfig, backendName, &params) {
+		return result, errAuthorizationDenied
+	}
 
 	params.Name = upstreamName
 	rewrittenParams, err := json.Marshal(params)
@@ -898,6 +925,10 @@ func (m *mcpRequestContext) handleModernComplete(ctx context.Context, w http.Res
 		onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, "completion/complete requires a ref", req.ID)
 		return handlerResult{}, errors.New("completion/complete requires a ref")
 	}
+	// Authorization sees the params as sent by the client, before the ref is unprefixed below.
+	authzParams := params
+	authzRef := *params.Ref
+	authzParams.Ref = &authzRef
 
 	// completion/complete targets a specific prompt or resource by ref. Resolve
 	// the owning backend from the ref and unprefix it, matching legacy
@@ -936,6 +967,9 @@ func (m *mcpRequestContext) handleModernComplete(ctx context.Context, w http.Res
 			onRequestError(w, http.StatusBadRequest, errCodeInvalidParams, fmt.Sprintf("invalid prompt name: %s", params.Ref.Name), req.ID)
 			return result, fmt.Errorf("%w: %s", errInvalidPromptName, params.Ref.Name)
 		}
+	}
+	if !m.authorizeModernMethod(w, r, req, routeConfig, backendName, &authzParams) {
+		return result, errAuthorizationDenied
 	}
 
 	// Rewrite params with the unprefixed ref.
@@ -992,6 +1026,16 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 			return handlerResult{}, err
 		}
 	}
+	// Only backends the route's authorization policy allows for subscriptions/listen are
+	// contacted. Subscribing to a resource on a denied backend is rejected outright, like
+	// resources/read; list_changed opt-ins silently skip denied backends, like list fan-out.
+	authorized := m.authorizedModernBackends(routeConfig, req, selected, &mcp.SubscriptionsListenParams{})
+	for backendName := range perBackendURIs {
+		if _, ok := authorized[backendName]; !ok {
+			onRequestError(w, http.StatusForbidden, errCodeInvalidRequest, "access denied", req.ID)
+			return handlerResult{}, errAuthorizationDenied
+		}
+	}
 
 	wantListChanged := intent.toolsListChanged || intent.promptsListChanged || intent.resourcesListChanged
 
@@ -1013,7 +1057,7 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 		backend filterapi.MCPBackend
 		uris    []string
 	}
-	for _, backend := range selected {
+	for _, backend := range authorized {
 		uris := perBackendURIs[backend.Name]
 		if len(uris) == 0 && !wantListChanged {
 			continue
@@ -1784,6 +1828,46 @@ func rewriteUpdatedURI(params json.RawMessage, backendName string) (json.RawMess
 		return nil, false
 	}
 	return out, true
+}
+
+// authorizeModernMethod evaluates the route's authorization policy for a non-tool modern method
+// addressed to a single backend (resources/read, prompts/get, completion/complete). params are the
+// params as sent by the client. On denial it writes a 403 JSON-RPC error, with the
+// insufficient_scope challenge when scopes are missing, and returns false.
+func (m *mcpRequestContext) authorizeModernMethod(w http.ResponseWriter, r *http.Request, req *jsonrpc.Request, route *mcpProxyConfigRoute, backend filterapi.MCPBackendName, params mcp.Params) bool {
+	// Modern handlers receive the request directly; make sure authorization sees it even when the
+	// handler is invoked without servePOST (e.g. in tests).
+	m.httpRequest = r
+	allowed, requiredScopes := m.authorizeMethod(route, req.Method, backend, params)
+	if !allowed {
+		m.setInsufficientScopeChallenge(w, r, route, requiredScopes)
+		onRequestError(w, http.StatusForbidden, errCodeInvalidRequest, "access denied", req.ID)
+	}
+	return allowed
+}
+
+// authorizedModernBackends returns the subset of selected backends that the route's
+// authorization policy allows for req.Method, mirroring the per-backend filtering the legacy
+// fan-out applies in sendToAllBackendsAndAggregateResponses. Authorization sees the params as
+// sent by the client.
+//
+// params is a zero value of the method's params type; it is populated from req.Params.
+func (m *mcpRequestContext) authorizedModernBackends(route *mcpProxyConfigRoute, req *jsonrpc.Request, selected map[filterapi.MCPBackendName]filterapi.MCPBackend, params mcp.Params) map[filterapi.MCPBackendName]filterapi.MCPBackend {
+	if route == nil || route.authorization == nil {
+		return selected
+	}
+	if len(req.Params) > 0 {
+		// The params were already validated by serveModernPOST; ignore errors here.
+		_ = json.Unmarshal(req.Params, params)
+	}
+	authorized := m.authorizedBackendFilter(route, req.Method, params)
+	allowed := make(map[filterapi.MCPBackendName]filterapi.MCPBackend, len(selected))
+	for name, backend := range selected {
+		if authorized(name) {
+			allowed[name] = backend
+		}
+	}
+	return allowed
 }
 
 // sendToAllModernBackendsAndAggregateResponses fans out a modern (stateless) list request

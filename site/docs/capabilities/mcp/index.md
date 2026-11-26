@@ -469,6 +469,43 @@ spec:
 
 Rules are evaluated in order. The first rule that matches the request (Target, Source, and CEL) determines the action (Allow/Deny). If no rules match, the `defaultAction` is applied.
 
+Authorization applies to every MCP method the gateway forwards to a backend, not only to tool calls:
+`resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, `subscriptions/listen` and `notifications/roots/list_changed`
+are evaluated against the same rules, with `request.mcp.method` and `request.mcp.backend` set accordingly.
+Rules with a `target` only match `tools/call` (and the `tools/list` filtering), so under the default
+`defaultAction: Deny` these other methods are denied unless a rule without a `target` allows them. For
+methods that fan out to every backend (the `*/list` methods, `logging/setLevel`, `subscriptions/listen` and notifications), the
+rules are evaluated per backend and backends that are not allowed are skipped. For example, to allow
+reading resources and prompts on the `github` backend:
+
+```yaml
+authorization:
+  rules:
+    - cel: request.mcp.method in ["resources/list", "resources/read", "prompts/list", "prompts/get"] && request.mcp.backend == "github"
+```
+
+:::note
+Earlier releases evaluated `authorization` only for `tools/call` and `tools/list`, and forwarded every other
+method without checking it. Routes whose rules all have a `target` therefore exposed resources and prompts
+even with `defaultAction: Deny`. These methods are now denied on such routes. To keep the previous behavior
+while you write narrower rules, add this rule **first** in the list. It allows every method except tool calls,
+so tool authorization is unaffected:
+
+```yaml
+authorization:
+  rules:
+    - cel: request.mcp.method != "tools/call" # allow all non-tool methods (previous behavior)
+    # ...existing rules
+```
+
+This rule leaves resources and prompts open to every caller. Prefer rules scoped to specific methods and backends, like the example above.
+
+Rules without a `target` are now also evaluated for non-tool methods. If such a rule's CEL expression reads
+tool-only fields, such as `request.mcp.params.arguments`, guard it with
+`request.mcp.method == "tools/call" && ...` or `has(...)`. Otherwise the expression fails to evaluate on other
+methods, and evaluation errors deny the request.
+:::
+
 #### Matchers
 
 | Matcher    | Description                                                                                                                                                         |

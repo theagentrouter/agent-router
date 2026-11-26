@@ -306,6 +306,74 @@ func TestMCPRouteAuthorization(t *testing.T) {
 
 		requireSumToolResult(ctx, t, sess, 41, 1, "42")
 	})
+
+	// The route's defaultAction is Deny (the CRD default) and only the "all-access" rule has no
+	// target, so prompts and resources must only be reachable with that scope.
+	t.Run("non-tool methods are subject to authorization", func(t *testing.T) {
+		const promptName = "mcp-backend-authorization__code_review"
+		connect := func(t *testing.T, scopes ...string) (context.Context, *mcp.ClientSession) {
+			authHTTPClient := &http.Client{
+				Timeout:   10 * time.Second,
+				Transport: &bearerTokenTransport{token: makeSignedJWT(t, scopes...)},
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			t.Cleanup(cancel)
+			sess := requireConnectMCP(ctx, t, client, fmt.Sprintf("%s/mcp-authorization", fwd.Address()), authHTTPClient)
+			t.Cleanup(func() { _ = sess.Close() })
+			return ctx, sess
+		}
+
+		// Resource URIs are rewritten by the gateway, so discover the client-facing one first.
+		var resourceURI string
+		t.Run("allowed by untargeted rule", func(t *testing.T) {
+			ctx, sess := connect(t, "all-access")
+
+			prompts, err := sess.ListPrompts(ctx, &mcp.ListPromptsParams{})
+			require.NoError(t, err)
+			require.Len(t, prompts.Prompts, 1)
+			require.Equal(t, promptName, prompts.Prompts[0].Name)
+
+			prompt, err := sess.GetPrompt(ctx, &mcp.GetPromptParams{Name: promptName, Arguments: map[string]string{"Code": "x := 1"}})
+			require.NoError(t, err)
+			require.NotEmpty(t, prompt.Messages)
+
+			resources, err := sess.ListResources(ctx, &mcp.ListResourcesParams{})
+			require.NoError(t, err)
+			for _, r := range resources.Resources {
+				if strings.HasSuffix(r.URI, testmcp.DummyResource.URI) {
+					resourceURI = r.URI
+				}
+			}
+			require.NotEmpty(t, resourceURI, "dummy resource not listed: %+v", resources.Resources)
+
+			contents, err := sess.ReadResource(ctx, &mcp.ReadResourceParams{URI: resourceURI})
+			require.NoError(t, err)
+			require.NotEmpty(t, contents.Contents)
+		})
+
+		t.Run("denied without a matching rule", func(t *testing.T) {
+			require.NotEmpty(t, resourceURI)
+			// "countdown" is allowed for every caller via a tool-targeted rule, which must not
+			// open up prompts or resources.
+			ctx, sess := connect(t, "echo")
+
+			prompts, err := sess.ListPrompts(ctx, &mcp.ListPromptsParams{})
+			require.NoError(t, err)
+			require.Empty(t, prompts.Prompts)
+
+			resources, err := sess.ListResources(ctx, &mcp.ListResourcesParams{})
+			require.NoError(t, err)
+			require.Empty(t, resources.Resources)
+
+			_, err = sess.GetPrompt(ctx, &mcp.GetPromptParams{Name: promptName, Arguments: map[string]string{"Code": "x := 1"}})
+			require.Error(t, err)
+			require.Contains(t, strings.ToLower(err.Error()), "forbidden", "unexpected error: %v", err)
+
+			_, err = sess.ReadResource(ctx, &mcp.ReadResourceParams{URI: resourceURI})
+			require.Error(t, err)
+			require.Contains(t, strings.ToLower(err.Error()), "forbidden", "unexpected error: %v", err)
+		})
+	})
 }
 
 func requireConnectMCP(ctx context.Context, t *testing.T, client *mcp.Client, endpoint string, httpClient *http.Client) *mcp.ClientSession {
