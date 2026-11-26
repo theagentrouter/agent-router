@@ -6,7 +6,7 @@
 package testupstreamlib
 
 const (
-	// FastAWSEventStream sends AWS events 10 ms apart and supports pausing after the first text delta.
+	// FastAWSEventStream sends AWS events 10 ms apart and supports pausing after the first content block delta.
 	FastAWSEventStream = "aws-event-stream-fast"
 	// ResponseTypeKey is the key for the response type in the request.
 	//	* If this is "sse", the response body is expected to be a Server-Sent Event stream.
