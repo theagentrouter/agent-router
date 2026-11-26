@@ -146,7 +146,7 @@ func collectObjects(yamlInput string, out io.Writer, logger *slog.Logger) (
 			return
 		}
 		// Deduplicate objects, skipping if already seen.
-		key := fmt.Sprintf("%s/%s", obj.GetKind(), obj.GetName())
+		key := fmt.Sprintf("%s/%s/%s", obj.GetKind(), obj.GetNamespace(), obj.GetName())
 		if _, ok := exists[key]; !ok {
 			exists[key] = struct{}{}
 		} else {
