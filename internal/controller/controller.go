@@ -98,6 +98,12 @@ type Options struct {
 	ExtProcImagePullSecrets string
 	// ExtProcMaxRecvMsgSize is the maximum message size in bytes that the gRPC server can receive for extProc.
 	ExtProcMaxRecvMsgSize int
+	// FilterConfigBundleMaxSlots is the number of part Secrets the filter config bundle may be split into, and the
+	// number of optional part slots the webhook projects into every gateway pod.
+	// A change rolls the gateway pods, since a pod's slots are fixed at creation. A lowered value takes effect
+	// only once the filter config fits in it: until then the config is not written and the pods keep their
+	// previous config.
+	FilterConfigBundleMaxSlots int
 	// MCPSessionEncryptionSeed is the seed used to derive the encryption key for MCP session encryption.
 	MCPSessionEncryptionSeed string
 	// MCPSessionEncryptionIterations is the number of iterations to use for PBKDF2 key derivation for MCP session encryption.
@@ -150,7 +156,8 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	extProcBuilder := newExtProcBuilder(options, isKubernetes133OrLater(versionInfo, logger), logger)
 	gatewayC := NewGatewayController(c, kubernetes.NewForConfigOrDie(config),
 		logger.WithName("gateway"), options.EnvoyGatewayNamespace,
-		false, uuid.NewString, options, isKubernetes133OrLater(versionInfo, logger))
+		false, uuid.NewString, options, isKubernetes133OrLater(versionInfo, logger),
+		mgr.GetEventRecorder("envoy-ai-gateway-controller"))
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1.Gateway{}).
 		WatchesRawSource(source.Channel(
 			gatewayEventChan,
@@ -612,12 +619,13 @@ func referenceGrantToTargetKindIndexFunc(o client.Object) []string {
 	return keys
 }
 
-// newConditions creates a new condition with the given type and message.
+// newConditions creates a new condition with the given type and message, observed at the given
+// generation of the object.
 //
 // Currently, we only set one condition at a time either "Accepted" or "NotAccepted".
 // In the future, if we can have multiple conditions like multiple errors, we can make changes here.
-func newConditions(conditionType, message string) []metav1.Condition {
-	condition := metav1.Condition{Message: message, LastTransitionTime: metav1.Now()}
+func newConditions(generation int64, conditionType, message string) []metav1.Condition {
+	condition := metav1.Condition{Message: message, LastTransitionTime: metav1.Now(), ObservedGeneration: generation}
 	// Note: we use the fixed reason for now since the message is enough to describe the error and
 	// reason doesn't fit the entire message.
 	switch conditionType {

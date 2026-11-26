@@ -119,7 +119,7 @@ spec:
         hostname: stream-idle-timeout-semi-silent.default.svc.cluster.local
         port: 8080
 ---
-# Semi-Silent upstream: accepts the TCP connection, sends one byte, and then holds it open without ever sending another byte.
+# Semi-silent upstream: sends one SSE event after receiving the request headers, then stalls.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -127,22 +127,22 @@ metadata:
   namespace: default
 data:
   semi-silent.py: |
-    import socket, sys
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", 8080))
-    s.listen(128)
-    sys.stderr.write("semi-silent upstream listening on :8080\n")
-    sys.stderr.flush()
-    while True:
-        conn, addr = s.accept()
-        sys.stderr.write(f"accepted from {addr}\n")
-        sys.stderr.flush()
-        # http sse response
-        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: hello\n\n")
-        sys.stderr.write(f"sent first byte to {addr}; keeping it silent\n")
-        # Intentionally don't recv / don't send. Hold the connection open
-        # until Envoy gives up.
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class SemiSilentBackend(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b"data: hello\n\n")
+
+            # Keep the response open until Envoy closes the idle stream.
+            while self.rfile.read(8192):
+                pass
+
+    ThreadingHTTPServer(("0.0.0.0", 8080), SemiSilentBackend).serve_forever()
 ---
 apiVersion: apps/v1
 kind: Deployment

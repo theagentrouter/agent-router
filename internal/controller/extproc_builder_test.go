@@ -86,7 +86,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	input := extProcContainerInput{}
 	baseHash := base.extProcContainerHash(input)
 	require.NotEmpty(t, baseHash)
-	require.Equal(t, 24, reflect.TypeOf(extProcBuilder{}).NumField(),
+	require.Equal(t, 25, reflect.TypeOf(extProcBuilder{}).NumField(),
 		"update drift coverage when extProcBuilder fields change")
 
 	// Helper: mutate a copy of the builder, recompute, expect a different hash.
@@ -148,6 +148,17 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 		b.logFormat = internalapi.LogFormatJSON
 		return b
 	}())
+	assertDrifts("bundleMaxSlots", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.bundleMaxSlots = DefaultFilterConfigBundleMaxSlots * 2
+		return b
+	}())
+	t.Run("bundleMaxSlots at the default keeps the hash", func(t *testing.T) {
+		b := newTestBuilder()
+		b.bundleMaxSlots = DefaultFilterConfigBundleMaxSlots
+		require.Equal(t, baseHash, b.extProcContainerHash(input),
+			"setting the default explicitly must not roll existing pods")
+	})
 	assertDrifts("requestHeaderAttributes", func() *extProcBuilder {
 		b := newTestBuilder()
 		s := "x-tenant-id:tenant.id"

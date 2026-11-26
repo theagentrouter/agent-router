@@ -493,6 +493,9 @@ func (c *AIGatewayRouteController) validateAndGetBackend(
 
 // updateAIGatewayRouteStatus updates the status of the AIGatewayRoute.
 func (c *AIGatewayRouteController) updateAIGatewayRouteStatus(ctx context.Context, route *aigv1b1.AIGatewayRoute, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := route.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -501,7 +504,7 @@ func (c *AIGatewayRouteController) updateAIGatewayRouteStatus(ctx context.Contex
 			return err
 		}
 
-		route.Status.Conditions = newConditions(conditionType, message)
+		route.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, route)
 	})
 	if err != nil {
