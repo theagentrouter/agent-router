@@ -741,7 +741,7 @@ It can reference either an AIServiceBackend or an InferencePool resource.
   type="integer"
   required="false"
   defaultValue="0"
-  description="Priority is the priority of the backend. This sets the priority on the underlying endpoints.<br />See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/priority<br />Note: A non-zero value overrides the `fallback` property of the underlying Envoy Gateway Backend.<br />With 0, the priority derived from the `fallback` property applies.<br />This field is ignored when referencing InferencePool resources.<br />Default is 0."
+  description="Priority is the priority of the backend. This sets the priority on the underlying endpoints.<br />See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/priority<br />Note: A non-zero value overrides the `fallback` property of the underlying Envoy Gateway Backend.<br />With 0, the priority derived from the `fallback` property applies.<br />This field is ignored when referencing InferencePool resources.<br />Valid range is 0 to 128.<br />Default is 0."
 />
 
 
@@ -3354,7 +3354,7 @@ It can reference either an AIServiceBackend or an InferencePool resource.
   type="integer"
   required="false"
   defaultValue="0"
-  description="Priority is the priority of the backend. This sets the priority on the underlying endpoints.<br />See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/priority<br />Note: A non-zero value overrides the `fallback` property of the underlying Envoy Gateway Backend.<br />With 0, the priority derived from the `fallback` property applies.<br />This field is ignored when referencing InferencePool resources.<br />Default is 0."
+  description="Priority is the priority of the backend. This sets the priority on the underlying endpoints.<br />See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/priority<br />Note: A non-zero value overrides the `fallback` property of the underlying Envoy Gateway Backend.<br />With 0, the priority derived from the `fallback` property applies.<br />This field is ignored when referencing InferencePool resources.<br />Valid range is 0 to 128.<br />Default is 0."
 />
 
 

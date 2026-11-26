@@ -400,6 +400,8 @@ type AIGatewayRouteRuleBackendRef struct {
 	// With 0, the priority derived from the `fallback` property applies.
 	// This field is ignored when referencing InferencePool resources.
 	//
+	// Valid range is 0 to 128.
+	//
 	// Default is 0.
 	//
 	// +optional
