@@ -52,8 +52,9 @@ changed.
 `aigw claude` and `aigw codex` start Agent Router in the background on
 `http://localhost:1975`, and share it: Claude Code and Codex can run at the same
 time, in any number of terminals, and each one's requests go to the provider
-chosen for it. Its logs are written to
-`~/.local/state/aigw/agents/gateway.log`.
+chosen for it. It only accepts requests from this machine, and the agents never
+get the API keys: Agent Router adds them to the requests. Its logs are written
+to `~/.local/state/aigw/agents/gateway.log`.
 
 Agent Router keeps running when the agent exits, so the next `aigw claude` or
 `aigw codex` starts at once:

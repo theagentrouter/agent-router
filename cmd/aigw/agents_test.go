@@ -8,6 +8,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -68,6 +69,14 @@ func TestRunAgentSetup(t *testing.T) {
 			env:     map[string]string{tetrateKeyEnv: "tars"},
 			exp:     agentSettings{Mode: "tetrate-managed", URL: "https://router.example.com"}, expKeys: map[string]string{},
 			expOut: []string{"Currently: Tetrate Agent Router, managed (router.example.com)"},
+		},
+		{
+			name: "another mode does not reuse the current url", agent: &codexAgent,
+			current: &agentSettings{Mode: "openai-compatible", URL: "http://localhost:11434/v1"},
+			input:   "k\r\r",
+			env:     map[string]string{tetrateKeyEnv: "tars"},
+			exp:     agentSettings{Mode: "tetrate"}, expKeys: map[string]string{},
+			expOut: []string{"Agent Router URL [https://api.router.tetrate.ai]"},
 		},
 		{
 			name: "codex openai", agent: &codexAgent, input: "\rsk-openai\r",
@@ -160,6 +169,8 @@ func TestAgentAddProvider(t *testing.T) {
 	require.Empty(t, p.APIKeyEnv)
 	require.Equal(t, &autoconfig.Header{Name: agentHeader, Value: "codex"}, p.HeaderMatch)
 	require.Equal(t, 11434, b.Port)
+	// Without a key, the placeholder credentials of the agent don't reach the provider either.
+	require.Equal(t, []string{agentHeader, "authorization", "x-api-key", tetratePassthroughHeader}, p.RemoveHeaders)
 
 	var data autoconfig.ConfigData
 	require.Error(t, claudeAgent.addProvider(&data, agentSettings{Mode: "nope"}))
@@ -187,10 +198,16 @@ func TestWriteAgentGatewayConfig(t *testing.T) {
 	require.Contains(t, config, "request: 30m")
 	require.Contains(t, config, `value: "${TARS_API_KEY}"`)
 	require.Contains(t, config, "apiKey: |-\n    ${OPENAI_API_KEY}")
+	// Only this machine may send requests, which get the API keys added.
+	require.Contains(t, config, "kind: SecurityPolicy")
+	require.Contains(t, config, "- 127.0.0.0/8")
 }
 
 func TestAgentCommand(t *testing.T) {
-	base := []string{"PATH=/bin", "ANTHROPIC_API_KEY=sk-real", "ANTHROPIC_CUSTOM_HEADERS=x-team: a"}
+	base := []string{
+		"PATH=/bin", "ANTHROPIC_API_KEY=sk-real", "ANTHROPIC_CUSTOM_HEADERS=x-team: a",
+		"OPENAI_API_KEY=sk-openai", tetrateKeyEnv + "=tars", "OPENAI_COMPATIBLE_API_KEY=sk-other",
+	}
 
 	args, env, err := claudeAgent.command(agentSettings{Mode: "subscription"}, []string{"-p", "hi"}, base)
 	require.NoError(t, err)
@@ -213,6 +230,18 @@ func TestAgentCommand(t *testing.T) {
 	require.Contains(t, args, `model_providers.aigw.http_headers={"x-aigw-agent"="codex"}`)
 	require.Equal(t, []string{"exec", "hi"}, args[len(args)-2:])
 	require.Equal(t, "aigw", lookupEnv(env, "AIGW_CODEX_API_KEY"))
+
+	// The agents never get the API keys of the providers.
+	for _, s := range []agentSettings{{Mode: "tetrate-passthrough"}, {Mode: "tetrate-managed"}} {
+		_, env, err = claudeAgent.command(s, nil, base)
+		require.NoError(t, err)
+		require.Equal(t, []string{"PATH=/bin"}, slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, "ANTHROPIC_") }))
+	}
+	for _, s := range []agentSettings{{Mode: "openai-api-key"}, {Mode: "tetrate"}, {Mode: "openai-compatible"}} {
+		_, env, err = codexAgent.command(s, nil, base)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"PATH=/bin", "ANTHROPIC_CUSTOM_HEADERS=x-team: a", "AIGW_CODEX_API_KEY=aigw"}, env)
+	}
 
 	_, _, err = claudeAgent.command(agentSettings{Mode: "nope"}, nil, base)
 	require.Error(t, err)

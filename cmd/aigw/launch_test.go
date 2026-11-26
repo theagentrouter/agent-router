@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,17 +50,38 @@ func useFreeAddr(t *testing.T) {
 	t.Cleanup(func() { agentGatewayAddr = prev })
 }
 
+// fakeGatewayProcess takes any live process for the gateway.
+func fakeGatewayProcess(t *testing.T) {
+	prev := isAgentGateway
+	isAgentGateway = func(int, string) bool { return true }
+	t.Cleanup(func() { isAgentGateway = prev })
+}
+
 func fakeStart(t *testing.T, calls *[]map[string]agentSettings) {
+	fakeGatewayProcess(t)
 	prev := startAgentGateway
-	startAgentGateway = func(_ context.Context, paths agentPaths, _ *xdg.Directories, routed map[string]agentSettings, _ map[string]string) error {
+	startAgentGateway = func(_ context.Context, paths *agentPaths, _ *xdg.Directories, routed map[string]agentSettings, keys map[string]string) error {
 		*calls = append(*calls, routed)
 		require.NoError(t, os.MkdirAll(paths.dir, 0o750))
-		// This process plays the gateway, so it is alive.
-		state, err := json.Marshal(agentState{Pid: os.Getpid(), Started: time.Now(), Agents: routed})
+		// A process plays the gateway, so it is alive, and it can be stopped.
+		gw := exec.Command("sleep", "60")
+		require.NoError(t, gw.Start())
+		go func() { _ = gw.Wait() }()
+		t.Cleanup(func() { _ = gw.Process.Kill() })
+		state, err := json.Marshal(newAgentState(gw.Process.Pid, routed, keys))
 		require.NoError(t, err)
 		return os.WriteFile(paths.state, state, 0o600)
 	}
 	t.Cleanup(func() { startAgentGateway = prev })
+}
+
+// serveReady makes the gateway address answer the readiness probe.
+func serveReady(t *testing.T) {
+	l, err := net.Listen("tcp", agentGatewayAddr)
+	require.NoError(t, err)
+	srv := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), ReadHeaderTimeout: time.Second}
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(func() { _ = srv.Close() })
 }
 
 func TestRunAgent(t *testing.T) {
@@ -100,11 +122,22 @@ func TestRunAgent(t *testing.T) {
 	})
 
 	t.Run("joins the running gateway and returns the agent exit code", func(t *testing.T) {
+		serveReady(t)
 		out := &bytes.Buffer{}
 		err := runAgent(t.Context(), &codexAgent, &cmdAgent{}, dirs, out)
 		require.Equal(t, errAgentExit{code: 3}, err)
 		require.Len(t, calls, 1)
 		require.Contains(t, out.String(), "Agent Router running on")
+	})
+
+	t.Run("restarts the gateway when the API key changes", func(t *testing.T) {
+		t.Setenv("OPENAI_API_KEY", "sk-rotated")
+		out := &bytes.Buffer{}
+		err := runAgent(t.Context(), &codexAgent, &cmdAgent{}, dirs, out)
+		require.Equal(t, errAgentExit{code: 3}, err)
+		require.Len(t, calls, 2)
+		require.Contains(t, out.String(), "Restarting Agent Router")
+		require.NotContains(t, newAgentPaths(dirs).running().Keys["codex"], "sk-rotated")
 	})
 
 	t.Run("missing key", func(t *testing.T) {
@@ -130,6 +163,7 @@ func TestRunAgent(t *testing.T) {
 
 func TestStopAndStatus(t *testing.T) {
 	useFreeAddr(t)
+	fakeGatewayProcess(t)
 	dirs := testDirs(t)
 	paths := newAgentPaths(dirs)
 
@@ -168,6 +202,23 @@ func TestStopAndStatus(t *testing.T) {
 	require.Eventually(t, func() bool { return !processAlive(gw.Process.Pid) }, 5*time.Second, 50*time.Millisecond)
 	_, err = os.Stat(paths.state)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestProcessRuns(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "config.yaml")
+	cmd := exec.Command("sh", "-c", "sleep 60", "aigw", "run", config)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	require.Eventually(t, func() bool { return processRuns(cmd.Process.Pid, config) }, 5*time.Second, 50*time.Millisecond)
+	require.False(t, processRuns(cmd.Process.Pid, config+".other"))
+	require.False(t, processRuns(os.Getpid(), config))
+}
+
+func TestKeyFingerprint(t *testing.T) {
+	require.Empty(t, keyFingerprint(""))
+	require.Len(t, keyFingerprint("a"), 64)
+	require.NotEqual(t, keyFingerprint("a"), keyFingerprint("b"))
+	require.NotContains(t, keyFingerprint("sk-secret"), "sk-secret")
 }
 
 func TestTail(t *testing.T) {

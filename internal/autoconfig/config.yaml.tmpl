@@ -365,6 +365,28 @@ spec:
   connection:
     bufferLimit: 50Mi
 ---
+{{- if .LocalOnly }}
+# Envoy Gateway listens on all addresses: deny the requests that don't come from this machine.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: local-only
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  authorization:
+    defaultAction: Deny
+    rules:
+      - action: Allow
+        principal:
+          clientCIDRs:
+            - 127.0.0.0/8
+            - ::1/128
+---
+{{- end }}
 {{- range .Providers }}
 {{- if or .APIKey .APIKeyEnv }}
 apiVersion: v1

@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -50,6 +52,8 @@ var (
 	agentGatewayAddr = "localhost:1975"
 	// startAgentGateway starts the gateway process for the given configuration.
 	startAgentGateway = spawnAgentGateway
+	// isAgentGateway reports whether the process pid is the gateway running the given configuration.
+	isAgentGateway = processRuns
 )
 
 // errAgentExit carries the exit code of the agent.
@@ -65,38 +69,85 @@ type agentState struct {
 	Started time.Time `json:"started"`
 	// Agents are the settings of each agent the gateway routes.
 	Agents map[string]agentSettings `json:"agents"`
+	// Keys are the fingerprints of the API key of each agent, to restart the gateway when one changes.
+	Keys map[string]string `json:"keys,omitempty"`
 }
 
 // agentPaths are the files of the gateway started for the coding agents.
 type agentPaths struct {
-	dir, config, state, log string
+	dir, config, state, log, lock string
 }
 
-func newAgentPaths(dirs *xdg.Directories) agentPaths {
+func newAgentPaths(dirs *xdg.Directories) *agentPaths {
 	dir := filepath.Join(dirs.StateHome, "agents")
-	return agentPaths{
+	return &agentPaths{
 		dir:    dir,
 		config: filepath.Join(dir, "config.yaml"),
 		state:  filepath.Join(dir, "gateway.json"),
 		log:    filepath.Join(dir, "gateway.log"),
+		lock:   filepath.Join(dir, "gateway.lock"),
 	}
 }
 
 // running returns the state of the gateway, or nil if it is not running.
-func (p agentPaths) running() *agentState {
+func (p *agentPaths) running() *agentState {
 	raw, err := os.ReadFile(p.state)
 	if err != nil {
 		return nil
 	}
 	var s agentState
-	if err = json.Unmarshal(raw, &s); err != nil || !processAlive(s.Pid) {
+	// After a reboot or a crash, the pid may belong to another process: never take it for the gateway.
+	if err = json.Unmarshal(raw, &s); err != nil || !processAlive(s.Pid) || !isAgentGateway(s.Pid, p.config) {
 		return nil
 	}
 	return &s
 }
 
+// lockGateway takes the lock serializing the start of the gateway, so that agents launched at the same
+// time don't start it twice, or join it before it serves requests. It returns the unlock function.
+func (p *agentPaths) lockGateway() (func(), error) {
+	if err := os.MkdirAll(p.dir, 0o750); err != nil {
+		return nil, fmt.Errorf("failed to create %s: %w", p.dir, err)
+	}
+	f, err := os.OpenFile(p.lock, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open %s: %w", p.lock, err)
+	}
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil { //nolint:gosec // a file descriptor fits in an int.
+		_ = f.Close()
+		return nil, fmt.Errorf("failed to lock %s: %w", p.lock, err)
+	}
+	return func() { _ = f.Close() }, nil
+}
+
 func processAlive(pid int) bool {
 	return pid > 0 && syscall.Kill(pid, 0) == nil
+}
+
+// processRuns reports whether the process pid is "aigw run <config>".
+func processRuns(pid int, config string) bool {
+	out, err := exec.Command("ps", "-ww", "-p", strconv.Itoa(pid), "-o", "command=").Output() //nolint:gosec // fixed command.
+	return err == nil && strings.HasSuffix(strings.TrimSpace(string(out)), " run "+config)
+}
+
+// newAgentState returns the state of the gateway process pid, routing the given agents.
+func newAgentState(pid int, routed map[string]agentSettings, keys map[string]string) agentState {
+	fingerprints := map[string]string{}
+	for name, s := range routed {
+		if fp := keyFingerprint(agents[name].key(s, keys)); fp != "" {
+			fingerprints[name] = fp
+		}
+	}
+	return agentState{Pid: pid, Started: time.Now(), Agents: routed, Keys: fingerprints}
+}
+
+// keyFingerprint identifies the value of an API key without revealing it.
+func keyFingerprint(key string) string {
+	if key == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("aigw agent key\x00" + key))
+	return hex.EncodeToString(sum[:])
 }
 
 // portInUse reports whether something listens on addr.
@@ -144,46 +195,8 @@ func runAgent(ctx context.Context, a *agentSpec, c *cmdAgent, dirs *xdg.Director
 	}
 
 	paths := newAgentPaths(dirs)
-	state := paths.running()
-	switch {
-	case state != nil && state.Agents[a.name] == current:
-		ui.printf("%s Agent Router running on %s · %s → %s\n", ui.cyan("✓"), agentGatewayURL, a.title, a.describe(current))
-	default:
-		if state == nil && portInUse(agentGatewayAddr) {
-			return fmt.Errorf("%s is already in use, probably by \"aigw run\". Stop it first: "+
-				"\"aigw %s\" starts its own Agent Router", agentGatewayAddr, a.name)
-		}
-		// Route every configured agent whose API key is available, so other open agents keep working.
-		routed := map[string]agentSettings{a.name: current}
-		var dropped []string
-		for _, name := range slices.Sorted(maps.Keys(settings)) {
-			other, ok := agents[name]
-			if !ok || name == a.name {
-				continue
-			}
-			if other.missingKey(settings[name], keys) == "" {
-				routed[name] = settings[name]
-			} else if state != nil && state.Agents[name] != (agentSettings{}) {
-				dropped = append(dropped, other.title)
-			}
-		}
-		if state != nil {
-			ui.printf("%s\n", ui.dim("Restarting Agent Router to apply the "+a.title+" settings: other open agents pause for a few seconds."))
-			if err = stopAgentGateway(paths, state); err != nil {
-				return err
-			}
-		}
-		for _, title := range dropped {
-			ui.printf("%s\n", ui.sgr("33", title+" is no longer routed: its API key is not set in this terminal. Run it again from a terminal that has it."))
-		}
-		start := time.Now()
-		ui.printf("%s", ui.dim("Starting Agent Router… "))
-		if err = startAgentGateway(ctx, paths, dirs, routed, keys); err != nil {
-			ui.printf("\n")
-			return err
-		}
-		ui.printf("\r\x1b[K%s Agent Router started on %s (%v) · logs: %s\n", ui.cyan("✓"), agentGatewayURL,
-			time.Since(start).Round(100*time.Millisecond), paths.log)
+	if err = ensureAgentGateway(ctx, a, current, settings, keys, paths, dirs, ui); err != nil {
+		return err
 	}
 
 	args, env, err := a.command(current, c.Args, os.Environ())
@@ -201,6 +214,69 @@ func runAgent(ctx context.Context, a *agentSpec, c *cmdAgent, dirs *xdg.Director
 	if code != 0 {
 		return errAgentExit{code: code}
 	}
+	return nil
+}
+
+// ensureAgentGateway joins the running gateway if it routes the agent with the same settings and
+// API key, or (re)starts it otherwise.
+func ensureAgentGateway(ctx context.Context, a *agentSpec, current agentSettings, settings map[string]agentSettings,
+	keys map[string]string, paths *agentPaths, dirs *xdg.Directories, ui *terminalUI,
+) error {
+	unlock, err := paths.lockGateway()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	state := paths.running()
+	if state != nil && state.Agents[a.name] == current && state.Keys[a.name] == keyFingerprint(a.key(current, keys)) {
+		// It may still be starting, if the launcher that started it was interrupted.
+		if !gatewayReady(ctx) {
+			ui.printf("%s", ui.dim("Waiting for Agent Router… "))
+			if err = waitGatewayReady(ctx, paths, nil); err != nil {
+				ui.printf("\n")
+				return err
+			}
+			ui.printf("\r\x1b[K")
+		}
+		ui.printf("%s Agent Router running on %s · %s → %s\n", ui.cyan("✓"), agentGatewayURL, a.title, a.describe(current))
+		return nil
+	}
+	if state == nil && portInUse(agentGatewayAddr) {
+		return fmt.Errorf("%s is already in use, probably by \"aigw run\". Stop it first: "+
+			"\"aigw %s\" starts its own Agent Router", agentGatewayAddr, a.name)
+	}
+	// Route every configured agent whose API key is available, so other open agents keep working.
+	routed := map[string]agentSettings{a.name: current}
+	var dropped []string
+	for _, name := range slices.Sorted(maps.Keys(settings)) {
+		other, ok := agents[name]
+		if !ok || name == a.name {
+			continue
+		}
+		if other.missingKey(settings[name], keys) == "" {
+			routed[name] = settings[name]
+		} else if state != nil && state.Agents[name] != (agentSettings{}) {
+			dropped = append(dropped, other.title)
+		}
+	}
+	if state != nil {
+		ui.printf("%s\n", ui.dim("Restarting Agent Router to apply the "+a.title+" settings: other open agents pause for a few seconds."))
+		if err = stopAgentGateway(paths, state); err != nil {
+			return err
+		}
+	}
+	for _, title := range dropped {
+		ui.printf("%s\n", ui.sgr("33", title+" is no longer routed: its API key is not set in this terminal. Run it again from a terminal that has it."))
+	}
+	start := time.Now()
+	ui.printf("%s", ui.dim("Starting Agent Router… "))
+	if err = startAgentGateway(ctx, paths, dirs, routed, keys); err != nil {
+		ui.printf("\n")
+		return err
+	}
+	ui.printf("\r\x1b[K%s Agent Router started on %s (%v) · logs: %s\n", ui.cyan("✓"), agentGatewayURL,
+		time.Since(start).Round(100*time.Millisecond), paths.log)
 	return nil
 }
 
@@ -257,7 +333,8 @@ func runChild(ctx context.Context, binary string, args, env []string) (int, erro
 
 // writeAgentGatewayConfig renders the configuration routing each agent to its provider.
 func writeAgentGatewayConfig(path string, routed map[string]agentSettings) error {
-	var data autoconfig.ConfigData
+	// The gateway adds the API keys to the requests: only this machine may send them.
+	data := autoconfig.ConfigData{LocalOnly: true}
 	for _, name := range slices.Sorted(maps.Keys(routed)) {
 		if err := agents[name].addProvider(&data, routed[name]); err != nil {
 			return err
@@ -274,7 +351,7 @@ func writeAgentGatewayConfig(path string, routed map[string]agentSettings) error
 
 // spawnAgentGateway starts "aigw run" in the background, detached from the terminal so that
 // it outlives the agent, and waits until it serves requests.
-func spawnAgentGateway(ctx context.Context, paths agentPaths, dirs *xdg.Directories, routed map[string]agentSettings, keys map[string]string) error {
+func spawnAgentGateway(ctx context.Context, paths *agentPaths, dirs *xdg.Directories, routed map[string]agentSettings, keys map[string]string) error {
 	if err := os.MkdirAll(paths.dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create %s: %w", paths.dir, err)
 	}
@@ -319,7 +396,7 @@ func spawnAgentGateway(ctx context.Context, paths agentPaths, dirs *xdg.Director
 		close(exited)
 	}()
 
-	state, err := json.Marshal(agentState{Pid: cmd.Process.Pid, Started: time.Now(), Agents: routed})
+	state, err := json.Marshal(newAgentState(cmd.Process.Pid, routed, keys))
 	if err != nil {
 		return err
 	}
@@ -327,6 +404,18 @@ func spawnAgentGateway(ctx context.Context, paths agentPaths, dirs *xdg.Director
 		return fmt.Errorf("failed to save %s: %w", paths.state, err)
 	}
 
+	if err = waitGatewayReady(ctx, paths, exited); err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = os.Remove(paths.state)
+		return err
+	}
+	// The gateway runs on its own: stop waiting for it.
+	_ = cmd.Process.Release()
+	return nil
+}
+
+// waitGatewayReady waits until the gateway serves requests, it exits, or agentGatewayStartTimeout.
+func waitGatewayReady(ctx context.Context, paths *agentPaths, exited <-chan struct{}) error {
 	ctx, cancel := context.WithTimeout(ctx, agentGatewayStartTimeout)
 	defer cancel()
 	ticker := time.NewTicker(250 * time.Millisecond)
@@ -334,16 +423,11 @@ func spawnAgentGateway(ctx context.Context, paths agentPaths, dirs *xdg.Director
 	for {
 		select {
 		case <-exited:
-			_ = os.Remove(paths.state)
 			return fmt.Errorf("agent Router failed to start:\n%s", tail(paths.log, 20))
 		case <-ctx.Done():
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			_ = os.Remove(paths.state)
 			return fmt.Errorf("agent Router did not start in %v, see %s", agentGatewayStartTimeout, paths.log)
 		case <-ticker.C:
 			if gatewayReady(ctx) {
-				// The gateway runs on its own: stop waiting for it.
-				_ = cmd.Process.Release()
 				return nil
 			}
 		}
@@ -375,7 +459,7 @@ func tail(path string, n int) string {
 }
 
 // stopAgentGateway stops the gateway gracefully, or kills it after agentGatewayStopTimeout.
-func stopAgentGateway(paths agentPaths, state *agentState) error {
+func stopAgentGateway(paths *agentPaths, state *agentState) error {
 	if err := syscall.Kill(state.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return fmt.Errorf("failed to stop Agent Router (pid %d): %w", state.Pid, err)
 	}

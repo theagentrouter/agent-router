@@ -198,6 +198,14 @@ func (a *agentSpec) mode(id string) (*agentMode, error) {
 	return nil, fmt.Errorf("unknown %s mode %q: run \"aigw %s --setup\" to choose again", a.title, id, a.name)
 }
 
+// sameEndpoint reports whether the mode with the given id sends requests to the same place as m:
+// it is m, or a mode of the same group. The URL of another mode must not be reused, or the
+// API key of m could be sent to it.
+func (a *agentSpec) sameEndpoint(id string, m *agentMode) bool {
+	other, err := a.mode(id)
+	return err == nil && (other.id == m.id || (m.group != "" && other.group == m.group))
+}
+
 // endpoint returns the endpoint the agent's requests are sent to.
 func (m *agentMode) endpoint(s agentSettings) string {
 	if s.URL != "" {
@@ -249,17 +257,18 @@ func (a *agentSpec) addProvider(data *autoconfig.ConfigData, s agentSettings) er
 		RequestTimeout: agentRequestTimeout,
 		RemoveHeaders:  []string{agentHeader},
 	}
-	if keyEnv := m.keyEnvFor(s); keyEnv != "" {
-		if m.keyHeader != "" {
-			// The agent's own credentials go through untouched, and the API key goes in its own header.
+	keyEnv := m.keyEnvFor(s)
+	if m.subscription {
+		// The agent's own credentials go through untouched, and the API key, if any, goes in its own header.
+		if keyEnv != "" {
 			p.Headers = []autoconfig.Header{{Name: m.keyHeader, Value: "${" + keyEnv + "}"}}
-		} else {
-			// The gateway owns the credentials: drop the placeholder ones the agent sends.
-			p.APIKeyEnv = keyEnv
-			// That includes a passthrough key the user's own settings may add, which would switch
-			// Tetrate Agent Router to passthrough mode with no Claude login to pass through.
-			p.RemoveHeaders = append(p.RemoveHeaders, "authorization", "x-api-key", tetratePassthroughHeader)
 		}
+	} else {
+		// The gateway owns the credentials, if any: drop the placeholder ones the agent sends.
+		// That includes a passthrough key the user's own settings may add, which would switch
+		// Tetrate Agent Router to passthrough mode with no Claude login to pass through.
+		p.APIKeyEnv = keyEnv
+		p.RemoveHeaders = append(p.RemoveHeaders, "authorization", "x-api-key", tetratePassthroughHeader)
 	}
 	endpoint := strings.TrimSuffix(m.endpoint(s), "/") + m.apiPath
 	if err = autoconfig.AddProvider(data, &p, endpoint); err != nil {
@@ -269,15 +278,32 @@ func (a *agentSpec) addProvider(data *autoconfig.ConfigData, s agentSettings) er
 }
 
 // missingKey returns the environment variable that the settings need and is not set, or "".
-func (a *agentSpec) missingKey(s agentSettings, env map[string]string) string {
+func (a *agentSpec) missingKey(s agentSettings, keys map[string]string) string {
 	m, err := a.mode(s.Mode)
 	if err != nil {
 		return ""
 	}
-	if keyEnv := m.keyEnvFor(s); keyEnv != "" && env[keyEnv] == "" && os.Getenv(keyEnv) == "" {
+	if keyEnv := m.keyEnvFor(s); keyEnv != "" && a.key(s, keys) == "" {
 		return keyEnv
 	}
 	return ""
+}
+
+// key returns the API key the settings use: the one entered during the setup, if any, or the
+// one in the environment. It is "" if the settings use none, or it is not set.
+func (a *agentSpec) key(s agentSettings, keys map[string]string) string {
+	m, err := a.mode(s.Mode)
+	if err != nil {
+		return ""
+	}
+	keyEnv := m.keyEnvFor(s)
+	if keyEnv == "" {
+		return ""
+	}
+	if k := keys[keyEnv]; k != "" {
+		return k
+	}
+	return os.Getenv(keyEnv)
 }
 
 // command returns the arguments and environment to run the agent through the gateway.
@@ -286,15 +312,18 @@ func (a *agentSpec) command(s agentSettings, args, environ []string) ([]string, 
 	if err != nil {
 		return nil, nil, err
 	}
-	env := slices.Clone(environ)
+	// The agent never gets the API keys of the providers: the gateway adds them. That also keeps
+	// Claude Code from sending ANTHROPIC_API_KEY instead of its login, or the gateway's credentials.
+	env := slices.DeleteFunc(slices.Clone(environ), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		return slices.Contains(providerKeyEnvs(), k)
+	})
 	switch a.name {
 	case claudeAgent.name:
 		headers := agentHeader + ": " + a.name
 		if existing := lookupEnv(env, "ANTHROPIC_CUSTOM_HEADERS"); existing != "" {
 			headers = existing + "\n" + headers
 		}
-		// The agent must not send a real API key: the gateway owns the credentials, or forwards the login.
-		env = setEnv(env, "ANTHROPIC_API_KEY", "")
 		env = setEnv(env, "ANTHROPIC_BASE_URL", agentGatewayURL+"/anthropic")
 		env = setEnv(env, "ANTHROPIC_CUSTOM_HEADERS", headers)
 		settingsEnv := map[string]string{
@@ -329,6 +358,19 @@ func (a *agentSpec) command(s agentSettings, args, environ []string) ([]string, 
 	default:
 		return nil, nil, fmt.Errorf("unknown agent %q", a.name)
 	}
+}
+
+// providerKeyEnvs returns the environment variables holding the API keys of every mode.
+func providerKeyEnvs() []string {
+	var envs []string
+	for _, a := range agents {
+		for i := range a.modes {
+			if k := a.modes[i].keyEnv; k != "" && !slices.Contains(envs, k) {
+				envs = append(envs, k)
+			}
+		}
+	}
+	return envs
 }
 
 // lookupEnv returns the value of key in env, a list of KEY=value entries.
@@ -421,7 +463,7 @@ func runAgentSetup(ui *terminalUI, a *agentSpec, current *agentSettings) (agentS
 			}
 		}
 		ui.printf("\n  %s\n", ui.bold(a.groups[c.group].label))
-		if settings.URL, err = askURL(ui, groupModes[0], current); err != nil {
+		if settings.URL, err = askURL(ui, a, groupModes[0], current); err != nil {
 			return agentSettings{}, nil, err
 		}
 		ui.printf("\n")
@@ -436,7 +478,7 @@ func runAgentSetup(ui *terminalUI, a *agentSpec, current *agentSettings) (agentS
 	if mode.group == "" && (mode.askURL || mode.keyEnv != "") {
 		ui.printf("\n  %s\n", ui.bold(mode.title))
 		if mode.askURL {
-			if settings.URL, err = askURL(ui, mode, current); err != nil {
+			if settings.URL, err = askURL(ui, a, mode, current); err != nil {
 				return agentSettings{}, nil, err
 			}
 		}
@@ -470,11 +512,12 @@ func runAgentSetup(ui *terminalUI, a *agentSpec, current *agentSettings) (agentS
 	return settings, keys, nil
 }
 
-// askURL asks for the endpoint of a mode. The default is the current one, or the mode's default.
+// askURL asks for the endpoint of a mode. The default is the current one, if the current mode
+// sends requests to the same place, or the mode's default.
 // It returns "" when the answer is the mode's default, so the saved settings follow it.
-func askURL(ui *terminalUI, m *agentMode, current *agentSettings) (string, error) {
+func askURL(ui *terminalUI, a *agentSpec, m *agentMode, current *agentSettings) (string, error) {
 	def := m.baseURL
-	if current != nil && current.URL != "" {
+	if current != nil && current.URL != "" && a.sameEndpoint(current.Mode, m) {
 		def = current.URL
 	}
 	v, err := requiredInput(ui, m.urlHint, def, false, validURL)
