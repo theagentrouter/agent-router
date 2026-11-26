@@ -34,7 +34,7 @@ func validate(ctx context.Context, c *cmdValidate, stdout, stderr io.Writer) err
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	if err = validateCustomResourceObjects(
+	if _, _, _, _, _, _, _, _, _, err = translateCustomResourceObjects(
 		ctx,
 		aigwRoutes, mcpRoutes, aiSvcBackends, backendSecurityPolicies,
 		backendTLSConfigs, referenceGrants, gws, secrets,
