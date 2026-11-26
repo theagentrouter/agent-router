@@ -129,13 +129,13 @@ spec:
     - name: aigw-run
       kind: Gateway
       group: gateway.networking.k8s.io
-  # Simple rule: route everything to OpenAI backend
+  # Requests are routed to the first provider whose rule matches the model name.
   rules:
     - matches:
         - headers:
             - type: RegularExpression
               name: x-ai-eg-model
-              value: .*
+              value: ".*"
       backendRefs:
         - name: openai
           namespace: default
@@ -265,7 +265,9 @@ metadata:
   namespace: default
 type: Opaque
 stringData:
-  apiKey: ${OPENAI_API_KEY}
+  # A block scalar keeps the substituted key a string, whatever it looks like (e.g. digits only).
+  apiKey: |-
+    ${OPENAI_API_KEY}
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: BackendSecurityPolicy
@@ -289,5 +291,6 @@ metadata:
   namespace: default
 type: Opaque
 stringData:
-  apiKey: ${GITHUB_MCP_TOKEN}
+  apiKey: |-
+    ${GITHUB_MCP_TOKEN}
 ---

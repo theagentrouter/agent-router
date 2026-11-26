@@ -278,15 +278,11 @@ func (c *MCPRouteController) deleteOrphanedPerBackendResources(ctx context.Conte
 			return fmt.Errorf("failed to delete orphaned HTTPRouteFilter %s: %w", filterName, err)
 		}
 
-		// Credential secrets are only created for backends with secretRef-based API keys, but we
-		// unconditionally attempt the delete to avoid an extra GET call.
+		// Credential secrets are only created for backends with secretRef-based API keys. Only
+		// delete the Secret if it is controlled by this MCPRoute.
 		credSecretName := internalapi.MCPPerBackendCredentialSecretPrefix + strings.TrimPrefix(name, internalapi.MCPPerBackendRefHTTPRoutePrefix)
-		if err := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, credSecretName, metav1.DeleteOptions{}); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("failed to delete orphaned credential secret %s: %w", credSecretName, err)
-			}
-		} else {
-			c.logger.Info("Deleted orphaned credential secret", "namespace", mcpRoute.Namespace, "name", credSecretName)
+		if err := c.deleteOwnedCredentialSecret(ctx, mcpRoute, credSecretName); err != nil {
+			return fmt.Errorf("failed to delete orphaned credential secret %s: %w", credSecretName, err)
 		}
 	}
 	return nil
@@ -540,6 +536,9 @@ func (c *MCPRouteController) syncGateway(ctx context.Context, namespace, name st
 
 // updateMCPRouteStatus updates the status of the MCPRoute.
 func (c *MCPRouteController) updateMCPRouteStatus(ctx context.Context, route *aigv1b1.MCPRoute, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := route.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -548,7 +547,7 @@ func (c *MCPRouteController) updateMCPRouteStatus(ctx context.Context, route *ai
 			return err
 		}
 
-		route.Status.Conditions = newConditions(conditionType, message)
+		route.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, route)
 	})
 	if err != nil {
@@ -876,9 +875,11 @@ func (c *MCPRouteController) ensureMCPBackendRefHTTPFilter(ctx context.Context, 
 		}
 		// Delete only on credential-injection transitions to avoid per-reconcile Delete calls.
 		if previousCredentialSecretName != "" && previousCredentialSecretName != credentialSecretName {
-			deleteErr := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, previousCredentialSecretName, metav1.DeleteOptions{})
-			if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
-				return fmt.Errorf("failed to delete stale credential secret %s: %w", previousCredentialSecretName, deleteErr)
+			// The name comes from the existing filter's spec, which is user-editable. Only delete the
+			// Secret if it is controlled by this MCPRoute, so that the controller cannot be used to delete
+			// arbitrary Secrets in the namespace.
+			if err = c.deleteOwnedCredentialSecret(ctx, mcpRoute, previousCredentialSecretName); err != nil {
+				return fmt.Errorf("failed to delete stale credential secret %s: %w", previousCredentialSecretName, err)
 			}
 		}
 
@@ -888,6 +889,35 @@ func (c *MCPRouteController) ensureMCPBackendRefHTTPFilter(ctx context.Context, 
 		if err = c.client.Update(ctx, &existingFilter); err != nil {
 			return fmt.Errorf("failed to update HTTPRouteFilter: %w", err)
 		}
+	}
+	return nil
+}
+
+// deleteOwnedCredentialSecret deletes the named Secret in the MCPRoute's namespace only if it is
+// controlled by the given MCPRoute. Secrets that do not exist or that are not controlled by the
+// MCPRoute are left untouched. The delete uses a UID precondition so that a Secret that is replaced
+// between the read and the delete is never removed.
+func (c *MCPRouteController) deleteOwnedCredentialSecret(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, name string) error {
+	secret, err := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !metav1.IsControlledBy(secret, mcpRoute) {
+		c.logger.Info("Skipping deletion of credential secret not controlled by the MCPRoute",
+			"namespace", mcpRoute.Namespace, "name", name, "mcpRoute", mcpRoute.Name)
+		return nil
+	}
+	err = c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, name, metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &secret.UID},
+	})
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+		return err
+	}
+	if err == nil {
+		c.logger.Info("Deleted credential secret", "namespace", mcpRoute.Namespace, "name", name)
 	}
 	return nil
 }
