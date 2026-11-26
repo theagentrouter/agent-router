@@ -365,37 +365,6 @@ func mustExtractAndAppend[T any](obj *unstructured.Unstructured, slice *[]T) {
 	*slice = append(*slice, item)
 }
 
-// mustCreate creates the object in the fake client, panicking on error.
-func mustCreate(ctx context.Context, fakeClient client.Client, obj client.Object, logger *slog.Logger) {
-	if err := tryCreate(ctx, fakeClient, obj, logger); err != nil {
-		panic(err)
-	}
-}
-
-// mustCreateAndReconcile creates the object in the fake client and reconciles it, panicking on error.
-func mustCreateAndReconcile(
-	ctx context.Context,
-	fakeClient client.Client, obj client.Object,
-	c reconcile.TypedReconciler[reconcile.Request],
-	logger *slog.Logger,
-) {
-	if err := tryCreateAndReconcile(ctx, fakeClient, obj, c, logger); err != nil {
-		panic(err)
-	}
-}
-
-// mustReconcile reconciles the object using the provided reconciler, panicking on error.
-func mustReconcile(
-	ctx context.Context,
-	obj client.Object,
-	c reconcile.TypedReconciler[reconcile.Request],
-	logger *slog.Logger,
-) {
-	if err := tryReconcile(ctx, obj, c, logger); err != nil {
-		panic(err)
-	}
-}
-
 // tryCreate creates the object in the fake client, returning any error instead of panicking.
 func tryCreate(ctx context.Context, fakeClient client.Client, obj client.Object, logger *slog.Logger) error {
 	logger.Info("Fake creating", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
