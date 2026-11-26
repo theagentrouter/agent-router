@@ -30,6 +30,13 @@ import (
 //     Because response headers have already been flushed to the client, Envoy cannot synthesize a 504 and instead
 //     resets the stream, which the client observes as a truncated body read.
 func Test_Examples_StreamIdleTimeout(t *testing.T) {
+	// The example puts the backends at priorities 0 and 1, which are set through Envoy Gateway's backendPriority
+	// HTTPRouteFilter that older Envoy Gateway releases lack. There, the backendRefs end up in separate clusters
+	// and do not fail over. See e2elib.EnvoyGatewaySupportsBackendPriority.
+	if !e2elib.EnvoyGatewaySupportsBackendPriority() {
+		t.Skipf("needs Envoy Gateway %s or later for backendRef priorities, have %s",
+			"v1.10.0", e2elib.EnvoyGatewayVersion())
+	}
 	const backendsManifest = "../../examples/stream_idle_timeout/backends.yaml"
 	const baseManifest = "../../examples/stream_idle_timeout/base.yaml"
 	manifests := []string{backendsManifest, baseManifest}
