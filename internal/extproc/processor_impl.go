@@ -193,9 +193,29 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespons
 
 // formatUserFacingErrorJSON formats a user-facing error as a JSON response body.
 // Returns JSON in format: {"type":"error","error":{"type":"<errorType>","code":"<statusCode>","message":"<message>"}}
+// The values are JSON-encoded, so messages that quote user input (e.g. a malformed parameter) stay valid JSON.
 func formatUserFacingErrorJSON(errorType string, statusCode int, message string) []byte {
-	return fmt.Appendf(nil, `{"type":"error","error":{"type":"%s","code":"%d","message":"%s"}}`,
-		errorType, statusCode, message)
+	// Marshalling a struct of plain strings cannot fail.
+	body, _ := json.Marshal(userFacingError{
+		Type: "error",
+		Error: userFacingErrorDetail{
+			Type:    errorType,
+			Code:    strconv.Itoa(statusCode),
+			Message: message,
+		},
+	})
+	return body
+}
+
+type userFacingError struct {
+	Type  string                `json:"type"`
+	Error userFacingErrorDetail `json:"error"`
+}
+
+type userFacingErrorDetail struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // respondLocally answers the request from the gateway itself instead of dispatching it upstream.
@@ -296,7 +316,7 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		Header:       &corev3.HeaderValue{Key: internalapi.ModelNameHeaderKeyDefault, RawValue: []byte(originalModel)},
 	})
 	originalPath := r.requestHeaders[":path"]
-	// These original-path headers are owned by extproc, so set them unconditionally.
+	// This original-path header is owned by extproc, so set it unconditionally.
 	// A client-supplied or pre-existing value must not shadow the gateway's own value,
 	// as downstream logic (e.g. processor lookup on retry) keys off it.
 	r.requestHeaders[originalPathHeader] = originalPath
@@ -304,11 +324,6 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		// Overwrite unconditionally so a client-supplied or pre-existing value is replaced, not appended.
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		Header:       &corev3.HeaderValue{Key: originalPathHeader, RawValue: []byte(originalPath)},
-	})
-	r.requestHeaders[internalapi.EnvoyOriginalPathHeader] = originalPath
-	additionalHeaders = append(additionalHeaders, &corev3.HeaderValueOption{
-		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		Header:       &corev3.HeaderValue{Key: internalapi.EnvoyOriginalPathHeader, RawValue: []byte(originalPath)},
 	})
 	r.originalModel = originalModel
 	r.originalRequestBody = body
