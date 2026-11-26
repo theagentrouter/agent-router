@@ -101,9 +101,7 @@ func TestStartConfigBundleWatcher(t *testing.T) {
 // requireAtomicWriteFile creates a temporary file, writes the data to it, and then renames it to the final filename.
 // This is an alternative to os.WriteFile but in a way that ensures the write is atomic.
 func requireAtomicWriteFile(t *testing.T, tickInterval time.Duration, filename string, data []byte, perm os.FileMode) {
-	// Sleep enough to ensure that the new file has a different modification time.
-	// In practice, when the extproc is deployed, it will read from the k8s secret,
-	// hence the file will have a different modification time (due to the delay caused by Kubernetes secret updates).
+	// Advance the test clock so each published file gets a later modification time.
 	time.Sleep(2 * tickInterval)
 
 	tempFile, err := os.CreateTemp(t.TempDir(), filepath.Base(filename)+".tmp.*")
@@ -115,6 +113,9 @@ func requireAtomicWriteFile(t *testing.T, tickInterval time.Duration, filename s
 	require.NoError(t, err, "failed to set permissions on temporary file")
 	err = tempFile.Close()
 	require.NoError(t, err, "failed to close temporary file")
+	// The filesystem uses the real clock. Stamp the file with the test clock before publishing it.
+	modTime := time.Now()
+	require.NoError(t, os.Chtimes(tempName, modTime, modTime))
 	err = os.Rename(tempName, filename)
 	require.NoError(t, err, "failed to rename temporary file to final destination")
 }
