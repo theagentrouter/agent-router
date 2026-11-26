@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -55,12 +57,23 @@ func loggerFromContext(ctx context.Context) *slog.Logger {
 	return nil
 }
 
+// configReloadTimeout bounds how long a request waits for the configuration to be read again when it names a
+// backend that is not in the loaded configuration. Envoy waits up to 10s for each response from this filter.
+const configReloadTimeout = 2 * time.Second
+
+var errUnknownBackend = errors.New("unknown backend")
+
+var _ filterapi.ReloadableConfigReceiver = (*Server)(nil)
+
 // Server implements the external processor server.
 type Server struct {
-	logger                        *slog.Logger
-	debugLogEnabled               bool
-	enableRedaction               bool
-	config                        *filterapi.RuntimeConfig
+	logger          *slog.Logger
+	debugLogEnabled bool
+	enableRedaction bool
+	// config is replaced by LoadConfig while requests read it.
+	config atomic.Pointer[filterapi.RuntimeConfig]
+	// reloadConfig reads the configuration again. It is nil until SetConfigReloader is called.
+	reloadConfig                  func(context.Context) error
 	processorFactories            map[string]ProcessorFactory
 	prefixProcessorFactories      []prefixProcessorFactory
 	routerProcessorsPerReqID      map[string]Processor
@@ -96,8 +109,14 @@ func (s *Server) LoadConfig(ctx context.Context, config *filterapi.Config) error
 	if err != nil {
 		return fmt.Errorf("cannot create runtime filter config: %w", err)
 	}
-	s.config = newConfig // This is racey, but we don't care.
+	s.config.Store(newConfig)
 	return nil
+}
+
+// SetConfigReloader implements [filterapi.ReloadableConfigReceiver.SetConfigReloader].
+// It must be called before the server starts serving.
+func (s *Server) SetConfigReloader(reload func(context.Context) error) {
+	s.reloadConfig = reload
 }
 
 // Register a new processor for the given request path.
@@ -133,7 +152,7 @@ func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFi
 	}
 
 	if newProcessor, ok := s.processorFactories[path]; ok {
-		return newProcessor(s.config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
+		return newProcessor(s.config.Load(), requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
 	}
 
 	// Fall back to the longest matching prefix registration.
@@ -147,7 +166,7 @@ func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFi
 		}
 	}
 	if best != nil {
-		return best(s.config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
+		return best(s.config.Load(), requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
 	}
 	return nil, fmt.Errorf("%w: %s", errNoProcessor, path)
 }
@@ -164,7 +183,7 @@ const internalReqIDHeader = internalapi.EnvoyAIGatewayHeaderPrefix + "internal-r
 func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {
 	ctx := stream.Context()
 	if s.debugLogEnabled {
-		s.logger.Debug("handling a new stream", slog.Any("config_uuid", s.config.UUID))
+		s.logger.Debug("handling a new stream", slog.Any("config_uuid", s.config.Load().UUID))
 	}
 
 	// The processor will be instantiated when the first message containing the request headers is received.
@@ -258,6 +277,12 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			_, isEndpoinPicker := headersMap[internalapi.EndpointPickerHeaderKey]
 			if isUpstreamFilter {
 				if err = s.setBackend(ctx, p, internalReqID, isEndpoinPicker, req); err != nil {
+					if errors.Is(err, errUnknownBackend) {
+						s.logger.Warn("responding 503 to a request for a backend that is not in the loaded config",
+							slog.String("error", err.Error()))
+						_ = stream.Send(unknownBackendResponse())
+						return status.Error(codes.Unavailable, err.Error())
+					}
 					s.logger.Error("error processing request message", slog.String("error", err.Error()))
 					return status.Errorf(codes.Unknown, "error processing request message: %v", err)
 				}
@@ -421,9 +446,9 @@ func (s *Server) setBackend(ctx context.Context, p Processor, internalReqID stri
 	}
 	routeName := resolveRouteName(attributes)
 
-	backend, ok := s.config.Backends[backendName]
+	backend, ok := s.lookupBackend(ctx, backendName)
 	if !ok {
-		return status.Errorf(codes.Internal, "unknown backend: %s", backendName)
+		return fmt.Errorf("%w: %s", errUnknownBackend, backendName)
 	}
 
 	s.routerProcessorsPerReqIDMutex.RLock()
@@ -438,6 +463,42 @@ func (s *Server) setBackend(ctx context.Context, p Processor, internalReqID stri
 		return status.Errorf(codes.Internal, "cannot set backend: %v", err)
 	}
 	return nil
+}
+
+// lookupBackend returns the named backend. If the loaded configuration does not have it, it reads the configuration
+// again and looks once more: during a route change, Envoy can send a request to a new backend before the periodic
+// load has picked up the configuration that has it.
+func (s *Server) lookupBackend(ctx context.Context, name string) (*filterapi.RuntimeBackend, bool) {
+	if b, ok := s.loadedBackend(name); ok {
+		return b, true
+	}
+	if s.reloadConfig == nil {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, configReloadTimeout)
+	defer cancel()
+	if err := s.reloadConfig(ctx); err != nil {
+		s.logger.Warn("cannot reload the config for an unknown backend", slog.String("backend", name), slog.String("error", err.Error()))
+	}
+	return s.loadedBackend(name)
+}
+
+func (s *Server) loadedBackend(name string) (*filterapi.RuntimeBackend, bool) {
+	cfg := s.config.Load()
+	if cfg == nil {
+		return nil, false
+	}
+	b, ok := cfg.Backends[name]
+	return b, ok
+}
+
+// unknownBackendResponse answers 503 to a request for a backend that is not in the loaded configuration, so that
+// clients can retry it. This filter fails closed, so an error on the stream would reach the client as a 500
+// whatever its gRPC code.
+func unknownBackendResponse() *extprocv3.ProcessingResponse {
+	resp := createUserFacingErrorResponse(503, "ServiceUnavailable", "the backend for this route is not loaded yet, retry the request")
+	resp.GetImmediateResponse().GrpcStatus = &extprocv3.GrpcStatus{Status: uint32(codes.Unavailable)}
+	return resp
 }
 
 func resolveBackendName(isEndpointPicker bool, attributes *structpb.Struct) (string, error) {
