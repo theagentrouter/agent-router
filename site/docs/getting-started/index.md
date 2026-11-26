@@ -47,6 +47,13 @@ and Anthropic SDKs, front MCP servers, and run custom configuration files. See
 [Installation](../cli/installation.md) for other ways to get the `aigw` binary,
 and [aigw run](../cli/run.md) for all the options.
 
+## Call models from Python
+
+Building an agent in Python? The [Python SDK](../python-sdk.md) runs Agent
+Router for you: `pip install theagentrouter`, then call any model with
+LiteLLM's API. The first call starts a local router, and the same code can later
+point at a shared Agent Router with two environment variables.
+
 ## Deploy on Kubernetes
 
 For production, Agent Router runs as a control plane on Envoy Gateway in your
