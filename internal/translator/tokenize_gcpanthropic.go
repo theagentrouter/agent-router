@@ -99,7 +99,10 @@ func (o *ToGCPAnthropicV1Tokenize) RequestBody(_ []byte, tokenizeReq *tokenize.R
 	// The GCP Anthropic count-tokens endpoint uses "count-tokens" as a virtual model name
 	// in the path, while the actual Claude model name is specified in the request body.
 	// See: https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
-	path := buildGCPModelPathSuffix(gcpModelPublisherAnthropic, gcpCountTokensModel, gcpMethodRawPredict)
+	path, err := buildGCPModelPathSuffix(gcpModelPublisherAnthropic, gcpCountTokensModel, gcpMethodRawPredict)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	anthropicReq, err := openAIToAnthropicCountTokensParams(tokenizeReq.ChatRequest, o.requestModel)
 	if err != nil {

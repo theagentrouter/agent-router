@@ -295,7 +295,10 @@ func (o *openAIToGCPVertexAITranslatorV1Embedding) RequestBody(_ []byte, req *op
 
 	if isEmbedContentModel(o.requestModel) {
 		o.useEmbedContent = true
-		path = buildGCPModelPathSuffix(gcpModelPublisherGoogle, o.requestModel, gcpMethodEmbedContent)
+		path, err = buildGCPModelPathSuffix(gcpModelPublisherGoogle, o.requestModel, gcpMethodEmbedContent)
+		if err != nil {
+			return nil, nil, err
+		}
 
 		var gcpReq *gcp.EmbedContentRequest
 		gcpReq, err = openAIEmbeddingToEmbedContentRequest(req, o.requestModel)
@@ -310,7 +313,10 @@ func (o *openAIToGCPVertexAITranslatorV1Embedding) RequestBody(_ []byte, req *op
 			return nil, nil, fmt.Errorf("%w: model %s does not support multimodal embedding via messages", internalapi.ErrInvalidRequestBody, o.requestModel)
 		}
 
-		path = buildGCPModelPathSuffix(gcpModelPublisherGoogle, o.requestModel, gcpMethodPredict)
+		path, err = buildGCPModelPathSuffix(gcpModelPublisherGoogle, o.requestModel, gcpMethodPredict)
+		if err != nil {
+			return nil, nil, err
+		}
 
 		var gcpReq *gcp.PredictRequest
 		gcpReq, err = openAIEmbeddingToGeminiMessage(req)

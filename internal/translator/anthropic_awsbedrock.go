@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -62,7 +61,10 @@ func (a *anthropicToAWSBedrockTranslator) RequestBody(_ []byte, body *anthropics
 		pathTemplate = "/model/%s/converse"
 	}
 
-	encodedModelName := url.PathEscape(a.requestModel)
+	encodedModelName, err := modelPathSegment(a.requestModel)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var bedrockReq awsbedrock.ConverseInput
 
