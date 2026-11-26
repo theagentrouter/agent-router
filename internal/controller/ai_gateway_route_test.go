@@ -1691,13 +1691,28 @@ func TestAIGatewayRouteController_ensureBackendPriorityHTTPRouteFilters_conflict
 	require.NoError(t, fakeClient.Create(t.Context(), matching))
 	hr.Spec.Rules[0].BackendRefs[0].Filters = []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(2)}
 	require.ErrorContains(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr), "is not managed by the AI Gateway controller")
+}
 
-	// A managed filter with a different priority is rejected as well.
-	mismatched := generateBackendPriorityHTTPRouteFilter("ns", 3)
-	mismatched.Spec.BackendPriority = ptr.To[int32](4)
-	require.NoError(t, fakeClient.Create(t.Context(), mismatched))
-	hr.Spec.Rules[0].BackendRefs[0].Filters = []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(3)}
-	require.ErrorContains(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr), "does not set backendPriority 3")
+func TestAIGatewayRouteController_ensureBackendPriorityHTTPRouteFilters_restoresEditedFilter(t *testing.T) {
+	s, fakeClient := newBackendPriorityTestController(t)
+	// A managed filter whose spec and priority label were edited out of band.
+	edited := generateBackendPriorityHTTPRouteFilter("ns", 3)
+	edited.Spec.BackendPriority = ptr.To[int32](4)
+	edited.Labels[backendPriorityHTTPFilterLabelKey] = "4"
+	require.NoError(t, fakeClient.Create(t.Context(), edited))
+	hr := &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns"},
+		Spec: gwapiv1.HTTPRouteSpec{Rules: []gwapiv1.HTTPRouteRule{{BackendRefs: []gwapiv1.HTTPBackendRef{
+			{Filters: []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(3)}},
+		}}}},
+	}
+	require.NoError(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr))
+
+	var f egv1a1.HTTPRouteFilter
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(3), Namespace: "ns"}, &f))
+	expected := generateBackendPriorityHTTPRouteFilter("ns", 3)
+	require.Equal(t, expected.Spec, f.Spec)
+	require.Equal(t, expected.Labels, f.Labels)
 }
 
 func TestAIGatewayRouteController_deleteUnusedBackendPriorityHTTPRouteFilters(t *testing.T) {
@@ -1743,6 +1758,23 @@ func TestAIGatewayRouteController_deleteUnusedBackendPriorityHTTPRouteFilters(t 
 	// Running it again is a no-op.
 	require.NoError(t, s.deleteUnusedBackendPriorityHTTPRouteFilters(t.Context(), ns))
 	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(1), Namespace: ns}, &f))
+}
+
+func Test_backendPriorityFromFilterName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		exp   int32
+		expOK bool
+	}{
+		{name: getBackendPriorityFilterName(0), exp: 0, expOK: true},
+		{name: getBackendPriorityFilterName(128), exp: 128, expOK: true},
+		{name: backendPriorityHTTPFilterNamePrefix + "x"},
+		{name: "ai-eg-host-rewrite-foo"},
+	} {
+		p, ok := backendPriorityFromFilterName(tc.name)
+		require.Equal(t, tc.expOK, ok, tc.name)
+		require.Equal(t, tc.exp, p, tc.name)
+	}
 }
 
 func Test_referencedBackendPriorities(t *testing.T) {
@@ -1811,18 +1843,35 @@ func TestAIGatewayRouteController_backendPriorityFilterToAIGatewayRoutes(t *test
 	reqs := s.backendPriorityFilterToAIGatewayRoutes(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, 1))
 	require.Equal(t, []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: ns, Name: "uses-1"}}}, reqs)
 	require.Empty(t, s.backendPriorityFilterToAIGatewayRoutes(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, 3)))
+
+	// The priority comes from the name, so an edited label does not redirect the reconcile.
+	edited := generateBackendPriorityHTTPRouteFilter(ns, 1)
+	edited.Labels[backendPriorityHTTPFilterLabelKey] = "2"
+	require.Equal(t, reqs, s.backendPriorityFilterToAIGatewayRoutes(t.Context(), edited))
+	require.Empty(t, s.backendPriorityFilterToAIGatewayRoutes(t.Context(),
+		&egv1a1.HTTPRouteFilter{ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: ns}}))
 }
 
-func Test_backendPriorityFilterDeletedPredicate(t *testing.T) {
-	p := backendPriorityFilterDeletedPredicate()
+func Test_backendPriorityFilterChangedPredicate(t *testing.T) {
+	p := backendPriorityFilterChangedPredicate()
 	shared := generateBackendPriorityHTTPRouteFilter("ns", 1)
+	edited := generateBackendPriorityHTTPRouteFilter("ns", 1)
+	edited.Spec.BackendPriority = ptr.To[int32](5)
+	unlabeled := generateBackendPriorityHTTPRouteFilter("ns", 1)
+	unlabeled.Labels = nil
 	userFilter := generateBackendPriorityHTTPRouteFilter("ns", 1)
 	userFilter.Labels = map[string]string{backendPriorityHTTPFilterLabelKey: "1"} // No managed-by label.
 	other := &egv1a1.HTTPRouteFilter{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "ns"}}
+
 	require.True(t, p.Delete(event.DeleteEvent{Object: shared}))
 	require.False(t, p.Delete(event.DeleteEvent{Object: userFilter}))
 	require.False(t, p.Delete(event.DeleteEvent{Object: other}))
+
+	require.True(t, p.Update(event.UpdateEvent{ObjectOld: shared, ObjectNew: edited}))
+	// An update that dropped the managed labels passes, so that the reconcile reports the filter.
+	require.True(t, p.Update(event.UpdateEvent{ObjectOld: shared, ObjectNew: unlabeled}))
+	require.False(t, p.Update(event.UpdateEvent{ObjectOld: other, ObjectNew: other}))
+
 	require.False(t, p.Create(event.CreateEvent{Object: shared}))
-	require.False(t, p.Update(event.UpdateEvent{ObjectOld: shared, ObjectNew: shared}))
 	require.False(t, p.Generic(event.GenericEvent{Object: shared}))
 }

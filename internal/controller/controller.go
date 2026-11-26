@@ -178,10 +178,11 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 		Owns(&gwapiv1.HTTPRoute{}).
 		Owns(&egv1a1.HTTPRouteFilter{}).
 		// The shared backendPriority HTTPRouteFilters are not owned by any AIGatewayRoute, so Owns does not
-		// cover them. Recreate one when it is deleted while AIGatewayRoutes still use its priority.
+		// cover them. Recreate or restore one when it is deleted or edited while AIGatewayRoutes still use its
+		// priority.
 		Watches(&egv1a1.HTTPRouteFilter{},
 			handler.EnqueueRequestsFromMapFunc(routeC.backendPriorityFilterToAIGatewayRoutes),
-			builder.WithPredicates(backendPriorityFilterDeletedPredicate()),
+			builder.WithPredicates(backendPriorityFilterChangedPredicate()),
 		).
 		WatchesRawSource(source.Channel(
 			aiGatewayRouteEventChan,
