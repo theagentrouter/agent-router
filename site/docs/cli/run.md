@@ -400,13 +400,16 @@ Setting the environment variable overrides the saved seed. Deleting the file rot
 next run, which invalidates all previously issued file and batch ids. If the seed cannot be saved,
 `aigw run` prints a warning and uses a random seed for that run only.
 
-When `AIGW_MCP_SESSION_ENCRYPTION_SEED` is not set, MCP session ids use a well-known public seed, which
-lets anyone decrypt and forge them.
+When `AIGW_MCP_SESSION_ENCRYPTION_SEED` is not set, `aigw run` likewise uses a random seed, saved to
+`~/.config/aigw/mcp-session-encryption-seed` (`$AIGW_CONFIG_HOME/mcp-session-encryption-seed`) and reused
+by later runs, so MCP sessions survive restarts. Deleting the file rotates the seed on the next run, which
+ends all existing MCP sessions. Never set it to a well-known value such as `default-insecure-seed`:
+anyone who knows the seed can decrypt and forge MCP session ids.
 
 The seeds are passed to the external processor through its configuration file, not its command line.
 The key derivation iterations are set with `--file-id-encryption-iterations` and
-`--mcp-session-encryption-iterations` (default `100000`). File ids issued under one seed stop working
-when the seed changes.
+`--mcp-session-encryption-iterations` (default `100000`). File ids and MCP sessions issued under one
+seed stop working when the seed changes.
 
 ## Configuration
 
