@@ -76,10 +76,10 @@ output work as in LiteLLM. See the SDK's
 
 There are two packages, both imported as `import theagentrouter`:
 
-| Package                | What it installs                           | Use it on                                            |
-| ---------------------- | ------------------------------------------ | ---------------------------------------------------- |
-| `theagentrouter`       | The SDK and the local gateway (about 80 MB) | A developer computer                                 |
-| `theagentrouter-core`  | The SDK alone                              | Servers, containers, serverless functions and CI that use a remote gateway |
+| Package               | What it installs                            | Use it on                                                                  |
+| --------------------- | ------------------------------------------- | -------------------------------------------------------------------------- |
+| `theagentrouter`      | The SDK and the local gateway (about 80 MB) | A developer computer                                                       |
+| `theagentrouter-core` | The SDK alone                               | Servers, containers, serverless functions and CI that use a remote gateway |
 
 The local gateway runs on macOS 13 or newer on Apple silicon, and on Linux with
 glibc 2.36 or newer (x86-64 and Arm). Everywhere else, including Windows,
@@ -124,20 +124,20 @@ or with [`aigw run`](./cli/run.md), set its address and client key:
 
 ```shell
 export AGENTROUTER_BASE_URL=https://gateway.example.com/v1
-export AGENTROUTER_API_KEY=...   # the gateway's key, not a provider's
+export AGENTROUTER_API_KEY=... # the gateway's key, not a provider's
 ```
 
 With these set, the local gateway never starts and no provider keys are needed
 on the computer: they stay on the gateway. Calls use the gateway's standard
 endpoints, so any Agent Router configuration that serves them works:
 
-| SDK call                                    | Gateway endpoint                 |
-| ------------------------------------------- | -------------------------------- |
-| `completion` to Claude models               | `/anthropic/v1/messages`         |
-| `completion` to any other model             | `/v1/chat/completions`           |
-| `responses`                                 | `/v1/responses`                  |
-| `anthropic.messages.create`                 | `/anthropic/v1/messages`         |
-| `embedding`                                 | `/v1/embeddings`                 |
+| SDK call                        | Gateway endpoint         |
+| ------------------------------- | ------------------------ |
+| `completion` to Claude models   | `/anthropic/v1/messages` |
+| `completion` to any other model | `/v1/chat/completions`   |
+| `responses`                     | `/v1/responses`          |
+| `anthropic.messages.create`     | `/anthropic/v1/messages` |
+| `embedding`                     | `/v1/embeddings`         |
 
 A call to a route sends the route's name, so the gateway's own route of that name
 applies. To run on a server the same routes and models you tested locally,
