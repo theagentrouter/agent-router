@@ -66,6 +66,8 @@ type flags struct {
 	webhookPort int
 	// extProcMaxRecvMsgSize is the maximum message size in bytes that the gRPC server can receive.
 	extProcMaxRecvMsgSize int
+	// filterConfigBundleMaxSlots is the number of filter config bundle part slots.
+	filterConfigBundleMaxSlots int
 	// maxRecvMsgSize is the maximum message size in bytes that the gRPC extension server can receive.
 	maxRecvMsgSize                         int
 	mcpSessionEncryptionSeed               string
@@ -273,6 +275,13 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		512*1024*1024,
 		"Maximum message size in bytes that the gRPC server can receive for extProc. Default is 512MB.",
 	)
+	filterConfigBundleMaxSlots := fs.Int(
+		"filterConfigBundleMaxSlots",
+		controller.DefaultFilterConfigBundleMaxSlots,
+		fmt.Sprintf("Maximum number of Secrets (~700KiB each) the extProc filter config is split into; "+
+			"a larger config is not written. Changing it rolls the gateway pods. Must be between 1 and %d.",
+			controller.MaxFilterConfigBundleMaxSlots),
+	)
 	maxRecvMsgSize := fs.Int(
 		"maxRecvMsgSize",
 		4*1024*1024,
@@ -405,6 +414,11 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		}
 	}
 
+	if *filterConfigBundleMaxSlots < 1 || *filterConfigBundleMaxSlots > controller.MaxFilterConfigBundleMaxSlots {
+		return nil, fmt.Errorf("filterConfigBundleMaxSlots must be between 1 and %d, got %d",
+			controller.MaxFilterConfigBundleMaxSlots, *filterConfigBundleMaxSlots)
+	}
+
 	// Validate extProc extra env vars if provided.
 	if *extProcExtraEnvVars != "" {
 		_, err := controller.ParseExtraEnvVars(*extProcExtraEnvVars)
@@ -466,6 +480,7 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		extProcImagePullSecrets:                *extProcImagePullSecrets,
 		webhookPort:                            *webhookPort,
 		extProcMaxRecvMsgSize:                  *extProcMaxRecvMsgSize,
+		filterConfigBundleMaxSlots:             *filterConfigBundleMaxSlots,
 		maxRecvMsgSize:                         *maxRecvMsgSize,
 		watchNamespaces:                        parseWatchNamespaces(*watchNamespaces),
 		cacheSyncTimeout:                       *cacheSyncTimeout,
@@ -596,6 +611,7 @@ func main() {
 		ExtProcExtraEnvVars:                    parsedFlags.extProcExtraEnvVars,
 		ExtProcImagePullSecrets:                parsedFlags.extProcImagePullSecrets,
 		ExtProcMaxRecvMsgSize:                  parsedFlags.extProcMaxRecvMsgSize,
+		FilterConfigBundleMaxSlots:             parsedFlags.filterConfigBundleMaxSlots,
 		MCPSessionEncryptionSeed:               parsedFlags.mcpSessionEncryptionSeed,
 		MCPSessionEncryptionIterations:         parsedFlags.mcpSessionEncryptionIterations,
 		MCPFallbackSessionEncryptionSeed:       parsedFlags.mcpFallbackSessionEncryptionSeed,
