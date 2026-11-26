@@ -102,7 +102,7 @@ func TestGatewayMutator_mutatePod(t *testing.T) {
 					}
 					foundBundle = true
 					require.NotNil(t, v.Projected)
-					require.Len(t, v.Projected.Sources, maxFilterConfigBundleSlots+1) // index + fixed slots
+					require.Len(t, v.Projected.Sources, DefaultFilterConfigBundleMaxSlots+1) // index + fixed slots
 					for j, src := range v.Projected.Sources {
 						if j == 0 {
 							require.Nil(t, src.Secret.Optional) // index secret is not optional
@@ -463,9 +463,29 @@ func TestGatewayMutator_mutatePod(t *testing.T) {
 }
 
 func TestGatewayMutator_mutatePod_BundleOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		slots      int
+		indexParts int // 0 writes an index that does not parse.
+		wantSlots  int
+	}{
+		{name: "default", slots: 0, indexParts: 1, wantSlots: DefaultFilterConfigBundleMaxSlots},
+		{name: "raised", slots: 16, indexParts: 1, wantSlots: 16},
+		// After the slot count is lowered, the index can still list the parts of the last write.
+		{name: "index lists more parts than the slots", slots: 8, indexParts: 12, wantSlots: 12},
+		{name: "unparsable index", slots: 0, indexParts: 0, wantSlots: DefaultFilterConfigBundleMaxSlots},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testGatewayMutatorMutatePodBundleOnly(t, tc.slots, tc.indexParts, tc.wantSlots)
+		})
+	}
+}
+
+func testGatewayMutatorMutatePodBundleOnly(t *testing.T, slots, indexParts, wantSlots int) {
 	fakeClient := requireNewFakeClientWithIndexes(t)
 	fakeKube := fake2.NewClientset()
 	g := newTestGatewayMutator(fakeClient, fakeKube, nil, nil, nil, nil, "", "", "", false)
+	g.bundleMaxSlots = slots
 
 	const gwName, gwNamespace = "test-gateway", "test-namespace"
 	err := fakeClient.Create(t.Context(), &aigv1b1.AIGatewayRoute{
@@ -488,13 +508,19 @@ func TestGatewayMutator_mutatePod_BundleOnly(t *testing.T) {
 		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "envoy"}}},
 	}
 
-	indexRaw, idxErr := filterapi.MarshalConfigBundleIndex(&filterapi.ConfigBundleIndex{
-		Checksum: "abc",
-		Parts: []filterapi.ConfigBundlePart{
-			{Name: FilterConfigBundleIndexSecretName(gwName, gwNamespace) + "-part-000", Path: "parts/000"},
-		},
-	})
-	require.NoError(t, idxErr)
+	indexRaw := []byte("not an index")
+	if indexParts > 0 {
+		parts := make([]filterapi.ConfigBundlePart, indexParts)
+		for i := range parts {
+			parts[i] = filterapi.ConfigBundlePart{
+				Name: filterConfigBundlePartSecretName(gwName, gwNamespace, i),
+				Path: filterapi.ConfigBundlePartPath(i),
+			}
+		}
+		var idxErr error
+		indexRaw, idxErr = filterapi.MarshalConfigBundleIndex(&filterapi.ConfigBundleIndex{Checksum: "abc", Parts: parts})
+		require.NoError(t, idxErr)
+	}
 	_, err = g.kube.CoreV1().Secrets(gwNamespace).Create(t.Context(),
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: FilterConfigBundleIndexSecretName(gwName, gwNamespace), Namespace: gwNamespace},
@@ -514,6 +540,20 @@ func TestGatewayMutator_mutatePod_BundleOnly(t *testing.T) {
 
 	extProcContainer := pod.Spec.Containers[1]
 	require.Contains(t, extProcContainer.Args, "-configBundlePath")
+
+	var foundBundle bool
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.Projected == nil || !strings.HasSuffix(v.Name, "-bundle") {
+			continue
+		}
+		foundBundle = true
+		require.Len(t, v.Projected.Sources, wantSlots+1) // index + slots
+		last := v.Projected.Sources[wantSlots].Secret
+		require.Equal(t, filterConfigBundlePartSecretName(gwName, gwNamespace, wantSlots-1), last.Name)
+		require.True(t, *last.Optional)
+	}
+	require.True(t, foundBundle)
 }
 
 func strPtr(value string) *string {
