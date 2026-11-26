@@ -22,12 +22,12 @@ Any arguments are passed to the agent, for example `aigw claude --continue` or
 
 The first time, `aigw claude` asks how Claude Code reaches Claude:
 
-| Choice                                        | Who pays                   | What it needs                                    |
-| --------------------------------------------- | -------------------------- | ------------------------------------------------ |
-| Claude subscription (default)                 | Your Claude Pro/Max plan   | Your Claude Code login                           |
-| Anthropic API key                             | Your Anthropic Console     | `ANTHROPIC_API_KEY`                              |
-| Tetrate Agent Router, passthrough             | Your Claude Pro/Max plan   | Your Claude Code login, and `TARS_API_KEY`       |
-| Tetrate Agent Router, managed                 | Tetrate Agent Router       | `TARS_API_KEY`                                   |
+| Choice                            | Who pays                 | What it needs                              |
+| --------------------------------- | ------------------------ | ------------------------------------------ |
+| Claude subscription (default)     | Your Claude Pro/Max plan | Your Claude Code login                     |
+| Anthropic API key                 | Your Anthropic Console   | `ANTHROPIC_API_KEY`                        |
+| Tetrate Agent Router, passthrough | Your Claude Pro/Max plan | Your Claude Code login, and `TARS_API_KEY` |
+| Tetrate Agent Router, managed     | Tetrate Agent Router     | `TARS_API_KEY`                             |
 
 For Tetrate Agent Router (Service or Enterprise), it also asks for its URL,
 which defaults to `https://api.router.tetrate.ai`. In passthrough mode, your
@@ -60,8 +60,8 @@ Agent Router keeps running when the agent exits, so the next `aigw claude` or
 `aigw codex` starts at once:
 
 ```shell
-aigw status   # Show whether it runs, and where each agent goes
-aigw stop     # Stop it
+aigw status # Show whether it runs, and where each agent goes
+aigw stop   # Stop it
 ```
 
 It uses the same ports as `aigw run`: stop one before starting the other.

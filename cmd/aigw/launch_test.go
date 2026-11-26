@@ -239,8 +239,13 @@ func TestStartedAgentGatewayStateError(t *testing.T) {
 }
 
 func TestProcessRuns(t *testing.T) {
-	config := filepath.Join(t.TempDir(), "config.yaml")
-	cmd := exec.Command("sh", "-c", "sleep 60", "aigw", "run", config)
+	dir := t.TempDir()
+	config := filepath.Join(dir, "config.yaml")
+	// A script playing "aigw run <config>". The loop keeps the shell, and its arguments, alive:
+	// a shell may replace itself with its last command.
+	aigw := filepath.Join(dir, "aigw")
+	require.NoError(t, os.WriteFile(aigw, []byte("#!/bin/sh\nwhile :; do sleep 1; done\n"), 0o700)) //nolint:gosec // an executable script.
+	cmd := exec.Command(aigw, "run", config)
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	require.Eventually(t, func() bool { return processRuns(cmd.Process.Pid, config) }, 5*time.Second, 50*time.Millisecond)
