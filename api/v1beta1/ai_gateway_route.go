@@ -396,13 +396,15 @@ type AIGatewayRouteRuleBackendRef struct {
 	Weight *int32 `json:"weight,omitempty"`
 	// Priority is the priority of the backend. This sets the priority on the underlying endpoints.
 	// See: https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/priority
-	// Note: This will override the `faillback` property of the underlying Envoy Gateway Backend
+	// Note: A non-zero value overrides the `fallback` property of the underlying Envoy Gateway Backend.
+	// With 0, the priority derived from the `fallback` property applies.
 	// This field is ignored when referencing InferencePool resources.
 	//
 	// Default is 0.
 	//
 	// +optional
 	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=128
 	// +kubebuilder:default=0
 	Priority *uint32 `json:"priority,omitempty"`
 }

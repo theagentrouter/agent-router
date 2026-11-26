@@ -12,13 +12,16 @@ import (
 	stdjson "encoding/json" //nolint: depguard // byte-stable hashing; sonic does not guarantee stable field order.
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
@@ -43,10 +46,18 @@ const (
 	routeNotFoundResponseHTTPFilterName = "ai-eg-route-not-found-response"
 	aigatewayUUIDAnnotationKey          = "aigateway.envoyproxy.io/uuid"
 	egAnnotationPrefix                  = "gateway.envoyproxy.io/"
-	// We use this annotation to ensure that Envoy Gateway reconciles the HTTPRoute when the backend refs change.
-	// This will result in metadata being added to the underling Envoy route
-	// @see https://gateway.envoyproxy.io/contributions/design/metadata/
-	httpRouteBackendRefPriorityAnnotationKey           = egAnnotationPrefix + "backend-ref-priority"
+	// backendPriorityHTTPFilterNamePrefix is the name prefix of the HTTPRouteFilters that carry
+	// spec.backendPriority. One such filter exists per distinct priority value in a namespace, shared by
+	// every AIGatewayRoute in that namespace, and named "<prefix><priority>".
+	backendPriorityHTTPFilterNamePrefix = "ai-eg-backend-priority-"
+	// backendPriorityHTTPFilterLabelKey is set on the shared backendPriority HTTPRouteFilters. Its value
+	// is the priority.
+	backendPriorityHTTPFilterLabelKey = "aigateway.envoyproxy.io/backend-priority"
+	// legacyHTTPRouteBackendRefPriorityAnnotationKey is the annotation that older versions stamped on the
+	// generated HTTPRoute to force Envoy Gateway to re-translate on a priority-only change, while the
+	// extension server applied the priority. Priority is now part of the HTTPRoute spec via backendPriority
+	// HTTPRouteFilters, so the annotation is removed from existing HTTPRoutes on reconcile.
+	legacyHTTPRouteBackendRefPriorityAnnotationKey     = egAnnotationPrefix + "backend-ref-priority"
 	httpRouteAnnotationForAIGatewayGeneratedIndication = egAnnotationPrefix + internalapi.AIGatewayGeneratedHTTPRouteAnnotation
 	// httpRouteQuotaPolicyHashAnnotationKey carries a hash of the QuotaPolicies attached to the
 	// AIServiceBackends referenced by this route. QuotaPolicy is an AI Gateway CRD that Envoy Gateway
@@ -129,6 +140,152 @@ func getRouteNotFoundFilterName(baseName string) string {
 	return fmt.Sprintf("%s-%s", routeNotFoundResponseHTTPFilterName, baseName)
 }
 
+// getBackendPriorityFilterName returns the name of the shared HTTPRouteFilter that sets the given
+// backendPriority.
+func getBackendPriorityFilterName(priority int32) string {
+	return backendPriorityHTTPFilterNamePrefix + strconv.Itoa(int(priority))
+}
+
+// backendPriorityFilterRef returns the backendRef filter that references the shared backendPriority
+// HTTPRouteFilter for the given priority.
+func backendPriorityFilterRef(priority int32) gwapiv1.HTTPRouteFilter {
+	return gwapiv1.HTTPRouteFilter{
+		Type: gwapiv1.HTTPRouteFilterExtensionRef,
+		ExtensionRef: &gwapiv1.LocalObjectReference{
+			Group: gwapiv1.Group(egv1a1.GroupVersion.Group),
+			Kind:  gwapiv1.Kind(egv1a1.KindHTTPRouteFilter),
+			Name:  gwapiv1.ObjectName(getBackendPriorityFilterName(priority)),
+		},
+	}
+}
+
+// generateBackendPriorityHTTPRouteFilter returns the shared HTTPRouteFilter that sets the given
+// backendPriority in the given namespace.
+//
+// The filter is not owned by any AIGatewayRoute since it is shared by every AIGatewayRoute in the namespace
+// that uses the same priority; it is tagged with the managed-by label instead, so that it can be told apart
+// from a user-provided HTTPRouteFilter that happens to have the same name.
+func generateBackendPriorityHTTPRouteFilter(namespace string, priority int32) *egv1a1.HTTPRouteFilter {
+	return &egv1a1.HTTPRouteFilter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      getBackendPriorityFilterName(priority),
+			Namespace: namespace,
+			Labels: map[string]string{
+				managedByLabel:                    managedByValue,
+				backendPriorityHTTPFilterLabelKey: strconv.Itoa(int(priority)),
+			},
+		},
+		Spec: egv1a1.HTTPRouteFilterSpec{BackendPriority: ptr.To(priority)},
+	}
+}
+
+// referencedBackendPriorities returns the backendPriority values referenced by the backendRef filters of
+// the given HTTPRoute, in ascending order.
+func referencedBackendPriorities(httpRoute *gwapiv1.HTTPRoute) []int32 {
+	priorities := sets.New[int32]()
+	for i := range httpRoute.Spec.Rules {
+		for j := range httpRoute.Spec.Rules[i].BackendRefs {
+			for _, f := range httpRoute.Spec.Rules[i].BackendRefs[j].Filters {
+				if f.ExtensionRef == nil || string(f.ExtensionRef.Kind) != egv1a1.KindHTTPRouteFilter {
+					continue
+				}
+				v, ok := strings.CutPrefix(string(f.ExtensionRef.Name), backendPriorityHTTPFilterNamePrefix)
+				if !ok {
+					continue
+				}
+				p, err := strconv.ParseInt(v, 10, 32)
+				if err != nil {
+					continue
+				}
+				priorities.Insert(int32(p))
+			}
+		}
+	}
+	return sets.List(priorities)
+}
+
+// ensureBackendPriorityHTTPRouteFilters creates the shared backendPriority HTTPRouteFilters referenced by
+// the given HTTPRoute if they do not exist yet. This must run before the HTTPRoute is written so that
+// Envoy Gateway never sees a reference to a missing filter, which would invalidate the backendRef.
+func (c *AIGatewayRouteController) ensureBackendPriorityHTTPRouteFilters(ctx context.Context, httpRoute *gwapiv1.HTTPRoute) error {
+	for _, priority := range referencedBackendPriorities(httpRoute) {
+		base := generateBackendPriorityHTTPRouteFilter(httpRoute.Namespace, priority)
+		var f egv1a1.HTTPRouteFilter
+		err := c.client.Get(ctx, client.ObjectKey{Name: base.Name, Namespace: base.Namespace}, &f)
+		switch {
+		case err == nil:
+			if f.Spec.BackendPriority == nil || *f.Spec.BackendPriority != priority {
+				return fmt.Errorf("HTTPRouteFilter %s/%s exists but does not set backendPriority %d",
+					base.Namespace, base.Name, priority)
+			}
+		case apierrors.IsNotFound(err):
+			if err = c.client.Create(ctx, base); err != nil && !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("failed to create HTTPRouteFilter %s: %w", base.Name, err)
+			}
+			c.logger.Info("Created HTTPRouteFilter", "name", base.Name, "namespace", base.Namespace)
+		default:
+			return fmt.Errorf("failed to get HTTPRouteFilter %s: %w", base.Name, err)
+		}
+	}
+	return nil
+}
+
+// aiGatewayRoutesUsingBackendPriority returns the AIGatewayRoutes in the namespace, other than those being
+// deleted, that have a backendRef with the given priority.
+//
+// This reads the AIGatewayRoutes rather than the generated HTTPRoutes on purpose. An AIGatewayRoute is in
+// the informer cache before it is reconciled, so by the time its reconcile has checked that a filter exists
+// (or created it), any later lookup here sees it. The HTTPRoute that reconcile writes, in contrast, may not
+// have reached the cache yet, and relying on it could delete a filter that has just started being used.
+func (c *AIGatewayRouteController) aiGatewayRoutesUsingBackendPriority(ctx context.Context, namespace, priority string) ([]aigv1b1.AIGatewayRoute, error) {
+	var list aigv1b1.AIGatewayRouteList
+	if err := c.client.List(ctx, &list, client.InNamespace(namespace),
+		client.MatchingFields{k8sClientIndexAIGatewayRouteToBackendPriority: priority}); err != nil {
+		return nil, err
+	}
+	routes := list.Items[:0]
+	for i := range list.Items {
+		if list.Items[i].DeletionTimestamp.IsZero() {
+			routes = append(routes, list.Items[i])
+		}
+	}
+	return routes, nil
+}
+
+// deleteUnusedBackendPriorityHTTPRouteFilters deletes the shared backendPriority HTTPRouteFilters for the
+// given priorities in the namespace that no AIGatewayRoute other than self uses any more.
+func (c *AIGatewayRouteController) deleteUnusedBackendPriorityHTTPRouteFilters(ctx context.Context, namespace, self string, priorities []int32) error {
+	for _, priority := range priorities {
+		routes, err := c.aiGatewayRoutesUsingBackendPriority(ctx, namespace, strconv.Itoa(int(priority)))
+		if err != nil {
+			return fmt.Errorf("failed to list AIGatewayRoutes using backend priority %d: %w", priority, err)
+		}
+		if slices.ContainsFunc(routes, func(r aigv1b1.AIGatewayRoute) bool { return r.Name != self }) {
+			continue
+		}
+		// Fetch first and only delete a filter we created: a user may own an HTTPRouteFilter that happens to
+		// share the name, and it lacks our managed-by label.
+		name := getBackendPriorityFilterName(priority)
+		var f egv1a1.HTTPRouteFilter
+		if err = c.client.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &f); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("failed to get HTTPRouteFilter %s: %w", name, err)
+		}
+		if f.Labels[managedByLabel] != managedByValue {
+			continue
+		}
+		if err = c.client.Delete(ctx, &f); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete HTTPRouteFilter %s: %w", name, err)
+		}
+		if err == nil {
+			c.logger.Info("Deleted unused HTTPRouteFilter", "name", name, "namespace", namespace)
+		}
+	}
+	return nil
+}
+
 // generateHTTPRouteFilters returns two HTTPRouteFilter with the given AIGatewayRoute.
 func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.HTTPRouteFilter {
 	ns := aiGatewayRoute.Namespace
@@ -175,7 +332,7 @@ func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.
 // This is decoupled from the Reconcile method to centralize the error handling and status updates.
 func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
 	// Propagate the AIGatewayRoute deletion all the way up to relevant Gateways.
-	onDelete, err := handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.syncGateways)
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.onAIGatewayRouteDeletion)
 	if err != nil {
 		return err
 	}
@@ -236,12 +393,18 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 		return fmt.Errorf("failed to get HTTPRoute: %w", err)
 	}
 
+	// Record the backendPriority filters the HTTPRoute references before newHTTPRoute overwrites its rules.
+	previousPriorities := referencedBackendPriorities(&httpRoute)
 	// Update the HTTPRoute with the new AIGatewayRoute. A backendRef that fails validation (e.g. a
 	// missing or revoked ReferenceGrant) is dropped from the generated rule rather than aborting the
 	// whole sync, so the HTTPRoute and the Gateways below still get updated to reflect the now-reduced
 	// set of authorized backends instead of staying frozen at their last-good state. The error, if any,
 	// is still returned at the end so the caller marks the AIGatewayRoute NotAccepted as before.
 	newHTTPRouteErr := c.newHTTPRoute(ctx, &httpRoute, aiGatewayRoute)
+
+	if err = c.ensureBackendPriorityHTTPRouteFilters(ctx, &httpRoute); err != nil {
+		return err
+	}
 
 	if existingRoute {
 		c.logger.Info("updating HTTPRoute", "namespace", httpRoute.Namespace, "name", httpRoute.Name)
@@ -252,6 +415,18 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 		c.logger.Info("creating HTTPRoute", "namespace", httpRoute.Namespace, "name", httpRoute.Name)
 		if err = c.client.Create(ctx, &httpRoute); err != nil {
 			return fmt.Errorf("failed to create HTTPRoute: %w", err)
+		}
+	}
+
+	// Delete the shared backendPriority HTTPRouteFilters that this HTTPRoute stopped referencing, unless
+	// another AIGatewayRoute in the namespace still uses them. This runs after the HTTPRoute is written so that
+	// it never references a deleted filter.
+	currentPriorities := referencedBackendPriorities(&httpRoute)
+	if unused := slices.DeleteFunc(previousPriorities, func(p int32) bool {
+		return slices.Contains(currentPriorities, p)
+	}); len(unused) > 0 {
+		if err = c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace, aiGatewayRoute.Name, unused); err != nil {
+			return err
 		}
 	}
 
@@ -341,12 +516,24 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 					backendObjRef.Namespace = &ns
 				}
 
-				backendRefs = append(backendRefs,
-					gwapiv1.HTTPBackendRef{BackendRef: gwapiv1.BackendRef{
-						BackendObjectReference: backendObjRef,
-						Weight:                 br.Weight,
-					}},
-				)
+				httpBackendRef := gwapiv1.HTTPBackendRef{BackendRef: gwapiv1.BackendRef{
+					BackendObjectReference: backendObjRef,
+					Weight:                 br.Weight,
+				}}
+				// Set the priority through Envoy Gateway's backendPriority HTTPRouteFilter, so that Envoy
+				// Gateway sets the locality priority of this backendRef's endpoints during its own
+				// translation (and keeps the rule out of MergeBackends). A priority change changes the
+				// referenced filter, so it also changes the HTTPRoute and triggers a re-translation.
+				//
+				// Priority 0 is Envoy Gateway's default, so it gets no filter. That leaves the priority derived
+				// from the referenced Backend's spec.fallback in effect, which only a non-zero priority
+				// overrides. It also keeps rules without priorities eligible for MergeBackends, which Envoy
+				// Gateway disables for any rule with a backendPriority filter.
+				if p := ptr.Deref(br.Priority, 0); p != 0 {
+					// #nosec G115 -- bounded by the CRD maximum of 128.
+					httpBackendRef.Filters = []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(int32(p))}
+				}
+				backendRefs = append(backendRefs, httpBackendRef)
 			}
 		}
 		var matches []gwapiv1.HTTPRouteMatch
@@ -398,8 +585,12 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 		dst.Annotations[k] = v
 	}
 
-	// HACK: We need to set an annotation so that Envoy Gateway reconciles the HTTPRoute when the backend refs change.
-	dst.Annotations[httpRouteBackendRefPriorityAnnotationKey] = buildPriorityAnnotation(aiGatewayRoute.Spec.Rules)
+	// Drop the annotation stamped by older versions. See legacyHTTPRouteBackendRefPriorityAnnotationKey.
+	//
+	// TODO: remove this, along with legacyHTTPRouteBackendRefPriorityAnnotationKey, one release after the
+	// backendPriority HTTPRouteFilter migration ships, together with applyLegacyBackendRefPriority in the
+	// extension server, e.g. keep it in v1.4 (which introduces the migration) and remove it in v1.5.
+	delete(dst.Annotations, legacyHTTPRouteBackendRefPriorityAnnotationKey)
 	dst.Annotations[httpRouteAnnotationForAIGatewayGeneratedIndication] = "true"
 	// HACK: Stamp a hash of the QuotaPolicies affecting this route's backends so that a QuotaPolicy
 	// change (which Envoy Gateway does not watch) actually mutates the HTTPRoute, forcing Envoy Gateway
@@ -418,6 +609,22 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 
 	dst.Spec.Hostnames = aiGatewayRoute.Spec.Hostnames
 	return errors.Join(errs...)
+}
+
+// onAIGatewayRouteDeletion handles the deletion of the AIGatewayRoute: it deletes the shared backendPriority
+// HTTPRouteFilters that only this AIGatewayRoute used, and propagates the deletion to the Gateways.
+func (c *AIGatewayRouteController) onAIGatewayRouteDeletion(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
+	var httpRoute gwapiv1.HTTPRoute
+	var priorities []int32
+	err := c.client.Get(ctx, client.ObjectKeyFromObject(aiGatewayRoute), &httpRoute)
+	switch {
+	case err == nil:
+		priorities = referencedBackendPriorities(&httpRoute)
+	case !apierrors.IsNotFound(err):
+		return fmt.Errorf("failed to get HTTPRoute: %w", err)
+	}
+	gcErr := c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace, aiGatewayRoute.Name, priorities)
+	return errors.Join(gcErr, c.syncGateways(ctx, aiGatewayRoute))
 }
 
 // syncGateways synchronizes the gateways referenced by the AIGatewayRoute by sending events to the gateway controller.
@@ -624,20 +831,4 @@ func hashQuotaPolicies(policies []*aigv1a1.QuotaPolicy) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:8]), nil
-}
-
-// Build an annotation that contains the priority of each backend ref. This is used to ensure Envoy Gateway reconciles the
-// HTTP route when the priorities change.
-func buildPriorityAnnotation(rules []aigv1b1.AIGatewayRouteRule) string {
-	priorities := make([]string, 0, len(rules))
-	for i, rule := range rules {
-		for _, br := range rule.BackendRefs {
-			var priority uint32
-			if br.Priority != nil {
-				priority = *br.Priority
-			}
-			priorities = append(priorities, fmt.Sprintf("%d:%s:%d", i, br.Name, priority))
-		}
-	}
-	return strings.Join(priorities, ",")
 }
