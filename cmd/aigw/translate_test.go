@@ -8,7 +8,9 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"testing"
 
@@ -73,6 +75,43 @@ func Test_translate(t *testing.T) {
 			assert.ElementsMatch(t, expEnvoyProxy, outEnvoyProxy)
 			assert.ElementsMatch(t, expBackendTrafficPolicy, outBackendTrafficPolicy)
 			assert.ElementsMatch(t, expSecurityPolicy, outSecurityPolicy)
+		})
+	}
+}
+
+func Test_collectObjects_MCPRouteNamespaces(t *testing.T) {
+	const route = `apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-route
+  namespace: team-%[1]s
+spec:
+  parentRefs:
+    - name: gateway-%[1]s
+  backendRefs:
+    - name: backend-%[1]s
+      kind: Backend
+      group: gateway.envoyproxy.io
+      path: /mcp
+`
+	a, b := fmt.Sprintf(route, "a"), fmt.Sprintf(route, "b")
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{"A+B", a + "---\n" + b, []string{"team-a/mcp-route", "team-b/mcp-route"}},
+		{"B+A", b + "---\n" + a, []string{"team-a/mcp-route", "team-b/mcp-route"}},
+		{"A+A", a + "---\n" + a, []string{"team-a/mcp-route"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, routes, _, _, _, _, _, _, _, err := collectObjects(tc.input, io.Discard, slog.New(slog.DiscardHandler))
+			require.NoError(t, err)
+			var got []string
+			for _, route := range routes {
+				got = append(got, route.Namespace+"/"+route.Name)
+			}
+			require.ElementsMatch(t, tc.want, got)
 		})
 	}
 }
