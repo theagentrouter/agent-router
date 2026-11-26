@@ -35,6 +35,8 @@ type Server struct {
 	ID string
 	// Logger is the logger used to log messages.
 	Logger *log.Logger
+	// AfterFirstBedrockText runs after the fast stream flushes its first text delta.
+	AfterFirstBedrockText func()
 
 	streamingInterval time.Duration
 }
@@ -327,8 +329,14 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Logger.Println("response sent")
 		r.Context().Done()
-	case "aws-event-stream":
+	case "aws-event-stream", FastAWSEventStream:
 		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		interval := s.streamingInterval
+		var afterFirstText func()
+		if r.Header.Get(ResponseTypeKey) == FastAWSEventStream {
+			interval = 10 * time.Millisecond
+			afterFirstText = s.AfterFirstBedrockText
+		}
 
 		var expResponseBody []byte
 		expResponseBody, err = base64.StdEncoding.DecodeString(r.Header.Get(ResponseBodyHeaderKey))
@@ -344,7 +352,7 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 			if len(line) == 0 {
 				continue
 			}
-			time.Sleep(s.streamingInterval)
+			time.Sleep(interval)
 			var bedrockStreamEvent map[string]any
 			err = json.Unmarshal(line, &bedrockStreamEvent)
 			if err != nil {
@@ -371,6 +379,10 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 				s.Logger.Println("failed to encode the response body")
 			}
 			w.(http.Flusher).Flush()
+			if afterFirstText != nil && gjson.GetBytes(line, "delta.text").String() != "" {
+				afterFirstText()
+				afterFirstText = nil
+			}
 			s.Logger.Println("response line sent:", string(line))
 		}
 
