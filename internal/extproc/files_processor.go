@@ -657,7 +657,8 @@ func (p *filesProcessor) rewrittenPath(op filesOperation, nativeID string) strin
 	pathOnly, query := splitQuery(p.requestHeaders[":path"])
 	idx := strings.Index(pathOnly, filesPathMarker)
 	base := pathOnly[:idx+len(filesPathMarker)]
-	// Callers validate nativeID with isSafeNativeID; escaping is defense in depth.
+	// Callers validate nativeID with isSafeNativeID; escaping keeps any remaining reserved
+	// characters (e.g. "?", "#") inside the path segment.
 	suffix := "/" + url.PathEscape(nativeID)
 	if op == filesOpContent {
 		suffix += "/content"
@@ -665,15 +666,21 @@ func (p *filesProcessor) rewrittenPath(op filesOperation, nativeID string) strin
 	return base + suffix + query
 }
 
-// isSafeNativeID reports whether a backend-native id can be used verbatim as a single path segment
-// of the upstream request: it must be non-empty, not a dot segment ("." or ".."), and contain only
-// characters that need no escaping in a path segment. This rejects "/", backslash, "?", "#", "%",
-// whitespace, control and non-ASCII characters, which provider file ids never contain.
+// isSafeNativeID reports whether a backend-native id can be used as a single path segment of the
+// upstream request once escaped with url.PathEscape. It rejects empty ids, the dot segments "." and
+// "..", path separators ("/" and backslash), and control characters, which escaping does not make
+// safe. It also rejects "%", so an upstream that decodes the path more than once cannot turn an
+// escaped id back into a path separator. Any other character is escaped in the upstream path.
 func isSafeNativeID(id string) bool {
-	if id == "" || id == "." || id == ".." || strings.ContainsRune(id, '\\') {
+	if id == "" || id == "." || id == ".." {
 		return false
 	}
-	return url.PathEscape(id) == id
+	for _, r := range id {
+		if r == '/' || r == '\\' || r == '%' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // classifyFilesRequest determines the Files API operation and (where present) the path id from

@@ -18,6 +18,7 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	openai "github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -1135,11 +1136,10 @@ func TestHandleIDBearingRequestHeaders_UnsafeNativeID(t *testing.T) {
 		".",
 		"a/b",
 		`a\b`,
-		"file-1?x=y",
-		"file-1#frag",
 		"file-1%2F..",
-		"file 1",
 		"file-\x00",
+		"file-\x7f",
+		"file-\n",
 	} {
 		t.Run(nativeID, func(t *testing.T) {
 			codec := newTestCodec()
@@ -1207,10 +1207,61 @@ func TestReEncode_UnsafeUpstreamNativeID(t *testing.T) {
 }
 
 func TestIsSafeNativeID(t *testing.T) {
-	for _, id := range []string{"file-abc123", "file_ABC-9", "batch_xyz", "3f2a7c1e-0d4b-4b8e-9a6f-1c2d3e4f5a6b", "a.b", "..a", "a:b@c"} {
+	for _, id := range []string{
+		"file-abc123", "file_ABC-9", "batch_xyz", "3f2a7c1e-0d4b-4b8e-9a6f-1c2d3e4f5a6b",
+		"a.b", "..a", "a:b@c", "file-with|separator", "a?b", "a#b", "a b", "é",
+	} {
 		require.True(t, isSafeNativeID(id), id)
 	}
-	for _, id := range []string{"", ".", "..", "a/b", `a\b`, "a?b", "a#b", "a%2Fb", "a b", "a\tb", "a\nb", "é"} {
+	for _, id := range []string{"", ".", "..", "a/b", `a\b`, "a%2Fb", "a%b", "a\tb", "a\nb", "a\x00b", "a\x7fb"} {
 		require.False(t, isSafeNativeID(id), id)
 	}
+}
+
+// TestHandleIDBearingRequestHeaders_EscapesNativeID verifies that native ids with characters that
+// are reserved in a path, but safe once escaped, stay inside a single upstream path segment.
+func TestHandleIDBearingRequestHeaders_EscapesNativeID(t *testing.T) {
+	for nativeID, escaped := range map[string]string{
+		"file-with|separator": "file-with%7Cseparator",
+		"file-1?x=y":          "file-1%3Fx=y",
+		"file-1#frag":         "file-1%23frag",
+		"file 1":              "file%201",
+	} {
+		t.Run(nativeID, func(t *testing.T) {
+			codec := newTestCodec()
+			config := runtimeConfigWithSchema("ns", "apple", "myroute", filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI})
+			gatewayID := encodeGatewayFileID(t, codec, "ns", "apple", nativeID)
+			p := &filesProcessor{
+				codec:          codec,
+				config:         config,
+				requestHeaders: map[string]string{":method": http.MethodGet, ":path": "/v1/files/" + gatewayID + "/content?limit=1"},
+				logger:         slog.Default(),
+			}
+			resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+			require.NoError(t, err)
+			require.Nil(t, resp.GetImmediateResponse())
+			newPath, ok := responseHeaderValue(resp, ":path")
+			require.True(t, ok)
+			require.Equal(t, "/v1/files/"+escaped+"/content?limit=1", newPath)
+			require.Equal(t, nativeID, p.filesRequestMetadata.NativeID)
+		})
+	}
+}
+
+// TestReEncode_EscapableUpstreamNativeID verifies that an upstream native id with characters that
+// are safe once escaped is still re-encoded into a gateway id.
+func TestReEncode_EscapableUpstreamNativeID(t *testing.T) {
+	codec := newTestCodec()
+	p := &filesProcessor{
+		codec:   codec,
+		op:      filesOpUpload,
+		backend: &backendKey{namespace: "ns", name: "apple"},
+		logger:  slog.Default(),
+	}
+	resp := p.reEncodeResponse([]byte(`{"id":"file-with|separator","object":"file"}`))
+	require.Nil(t, resp.GetImmediateResponse())
+	body := resp.GetResponseBody().GetResponse().GetBodyMutation().GetBody()
+	decoded, err := codec.Decode(gjson.GetBytes(body, "id").String())
+	require.NoError(t, err)
+	require.Equal(t, "file-with|separator", decoded.NativeID)
 }
