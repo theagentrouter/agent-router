@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tidwall/gjson"
 	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
@@ -192,9 +193,18 @@ func openAIMessageToBedrockMessageRoleAssistant(
 		for i := range openAiMessage.ThinkingBlocks {
 			block := &openAiMessage.ThinkingBlocks[i]
 			if block.Type == "thinking" && block.Signature != "" {
+				text := block.Thinking
+				// A streamed message can carry the text separately from its signature.
+				// Only one block can be paired unambiguously with that text.
+				if len(openAiMessage.ThinkingBlocks) == 1 && text == "" && block.Data == "" {
+					reasoning := gjson.ParseBytes(openAiMessage.ReasoningContent)
+					if reasoning.Type == gjson.String {
+						text = reasoning.Str
+					}
+				}
 				contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{
 					Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
-					Text:      &block.Thinking,
+					Text:      &text,
 					Signature: &block.Signature,
 				})
 			}

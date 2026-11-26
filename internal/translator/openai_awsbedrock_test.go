@@ -1527,6 +1527,15 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody_SignedThinking
 			want:      wantTool,
 			assistant: `{"role": "assistant", ` + toolHistoryFields + `}`,
 		},
+		{
+			name:    "streamed tool call with separate reasoning text and signature",
+			request: toolRequest,
+			want:    wantTool,
+			assistant: `{"role": "assistant", "content": "", "reasoning_content": "synthetic reasoning for turn one",
+				"thinking_blocks": [{"type": "thinking", "signature": "sig_local_roundtrip_01"}],
+				"tool_calls": [{"id": "call_clock_01", "function": {"arguments": "{\"timezone\":\"UTC\"}", "name": "get_time"}, "type": "function", "index": 0}]
+			}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := []byte(fmt.Sprintf(tc.request, tc.assistant))
