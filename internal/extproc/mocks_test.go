@@ -119,6 +119,34 @@ func (m *mockTranslator) ResponseBody(_ map[string]string, body io.Reader, _ boo
 	return m.retHeaderMutation, m.retBodyMutation, m.retUsedToken, m.retResponseModel, m.retErr
 }
 
+// closingMockProcessor is a mockProcessor that records whether it was closed.
+type closingMockProcessor struct {
+	mockProcessor
+	closed bool
+}
+
+// Close implements [io.Closer].
+func (m *closingMockProcessor) Close() error {
+	m.closed = true
+	return nil
+}
+
+// endingMockProcessingStream is a mockExternalProcessingStream that ends once its requests are received.
+type endingMockProcessingStream struct {
+	mockExternalProcessingStream
+	requests []*extprocv3.ProcessingRequest
+}
+
+// Recv implements [extprocv3.ExternalProcessor_ProcessServer].
+func (m *endingMockProcessingStream) Recv() (*extprocv3.ProcessingRequest, error) {
+	if len(m.requests) == 0 {
+		return nil, io.EOF
+	}
+	req := m.requests[0]
+	m.requests = m.requests[1:]
+	return req, nil
+}
+
 // mockExternalProcessingStream implements [extprocv3.ExternalProcessor_ProcessServer] for testing.
 type mockExternalProcessingStream struct {
 	t                 *testing.T

@@ -295,6 +295,23 @@ func TestServer_Process(t *testing.T) {
 		err := s.Process(ms)
 		require.ErrorContains(t, err, "context deadline exceeded")
 	})
+	t.Run("closes the processor when the stream ends", func(t *testing.T) {
+		s, _ := requireNewServerWithMockProcessor(t)
+		hm := &corev3.HeaderMap{Headers: []*corev3.HeaderValue{{Key: ":path", Value: "/"}}}
+		expResponse := &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_RequestHeaders{}}
+		p := &closingMockProcessor{mockProcessor: mockProcessor{t: t, expHeaderMap: hm, retProcessingResponse: expResponse}}
+		s.Register("/", func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
+			return p, nil
+		})
+		ms := &endingMockProcessingStream{
+			mockExternalProcessingStream: mockExternalProcessingStream{t: t, ctx: t.Context(), expResponseOnSend: expResponse},
+			requests: []*extprocv3.ProcessingRequest{{
+				Request: &extprocv3.ProcessingRequest_RequestHeaders{RequestHeaders: &extprocv3.HttpHeaders{Headers: hm}},
+			}},
+		}
+		require.NoError(t, s.Process(ms))
+		require.True(t, p.closed)
+	})
 	t.Run("without going through request headers phase", func(t *testing.T) {
 		// This is a regression test as in #419.
 		s, _ := requireNewServerWithMockProcessor(t)

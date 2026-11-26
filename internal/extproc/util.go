@@ -8,8 +8,10 @@ package extproc
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"log/slog"
 
 	"github.com/andybalholm/brotli"
@@ -43,9 +45,14 @@ func decodeContentIfNeeded(body []byte, contentEncoding string) (contentDecoding
 			isEncoded: false,
 		}, nil
 	}
+	return decodeReaderIfNeeded(bytes.NewReader(body), contentEncoding)
+}
+
+// decodeReaderIfNeeded is like decodeContentIfNeeded but decompresses the body read from r.
+func decodeReaderIfNeeded(r io.Reader, contentEncoding string) (contentDecodingResult, error) {
 	switch contentEncoding {
 	case "gzip":
-		reader, err := gzip.NewReader(bytes.NewReader(body))
+		reader, err := gzip.NewReader(r)
 		if err != nil {
 			return contentDecodingResult{}, fmt.Errorf("failed to decode gzip: %w", err)
 		}
@@ -54,17 +61,88 @@ func decodeContentIfNeeded(body []byte, contentEncoding string) (contentDecoding
 			isEncoded: true,
 		}, nil
 	case "br":
-		reader := brotli.NewReader(bytes.NewReader(body))
+		reader := brotli.NewReader(r)
 		return contentDecodingResult{
 			reader:    reader,
 			isEncoded: true,
 		}, nil
 	default:
 		return contentDecodingResult{
-			reader:    bytes.NewReader(body),
+			reader:    r,
 			isEncoded: false,
 		}, nil
 	}
+}
+
+// errStreamDecoderStopped is returned to the decompressor of a streamDecoder whose stop was called.
+var errStreamDecoderStopped = errors.New("stream decoder stopped")
+
+// streamDecoder decompresses a streaming response body chunk by chunk, decoding every compressed
+// byte once.
+//
+// Decompressors pull their input and treat a source that runs dry as a truncated stream, so the
+// decompressor runs in a coroutine (see [iter.Pull]) that suspends whenever it has consumed the
+// chunks fed so far, handing back what they decompressed to.
+//
+// stop must be called if the stream ends before its last chunk was decoded, otherwise the
+// coroutine is never released. As with [iter.Pull], decode and stop must not be called concurrently.
+type streamDecoder struct {
+	next  func() ([]byte, bool)
+	stop  func()
+	yield func([]byte) bool
+	in    []byte // compressed bytes of the current chunk not yet read by the decompressor
+	eos   bool
+	out   []byte // bytes decompressed since the coroutine last suspended
+	err   error  // set once the decompressor has returned
+}
+
+// newStreamDecoder returns a streamDecoder for a body encoded with contentEncoding. As in
+// decodeReaderIfNeeded, a body with an unsupported encoding is passed through as is.
+func newStreamDecoder(contentEncoding string) *streamDecoder {
+	d := &streamDecoder{}
+	d.next, d.stop = iter.Pull(func(yield func([]byte) bool) {
+		d.yield = yield
+		res, err := decodeReaderIfNeeded(d, contentEncoding)
+		if err == nil {
+			_, err = io.Copy(d, res.reader)
+		}
+		d.err = err
+	})
+	return d
+}
+
+// decode feeds the next chunk of the compressed body and returns the bytes it decompressed to.
+// endOfStream marks the last chunk, after which an incomplete compressed stream is an error.
+func (d *streamDecoder) decode(chunk []byte, endOfStream bool) ([]byte, error) {
+	d.in, d.eos = chunk, endOfStream
+	if out, ok := d.next(); ok {
+		return out, nil
+	}
+	out := d.out
+	d.out = nil
+	return out, d.err
+}
+
+// Read implements [io.Reader] as the source of the decompressor.
+func (d *streamDecoder) Read(p []byte) (int, error) {
+	for len(d.in) == 0 {
+		if d.eos {
+			return 0, io.EOF
+		}
+		if !d.yield(d.out) {
+			return 0, errStreamDecoderStopped
+		}
+		d.out = nil
+	}
+	n := copy(p, d.in)
+	d.in = d.in[n:]
+	return n, nil
+}
+
+// Write implements [io.Writer] as the sink of the decompressor.
+func (d *streamDecoder) Write(p []byte) (int, error) {
+	d.out = append(d.out, p...)
+	return len(p), nil
 }
 
 // removeContentEncodingIfNeeded removes the content-encoding header if the body was modified and was encoded.
