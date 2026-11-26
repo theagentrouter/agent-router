@@ -356,36 +356,76 @@ func buildExtProcClusterForInferencePoolEndpointPicker(pool *gwaiev1.InferencePo
 	return c, nil
 }
 
-// httpProtocolOptionsForInferencePoolBackend builds TypedExtensionProtocolOptions for the
-// InferencePool's backend cluster (the ORIGINAL_DST cluster used to reach the pool's selected
-// model-server Pods), honoring the InferencePool's spec.appProtocol.
+// mergeHTTPProtocolOptionsForInferencePoolBackend preserves the HTTP protocol options Envoy
+// Gateway rendered for the InferencePool's backend cluster (the ORIGINAL_DST cluster used to
+// reach the pool's selected model-server Pods) and replaces only the upstream protocol
+// selection to honor the InferencePool's spec.appProtocol.
 //
 // The InferencePool is not a Kubernetes Service, so Envoy Gateway has no appProtocol hint to
 // translate into upstream HTTP protocol options for this cluster the way it would for a normal
 // Service backend (see envoyproxy/gateway's resolveBackendProtocol, which maps the same
-// "kubernetes.io/h2c" string to explicit HTTP/2). We derive it ourselves here: h2c gets explicit
+// "kubernetes.io/h2c" string to explicit HTTP/2). The merge derives it here: h2c gets explicit
 // cleartext HTTP/2, everything else (including the default "http" and an unset value) gets
 // explicit HTTP/1.1.
-func httpProtocolOptionsForInferencePoolBackend(pool *gwaiev1.InferencePool) (map[string]*anypb.Any, error) {
-	explicitHTTPConfig := &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig{
-		ProtocolConfig: &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{},
-	}
-	if pool.Spec.AppProtocol == gwaiev1.AppProtocolH2C {
-		explicitHTTPConfig.ProtocolConfig = &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{
-			Http2ProtocolOptions: &corev3.Http2ProtocolOptions{},
-		}
+func mergeHTTPProtocolOptionsForInferencePoolBackend(cluster *clusterv3.Cluster, pool *gwaiev1.InferencePool) error {
+	if cluster.TypedExtensionProtocolOptions == nil {
+		cluster.TypedExtensionProtocolOptions = make(map[string]*anypb.Any)
 	}
 
-	poAny, err := toAny(&upstreamsv3.HttpProtocolOptions{
-		UpstreamProtocolOptions: &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_{
-			ExplicitHttpConfig: explicitHTTPConfig,
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to build HTTP protocol options for InferencePool %s/%s: %w",
-			pool.Namespace, pool.Name, err)
+	po := &upstreamsv3.HttpProtocolOptions{}
+	if raw, ok := cluster.TypedExtensionProtocolOptions[httpProtocolOptionsKey]; ok {
+		if err := raw.UnmarshalTo(po); err != nil {
+			return fmt.Errorf("failed to unmarshal HTTP protocol options for cluster %s (InferencePool %s/%s): %w",
+				cluster.Name, pool.Namespace, pool.Name, err)
+		}
 	}
-	return map[string]*anypb.Any{httpProtocolOptionsKey: poAny}, nil
+	po.UpstreamProtocolOptions = inferencePoolUpstreamProtocolOptions(pool, po)
+
+	poAny, err := toAny(po)
+	if err != nil {
+		return fmt.Errorf("failed to marshal HTTP protocol options for cluster %s (InferencePool %s/%s): %w",
+			cluster.Name, pool.Namespace, pool.Name, err)
+	}
+	cluster.TypedExtensionProtocolOptions[httpProtocolOptionsKey] = poAny
+	return nil
+}
+
+func inferencePoolUpstreamProtocolOptions(pool *gwaiev1.InferencePool, existing *upstreamsv3.HttpProtocolOptions) *upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_ {
+	http1, http2 := existingUpstreamProtocolOptions(existing)
+	if pool.Spec.AppProtocol == gwaiev1.AppProtocolH2C {
+		return &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_{
+			ExplicitHttpConfig: &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig{
+				ProtocolConfig: &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{
+					Http2ProtocolOptions: http2,
+				},
+			},
+		}
+	}
+	return &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_{
+		ExplicitHttpConfig: &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig{
+			ProtocolConfig: &upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+				HttpProtocolOptions: http1,
+			},
+		},
+	}
+}
+
+func existingUpstreamProtocolOptions(po *upstreamsv3.HttpProtocolOptions) (http1 *corev3.Http1ProtocolOptions, http2 *corev3.Http2ProtocolOptions) {
+	switch existing := po.GetUpstreamProtocolOptions().(type) {
+	case *upstreamsv3.HttpProtocolOptions_ExplicitHttpConfig_:
+		http1, http2 = existing.ExplicitHttpConfig.GetHttpProtocolOptions(), existing.ExplicitHttpConfig.GetHttp2ProtocolOptions()
+	case *upstreamsv3.HttpProtocolOptions_UseDownstreamProtocolConfig:
+		http1, http2 = existing.UseDownstreamProtocolConfig.GetHttpProtocolOptions(), existing.UseDownstreamProtocolConfig.GetHttp2ProtocolOptions()
+	case *upstreamsv3.HttpProtocolOptions_AutoConfig:
+		http1, http2 = existing.AutoConfig.GetHttpProtocolOptions(), existing.AutoConfig.GetHttp2ProtocolOptions()
+	}
+	if http1 == nil {
+		http1 = &corev3.Http1ProtocolOptions{}
+	}
+	if http2 == nil {
+		http2 = &corev3.Http2ProtocolOptions{}
+	}
+	return http1, http2
 }
 
 // buildInferencePoolHTTPFilter returns a HTTP filter for InferencePool.
