@@ -469,9 +469,13 @@ spec:
 
 Rules are evaluated in order. The first rule that matches the request (Target, Source, and CEL) determines the action (Allow/Deny). If no rules match, the `defaultAction` is applied.
 
-Authorization applies to every MCP method the gateway forwards to a backend, not only to tool calls:
+Authorization applies to the MCP methods a client sends to backends, not only to tool calls:
 `resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, `subscriptions/listen` and `notifications/roots/list_changed`
 are evaluated against the same rules, with `request.mcp.method` and `request.mcp.backend` set accordingly.
+Two kinds of messages are not evaluated. The first is session setup and discovery (`initialize` and
+`server/discover`); `backendSelector` controls which backends those reach. The second is
+replies to requests a backend sent to the client, such as sampling or elicitation results and their
+`notifications/progress`.
 Rules with a `target` only match `tools/call` (and the `tools/list` filtering), so under the default
 `defaultAction: Deny` these other methods are denied unless a rule without a `target` allows them. For
 methods that fan out to every backend (the `*/list` methods, `logging/setLevel`, `subscriptions/listen` and notifications), the

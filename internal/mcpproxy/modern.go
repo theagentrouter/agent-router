@@ -1028,14 +1028,14 @@ func (m *mcpRequestContext) handleSubscriptionsListen(ctx context.Context, w htt
 	}
 	// Only backends the route's authorization policy allows for subscriptions/listen are
 	// contacted. Subscribing to a resource on a denied backend is rejected outright, like
-	// resources/read; list_changed opt-ins silently skip denied backends, like list fan-out.
-	authorized := m.authorizedModernBackends(routeConfig, req, selected, &mcp.SubscriptionsListenParams{})
+	// resources/read (including the insufficient_scope challenge); list_changed opt-ins
+	// silently skip denied backends, like list fan-out.
 	for backendName := range perBackendURIs {
-		if _, ok := authorized[backendName]; !ok {
-			onRequestError(w, http.StatusForbidden, errCodeInvalidRequest, "access denied", req.ID)
+		if !m.authorizeModernMethod(w, r, req, routeConfig, backendName, &params) {
 			return handlerResult{}, errAuthorizationDenied
 		}
 	}
+	authorized := m.authorizedModernBackends(routeConfig, req, selected, &mcp.SubscriptionsListenParams{})
 
 	wantListChanged := intent.toolsListChanged || intent.promptsListChanged || intent.resourcesListChanged
 

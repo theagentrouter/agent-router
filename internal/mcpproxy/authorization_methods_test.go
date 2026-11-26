@@ -652,3 +652,100 @@ func TestAuthorization_ModernSubscriptionsListen(t *testing.T) {
 		require.Empty(t, calls.count)
 	})
 }
+
+// TestAuthorization_ScopeChallengeOnlyForMatchingRules verifies that the insufficient_scope
+// challenge only advertises the scopes of a rule whose CEL condition matches the request, not
+// those of a rule written for another method that would still deny after the scope is acquired.
+func TestAuthorization_ScopeChallengeOnlyForMatchingRules(t *testing.T) {
+	proxy, backend, sessionID := newAuthorizationTestProxy(t, &filterapi.MCPRouteAuthorization{
+		DefaultAction: filterapi.AuthorizationActionDeny,
+		VerifiedJWT:   true,
+		Rules: []filterapi.MCPRouteAuthorizationRule{
+			{
+				Action: filterapi.AuthorizationActionAllow,
+				Source: &filterapi.MCPAuthorizationSource{JWT: filterapi.JWTSource{Scopes: []string{"prompts"}}},
+				CEL:    ptr.To(`request.mcp.method == "prompts/get"`),
+			},
+			{
+				Action: filterapi.AuthorizationActionAllow,
+				Source: &filterapi.MCPAuthorizationSource{JWT: filterapi.JWTSource{Scopes: []string{"resources"}}},
+				CEL:    ptr.To(`request.mcp.method == "resources/read"`),
+			},
+		},
+	})
+	headers := map[string]string{"Authorization": "Bearer " + bearerTokenWithClaims(jwt.MapClaims{"scope": "other"})}
+
+	rr := doMCPPost(t, proxy, sessionID, "resources/read", &mcp.ReadResourceParams{URI: downstreamResourceURI("file:///secret", "backend1")}, headers)
+	require.Equal(t, http.StatusForbidden, rr.Code)
+	require.Contains(t, rr.Header().Get("WWW-Authenticate"), `scope="resources"`)
+	require.Empty(t, backend.reset())
+
+	rr = doMCPPost(t, proxy, sessionID, "prompts/get", &mcp.GetPromptParams{Name: "backend1__secret_prompt"}, headers)
+	require.Equal(t, http.StatusForbidden, rr.Code)
+	require.Contains(t, rr.Header().Get("WWW-Authenticate"), `scope="prompts"`)
+
+	// No rule matches completion/complete at all, so there is no scope to advertise.
+	rr = doMCPPost(t, proxy, sessionID, "completion/complete", &mcp.CompleteParams{Ref: &mcp.CompleteReference{Type: "ref/prompt", Name: "backend1__secret_prompt"}, Argument: mcp.CompleteParamsArgument{Name: "a", Value: "b"}}, headers)
+	require.Equal(t, http.StatusForbidden, rr.Code)
+	require.Empty(t, rr.Header().Get("WWW-Authenticate"))
+	require.Empty(t, backend.reset())
+}
+
+// TestAuthorization_FilteredListsArePrivate verifies that aggregated list results are marked as
+// privately cacheable when the route's authorization policy can filter them per caller, even if
+// every backend reported a public cache scope.
+func TestAuthorization_FilteredListsArePrivate(t *testing.T) {
+	public := mcp.Cacheable{TTLMs: 60000, CacheScope: "public"}
+	for _, tc := range []struct {
+		name          string
+		authorization *compiledAuthorization
+		expected      string
+	}{
+		{name: "no authorization", expected: "public"},
+		{name: "authorization", authorization: mustCompileAuthorization(t, &filterapi.MCPRouteAuthorization{DefaultAction: filterapi.AuthorizationActionAllow}), expected: "private"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proxy := newTestMCPProxy()
+			proxy.routes["test-route"].toolSelectors = nil
+			proxy.routes["test-route"].authorization = tc.authorization
+			s := &session{route: "test-route"}
+
+			tools := proxy.mergeToolsList(s, []broadCastResponse[mcp.ListToolsResult]{{backendName: "backend1", res: mcp.ListToolsResult{Cacheable: public}}})
+			require.Equal(t, tc.expected, tools.CacheScope)
+			resources := proxy.mergeResourceList(s, []broadCastResponse[mcp.ListResourcesResult]{{backendName: "backend1", res: mcp.ListResourcesResult{Cacheable: public}}})
+			require.Equal(t, tc.expected, resources.CacheScope)
+			templates := proxy.mergeResourcesTemplateList(s, []broadCastResponse[mcp.ListResourceTemplatesResult]{{backendName: "backend1", res: mcp.ListResourceTemplatesResult{Cacheable: public}}})
+			require.Equal(t, tc.expected, templates.CacheScope)
+			prompts := proxy.mergePromptsList(s, []broadCastResponse[mcp.ListPromptsResult]{{backendName: "backend1", res: mcp.ListPromptsResult{Cacheable: public}}})
+			require.Equal(t, tc.expected, prompts.CacheScope)
+		})
+	}
+}
+
+// TestAuthorization_ModernSubscriptionsListenScopeChallenge verifies that a resource subscription
+// denied for missing scopes carries the insufficient_scope challenge, like resources/read.
+func TestAuthorization_ModernSubscriptionsListenScopeChallenge(t *testing.T) {
+	proxy := newTestMCPProxy()
+	proxy.backendListenerAddr = "http://unused"
+	proxy.routes["test-route"].authorization = mustCompileAuthorization(t, &filterapi.MCPRouteAuthorization{
+		DefaultAction: filterapi.AuthorizationActionDeny,
+		VerifiedJWT:   true,
+		Rules: []filterapi.MCPRouteAuthorizationRule{{
+			Action: filterapi.AuthorizationActionAllow,
+			Source: &filterapi.MCPAuthorizationSource{JWT: filterapi.JWTSource{Scopes: []string{"subscribe"}}},
+			CEL:    ptr.To(`request.mcp.method == "subscriptions/listen"`),
+		}},
+	})
+	params, err := json.Marshal(map[string]any{"notifications": map[string]any{
+		"resourceSubscriptions": []string{downstreamResourceURI("file:///secret", "backend1")},
+	}})
+	require.NoError(t, err)
+	r := newModernRequest("subscriptions/listen")
+	r.Header.Set("Authorization", "Bearer "+bearerTokenWithClaims(jwt.MapClaims{"scope": "other"}))
+	rr := httptest.NewRecorder()
+
+	_, err = proxy.handleSubscriptionsListen(t.Context(), rr, r, modernReq(t, "subscriptions/listen", params), "test-route", nil)
+	require.ErrorIs(t, err, errAuthorizationDenied)
+	require.Equal(t, http.StatusForbidden, rr.Code)
+	require.Contains(t, rr.Header().Get("WWW-Authenticate"), `scope="subscribe"`)
+}
