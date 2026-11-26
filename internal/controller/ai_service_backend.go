@@ -104,6 +104,9 @@ func (c *AIBackendController) syncAIServiceBackend(ctx context.Context, aiBacken
 
 // updateAIServiceBackendStatus updates the status of the AIServiceBackend.
 func (c *AIBackendController) updateAIServiceBackendStatus(ctx context.Context, backend *aigv1b1.AIServiceBackend, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := backend.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: backend.Name, Namespace: backend.Namespace}, backend); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -111,7 +114,7 @@ func (c *AIBackendController) updateAIServiceBackendStatus(ctx context.Context, 
 			}
 			return err
 		}
-		backend.Status.Conditions = newConditions(conditionType, message)
+		backend.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, backend)
 	})
 	if err != nil {

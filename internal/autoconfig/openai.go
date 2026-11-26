@@ -10,8 +10,8 @@ import (
 	"os"
 )
 
-// PopulateOpenAIEnvConfig populates ConfigData with OpenAI backend configuration
-// from standard OpenAI SDK environment variables.
+// PopulateOpenAIEnvConfig adds an OpenAI provider to ConfigData, configured from the
+// standard OpenAI SDK environment variables, serving the models matched by modelMatch.
 //
 // This errs if neither OPENAI_API_KEY nor AZURE_OPENAI_API_KEY is set.
 // Prioritizes AZURE_OPENAI_API_KEY over OPENAI_API_KEY when both are set.
@@ -19,76 +19,43 @@ import (
 // For Azure OpenAI, requires AZURE_OPENAI_ENDPOINT and OPENAI_API_VERSION.
 //
 // See https://github.com/openai/openai-python/blob/main/src/openai/_client.py
-func PopulateOpenAIEnvConfig(data *ConfigData) error {
+func PopulateOpenAIEnvConfig(data *ConfigData, modelMatch string) error {
 	if data == nil {
 		return fmt.Errorf("ConfigData cannot be nil")
 	}
 
-	// Prioritize Azure OpenAI over standard OpenAI
-	azureAPIKey := os.Getenv("AZURE_OPENAI_API_KEY")
-	openaiAPIKey := os.Getenv("OPENAI_API_KEY")
-
-	var err error
-	var parsed *parsedURL
-	var schemaName string
-	var version string
-
+	p := Provider{Name: "openai", ModelMatch: modelMatch}
+	var baseURL string
 	switch {
-	case azureAPIKey != "":
+	case os.Getenv("AZURE_OPENAI_API_KEY") != "":
 		// Azure OpenAI mode
-		azureEndpoint := os.Getenv("AZURE_OPENAI_ENDPOINT")
-		if azureEndpoint == "" {
+		baseURL = os.Getenv("AZURE_OPENAI_ENDPOINT")
+		if baseURL == "" {
 			return fmt.Errorf("AZURE_OPENAI_ENDPOINT environment variable is required when AZURE_OPENAI_API_KEY is set")
 		}
-		apiVersion := os.Getenv("OPENAI_API_VERSION")
-		if apiVersion == "" {
+		p.Version = os.Getenv("OPENAI_API_VERSION")
+		if p.Version == "" {
 			return fmt.Errorf("OPENAI_API_VERSION environment variable is required when AZURE_OPENAI_API_KEY is set")
 		}
-
-		parsed, err = parseURL(azureEndpoint)
-		if err != nil {
-			return err
-		}
-		schemaName = "AzureOpenAI"
-		version = apiVersion
-	case openaiAPIKey != "":
+		p.SchemaName = "AzureOpenAI"
+		p.APIKeyEnv = "AZURE_OPENAI_API_KEY"
+	case os.Getenv("OPENAI_API_KEY") != "":
 		// Standard OpenAI mode
-		baseURL := os.Getenv("OPENAI_BASE_URL")
+		baseURL = os.Getenv("OPENAI_BASE_URL")
 		if baseURL == "" {
 			baseURL = "https://api.openai.com/v1"
 		}
-
-		parsed, err = parseURL(baseURL)
-		if err != nil {
-			return err
-		}
-		schemaName = "OpenAI"
-		version = parsed.version
+		p.SchemaName = "OpenAI"
+		p.APIKeyEnv = "OPENAI_API_KEY"
 	default:
 		return fmt.Errorf("either OPENAI_API_KEY or AZURE_OPENAI_API_KEY environment variable is required")
 	}
 
-	// Create Backend for OpenAI
-	backend := Backend{
-		Name:     "openai",
-		Hostname: parsed.hostname,
-		IP:       parsed.ip,
-		Port:     parsed.port,
-		NeedsTLS: parsed.needsTLS,
+	if org := os.Getenv("OPENAI_ORG_ID"); org != "" {
+		p.Headers = append(p.Headers, Header{Name: "OpenAI-Organization", Value: org})
 	}
-
-	// Create OpenAIConfig referencing the backend
-	openaiConfig := &OpenAIConfig{
-		BackendName:    "openai",
-		SchemaName:     schemaName,
-		Version:        version,
-		OrganizationID: os.Getenv("OPENAI_ORG_ID"),
-		ProjectID:      os.Getenv("OPENAI_PROJECT_ID"),
+	if project := os.Getenv("OPENAI_PROJECT_ID"); project != "" {
+		p.Headers = append(p.Headers, Header{Name: "OpenAI-Project", Value: project})
 	}
-
-	// Add to ConfigData
-	data.Backends = append(data.Backends, backend)
-	data.OpenAI = openaiConfig
-
-	return nil
+	return AddProvider(data, &p, baseURL)
 }

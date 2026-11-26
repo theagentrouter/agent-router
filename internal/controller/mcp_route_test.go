@@ -512,7 +512,7 @@ func TestMCPRouteController_updateMCPRouteStatus(t *testing.T) {
 	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
 	ctrlr := &MCPRouteController{client: fakeClient, logger: logr.Discard()}
 
-	r := &aigv1b1.MCPRoute{ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: "default"}}
+	r := &aigv1b1.MCPRoute{ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: "default", Generation: 1}}
 	err := fakeClient.Create(t.Context(), r)
 	require.NoError(t, err)
 
@@ -523,6 +523,7 @@ func TestMCPRouteController_updateMCPRouteStatus(t *testing.T) {
 	require.Len(t, updated.Status.Conditions, 1)
 	require.Equal(t, "err", updated.Status.Conditions[0].Message)
 	require.Equal(t, aigv1b1.ConditionTypeNotAccepted, updated.Status.Conditions[0].Type)
+	require.Equal(t, int64(1), updated.Status.Conditions[0].ObservedGeneration)
 
 	ctrlr.updateMCPRouteStatus(t.Context(), &updated, aigv1b1.ConditionTypeAccepted, "ok")
 	err = fakeClient.Get(t.Context(), client.ObjectKey{Name: "route1", Namespace: "default"}, &updated)
@@ -530,6 +531,22 @@ func TestMCPRouteController_updateMCPRouteStatus(t *testing.T) {
 	require.Len(t, updated.Status.Conditions, 1)
 	require.Equal(t, "ok", updated.Status.Conditions[0].Message)
 	require.Equal(t, aigv1b1.ConditionTypeAccepted, updated.Status.Conditions[0].Type)
+	require.Equal(t, int64(1), updated.Status.Conditions[0].ObservedGeneration)
+
+	// The reconcile processed generation 1, and the spec is edited to generation 2 before the
+	// status is written. The conditions describe generation 1, not the generation the status write
+	// re-reads.
+	processed := updated.DeepCopy()
+	updated.Generation = 2
+	require.NoError(t, fakeClient.Update(t.Context(), &updated))
+	for _, conditionType := range []string{aigv1b1.ConditionTypeNotAccepted, aigv1b1.ConditionTypeAccepted} {
+		ctrlr.updateMCPRouteStatus(t.Context(), processed.DeepCopy(), conditionType, "result")
+		var current aigv1b1.MCPRoute
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(r), &current))
+		require.Len(t, current.Status.Conditions, 1)
+		require.Equal(t, conditionType, current.Status.Conditions[0].Type)
+		require.Equal(t, int64(1), current.Status.Conditions[0].ObservedGeneration)
+	}
 }
 
 func TestMCPRouteController_syncGateway_notFound(t *testing.T) { // coverage for not-found branch.

@@ -36,10 +36,15 @@ jobs:
         with:
           cache: false
           go-version-file: go.mod
+      - name: Get Go build cache path
+        id: go_cache
+        run: |
+          cache_path=$(go env GOCACHE)
+          echo "path=$cache_path" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4
         with:
           path: |
-            ~/.cache/go-build
+            ${{ steps.go_cache.outputs.path }}
             ~/.cache/golangci-lint
             ~/go/pkg/mod
             ~/go/bin
