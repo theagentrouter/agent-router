@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -26,6 +27,55 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
+
+func TestExpectedJSONRequestBody(t *testing.T) {
+	const budget = `{"additionalModelRequestFields":{"thinking":{"budget_tokens":4096,"type":"enabled"}}}`
+	const reordered = `{"additionalModelRequestFields":{"thinking":{"type":"enabled","budget_tokens":4096}}}`
+	const success = `{"matched":true}`
+	mock := &Server{Logger: log.New(io.Discard, "", 0)}
+	server := httptest.NewServer(http.HandlerFunc(mock.handler))
+	t.Cleanup(server.Close)
+
+	for _, tc := range []struct {
+		name, contentType, expected, body string
+		wantStatus                        int
+	}{
+		{"reordered keys", "application/json", budget, reordered, http.StatusOK},
+		{"changed budget", "application/json", budget, `{"additionalModelRequestFields":{"thinking":{"budget_tokens":4097,"type":"enabled"}}}`, http.StatusBadRequest},
+		{"omitted content type", "", budget, reordered, http.StatusOK},
+		{"JSON media type with parameters", "application/vnd.test+json; charset=utf-8", budget, reordered, http.StatusOK},
+		{"reordered array", "application/json", `{"items":[1,2]}`, `{"items":[2,1]}`, http.StatusBadRequest},
+		{"large integers differ", "application/json", `9007199254740992`, `9007199254740993`, http.StatusBadRequest},
+		{"same numeric value", "application/json", `1`, `1.0`, http.StatusOK},
+		{"string is not a number", "application/json", `{"n":"1"}`, `{"n":1}`, http.StatusBadRequest},
+		{"trailing JSON value", "application/json", `{}`, `{} {}`, http.StatusBadRequest},
+		{"identical invalid JSON fixture", "application/json", "broken", "broken", http.StatusOK},
+		{"exact text", "text/plain", budget, budget, http.StatusOK},
+		{"changed text bytes", "text/plain", budget, reordered, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL, strings.NewReader(tc.body))
+			require.NoError(t, err)
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			}
+			req.Header.Set(ExpectedRequestBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(tc.expected)))
+			req.Header.Set(ResponseBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(success)))
+
+			resp, err := server.Client().Do(req)
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantStatus, resp.StatusCode, "%s", body)
+			if tc.wantStatus == http.StatusBadRequest {
+				require.Contains(t, string(body), "unexpected request body")
+			} else {
+				require.Equal(t, success, string(body))
+			}
+		})
+	}
+}
 
 func Test_main(t *testing.T) {
 	s := &Server{

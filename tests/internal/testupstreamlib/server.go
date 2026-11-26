@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"strconv"
@@ -21,6 +22,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/tidwall/gjson"
 	"golang.org/x/exp/rand"
 
@@ -70,6 +73,38 @@ func (s *Server) logAndSendError(w http.ResponseWriter, code int, format string,
 	w.Header().Set("X-TestUpstream-Error", "true")
 	w.WriteHeader(code)
 	fmt.Fprintf(w, format+"\n", a...) //nolint:errcheck
+}
+
+func requestBodiesEqual(contentType string, expected, actual []byte) bool {
+	if bytes.Equal(expected, actual) {
+		return true
+	}
+	// Some fixtures omit Content-Type. Allow a structural match only when
+	// both bodies are complete JSON values and no other media type was set.
+	if contentType != "" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil || (mediaType != "application/json" && !strings.HasSuffix(mediaType, "+json")) {
+			return false
+		}
+	}
+
+	decode := func(body []byte) (any, bool) {
+		if !gjson.ValidBytes(body) {
+			return nil, false
+		}
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.UseNumber()
+		var value any
+		err := decoder.Decode(&value)
+		return value, err == nil
+	}
+	want, wantOK := decode(expected)
+	got, gotOK := decode(actual)
+	// With UseNumber, only JSON numbers implement fmt.Stringer. Compare them
+	// by numeric value without rounding large integers or matching a string.
+	return wantOK && gotOK && cmp.Equal(want, got, cmp.Comparer(func(a, b fmt.Stringer) bool {
+		return jsonschema.Equal(a, b)
+	}))
 }
 
 func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +226,7 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if !bytes.Equal(expectedBody, requestBody) {
+		if !requestBodiesEqual(r.Header.Get("Content-Type"), expectedBody, requestBody) {
 			s.logAndSendError(w, http.StatusBadRequest, "unexpected request body: got %s, expected %s", string(requestBody), string(expectedBody))
 			return
 		}
