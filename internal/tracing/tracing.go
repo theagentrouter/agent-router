@@ -244,6 +244,11 @@ func NewTracingFromEnv(ctx context.Context, stdout io.Writer, headerAttributeMap
 	headerAttrs := headerAttributeMapping
 
 	tracer := tp.Tracer("envoyproxy/ai-gateway")
+	// See the constant's doc for why a caller's remote context may be
+	// recorded as a link on a new root span instead of as the parent.
+	if os.Getenv(envRemoteParentAsLink) == "true" {
+		tracer = remoteParentAsLinkTracer{delegate: tracer}
+	}
 	return &tracingImpl{
 		chatCompletionTracer: newChatCompletionTracer(
 			tracer,

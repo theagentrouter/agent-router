@@ -126,6 +126,9 @@ spec:
             {{- if ne .Values.controller.maxRecvMsgSize nil }}
             - --maxRecvMsgSize={{ .Values.controller.maxRecvMsgSize }}
             {{- end }}
+            {{- if ne .Values.controller.filterConfigBundleMaxSlots nil }}
+            - --filterConfigBundleMaxSlots={{ .Values.controller.filterConfigBundleMaxSlots }}
+            {{- end }}
             - --cacheSyncTimeout={{ .Values.controller.watch.cacheSyncTimeout }}
             - --credentialPreRotationWindow={{ .Values.controller.credentialPreRotationWindow }}
             - --watchNamespaces={{ join "," .Values.controller.watch.namespaces }}
