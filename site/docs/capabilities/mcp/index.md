@@ -477,10 +477,25 @@ Two kinds of messages are not evaluated. The first is session setup and discover
 replies to requests a backend sent to the client, such as sampling or elicitation results and their
 `notifications/progress`.
 Rules with a `target` only match `tools/call` (and the `tools/list` filtering), so under the default
-`defaultAction: Deny` these other methods are denied unless a rule without a `target` allows them. For
-methods that fan out to every backend (the `*/list` methods, `logging/setLevel`, `subscriptions/listen` and notifications), the
-rules are evaluated per backend and backends that are not allowed are skipped. For example, to allow
-reading resources and prompts on the `github` backend:
+`defaultAction: Deny` these other methods are denied unless a rule without a `target` allows them.
+
+How a denial looks depends on the method:
+
+- **Methods addressed to one backend** (`resources/read`, `resources/subscribe`, `resources/unsubscribe`, `prompts/get`,
+  `completion/complete`) are rejected with `403`.
+- **Methods that fan out to every backend** (`resources/list`, `resources/templates/list`, `prompts/list`,
+  `logging/setLevel` and `notifications/roots/list_changed`) are evaluated per backend, and backends that are
+  not allowed are skipped.
+- **`subscriptions/listen`** skips denied backends for list-change notifications. If any resource in
+  `resourceSubscriptions` belongs to a denied backend, the whole request is rejected with `403`.
+- **`tools/list`** is not evaluated per backend or as `tools/list`. Each listed tool is evaluated as a
+  `tools/call` of that tool, and the response only includes the tools the caller may call. A rule on
+  `request.mcp.method == "tools/list"` never matches.
+
+When a route has an authorization policy, list and `resources/read` results are returned with
+`cacheScope: private`, since what they contain depends on the caller.
+
+For example, to allow reading resources and prompts on the `github` backend:
 
 ```yaml
 authorization:

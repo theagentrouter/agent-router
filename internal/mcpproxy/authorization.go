@@ -230,12 +230,12 @@ func (m *mcpRequestContext) authorizeRequestWith(authorization *compiledAuthoriz
 				// Only advertise the scopes of a rule that would otherwise match this request:
 				// a rule whose CEL condition does not hold (e.g. one written for another MCP method
 				// or backend) would still deny the request after the client acquired its scopes.
+				// The CEL is evaluated as if the caller already held the rule's required scopes, so
+				// conditions on request.auth.jwt.scopes reflect what acquiring them would change.
 				// The rule cannot apply either way, so a CEL evaluation error here just skips it.
 				if rule.celProgram != nil {
-					if celActivation == nil {
-						celActivation = ac.activationFor(req)
-					}
-					if match, err := m.evalRuleCEL(rule, celActivation); err != nil || !match {
+					withRequired, _ := buildCELActivation(req, ac.claims, ac.scopes.Union(sets.New(requiredScopes...)))
+					if match, err := m.evalRuleCEL(rule, withRequired); err != nil || !match {
 						continue
 					}
 				}

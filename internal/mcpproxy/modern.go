@@ -799,7 +799,7 @@ func (m *mcpRequestContext) handleModernResourcesRead(ctx context.Context, w htt
 	// pass through verbatim, so only complete results are rewritten.
 	return m.sendModernRequestAndProxy(ctx, w, req, route, backend, result, span,
 		func(resp json.RawMessage) (json.RawMessage, bool) {
-			return rewriteResourcesReadResult(resp, backendName)
+			return rewriteResourcesReadResult(resp, backendName, routeHasAuthorization(routeConfig))
 		})
 }
 
@@ -813,7 +813,11 @@ func (m *mcpRequestContext) handleModernResourcesRead(ctx context.Context, w htt
 // caller should pass the result through verbatim.
 //
 // https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching#cacheable-results
-func rewriteResourcesReadResult(result json.RawMessage, backendName string) (json.RawMessage, bool) {
+//
+// forcePrivate marks the result as private regardless of the backend's cacheScope. It is set when
+// the route has an authorization policy: the content was only returned because this caller was
+// authorized, so a shared cache must not serve it to other callers.
+func rewriteResourcesReadResult(result json.RawMessage, backendName string, forcePrivate bool) (json.RawMessage, bool) {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(result, &m) != nil {
 		return nil, false
@@ -839,7 +843,7 @@ func rewriteResourcesReadResult(result json.RawMessage, backendName string) (jso
 	if raw, ok := m["ttlMs"]; !ok || string(raw) == "null" {
 		m["ttlMs"] = json.RawMessage(strconv.Itoa(defaultTTLMs))
 	}
-	if raw, ok := m["cacheScope"]; !ok || string(raw) == "null" || string(raw) == `""` {
+	if raw, ok := m["cacheScope"]; forcePrivate || !ok || string(raw) == "null" || string(raw) == `""` {
 		scope, _ := json.Marshal(defaultResourcesReadCacheScope)
 		m["cacheScope"] = scope
 	}

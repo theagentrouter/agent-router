@@ -933,7 +933,13 @@ func (m *mcpRequestContext) mergePromptsList(s *session, responses []broadCastRe
 // JWT claims, scopes and headers), so the aggregate is caller-specific even when every backend
 // reported a public cache scope, and a shared cache must not serve it to other callers.
 func forcePrivateCachingIfAuthorized(dst *mcp.Cacheable, route *mcpProxyConfigRoute) {
-	if route != nil && route.authorization != nil {
+	if routeHasAuthorization(route) {
 		dst.CacheScope = "private"
 	}
+}
+
+// routeHasAuthorization reports whether the route has an authorization policy, which makes the
+// results it returns caller-specific.
+func routeHasAuthorization(route *mcpProxyConfigRoute) bool {
+	return route != nil && route.authorization != nil
 }

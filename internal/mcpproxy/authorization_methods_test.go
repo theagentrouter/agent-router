@@ -749,3 +749,85 @@ func TestAuthorization_ModernSubscriptionsListenScopeChallenge(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, rr.Code)
 	require.Contains(t, rr.Header().Get("WWW-Authenticate"), `scope="subscribe"`)
 }
+
+// TestAuthorization_ScopeChallengeWithScopeDependentCEL verifies that a rule whose CEL also checks
+// request.auth.jwt.scopes still yields a challenge for its missing scopes: the CEL is evaluated as
+// if the caller already held them.
+func TestAuthorization_ScopeChallengeWithScopeDependentCEL(t *testing.T) {
+	proxy, backend, sessionID := newAuthorizationTestProxy(t, &filterapi.MCPRouteAuthorization{
+		DefaultAction: filterapi.AuthorizationActionDeny,
+		VerifiedJWT:   true,
+		Rules: []filterapi.MCPRouteAuthorizationRule{{
+			Action: filterapi.AuthorizationActionAllow,
+			Source: &filterapi.MCPAuthorizationSource{JWT: filterapi.JWTSource{Scopes: []string{"read"}}},
+			CEL:    ptr.To(`request.mcp.method == "resources/read" && "read" in request.auth.jwt.scopes`),
+		}},
+	})
+	params := &mcp.ReadResourceParams{URI: downstreamResourceURI("file:///secret", "backend1")}
+
+	rr := doMCPPost(t, proxy, sessionID, "resources/read", params, map[string]string{"Authorization": "Bearer " + bearerTokenWithClaims(jwt.MapClaims{"scope": "other"})})
+	require.Equal(t, http.StatusForbidden, rr.Code)
+	require.Contains(t, rr.Header().Get("WWW-Authenticate"), `scope="read"`)
+	require.Empty(t, backend.reset())
+
+	rr = doMCPPost(t, proxy, sessionID, "resources/read", params, map[string]string{"Authorization": "Bearer " + bearerTokenWithClaims(jwt.MapClaims{"scope": "read"})})
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	require.Equal(t, []string{"backend1 resources/read"}, backend.reset())
+}
+
+// TestAuthorization_ResourceReadIsPrivate verifies that resources/read results are marked private
+// on routes with an authorization policy, even when the backend reports a public cache scope, on
+// both the legacy and the modern path.
+func TestAuthorization_ResourceReadIsPrivate(t *testing.T) {
+	const publicResult = `{"contents":[{"uri":"file:///x","text":"t"}],"ttlMs":60000,"cacheScope":"public"}`
+	authz := mustCompileAuthorization(t, &filterapi.MCPRouteAuthorization{DefaultAction: filterapi.AuthorizationActionAllow})
+	cacheScope := func(t *testing.T, raw []byte) string {
+		var out struct {
+			CacheScope string `json:"cacheScope"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &out))
+		return out.CacheScope
+	}
+
+	for _, tc := range []struct {
+		name          string
+		authorization *compiledAuthorization
+		expected      string
+	}{
+		{name: "no authorization", expected: "public"},
+		{name: "authorization", authorization: authz, expected: "private"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("legacy", func(t *testing.T) {
+				proxy := newTestMCPProxy()
+				proxy.routes["test-route"].authorization = tc.authorization
+				msg := &jsonrpc.Response{Result: []byte(publicResult)}
+				require.NoError(t, proxy.maybeResponseModify(t.Context(), &session{route: "test-route"}, &jsonrpc.Request{Method: "resources/read"}, msg, "backend1"))
+				require.Equal(t, tc.expected, cacheScope(t, msg.Result))
+			})
+			t.Run("modern", func(t *testing.T) {
+				server := httptest.NewServer(modernBackendHandler(t, nil, nil, func(string, string) any { return json.RawMessage(publicResult) }))
+				t.Cleanup(server.Close)
+				proxy := newTestMCPProxy()
+				proxy.backendListenerAddr = server.URL
+				proxy.routes["test-route"].authorization = tc.authorization
+				params, err := json.Marshal(&mcp.ReadResourceParams{URI: downstreamResourceURI("file:///x", "backend1")})
+				require.NoError(t, err)
+				rr := httptest.NewRecorder()
+				_, err = proxy.handleModernResourcesRead(t.Context(), rr, newModernRequest("resources/read"), modernReq(t, "resources/read", params), "test-route", nil)
+				require.NoError(t, err)
+				require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+				require.Equal(t, tc.expected, cacheScope(t, decodeResultRaw(t, rr)))
+			})
+		})
+	}
+}
+
+func decodeResultRaw(t *testing.T, rr *httptest.ResponseRecorder) json.RawMessage {
+	t.Helper()
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &envelope))
+	return envelope.Result
+}

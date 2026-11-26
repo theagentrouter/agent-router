@@ -1405,7 +1405,7 @@ func Test_maybeResponseModify(t *testing.T) {
 		})
 		require.NoError(t, err)
 		msg := &jsonrpc.Response{Result: raw}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, nil, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
 		var got mcp.CallToolResult
 		require.NoError(t, json.Unmarshal(msg.Result, &got))
 		require.Equal(t, "ui://backend1/prefab/renderer.html", got.Meta["ui"].(map[string]any)["resourceUri"])
@@ -1417,7 +1417,7 @@ func Test_maybeResponseModify(t *testing.T) {
 		})
 		require.NoError(t, err)
 		msg := &jsonrpc.Response{Result: raw}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, nil, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
 		var got mcp.CallToolResult
 		require.NoError(t, json.Unmarshal(msg.Result, &got))
 		require.Equal(t, "ui://backend1/prefab/link.html", got.Content[0].(*mcp.ResourceLink).URI)
@@ -1428,20 +1428,20 @@ func Test_maybeResponseModify(t *testing.T) {
 		require.NoError(t, err)
 		before := append([]byte(nil), raw...)
 		msg := &jsonrpc.Response{Result: raw}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, nil, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
 		require.Equal(t, before, []byte(msg.Result))
 	})
 
 	t.Run("non-standard result shape passes through", func(t *testing.T) {
 		raw := []byte(`{"content":"not-an-array"}`)
 		msg := &jsonrpc.Response{Result: raw}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, nil, &jsonrpc.Request{Method: "tools/call"}, msg, backend))
 		require.Equal(t, raw, []byte(msg.Result))
 	})
 
 	t.Run("resources/read rewrites ui Contents URIs keeping the scheme", func(t *testing.T) {
 		msg := &jsonrpc.Response{Result: []byte(`{"contents":[{"uri":"ui://prefab/renderer.html"}]}`)}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, nil, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
 		var got mcp.ReadResourceResult
 		require.NoError(t, json.Unmarshal(msg.Result, &got))
 		require.Equal(t, "ui://backend1/prefab/renderer.html", got.Contents[0].URI)
@@ -1449,7 +1449,7 @@ func Test_maybeResponseModify(t *testing.T) {
 
 	t.Run("resources/read defaults caching hints omitted by the backend", func(t *testing.T) {
 		msg := &jsonrpc.Response{Result: []byte(`{"contents":[{"uri":"file:///notes.txt","mimeType":"text/plain","text":"hello"}]}`)}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, nil, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
 		require.NotContains(t, string(msg.Result), `"cacheScope":""`)
 		require.Contains(t, string(msg.Result), `"ttlMs":0`)
 		require.Contains(t, string(msg.Result), `"cacheScope":"private"`)
@@ -1458,20 +1458,20 @@ func Test_maybeResponseModify(t *testing.T) {
 
 	t.Run("resources/read replaces an empty cacheScope sent by the backend", func(t *testing.T) {
 		msg := &jsonrpc.Response{Result: []byte(`{"ttlMs":0,"cacheScope":"","contents":[{"uri":"file:///notes.txt","text":"hello"}]}`)}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, nil, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
 		require.Contains(t, string(msg.Result), `"cacheScope":"private"`)
 	})
 
 	t.Run("resources/read preserves backend caching hints", func(t *testing.T) {
 		msg := &jsonrpc.Response{Result: []byte(`{"ttlMs":5000,"cacheScope":"public","contents":[{"uri":"file:///notes.txt","text":"hello"}]}`)}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, nil, &jsonrpc.Request{Method: "resources/read"}, msg, backend))
 		require.Contains(t, string(msg.Result), `"ttlMs":5000`)
 		require.Contains(t, string(msg.Result), `"cacheScope":"public"`)
 	})
 
 	t.Run("prompts/get rewrites resource link and embedded resource URIs", func(t *testing.T) {
 		msg := &jsonrpc.Response{Result: []byte(`{"messages":[{"role":"user","content":{"type":"resource_link","uri":"file:///data"}},{"role":"assistant","content":{"type":"resource","resource":{"uri":"ui://prefab/embed.html"}}}],"_meta":{"ui":{"resourceUri":"ui://app/view"}}}`)}
-		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "prompts/get"}, msg, backend))
+		require.NoError(t, m.maybeResponseModify(ctx, nil, &jsonrpc.Request{Method: "prompts/get"}, msg, backend))
 		body := string(msg.Result)
 		require.Contains(t, body, `"uri":"backend1+file:///data"`)
 		require.Contains(t, body, `"uri":"ui://backend1/prefab/embed.html"`)

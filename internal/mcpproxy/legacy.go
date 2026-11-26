@@ -757,7 +757,7 @@ func (m *mcpRequestContext) proxyResponseBody(ctx context.Context, s *session, w
 				body, _ = jsonrpc.EncodeMessage(msg)
 			case *jsonrpc.Response:
 				if req != nil {
-					if err = m.maybeResponseModify(ctx, req, msg, backend.Name); err != nil {
+					if err = m.maybeResponseModify(ctx, s, req, msg, backend.Name); err != nil {
 						m.l.Error("failed to modify response", slog.String("error", err.Error()))
 						return err
 					}
@@ -829,7 +829,7 @@ func (m *mcpRequestContext) proxyResponseBody(ctx context.Context, s *session, w
 				case *jsonrpc.Response:
 					// Correct the ID to match the original request if possible.
 					if req != nil {
-						if err = m.maybeResponseModify(ctx, req, msg, backend.Name); err != nil {
+						if err = m.maybeResponseModify(ctx, s, req, msg, backend.Name); err != nil {
 							m.l.Error("failed to modify response", slog.String("error", err.Error()))
 							continue
 						}
@@ -900,13 +900,20 @@ func (m *mcpRequestContext) maybeUpdateProgressTokenMetadata(ctx context.Context
 // maybeResponseModify modifies the client->server response to include the backend name where needed.
 // URI rewriting uses the same raw-JSON helpers as the modern path so unknown
 // fields on tools/call, prompts/get, and resources/read results are preserved.
-func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.Request, msg *jsonrpc.Response, backend filterapi.MCPBackendName) error {
+//
+// s is the client session the request belongs to; it may be nil, in which case no route-specific
+// rewriting (such as forcing private caching on authorized routes) is applied.
+func (m *mcpRequestContext) maybeResponseModify(_ context.Context, s *session, req *jsonrpc.Request, msg *jsonrpc.Response, backend filterapi.MCPBackendName) error {
 	if msg.Result == nil {
 		return nil
 	}
 	switch req.Method {
 	case "resources/read":
-		if rewritten, ok := rewriteResourcesReadResult(json.RawMessage(msg.Result), backend); ok {
+		var route *mcpProxyConfigRoute
+		if s != nil {
+			route = m.routes[s.route]
+		}
+		if rewritten, ok := rewriteResourcesReadResult(json.RawMessage(msg.Result), backend, routeHasAuthorization(route)); ok {
 			msg.Result = []byte(rewritten)
 		}
 	case "tools/call":
