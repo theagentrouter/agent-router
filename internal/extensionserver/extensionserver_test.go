@@ -3392,6 +3392,14 @@ func TestApplyLegacyBackendRefPriority(t *testing.T) {
 		require.Equal(t, uint32(2), endpoints.Priority)
 		require.NotContains(t, buf.String(), msg)
 	})
+	t.Run("zero priority keeps the fallback-derived priority", func(t *testing.T) {
+		buf.Reset()
+		// Envoy Gateway set 1 from the Backend's spec.fallback, which priority 0 does not override.
+		endpoints := &endpointv3.LocalityLbEndpoints{Priority: 1}
+		s.applyLegacyBackendRefPriority(endpoints, ptr.To[uint32](0), "c", "b")
+		require.Equal(t, uint32(1), endpoints.Priority)
+		require.NotContains(t, buf.String(), msg)
+	})
 	t.Run("already set by Envoy Gateway", func(t *testing.T) {
 		buf.Reset()
 		endpoints := &endpointv3.LocalityLbEndpoints{Priority: 1}

@@ -325,7 +325,7 @@ func retrieveAndCache[T any, PT interface {
 // (which introduces the migration) and remove it in v1.5. By then every HTTPRoute has been regenerated with
 // the priority filters.
 func (s *Server) applyLegacyBackendRefPriority(endpoints *endpointv3.LocalityLbEndpoints, priority *uint32, clusterName, backendName string) {
-	if priority == nil || endpoints.Priority == *priority {
+	if priority == nil || *priority == 0 || endpoints.Priority == *priority {
 		return
 	}
 	s.log.Info("legacy backendRef priority rewrite changed the priority set by Envoy Gateway; "+
