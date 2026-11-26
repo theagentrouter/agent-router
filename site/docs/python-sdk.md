@@ -26,8 +26,9 @@ graph LR
 
 - **Already using LiteLLM?** Change one import. Functions, arguments, responses
   and errors stay the same.
-- **No gateway to set up on your laptop.** The first call starts a local Agent
-  Router (`aigw`) for you.
+- **No gateway to set up on your laptop.** On macOS (Apple silicon) and recent
+  Linux, the first call starts a local Agent Router (`aigw`) for you. Elsewhere,
+  calls go to a [remote gateway](#use-a-remote-gateway).
 - **The same code runs against a shared gateway.** Set two environment variables
   and calls go to the Agent Router your team runs, with provider keys kept there.
 
@@ -152,7 +153,9 @@ endpoints, so any Agent Router configuration that serves them works:
 A call to a route sends the route's name, so the gateway's own route of that name
 applies. To run on a server the same routes and models you tested locally,
 `local_gateway.export_config()` returns an `aigw` configuration built from them.
-Save it to a file and run it with `aigw run`:
+Save it to a file and run it with `aigw run`. The exported gateway checks one
+shared client key: set `AGENTROUTER_API_KEY` on the server too, to the same value
+your clients use, along with the provider keys:
 
 ```python
 from pathlib import Path
