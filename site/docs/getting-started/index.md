@@ -50,9 +50,11 @@ and [aigw run](../cli/run.md) for all the options.
 ## Call models from Python
 
 Building an agent in Python? The [Python SDK](../python-sdk.md) runs Agent
-Router for you: `pip install theagentrouter`, then call any model with
-LiteLLM's API. The first call starts a local router, and the same code can later
-point at a shared Agent Router with two environment variables.
+Router for you: `pip install theagentrouter`, then call OpenAI, Anthropic,
+Gemini, Bedrock and other providers' models with LiteLLM's API. On macOS (Apple
+silicon) and recent Linux, the first call starts a local router; elsewhere, and
+later in production, the same code points at a shared Agent Router with two
+environment variables.
 
 ## Deploy on Kubernetes
 

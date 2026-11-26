@@ -10,7 +10,10 @@ The [Agent Router Python SDK](https://github.com/theagentrouter/agent-router-pyt
 (`theagentrouter` on [PyPI](https://pypi.org/project/theagentrouter/)) lets
 Python agents call AI models with LiteLLM's API while every call goes through
 Agent Router. The SDK never calls a provider itself: the gateway handles
-fallbacks, retries, request limits and provider keys.
+fallbacks, retries, request limits and provider keys. The one exception is
+LiteLLM's `api_base` argument: a call that sets it goes straight to that address,
+in the provider's own format, and skips Agent Router unless the address is an
+Agent Router gateway.
 
 ```mermaid
 graph LR
@@ -30,7 +33,10 @@ graph LR
 
 ## Quick start
 
-You need Python 3.10 or newer and a key for at least one provider.
+You need Python 3.10 or newer, a key for at least one provider, and a computer
+that [runs the local gateway](#installation). The very first call also downloads
+Envoy (about 100 MB, into `~/.local/share/aigw`), so it needs internet access and
+can take a minute; later starts take a few seconds.
 
 ```shell
 pip install theagentrouter
@@ -69,7 +75,10 @@ vectors = theagentrouter.embedding(model="openai/text-embedding-3-small", input=
 ```
 
 Streaming, async calls (`acompletion`, `aresponses`, …), tools and structured
-output work as in LiteLLM. See the SDK's
+output work as in LiteLLM, except that `responses` and `aresponses` do not stream
+yet. The local gateway serves OpenAI, Anthropic, Gemini API, Groq, Mistral,
+DeepSeek, Together, Bedrock and Azure OpenAI models; Vertex AI is not served yet.
+See the SDK's
 [usage guide](https://github.com/theagentrouter/agent-router-python/blob/main/docs/usage.md).
 
 ## Installation
@@ -90,7 +99,8 @@ glibc 2.36 or newer (x86-64 and Arm). Everywhere else, including Windows,
 
 A route is a model name of your own with the models behind it, in order. The
 local gateway calls the first model, retries it on failure, then moves on to the
-next one:
+next one. The gateway needs a key for every provider in a route, so this example
+needs `OPENAI_API_KEY` as well as `ANTHROPIC_API_KEY`:
 
 ```python
 import theagentrouter as ar
@@ -141,7 +151,15 @@ endpoints, so any Agent Router configuration that serves them works:
 
 A call to a route sends the route's name, so the gateway's own route of that name
 applies. To run on a server the same routes and models you tested locally,
-`local_gateway.export_config()` writes an `aigw` configuration file from them.
+`local_gateway.export_config()` returns an `aigw` configuration built from them.
+Save it to a file and run it with `aigw run`:
+
+```python
+from pathlib import Path
+from theagentrouter import local_gateway
+
+Path("config.yaml").write_text(local_gateway.export_config())
+```
 
 ## Coming from LiteLLM
 

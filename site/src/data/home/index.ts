@@ -196,13 +196,13 @@ export const quickstart = {
       label: 'From Python',
       cta: { label: 'Read the guide', to: '/docs/python-sdk' },
       body:
-        'Building an agent in Python? Install the SDK and call any model with LiteLLM\'s API: the first call starts Agent Router on your laptop for you. Point the same code at your team\'s gateway with two environment variables.',
+        'Building an agent in Python? Install the SDK and call OpenAI, Anthropic, Gemini, Bedrock and more with LiteLLM\'s API. On macOS (Apple silicon) and recent Linux, the first call starts Agent Router on your laptop for you. Elsewhere, or for your team, point the same code at a shared gateway with two environment variables.',
       terminal: [
         { kind: 'comment', text: '# 1 — install the Python SDK (it includes the router)' },
         { kind: 'command', text: 'pip install theagentrouter' },
-        { kind: 'command', text: 'export ANTHROPIC_API_KEY=<your key>' },
+        { kind: 'command', text: 'export ANTHROPIC_API_KEY=...' },
         { kind: 'blank' },
-        { kind: 'comment', text: '# 2 — call any model; the first call starts the router' },
+        { kind: 'comment', text: '# 2 — call a model; the first call starts the router' },
         { kind: 'command', text: `python -c "import theagentrouter as ar; print(ar.completion(` },
         { kind: 'command', text: `  model='anthropic/claude-sonnet-5-5',` },
         { kind: 'command', text: `  messages=[{'role': 'user', 'content': 'Hello!'}]).choices[0].message.content)"` },
