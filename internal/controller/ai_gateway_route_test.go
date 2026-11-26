@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -1766,4 +1767,42 @@ func Test_aiGatewayRouteToBackendPriorityIndexFunc(t *testing.T) {
 		}},
 	}}}
 	require.Equal(t, []string{"2"}, aiGatewayRouteToBackendPriorityIndexFunc(route))
+}
+
+func TestAIGatewayRouteController_backendPriorityFilterToAIGatewayRoutes(t *testing.T) {
+	const ns = "ns1"
+	s, fakeClient := newBackendPriorityTestController(t)
+	for _, r := range []struct {
+		name, ns string
+		priority uint32
+	}{
+		{name: "uses-1", ns: ns, priority: 1},
+		{name: "uses-2", ns: ns, priority: 2},
+		{name: "other-ns-uses-1", ns: "other", priority: 1},
+	} {
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIGatewayRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: r.name, Namespace: r.ns},
+			Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{
+				BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "b", Priority: ptr.To(r.priority)}},
+			}}},
+		}))
+	}
+
+	reqs := s.backendPriorityFilterToAIGatewayRoutes(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, 1))
+	require.Equal(t, []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: ns, Name: "uses-1"}}}, reqs)
+	require.Empty(t, s.backendPriorityFilterToAIGatewayRoutes(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, 3)))
+}
+
+func Test_backendPriorityFilterDeletedPredicate(t *testing.T) {
+	p := backendPriorityFilterDeletedPredicate()
+	shared := generateBackendPriorityHTTPRouteFilter("ns", 1)
+	userFilter := generateBackendPriorityHTTPRouteFilter("ns", 1)
+	userFilter.Labels = map[string]string{backendPriorityHTTPFilterLabelKey: "1"} // No managed-by label.
+	other := &egv1a1.HTTPRouteFilter{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "ns"}}
+	require.True(t, p.Delete(event.DeleteEvent{Object: shared}))
+	require.False(t, p.Delete(event.DeleteEvent{Object: userFilter}))
+	require.False(t, p.Delete(event.DeleteEvent{Object: other}))
+	require.False(t, p.Create(event.CreateEvent{Object: shared}))
+	require.False(t, p.Update(event.UpdateEvent{ObjectOld: shared, ObjectNew: shared}))
+	require.False(t, p.Generic(event.GenericEvent{Object: shared}))
 }

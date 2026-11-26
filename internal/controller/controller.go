@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -176,6 +177,12 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.AIGatewayRoute{}).
 		Owns(&gwapiv1.HTTPRoute{}).
 		Owns(&egv1a1.HTTPRouteFilter{}).
+		// The shared backendPriority HTTPRouteFilters are not owned by any AIGatewayRoute, so Owns does not
+		// cover them. Recreate one when it is deleted while AIGatewayRoutes still use its priority.
+		Watches(&egv1a1.HTTPRouteFilter{},
+			handler.EnqueueRequestsFromMapFunc(routeC.backendPriorityFilterToAIGatewayRoutes),
+			builder.WithPredicates(backendPriorityFilterDeletedPredicate()),
+		).
 		WatchesRawSource(source.Channel(
 			aiGatewayRouteEventChan,
 			&handler.EnqueueRequestForObject{},

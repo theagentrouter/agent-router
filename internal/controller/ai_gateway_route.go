@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -228,6 +229,41 @@ func (c *AIGatewayRouteController) ensureBackendPriorityHTTPRouteFilters(ctx con
 		}
 	}
 	return nil
+}
+
+// backendPriorityFilterDeletedPredicate passes only deletions of the shared backendPriority HTTPRouteFilters.
+//
+// A deletion is the one event that needs a reconcile: the HTTPRoutes keep referencing the deleted filter, so
+// their backendRefs stay unresolved until it is recreated. Nothing else would trigger that reconcile, since
+// the AIGatewayRoute controller filters out events that do not change the generation, including Envoy
+// Gateway's HTTPRoute status update. Creations are made by the controller itself and need no reconcile.
+func backendPriorityFilterDeletedPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc:  func(event.CreateEvent) bool { return false },
+		UpdateFunc:  func(event.UpdateEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			labels := e.Object.GetLabels()
+			_, ok := labels[backendPriorityHTTPFilterLabelKey]
+			return ok && labels[managedByLabel] == managedByValue
+		},
+	}
+}
+
+// backendPriorityFilterToAIGatewayRoutes maps a deleted shared backendPriority HTTPRouteFilter to the
+// AIGatewayRoutes in its namespace that use its priority, so that they recreate it.
+func (c *AIGatewayRouteController) backendPriorityFilterToAIGatewayRoutes(ctx context.Context, obj client.Object) []reconcile.Request {
+	routes, err := c.aiGatewayRoutesUsingBackendPriority(ctx, obj.GetNamespace(), obj.GetLabels()[backendPriorityHTTPFilterLabelKey])
+	if err != nil {
+		c.logger.Error(err, "failed to list AIGatewayRoutes using backend priority",
+			"namespace", obj.GetNamespace(), "name", obj.GetName())
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(routes))
+	for i := range routes {
+		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&routes[i])})
+	}
+	return reqs
 }
 
 // aiGatewayRoutesUsingBackendPriority returns the AIGatewayRoutes in the namespace, other than those being
