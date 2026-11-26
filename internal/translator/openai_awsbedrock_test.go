@@ -1460,6 +1460,54 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 	})
 }
 
+func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody_SignedThinkingHistory(t *testing.T) {
+	const request = `{
+		"model": "something", "stream": false, "thinking": {"type": "enabled", "budget_tokens": 4096},
+		"messages": [{"role": "user", "content": "Say hello."}, %s, {"role": "user", "content": "Continue."}]
+	}`
+	const wantAssistant = `{
+		"role": "assistant",
+		"content": [
+			{"reasoningContent": {"reasoningText": {"text": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}}},
+			{"text": "Hello!"}
+		]
+	}`
+	for _, tc := range []struct {
+		name, assistant string
+	}{
+		{
+			name: "content parts",
+			assistant: `{"role": "assistant", "content": [
+				{"type": "thinking", "text": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"},
+				{"type": "text", "text": "Hello!"}
+			]}`,
+		},
+		{
+			name: "top-level thinking_blocks",
+			assistant: `{"role": "assistant", "content": "Hello!", "reasoning_content": "synthetic reasoning for turn one",
+				"thinking_blocks": [{"type": "thinking", "thinking": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}]
+			}`,
+		},
+		{
+			name: "same thinking block in content and thinking_blocks",
+			assistant: `{"role": "assistant", "content": [
+				{"type": "thinking", "text": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"},
+				{"type": "text", "text": "Hello!"}
+			], "thinking_blocks": [{"type": "thinking", "thinking": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(fmt.Sprintf(request, tc.assistant))
+			var req openai.ChatCompletionRequest
+			require.NoError(t, json.Unmarshal(raw, &req))
+			translator := NewChatCompletionOpenAIToAWSBedrockTranslator("")
+			_, body, err := translator.RequestBody(raw, &req, false)
+			require.NoError(t, err)
+			require.JSONEq(t, wantAssistant, gjson.GetBytes(body, "messages.1").Raw)
+		})
+	}
+}
+
 func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseHeaders(t *testing.T) {
 	t.Run("streaming", func(t *testing.T) {
 		o := &openAIToAWSBedrockTranslatorV1ChatCompletion{stream: true}

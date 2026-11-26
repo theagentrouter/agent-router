@@ -186,15 +186,29 @@ func openAIMessageToBedrockMessageRoleAssistant(
 	contentBlocks := make([]*awsbedrock.ContentBlock, 0)
 
 	var contentParts []openai.ChatCompletionAssistantMessageParamContent
-	if v, ok := openAiMessage.Content.Value.(string); ok && len(v) > 0 {
-		// Case 1: Content is a simple string.
-		contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{Type: openai.ChatCompletionAssistantMessageParamContentTypeText, Text: &v})
-	} else if singleContent, ok := openAiMessage.Content.Value.(openai.ChatCompletionAssistantMessageParamContent); ok {
-		// Case 2: Content is a single object.
-		contentParts = append(contentParts, singleContent)
-	} else if sliceContent, ok := openAiMessage.Content.Value.([]openai.ChatCompletionAssistantMessageParamContent); ok {
-		// Case 3: Content is already a slice of objects.
-		contentParts = sliceContent
+	switch content := openAiMessage.Content.Value.(type) {
+	case string:
+		// With a string answer, signed reasoning is carried separately in thinking_blocks.
+		for i := range openAiMessage.ThinkingBlocks {
+			block := &openAiMessage.ThinkingBlocks[i]
+			if block.Type == "thinking" && block.Signature != "" {
+				contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{
+					Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
+					Text:      &block.Thinking,
+					Signature: &block.Signature,
+				})
+			}
+		}
+		if content != "" {
+			contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{
+				Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
+				Text: &content,
+			})
+		}
+	case openai.ChatCompletionAssistantMessageParamContent:
+		contentParts = append(contentParts, content)
+	case []openai.ChatCompletionAssistantMessageParamContent:
+		contentParts = content
 	}
 
 	for _, content := range contentParts {
