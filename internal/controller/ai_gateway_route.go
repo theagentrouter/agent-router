@@ -12,7 +12,6 @@ import (
 	stdjson "encoding/json" //nolint: depguard // byte-stable hashing; sonic does not guarantee stable field order.
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -215,6 +214,10 @@ func (c *AIGatewayRouteController) ensureBackendPriorityHTTPRouteFilters(ctx con
 		err := c.client.Get(ctx, client.ObjectKey{Name: base.Name, Namespace: base.Namespace}, &f)
 		switch {
 		case err == nil:
+			if !isManagedBackendPriorityFilter(&f) {
+				return fmt.Errorf("HTTPRouteFilter %s/%s exists but is not managed by the AI Gateway controller",
+					base.Namespace, base.Name)
+			}
 			if f.Spec.BackendPriority == nil || *f.Spec.BackendPriority != priority {
 				return fmt.Errorf("HTTPRouteFilter %s/%s exists but does not set backendPriority %d",
 					base.Namespace, base.Name, priority)
@@ -242,12 +245,16 @@ func backendPriorityFilterDeletedPredicate() predicate.Predicate {
 		CreateFunc:  func(event.CreateEvent) bool { return false },
 		UpdateFunc:  func(event.UpdateEvent) bool { return false },
 		GenericFunc: func(event.GenericEvent) bool { return false },
-		DeleteFunc: func(e event.DeleteEvent) bool {
-			labels := e.Object.GetLabels()
-			_, ok := labels[backendPriorityHTTPFilterLabelKey]
-			return ok && labels[managedByLabel] == managedByValue
-		},
+		DeleteFunc:  func(e event.DeleteEvent) bool { return isManagedBackendPriorityFilter(e.Object) },
 	}
+}
+
+// isManagedBackendPriorityFilter reports whether obj is a shared backendPriority HTTPRouteFilter created by
+// the controller, as opposed to a user-provided one that happens to share the name.
+func isManagedBackendPriorityFilter(obj client.Object) bool {
+	labels := obj.GetLabels()
+	_, ok := labels[backendPriorityHTTPFilterLabelKey]
+	return ok && labels[managedByLabel] == managedByValue
 }
 
 // backendPriorityFilterToAIGatewayRoutes maps a deleted shared backendPriority HTTPRouteFilter to the
@@ -288,35 +295,28 @@ func (c *AIGatewayRouteController) aiGatewayRoutesUsingBackendPriority(ctx conte
 	return routes, nil
 }
 
-// deleteUnusedBackendPriorityHTTPRouteFilters deletes the shared backendPriority HTTPRouteFilters for the
-// given priorities in the namespace that no AIGatewayRoute other than self uses any more.
-func (c *AIGatewayRouteController) deleteUnusedBackendPriorityHTTPRouteFilters(ctx context.Context, namespace, self string, priorities []int32) error {
-	for _, priority := range priorities {
-		routes, err := c.aiGatewayRoutesUsingBackendPriority(ctx, namespace, strconv.Itoa(int(priority)))
+// deleteUnusedBackendPriorityHTTPRouteFilters deletes the shared backendPriority HTTPRouteFilters in the
+// namespace whose priority no AIGatewayRoute uses any more.
+func (c *AIGatewayRouteController) deleteUnusedBackendPriorityHTTPRouteFilters(ctx context.Context, namespace string) error {
+	var filters egv1a1.HTTPRouteFilterList
+	if err := c.client.List(ctx, &filters, client.InNamespace(namespace),
+		client.MatchingLabels{managedByLabel: managedByValue}, client.HasLabels{backendPriorityHTTPFilterLabelKey}); err != nil {
+		return fmt.Errorf("failed to list backendPriority HTTPRouteFilters: %w", err)
+	}
+	for i := range filters.Items {
+		f := &filters.Items[i]
+		routes, err := c.aiGatewayRoutesUsingBackendPriority(ctx, namespace, f.Labels[backendPriorityHTTPFilterLabelKey])
 		if err != nil {
-			return fmt.Errorf("failed to list AIGatewayRoutes using backend priority %d: %w", priority, err)
+			return fmt.Errorf("failed to list AIGatewayRoutes using HTTPRouteFilter %s: %w", f.Name, err)
 		}
-		if slices.ContainsFunc(routes, func(r aigv1b1.AIGatewayRoute) bool { return r.Name != self }) {
+		if len(routes) > 0 {
 			continue
 		}
-		// Fetch first and only delete a filter we created: a user may own an HTTPRouteFilter that happens to
-		// share the name, and it lacks our managed-by label.
-		name := getBackendPriorityFilterName(priority)
-		var f egv1a1.HTTPRouteFilter
-		if err = c.client.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &f); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			return fmt.Errorf("failed to get HTTPRouteFilter %s: %w", name, err)
-		}
-		if f.Labels[managedByLabel] != managedByValue {
-			continue
-		}
-		if err = c.client.Delete(ctx, &f); client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("failed to delete HTTPRouteFilter %s: %w", name, err)
+		if err = c.client.Delete(ctx, f); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete HTTPRouteFilter %s: %w", f.Name, err)
 		}
 		if err == nil {
-			c.logger.Info("Deleted unused HTTPRouteFilter", "name", name, "namespace", namespace)
+			c.logger.Info("Deleted unused HTTPRouteFilter", "name", f.Name, "namespace", namespace)
 		}
 	}
 	return nil
@@ -429,8 +429,6 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 		return fmt.Errorf("failed to get HTTPRoute: %w", err)
 	}
 
-	// Record the backendPriority filters the HTTPRoute references before newHTTPRoute overwrites its rules.
-	previousPriorities := referencedBackendPriorities(&httpRoute)
 	// Update the HTTPRoute with the new AIGatewayRoute. A backendRef that fails validation (e.g. a
 	// missing or revoked ReferenceGrant) is dropped from the generated rule rather than aborting the
 	// whole sync, so the HTTPRoute and the Gateways below still get updated to reflect the now-reduced
@@ -454,16 +452,10 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 		}
 	}
 
-	// Delete the shared backendPriority HTTPRouteFilters that this HTTPRoute stopped referencing, unless
-	// another AIGatewayRoute in the namespace still uses them. This runs after the HTTPRoute is written so that
-	// it never references a deleted filter.
-	currentPriorities := referencedBackendPriorities(&httpRoute)
-	if unused := slices.DeleteFunc(previousPriorities, func(p int32) bool {
-		return slices.Contains(currentPriorities, p)
-	}); len(unused) > 0 {
-		if err = c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace, aiGatewayRoute.Name, unused); err != nil {
-			return err
-		}
+	// Delete the shared backendPriority HTTPRouteFilters that no AIGatewayRoute in the namespace uses any more.
+	// This runs after the HTTPRoute is written so that it never references a deleted filter.
+	if err = c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace); err != nil {
+		return err
 	}
 
 	if err = c.syncGateways(ctx, aiGatewayRoute); err != nil {
@@ -648,18 +640,9 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 }
 
 // onAIGatewayRouteDeletion handles the deletion of the AIGatewayRoute: it deletes the shared backendPriority
-// HTTPRouteFilters that only this AIGatewayRoute used, and propagates the deletion to the Gateways.
+// HTTPRouteFilters that no other AIGatewayRoute uses, and propagates the deletion to the Gateways.
 func (c *AIGatewayRouteController) onAIGatewayRouteDeletion(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
-	var httpRoute gwapiv1.HTTPRoute
-	var priorities []int32
-	err := c.client.Get(ctx, client.ObjectKeyFromObject(aiGatewayRoute), &httpRoute)
-	switch {
-	case err == nil:
-		priorities = referencedBackendPriorities(&httpRoute)
-	case !apierrors.IsNotFound(err):
-		return fmt.Errorf("failed to get HTTPRoute: %w", err)
-	}
-	gcErr := c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace, aiGatewayRoute.Name, priorities)
+	gcErr := c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace)
 	return errors.Join(gcErr, c.syncGateways(ctx, aiGatewayRoute))
 }
 

@@ -1682,15 +1682,39 @@ func TestAIGatewayRouteController_ensureBackendPriorityHTTPRouteFilters_conflict
 			{Filters: []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(1)}},
 		}}}},
 	}
-	require.ErrorContains(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr), "does not set backendPriority 1")
+	require.ErrorContains(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr), "is not managed by the AI Gateway controller")
+
+	// The same goes for one that sets the expected priority but lacks the managed labels: the controller only
+	// relies on filters it manages, since only those are watched for deletion.
+	matching := generateBackendPriorityHTTPRouteFilter("ns", 2)
+	matching.Labels = nil
+	require.NoError(t, fakeClient.Create(t.Context(), matching))
+	hr.Spec.Rules[0].BackendRefs[0].Filters = []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(2)}
+	require.ErrorContains(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr), "is not managed by the AI Gateway controller")
+
+	// A managed filter with a different priority is rejected as well.
+	mismatched := generateBackendPriorityHTTPRouteFilter("ns", 3)
+	mismatched.Spec.BackendPriority = ptr.To[int32](4)
+	require.NoError(t, fakeClient.Create(t.Context(), mismatched))
+	hr.Spec.Rules[0].BackendRefs[0].Filters = []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(3)}
+	require.ErrorContains(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr), "does not set backendPriority 3")
 }
 
 func TestAIGatewayRouteController_deleteUnusedBackendPriorityHTTPRouteFilters(t *testing.T) {
 	const ns = "ns1"
 	s, fakeClient := newBackendPriorityTestController(t)
-	for _, p := range []int32{1, 2} {
+	// 1 is still used, 2 is used only by a route being deleted, and 3 was left behind by an earlier run that
+	// failed, e.g. after the HTTPRoute stopped referencing it.
+	for _, p := range []int32{1, 2, 3} {
 		require.NoError(t, fakeClient.Create(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, p)))
 	}
+	// A user-provided filter with the same name but without the managed labels.
+	userFilter := generateBackendPriorityHTTPRouteFilter(ns, 4)
+	userFilter.Labels = nil
+	require.NoError(t, fakeClient.Create(t.Context(), userFilter))
+	// A managed filter in another namespace that no route there uses.
+	require.NoError(t, fakeClient.Create(t.Context(), generateBackendPriorityHTTPRouteFilter("other", 1)))
+
 	newRoute := func(name string, priorities ...uint32) *aigv1b1.AIGatewayRoute {
 		r := &aigv1b1.AIGatewayRoute{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
 		var refs []aigv1b1.AIGatewayRouteRuleBackendRef
@@ -1701,28 +1725,24 @@ func TestAIGatewayRouteController_deleteUnusedBackendPriorityHTTPRouteFilters(t 
 		require.NoError(t, fakeClient.Create(t.Context(), r))
 		return r
 	}
-	newRoute("self", 0, 1, 2)
-	newRoute("other", 0, 1)
+	newRoute("user-of-1", 0, 1)
 	// A route being deleted does not keep a filter alive.
 	deleting := newRoute("deleting", 2)
 	deleting.Finalizers = []string{aiGatewayControllerFinalizer}
 	require.NoError(t, fakeClient.Update(t.Context(), deleting))
 	require.NoError(t, fakeClient.Delete(t.Context(), deleting))
 
-	require.NoError(t, s.deleteUnusedBackendPriorityHTTPRouteFilters(t.Context(), ns, "self", []int32{1, 2}))
+	require.NoError(t, s.deleteUnusedBackendPriorityHTTPRouteFilters(t.Context(), ns))
 	var f egv1a1.HTTPRouteFilter
 	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(1), Namespace: ns}, &f))
 	requireFilterNotFound(t, fakeClient, ns, 2)
+	requireFilterNotFound(t, fakeClient, ns, 3)
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(4), Namespace: ns}, &f))
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(1), Namespace: "other"}, &f))
 
-	// Deleting an already deleted filter is not an error.
-	require.NoError(t, s.deleteUnusedBackendPriorityHTTPRouteFilters(t.Context(), ns, "self", []int32{2}))
-
-	// A user-provided filter with the same name but without the managed-by label is left alone.
-	userFilter := generateBackendPriorityHTTPRouteFilter(ns, 3)
-	userFilter.Labels = nil
-	require.NoError(t, fakeClient.Create(t.Context(), userFilter))
-	require.NoError(t, s.deleteUnusedBackendPriorityHTTPRouteFilters(t.Context(), ns, "self", []int32{3}))
-	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(3), Namespace: ns}, &f))
+	// Running it again is a no-op.
+	require.NoError(t, s.deleteUnusedBackendPriorityHTTPRouteFilters(t.Context(), ns))
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(1), Namespace: ns}, &f))
 }
 
 func Test_referencedBackendPriorities(t *testing.T) {
