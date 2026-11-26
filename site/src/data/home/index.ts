@@ -135,7 +135,7 @@ export const quickstart = {
       id: 'local',
       title: 'Running in 60 seconds',
       label: 'On your laptop',
-      cta: { label: 'Read the guide', to: '/docs/cli/aigwagents' },
+      cta: { label: 'Read the guide', to: '/docs/next/cli/aigwagents' },
       body:
         'One command runs Agent Router on your laptop — no Docker, no Kubernetes. Run Claude Code or Codex through it, or pick your providers and point any OpenAI- or Anthropic-compatible client at it. The same configuration later ships to a dedicated gateway or a Kubernetes cluster.',
       terminal: [
