@@ -901,3 +901,51 @@ func TestGetReferenceGrantIndexKey(t *testing.T) {
 		})
 	}
 }
+
+func TestReferenceGrantValidator_ValidateMCPRouteSecretReference(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, gwapiv1b1.Install(scheme))
+
+	grant := func(fromKind gwapiv1b1.Kind, fromNS string) *gwapiv1b1.ReferenceGrant {
+		return &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "grant", Namespace: "secret-ns"},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{Group: aiServiceBackendGroup, Kind: fromKind, Namespace: gwapiv1b1.Namespace(fromNS)}},
+				To:   []gwapiv1b1.ReferenceGrantTo{{Group: secretGroup, Kind: secretKind}},
+			},
+		}
+	}
+	tests := []struct {
+		name          string
+		grant         *gwapiv1b1.ReferenceGrant
+		routeNS       string
+		expectedError string
+	}{
+		{name: "same namespace needs no grant", routeNS: "secret-ns"},
+		{name: "grant for MCPRoute from the route namespace", grant: grant(mcpRouteKind, "tenant-a"), routeNS: "tenant-a"},
+		{
+			name: "no grant", routeNS: "tenant-a",
+			expectedError: "cross-namespace reference from MCPRoute in namespace tenant-a to Secret token in namespace secret-ns is not permitted",
+		},
+		{name: "grant for another kind", grant: grant(backendSecurityPolicyKind, "tenant-a"), routeNS: "tenant-a", expectedError: "is not permitted"},
+		{name: "grant for another namespace", grant: grant(mcpRouteKind, "tenant-b"), routeNS: "tenant-a", expectedError: "is not permitted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := fake.NewClientBuilder().WithScheme(scheme).
+				WithIndex(&gwapiv1b1.ReferenceGrant{}, k8sClientIndexReferenceGrantToTargetKind, referenceGrantToTargetKindIndexFunc)
+			if tt.grant != nil {
+				builder = builder.WithObjects(tt.grant)
+			}
+			err := newReferenceGrantValidator(builder.Build()).validateMCPRouteSecretReference(t.Context(), tt.routeNS, "secret-ns", "token")
+			if tt.expectedError == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.expectedError)
+			var notPermitted *ReferenceNotPermittedError
+			require.ErrorAs(t, err, &notPermitted)
+			require.Equal(t, mcpRouteKind, notPermitted.FromKind)
+		})
+	}
+}
