@@ -1,8 +1,8 @@
 # Contributing
 
-We welcome contributions from the community. Please read the following guidelines carefully to maximize the chances of your PR being merged.
+We welcome contributions to Agent Router (formerly Envoy AI Gateway) from the community. Please read the following guidelines carefully to maximize the chances of your PR being merged.
 
-## Local development of Envoy AI Gateway project
+## Local development of Agent Router
 
 First of all, there are only three minimal prerequisites to contribute to the project:
 
@@ -55,7 +55,7 @@ want to run these tests locally, please prepare the necessary credentials by you
 
 ### Goals
 
-- Keep Envoy AI Gateway code consistent and high-quality.
+- Keep Agent Router code consistent and high-quality.
 - Save reviewers time. Reviewers are often in short supply and time, so try to avoid wasted time.
 
 ### What is allowed
@@ -128,7 +128,20 @@ make sure that these automated checks pass after you open a PR by following the 
   - The only exception to this rule is when you mistakenly pushed a non-signoff commit.
     In this case, you can amend the commit with the signoff line and force push.
 - Commits are squashed prior to merging a pull request, using the title and PR description
-  as commit message by default. Maintainers may request contributors to
+  as commit message by default. Maintainers and Reviewers may request contributors to
   edit the pull request title and description to ensure that it remains descriptive as a
-  commit message. Alternatively, maintainers may change the commit message directly at the time of merge.
-- If you have any questions during the review, please feel free to ask the maintainers listed in [MAINTAINERS.md](./MAINTAINERS.md).
+  commit message. Alternatively, whoever merges may change the commit message directly at the time of merge.
+- A pull request needs a Maintainer's approval to merge. Usually a Reviewer reviews it first. The full rules
+  are in [COMMUNITY_ROLES.md](./COMMUNITY_ROLES.md#how-pull-requests-get-approved).
+- If you have any questions during the review, please feel free to ask the maintainers and reviewers listed in [MAINTAINERS.md](./MAINTAINERS.md).
+
+## Community roles
+
+The community has three roles: Contributor, Reviewer, and Maintainer. You don't need a role to
+contribute. [COMMUNITY_ROLES.md](./COMMUNITY_ROLES.md) describes what each role can do, its
+responsibilities, and how to move from one role to the next. It is adopted by the Technical
+Steering Committee under section 2 of the project's [Technical Charter](./Technical_Charter.pdf),
+replaces the charter's default role definitions, and is part of this contributing guide.
+
+Contributors are the members of the `@theagentrouter/agent-router-assignable` GitHub team.
+[MAINTAINERS.md](./MAINTAINERS.md) lists the current Reviewers and Maintainers.
