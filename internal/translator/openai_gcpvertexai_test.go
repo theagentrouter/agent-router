@@ -1998,6 +1998,46 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishRe
 	require.Equal(t, uint32(18), outputTokens)
 }
 
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingFinishReasonPerChoice(t *testing.T) {
+	type event struct {
+		body       string
+		wantIndex  int64
+		wantFinish openai.ChatCompletionChoicesFinishReason
+	}
+	textStart := event{body: `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Blue"}]}}]}`, wantIndex: 0}
+	toolCall := event{body: `{"candidates":[{"index":1,"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Oslo"}}}]}}]}`, wantIndex: 1}
+	textStop := event{
+		body:      `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" jay."}]},"finishReason":"STOP"}]}`,
+		wantIndex: 0, wantFinish: openai.ChatCompletionChoicesFinishReasonStop,
+	}
+	toolStop := event{
+		body:      `{"candidates":[{"index":1,"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}`,
+		wantIndex: 1, wantFinish: openai.ChatCompletionChoicesFinishReasonToolCalls,
+	}
+
+	for _, tt := range []struct {
+		name   string
+		events []event
+	}{
+		{"tool before text stop", []event{textStart, toolCall, textStop, toolStop}},
+		{"tool after text stop", []event{textStart, textStop, toolCall, toolStop}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+			for _, e := range tt.events {
+				_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader("data: "+e.body+"\n\n"), false, nil)
+				require.NoError(t, err)
+				chunks := getChatCompletionResponseChunk(body)
+				require.Len(t, chunks, 1)
+				require.Len(t, chunks[0].Choices, 1)
+				choice := chunks[0].Choices[0]
+				assert.Equal(t, e.wantIndex, choice.Index)
+				assert.Equal(t, e.wantFinish, choice.FinishReason, "choice %d", e.wantIndex)
+			}
+		})
+	}
+}
+
 func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingRoleOnce(t *testing.T) {
 	type streamEvent struct {
 		event       string
