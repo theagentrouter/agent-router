@@ -687,6 +687,43 @@ func localityBackend(locality *endpointv3.LocalityLbEndpoints) (client.ObjectKey
 	return client.ObjectKey{}, false
 }
 
+// sharedBackendLocalityRefIndices maps the localities of a Backend that several backendRefs resolve
+// to (e.g. two AIServiceBackends with different settings or priorities for the same upstream) to
+// those backendRefs, returning the backendRef index of each locality.
+//
+// Envoy Gateway names the locality of each HTTPRoute backendRef after it in Locality.Region
+// ("httproute/<ns>/<name>/rule/<N>/backend/<M>"), and the controller generates the HTTPRoute
+// backendRefs in the order of the AIGatewayRoute ones, so the localities, ordered by M, follow the
+// order of the backendRefs. Per-zone localities (preferLocal, weightedZones) carry only a Zone, and a
+// backendRef left out of the HTTPRoute leaves fewer localities than backendRefs; in both cases the
+// localities cannot be told apart and false is returned.
+func sharedBackendLocalityRefIndices(localities []*endpointv3.LocalityLbEndpoints, backendRefIndices []int) ([]int, bool) {
+	httpRouteIndices := make([]int, len(localities))
+	for i, l := range localities {
+		region := l.GetLocality().GetRegion()
+		pos := strings.LastIndex(region, "/backend/")
+		if pos < 0 {
+			return nil, false
+		}
+		idx, err := strconv.Atoi(region[pos+len("/backend/"):])
+		if err != nil {
+			return nil, false
+		}
+		httpRouteIndices[i] = idx
+	}
+	distinct := slices.Clone(httpRouteIndices)
+	slices.Sort(distinct)
+	distinct = slices.Compact(distinct)
+	if len(distinct) != len(backendRefIndices) {
+		return nil, false
+	}
+	refIndices := make([]int, len(localities))
+	for i, idx := range httpRouteIndices {
+		refIndices[i] = backendRefIndices[slices.Index(distinct, idx)]
+	}
+	return refIndices, true
+}
+
 // stampLoadAssignment stamps the backend name, upstream host and priority of the owning backendRef
 // on the endpoints of each locality of the given ClusterLoadAssignment. It is used both for clusters
 // with an inline LoadAssignment and for EDS ClusterLoadAssignments (PostEndpointsModify, which only
@@ -696,9 +733,10 @@ func localityBackend(locality *endpointv3.LocalityLbEndpoints) (client.ObjectKey
 // The owning backendRef of each locality is identified from the Backend that Envoy Gateway records
 // in the locality's metadata, not from the locality's position: a backend can span several
 // localities (one per zone with preferLocal or weightedZones), and backendRefs that the controller
-// left out of the HTTPRoute have no locality. A locality whose backendRef cannot be told apart (no
-// match, or several backendRefs resolving to the same Backend) is left unstamped, so requests to it
-// fail rather than use another backend's configuration.
+// left out of the HTTPRoute have no locality. When several backendRefs resolve to the same Backend,
+// their localities are told apart by their HTTPRoute backendRef (see sharedBackendLocalityRefIndices).
+// A locality whose backendRef cannot be told apart is left unstamped, so requests to it fail rather
+// than use another backend's configuration.
 func (s *Server) stampLoadAssignment(ctx context.Context, clusterName string, cla *endpointv3.ClusterLoadAssignment, aigwRoute *aigv1b1.AIGatewayRoute, ruleIndex, backendRefIndex int) error {
 	rule := &aigwRoute.Spec.Rules[ruleIndex]
 	stamp := func(endpoints *endpointv3.LocalityLbEndpoints, i int) {
@@ -725,14 +763,36 @@ func (s *Server) stampLoadAssignment(ctx context.Context, clusterName string, cl
 		if err != nil {
 			return err
 		}
+		// Localities of a Backend that several backendRefs resolve to, in cluster order.
+		var shared []client.ObjectKey
+		sharedLocalities := make(map[client.ObjectKey][]*endpointv3.LocalityLbEndpoints)
 		for _, endpoints := range cla.Endpoints {
 			backend, _ := localityBackend(endpoints)
-			if indices := byBackend[backend]; len(indices) == 1 {
+			switch indices := byBackend[backend]; len(indices) {
+			case 0:
+				s.log.Info("cannot tell which backendRef a cluster locality belongs to; not setting its backend metadata",
+					"cluster_name", clusterName, "backend", backend.String(), "matching_backend_refs", 0)
+			case 1:
 				stamp(endpoints, indices[0])
+			default:
+				if _, ok := sharedLocalities[backend]; !ok {
+					shared = append(shared, backend)
+				}
+				sharedLocalities[backend] = append(sharedLocalities[backend], endpoints)
+			}
+		}
+		for _, backend := range shared {
+			indices := byBackend[backend]
+			localities := sharedLocalities[backend]
+			refIndices, ok := sharedBackendLocalityRefIndices(localities, indices)
+			if !ok {
+				s.log.Info("cannot tell which backendRef a cluster locality belongs to; not setting its backend metadata",
+					"cluster_name", clusterName, "backend", backend.String(), "matching_backend_refs", len(indices))
 				continue
 			}
-			s.log.Info("cannot tell which backendRef a cluster locality belongs to; not setting its backend metadata",
-				"cluster_name", clusterName, "backend", backend.String(), "matching_backend_refs", len(byBackend[backend]))
+			for j, endpoints := range localities {
+				stamp(endpoints, refIndices[j])
+			}
 		}
 		return nil
 	}

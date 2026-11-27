@@ -8,6 +8,7 @@ package extensionserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -67,6 +68,14 @@ func egLocality(backendNamespace, backendName, zone, addr string, port uint32) *
 			}}),
 		}},
 	}}
+	return l
+}
+
+// regionLocality returns a non-zonal locality as Envoy Gateway v1.8+ builds it for the HTTPRoute
+// backendRef at httpRouteBackendIndex: its Region names the backendRef.
+func regionLocality(rule string, httpRouteBackendIndex int, backendNamespace, backendName, addr string, port uint32) *endpointv3.LocalityLbEndpoints {
+	l := egLocality(backendNamespace, backendName, "", addr, port)
+	l.Locality = &corev3.Locality{Region: fmt.Sprintf("%s/backend/%d", rule, httpRouteBackendIndex)}
 	return l
 }
 
@@ -339,10 +348,19 @@ func TestStampLoadAssignment_localityMetadata(t *testing.T) {
 				{Name: "aaa", Priority: ptr.To[uint32](0)},
 				{Name: "bbb", Priority: ptr.To[uint32](1)},
 			}},
-			// Rule 1: two AIServiceBackends on the same EG Backend cannot be told apart.
+			// Rule 1: two AIServiceBackends on the same EG Backend.
 			{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "aaa"}, {Name: "aaa-alias"}}},
+			// Rule 2: a scale tier failing over to the default tier of the same upstream, after a
+			// backendRef the controller left out of the HTTPRoute.
+			{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+				{Name: "missing"},
+				{Name: "aaa-scale", Priority: ptr.To[uint32](0)},
+				{Name: "aaa-default", Priority: ptr.To[uint32](1)},
+			}},
 		}},
 	}))
+	createAIServiceBackend(t, c, "ns", "aaa-scale", "backend-aaa")
+	createAIServiceBackend(t, c, "ns", "aaa-default", "backend-aaa")
 	createAIServiceBackend(t, c, "ns", "aaa", "backend-aaa")
 	createAIServiceBackend(t, c, "ns", "bbb", "backend-bbb")
 	createAIServiceBackend(t, c, "ns", "aaa-alias", "backend-aaa")
@@ -367,6 +385,68 @@ func TestStampLoadAssignment_localityMetadata(t *testing.T) {
 		require.Equal(t, aaa, endpointBackendName(eps[1].LbEndpoints[0]))
 		require.Equal(t, bbb, endpointBackendName(eps[2].LbEndpoints[0]))
 		require.Equal(t, []uint32{0, 0, 1}, []uint32{eps[0].Priority, eps[1].Priority, eps[2].Priority})
+	})
+
+	t.Run("backendRefs sharing a Backend are told apart by their HTTPRoute backendRef", func(t *testing.T) {
+		const rule = "httproute/ns/myroute/rule/2"
+		// The HTTPRoute holds aaa-scale at index 0 and aaa-default at index 1; the cluster order does
+		// not matter.
+		cla := &endpointv3.ClusterLoadAssignment{
+			ClusterName: rule,
+			Endpoints: []*endpointv3.LocalityLbEndpoints{
+				regionLocality(rule, 1, "ns", "backend-aaa", "10.0.0.1", 80),
+				regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80),
+			},
+		}
+		resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{LoadAssignment: cla})
+		require.NoError(t, err)
+		eps := resp.GetLoadAssignment().Endpoints
+		require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", "aaa-default", "myroute", 2, 2), endpointBackendName(eps[0].LbEndpoints[0]))
+		require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", "aaa-scale", "myroute", 2, 1), endpointBackendName(eps[1].LbEndpoints[0]))
+		require.Equal(t, []uint32{1, 0}, []uint32{eps[0].Priority, eps[1].Priority})
+
+		// Same on an inline LoadAssignment.
+		cluster := &clusterv3.Cluster{
+			Name: rule,
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80),
+				regionLocality(rule, 1, "ns", "backend-aaa", "10.0.0.1", 80),
+			}},
+		}
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
+		eps = cluster.LoadAssignment.Endpoints
+		require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", "aaa-scale", "myroute", 2, 1), endpointBackendName(eps[0].LbEndpoints[0]))
+		require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", "aaa-default", "myroute", 2, 2), endpointBackendName(eps[1].LbEndpoints[0]))
+	})
+
+	t.Run("backendRefs sharing a Backend that cannot be told apart are left unstamped", func(t *testing.T) {
+		const rule = "httproute/ns/myroute/rule/2"
+		for name, endpoints := range map[string][]*endpointv3.LocalityLbEndpoints{
+			// preferLocal / weightedZones: per-zone localities carry no Region.
+			"zonal": {
+				egLocality("ns", "backend-aaa", "zone-a", "10.0.0.1", 80),
+				egLocality("ns", "backend-aaa", "zone-b", "10.0.0.2", 80),
+			},
+			// Fewer localities than backendRefs, e.g. one was left out of the HTTPRoute.
+			"count mismatch": {regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80)},
+			"malformed region": {
+				regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80),
+				func() *endpointv3.LocalityLbEndpoints {
+					l := egLocality("ns", "backend-aaa", "", "10.0.0.1", 80)
+					l.Locality = &corev3.Locality{Region: rule + "/backend/x"}
+					return l
+				}(),
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				cla := &endpointv3.ClusterLoadAssignment{ClusterName: rule, Endpoints: endpoints}
+				resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{LoadAssignment: cla})
+				require.NoError(t, err)
+				for _, l := range resp.GetLoadAssignment().Endpoints {
+					require.Empty(t, endpointBackendName(l.LbEndpoints[0]))
+				}
+			})
+		}
 	})
 
 	t.Run("ambiguous or unknown Backend is left unstamped", func(t *testing.T) {
