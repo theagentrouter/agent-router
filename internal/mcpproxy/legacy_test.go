@@ -615,11 +615,9 @@ func TestServePOST_JSONRPCRequest(t *testing.T) {
 // protected route's per-tool JWT rules would be evaluated against a bearer token that was never
 // verified by Envoy (the other route has no securityPolicy.oauth), so a caller could forge claims.
 func TestServePOST_ToolsCallRequest_CrossRouteSessionReuse(t *testing.T) {
-	// Unsigned (alg=none) token carrying the elevated scope. Only Envoy's JWT filter on the
-	// protected route would reject it; the proxy itself never verifies signatures.
-	forged := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"sub": "alice", "scope": "admin"})
-	forgedToken, err := forged.SignedString(jwt.UnsafeAllowNoneSignatureType)
-	require.NoError(t, err)
+	// Claims carrying the elevated scope, as the gateway would render them for a token verified on
+	// the protected route. The proxy only trusts the claims header on routes with VerifiedJWT.
+	claims := verifiedJWTClaims(jwt.MapClaims{"sub": "alice", "scope": "admin"})
 
 	compiledAuth, err := compileAuthorization(&filterapi.MCPRouteAuthorization{
 		DefaultAction: filterapi.AuthorizationActionDeny,
@@ -641,7 +639,7 @@ func TestServePOST_ToolsCallRequest_CrossRouteSessionReuse(t *testing.T) {
 		// The advisory's PoC: resume the protected session through the unprotected route.
 		{name: "through other route", route: "open-route", wantStatus: http.StatusBadRequest},
 		// Control: the same request through the protected route reaches the backend. In a real
-		// deployment Envoy would have rejected the forged token before reaching the proxy.
+		// deployment the claims header is only ever set by the gateway from a verified token.
 		{name: "through original route", route: "protected-route", wantStatus: http.StatusOK},
 	}
 
@@ -682,7 +680,7 @@ func TestServePOST_ToolsCallRequest_CrossRouteSessionReuse(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set(internalapi.MCPRouteHeader, tt.route)
 			req.Header.Set(internalapi.MCPSubjectHeader, "alice")
-			req.Header.Set("Authorization", "Bearer "+forgedToken)
+			req.Header.Set(internalapi.MCPJWTClaimsHeader, claims)
 			req.Header.Set(sessionIDHeader, sessionID)
 			rr := httptest.NewRecorder()
 
