@@ -65,6 +65,19 @@ Commands:
   download-envoy [flags]
     Download Envoy binary for the Envoy Gateway default version.
 
+  claude [<args> ...] [flags]
+    Run Claude Code through Agent Router, starting it in the background if
+    needed.
+
+  codex [<args> ...] [flags]
+    Run Codex through Agent Router, starting it in the background if needed.
+
+  status [flags]
+    Show the Agent Router started by "aigw claude" or "aigw codex".
+
+  stop [flags]
+    Stop the Agent Router started by "aigw claude" or "aigw codex".
+
 Run "aigw <command> --help" for more information on a command.
 `,
 			expPanicCode: ptr.To(0),
