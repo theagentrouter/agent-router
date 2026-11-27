@@ -21,11 +21,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -174,6 +177,13 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.AIGatewayRoute{}).
 		Owns(&gwapiv1.HTTPRoute{}).
 		Owns(&egv1a1.HTTPRouteFilter{}).
+		// The shared backendPriority HTTPRouteFilters are not owned by any AIGatewayRoute, so Owns does not
+		// cover them. Recreate or restore one when it is deleted or edited while AIGatewayRoutes still use its
+		// priority.
+		Watches(&egv1a1.HTTPRouteFilter{},
+			handler.EnqueueRequestsFromMapFunc(routeC.backendPriorityFilterToAIGatewayRoutes),
+			builder.WithPredicates(backendPriorityFilterChangedPredicate()),
+		).
 		WatchesRawSource(source.Channel(
 			aiGatewayRouteEventChan,
 			&handler.EnqueueRequestForObject{},
@@ -359,6 +369,10 @@ const (
 	// k8sClientIndexMCPRouteToOwnedHTTPRoute is the index name that maps from an MCPRoute to the
 	// HTTPRoutes it owns, enabling efficient lookup of child HTTPRoutes for orphan cleanup.
 	k8sClientIndexMCPRouteToOwnedHTTPRoute = "MCPRouteToOwnedHTTPRoute"
+	// k8sClientIndexAIGatewayRouteToBackendPriority is the index name that maps from a backendRef priority
+	// value to the AIGatewayRoutes whose rules have a backendRef with that priority. It is used to decide
+	// whether a shared backendPriority HTTPRouteFilter is still in use in a namespace.
+	k8sClientIndexAIGatewayRouteToBackendPriority = "AIGatewayRouteToBackendPriority"
 )
 
 // ApplyIndexing applies indexing to the given indexer. This is exported for testing purposes.
@@ -372,6 +386,11 @@ func ApplyIndexing(ctx context.Context, indexer func(ctx context.Context, obj cl
 		k8sClientIndexAIGatewayRouteToAttachedGateway, aiGatewayRouteToAttachedGatewayIndexFunc)
 	if err != nil {
 		return fmt.Errorf("failed to create index from Gateway to AIGatewayRoute: %w", err)
+	}
+	err = indexer(ctx, &aigv1b1.AIGatewayRoute{},
+		k8sClientIndexAIGatewayRouteToBackendPriority, aiGatewayRouteToBackendPriorityIndexFunc)
+	if err != nil {
+		return fmt.Errorf("failed to create index from backend priority to AIGatewayRoute: %w", err)
 	}
 	err = indexer(ctx, &aigv1b1.BackendSecurityPolicy{},
 		k8sClientIndexSecretToReferencingBackendSecurityPolicy, backendSecurityPolicyIndexFunc)
@@ -514,6 +533,23 @@ func aiGatewayRouteIndexFunc(o client.Object) []string {
 		}
 	}
 	return ret
+}
+
+// aiGatewayRouteToBackendPriorityIndexFunc returns the distinct non-zero priorities of the AIGatewayRoute's
+// backendRefs, i.e. those that get a backendPriority HTTPRouteFilter. InferencePool backendRefs are skipped
+// since their priority is ignored.
+func aiGatewayRouteToBackendPriorityIndexFunc(o client.Object) []string {
+	aiGatewayRoute := o.(*aigv1b1.AIGatewayRoute)
+	priorities := sets.New[string]()
+	for _, rule := range aiGatewayRoute.Spec.Rules {
+		for i := range rule.BackendRefs {
+			br := &rule.BackendRefs[i]
+			if p := ptr.Deref(br.Priority, 0); p != 0 && !br.IsInferencePool() {
+				priorities.Insert(strconv.FormatUint(uint64(p), 10))
+			}
+		}
+	}
+	return sets.List(priorities)
 }
 
 func backendSecurityPolicyIndexFunc(o client.Object) []string {
