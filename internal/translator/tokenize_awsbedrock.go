@@ -8,7 +8,6 @@ package translator
 import (
 	"fmt"
 	"io"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -156,7 +155,10 @@ func (o *ToAWSBedrockV1Tokenize) RequestBody(_ []byte, tokenizeReq *tokenize.Req
 		}
 	}
 	// URL encode the model name for the path to handle ARNs with special characters
-	encodedModelName := url.PathEscape(pathModel)
+	encodedModelName, err := modelPathSegment(pathModel)
+	if err != nil {
+		return nil, nil, err
+	}
 	path := fmt.Sprintf(pathTemplate, encodedModelName)
 
 	bedrockReq, err := o.tokenizeToBedrockCountTokens(tokenizeReq.ChatRequest)
