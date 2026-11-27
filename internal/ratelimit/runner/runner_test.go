@@ -148,6 +148,7 @@ func TestUpdateConfigs(t *testing.T) {
 func TestStart(t *testing.T) {
 	t.Run("starts and stops with context cancellation", func(t *testing.T) {
 		r := New(logr.Discard(), 0)
+		r.port = 0 // New selects DefaultPort. Let the OS assign a port when Start binds.
 		ctx, cancel := context.WithCancel(t.Context())
 
 		errCh := make(chan error, 1)
@@ -179,7 +180,9 @@ func TestStart(t *testing.T) {
 			}
 		}, funcr.Options{})
 
-		require.NoError(t, New(logger, 0).Start(ctx))
+		r := New(logger, 0)
+		r.port = 0
+		require.NoError(t, r.Start(ctx))
 	})
 }
 
