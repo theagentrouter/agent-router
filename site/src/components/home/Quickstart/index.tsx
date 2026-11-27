@@ -50,8 +50,8 @@ export default function Quickstart(): React.ReactElement {
         <div className={styles.panel}>
           <div>
             <span className={styles.label}>{quickstart.label}</span>
-            <h2 className={styles.title}>{quickstart.title}</h2>
-            <p className={styles.body}>{quickstart.body}</p>
+            <h2 className={styles.title}>{active.title}</h2>
+            <p className={styles.body}>{active.body}</p>
             <Link className="button button--primary" to={active.cta.to}>
               {active.cta.label}
             </Link>

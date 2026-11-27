@@ -613,9 +613,11 @@ func TestAnthropicToAWSBedrockTranslator_ResponseError(t *testing.T) {
 			{"401", "authentication_error"},
 			{"403", "permission_error"},
 			{"404", "not_found_error"},
+			{"413", "request_too_large"},
 			{"429", "rate_limit_error"},
 			{"500", "internal_server_error"},
 			{"503", "service_unavailable_error"},
+			{"529", "overloaded_error"},
 			{"502", "internal_server_error"}, // default
 		}
 		for _, tt := range tests {

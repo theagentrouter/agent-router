@@ -292,8 +292,16 @@ func (g *gatewayMutator) mutatePod(ctx context.Context, pod *corev1.Pod, gateway
 			},
 		},
 	}
+	// A pod's slot count is fixed at admission; pods with too few are rolled by
+	// checkPodHasBundleSlots. Project at least as many slots as the index lists: when the slot
+	// count is lowered below the parts the config needs, the write is refused and the index keeps
+	// listing the previous, larger set of parts.
+	slots := g.filterConfigBundleMaxSlots()
+	if index, indexErr := filterConfigBundleIndexFromSecret(bundleConfigIndexSecret); indexErr == nil {
+		slots = max(slots, len(index.Parts))
+	}
 	optional := true
-	for i := range maxFilterConfigBundleSlots {
+	for i := range slots {
 		projections = append(projections, corev1.VolumeProjection{
 			Secret: &corev1.SecretProjection{
 				LocalObjectReference: corev1.LocalObjectReference{
