@@ -25,8 +25,8 @@ const (
 	// ExpectedRawQueryHeaderKey is the key for the expected raw query in the request.
 	// E.g. "key1=value1&key2=value2".
 	ExpectedRawQueryHeaderKey = "x-expected-raw-query"
-	// ExpectedRequestBodyHeaderKey is the key for the expected request body in the request.
-	// The value is a base64 encoded.
+	// ExpectedRequestBodyHeaderKey supplies the base64-encoded body the mock expects.
+	// JSON bodies are compared by value. Other bodies must match byte for byte.
 	ExpectedRequestBodyHeaderKey = "x-expected-request-body"
 	// ResponseStatusKey is the key for the response status in the response, default is 200 if not set.
 	ResponseStatusKey = "x-response-status"
