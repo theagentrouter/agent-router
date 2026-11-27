@@ -16,7 +16,9 @@ import (
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	openai "github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -1122,4 +1124,144 @@ func TestContentResponse_Translated(t *testing.T) {
 	resp, err := p.ProcessResponseBody(context.Background(), &extprocv3.HttpBody{Body: []byte("wrapped")})
 	require.NoError(t, err)
 	require.Equal(t, []byte("unwrapped"), resp.GetResponseBody().GetResponse().GetBodyMutation().GetBody())
+}
+
+// TestHandleIDBearingRequestHeaders_UnsafeNativeID verifies that a decodable gateway id whose
+// backend-native id is not a single safe path segment is rejected instead of being used in the
+// upstream :path.
+func TestHandleIDBearingRequestHeaders_UnsafeNativeID(t *testing.T) {
+	for _, nativeID := range []string{
+		"../../v1/chat/completions",
+		"..",
+		".",
+		"a/b",
+		`a\b`,
+		"file-1%2F..",
+		"file-\x00",
+		"file-\x7f",
+		"file-\n",
+	} {
+		t.Run(nativeID, func(t *testing.T) {
+			codec := newTestCodec()
+			config := runtimeConfigWithSchema("ns", "apple", "myroute", filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI})
+			gatewayID := encodeGatewayFileID(t, codec, "ns", "apple", nativeID)
+			for _, tc := range []struct {
+				method, suffix string
+			}{
+				{http.MethodGet, ""},
+				{http.MethodGet, "/content"},
+				{http.MethodDelete, ""},
+			} {
+				p := &filesProcessor{
+					codec:          codec,
+					config:         config,
+					requestHeaders: map[string]string{":method": tc.method, ":path": "/v1/files/" + gatewayID + tc.suffix},
+					logger:         slog.Default(),
+				}
+				resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+				require.NoError(t, err)
+				require.NotNil(t, resp.GetImmediateResponse(), "%s %s must be rejected", tc.method, tc.suffix)
+				require.Equal(t, typev3.StatusCode_NotFound, resp.GetImmediateResponse().GetStatus().GetCode())
+				_, ok := responseHeaderValue(resp, ":path")
+				require.False(t, ok, "path must not be rewritten")
+			}
+		})
+	}
+}
+
+// TestProcessRequestHeaders_List_UnsafeAfterNativeID verifies that an "after" cursor decoding to an
+// unsafe native id is rejected.
+func TestProcessRequestHeaders_List_UnsafeAfterNativeID(t *testing.T) {
+	codec := newTestCodec()
+	after := encodeGatewayFileID(t, codec, "ns", "apple", "../../admin")
+	p := &filesProcessor{
+		codec:          codec,
+		requestHeaders: map[string]string{":method": http.MethodGet, ":path": "/v1/files?model=m1&after=" + after},
+		logger:         slog.Default(),
+	}
+	resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetImmediateResponse())
+	require.Equal(t, typev3.StatusCode_BadRequest, resp.GetImmediateResponse().GetStatus().GetCode())
+}
+
+// TestReEncode_UnsafeUpstreamNativeID verifies that the gateway refuses to mint a gateway id for an
+// unsafe native id returned by the upstream, so a malicious or compromised backend cannot plant a
+// traversal id that is later spliced into an upstream path.
+func TestReEncode_UnsafeUpstreamNativeID(t *testing.T) {
+	newP := func(op filesOperation) *filesProcessor {
+		return &filesProcessor{
+			codec:   newTestCodec(),
+			op:      op,
+			backend: &backendKey{namespace: "ns", name: "apple"},
+			logger:  slog.Default(),
+		}
+	}
+	resp := newP(filesOpUpload).reEncodeResponse([]byte(`{"id":"../../v1/chat/completions","object":"file"}`))
+	require.NotNil(t, resp.GetImmediateResponse())
+	require.Equal(t, typev3.StatusCode_BadGateway, resp.GetImmediateResponse().GetStatus().GetCode())
+
+	resp = newP(filesOpList).reEncodeListResponse([]byte(`{"object":"list","data":[{"id":"file-ok","object":"file"},{"id":"a/../b","object":"file"}]}`))
+	require.NotNil(t, resp.GetImmediateResponse())
+	require.Equal(t, typev3.StatusCode_BadGateway, resp.GetImmediateResponse().GetStatus().GetCode())
+}
+
+func TestIsSafeNativeID(t *testing.T) {
+	for _, id := range []string{
+		"file-abc123", "file_ABC-9", "batch_xyz", "3f2a7c1e-0d4b-4b8e-9a6f-1c2d3e4f5a6b",
+		"a.b", "..a", "a:b@c", "file-with|separator", "a?b", "a#b", "a b", "é",
+	} {
+		require.True(t, isSafeNativeID(id), id)
+	}
+	for _, id := range []string{"", ".", "..", "a/b", `a\b`, "a%2Fb", "a%b", "a\tb", "a\nb", "a\x00b", "a\x7fb"} {
+		require.False(t, isSafeNativeID(id), id)
+	}
+}
+
+// TestHandleIDBearingRequestHeaders_EscapesNativeID verifies that native ids with characters that
+// are reserved in a path, but safe once escaped, stay inside a single upstream path segment.
+func TestHandleIDBearingRequestHeaders_EscapesNativeID(t *testing.T) {
+	for nativeID, escaped := range map[string]string{
+		"file-with|separator": "file-with%7Cseparator",
+		"file-1?x=y":          "file-1%3Fx=y",
+		"file-1#frag":         "file-1%23frag",
+		"file 1":              "file%201",
+	} {
+		t.Run(nativeID, func(t *testing.T) {
+			codec := newTestCodec()
+			config := runtimeConfigWithSchema("ns", "apple", "myroute", filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI})
+			gatewayID := encodeGatewayFileID(t, codec, "ns", "apple", nativeID)
+			p := &filesProcessor{
+				codec:          codec,
+				config:         config,
+				requestHeaders: map[string]string{":method": http.MethodGet, ":path": "/v1/files/" + gatewayID + "/content?limit=1"},
+				logger:         slog.Default(),
+			}
+			resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+			require.NoError(t, err)
+			require.Nil(t, resp.GetImmediateResponse())
+			newPath, ok := responseHeaderValue(resp, ":path")
+			require.True(t, ok)
+			require.Equal(t, "/v1/files/"+escaped+"/content?limit=1", newPath)
+			require.Equal(t, nativeID, p.filesRequestMetadata.NativeID)
+		})
+	}
+}
+
+// TestReEncode_EscapableUpstreamNativeID verifies that an upstream native id with characters that
+// are safe once escaped is still re-encoded into a gateway id.
+func TestReEncode_EscapableUpstreamNativeID(t *testing.T) {
+	codec := newTestCodec()
+	p := &filesProcessor{
+		codec:   codec,
+		op:      filesOpUpload,
+		backend: &backendKey{namespace: "ns", name: "apple"},
+		logger:  slog.Default(),
+	}
+	resp := p.reEncodeResponse([]byte(`{"id":"file-with|separator","object":"file"}`))
+	require.Nil(t, resp.GetImmediateResponse())
+	body := resp.GetResponseBody().GetResponse().GetBodyMutation().GetBody()
+	decoded, err := codec.Decode(gjson.GetBytes(body, "id").String())
+	require.NoError(t, err)
+	require.Equal(t, "file-with|separator", decoded.NativeID)
 }

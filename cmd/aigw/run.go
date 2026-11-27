@@ -88,6 +88,8 @@ type runCmdContext struct {
 	fileIDEncryptionIterations int
 	// fileIDEncryptionSeed is the Files/Batch API id encryption seed used when the environment does not set one.
 	fileIDEncryptionSeed string
+	// mcpSessionEncryptionSeed is the MCP session encryption seed used when the environment does not set one.
+	mcpSessionEncryptionSeed string
 }
 
 // run starts the AI Gateway locally for a given configuration.
@@ -194,6 +196,11 @@ func run(ctx context.Context, c *cmdRun, o *runOpts, stdout, stderr io.Writer) e
 	// insecure default. It is saved in the config home, so ids stay valid across runs.
 	if os.Getenv(fileIDEncryptionSeedEnvVar) == "" {
 		runCtx.fileIDEncryptionSeed = fileIDSeedForRun(filepath.Join(o.ConfigHome, fileIDEncryptionSeedFile), stderr)
+	}
+	// Likewise for the MCP session encryption seed: the extproc default is a well-known public value
+	// that lets anyone decrypt and forge MCP session ids.
+	if os.Getenv(mcpSessionEncryptionSeedEnvVar) == "" {
+		runCtx.mcpSessionEncryptionSeed = mcpSessionSeedForRun(filepath.Join(o.ConfigHome, mcpSessionEncryptionSeedFile), stderr)
 	}
 	fakeClient, extProxDone, listenerPort, err := runCtx.writeEnvoyResourcesAndRunExtProc(ctx, aiGatewayResourcesYaml)
 	if err != nil {
@@ -424,6 +431,9 @@ const (
 	fileIDEncryptionSeedFile = "file-id-encryption-seed"
 	// mcpSessionEncryptionSeedEnvVar sets the MCP session encryption seed for `aigw run`.
 	mcpSessionEncryptionSeedEnvVar = "AIGW_MCP_SESSION_ENCRYPTION_SEED"
+	// mcpSessionEncryptionSeedFile is where `aigw run` saves the random MCP session encryption seed
+	// it uses when the environment does not set one, in the config home.
+	mcpSessionEncryptionSeedFile = "mcp-session-encryption-seed"
 )
 
 // fileIDSeedForRun returns the Files/Batch API id encryption seed to use when the environment does
@@ -435,6 +445,21 @@ func fileIDSeedForRun(seedPath string, stderr io.Writer) string {
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "warning: failed to save the Files/Batch API id encryption seed (%v): "+
 			"file and batch ids will not be valid after a restart. Set %s to use a fixed seed.\n", err, fileIDEncryptionSeedEnvVar)
+	}
+	return seed
+}
+
+// mcpSessionSeedForRun returns the MCP session encryption seed to use when the environment does not
+// set one. It is read from seedPath; when missing or empty, a random seed is generated and saved
+// there, so session ids issued by one run can still be decrypted after a restart (the backend
+// sessions they refer to only survive if the backends keep them; stdio MCP servers do not). If the
+// seed cannot be saved, a warning is written to stderr and the generated seed is used for this run
+// only.
+func mcpSessionSeedForRun(seedPath string, stderr io.Writer) string {
+	seed, err := loadOrCreateSeed(seedPath)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "warning: failed to save the MCP session encryption seed (%v): "+
+			"MCP session ids will not be valid after a restart. Set %s to use a fixed seed.\n", err, mcpSessionEncryptionSeedEnvVar)
 	}
 	return seed
 }
@@ -491,7 +516,8 @@ func readSeed(path string) string {
 
 // setEncryptionSeeds puts the encryption seeds from the environment into the filter config. They are
 // delivered through the config bundle rather than as extproc arguments, so they never appear on a
-// process command line. When unset, the extproc falls back to its default seeds.
+// process command line. When neither the environment nor the saved seeds set them, the extproc falls
+// back to its default seeds.
 func (runCtx *runCmdContext) setEncryptionSeeds(filterCfg *filterapi.Config) {
 	seed := os.Getenv(fileIDEncryptionSeedEnvVar)
 	if seed == "" {
@@ -500,9 +526,13 @@ func (runCtx *runCmdContext) setEncryptionSeeds(filterCfg *filterapi.Config) {
 	if seed != "" {
 		filterCfg.FileIDEncryption = &filterapi.FileIDEncryption{Seed: seed, Iterations: runCtx.fileIDEncryptionIterations}
 	}
-	if seed := os.Getenv(mcpSessionEncryptionSeedEnvVar); seed != "" && filterCfg.MCPConfig != nil {
+	mcpSeed := os.Getenv(mcpSessionEncryptionSeedEnvVar)
+	if mcpSeed == "" {
+		mcpSeed = runCtx.mcpSessionEncryptionSeed
+	}
+	if mcpSeed != "" && filterCfg.MCPConfig != nil {
 		filterCfg.MCPConfig.SessionEncryption = &filterapi.MCPSessionEncryption{
-			Seed:       seed,
+			Seed:       mcpSeed,
 			Iterations: runCtx.mcpSessionEncryptionIterations,
 		}
 	}

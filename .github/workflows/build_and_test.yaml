@@ -57,19 +57,25 @@ jobs:
 
   test_install_script:
     # The install script lives in the docs site, which the "code" filter ignores, so it has its own filter.
+    # The filter is checked on each step, not on the job: a skipped job would make GitHub skip every job
+    # downstream of ci-required (docker_push, helm_push, aigw_main_release...), even when ci-required succeeds,
+    # because their implicit success() condition looks at all the jobs up the chain, not only the direct ones.
     needs: changes
-    if: ${{ needs.changes.outputs.install_script == 'true' }}
     name: Install Script Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - if: ${{ needs.changes.outputs.install_script == 'true' }}
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - if: ${{ needs.changes.outputs.install_script == 'true' }}
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
         with:
           cache: false
           go-version-file: go.mod
       - name: Shellcheck
+        if: ${{ needs.changes.outputs.install_script == 'true' }}
         run: shellcheck site/static/install.sh # Preinstalled on the GitHub-hosted Ubuntu runners.
-      - run: go test -v ./tests/install/
+      - if: ${{ needs.changes.outputs.install_script == 'true' }}
+        run: go test -v ./tests/install/
 
   unittest:
     needs: changes
