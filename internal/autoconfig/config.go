@@ -51,6 +51,7 @@ type ConfigData struct {
 	Debug          bool            // Enable debug logging for Envoy (the http and ext_proc components are capped at "info" to keep injected credential headers out of the debug log)
 	EnvoyVersion   string          // Explicitly configure the version of Envoy to use.
 	OTELLog        *otelLogConfig  // OpenTelemetry access log configuration (nil => file sink).
+	LocalOnly      bool            // Only accept requests from this machine. Envoy Gateway always listens on all addresses.
 }
 
 // WriteConfig generates the AI Gateway configuration.
