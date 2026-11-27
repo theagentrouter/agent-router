@@ -81,7 +81,10 @@ func (a *anthropicToGCPAnthropicTranslator) RequestBody(raw []byte, req *anthrop
 		specifier = "streamRawPredict"
 	}
 
-	path := buildGCPModelPathSuffix(gcpModelPublisherAnthropic, a.requestModel, specifier)
+	path, err := buildGCPModelPathSuffix(gcpModelPublisherAnthropic, a.requestModel, specifier)
+	if err != nil {
+		return nil, nil, err
+	}
 	newHeaders = []internalapi.Header{{pathHeaderName, path}, {contentLengthHeaderName, strconv.Itoa(len(newBody))}}
 	// Vertex forwards the anthropic-beta header verbatim and 400s on unsupported values. When the
 	// filter drops a value, overwrite the forwarded header with the filtered set.

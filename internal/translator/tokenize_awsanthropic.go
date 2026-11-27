@@ -106,7 +106,10 @@ func (o *ToAWSAnthropicV1Tokenize) RequestBody(_ []byte, tokenizeReq *tokenize.R
 
 	// Bedrock CountTokens rejects cross-region inference IDs, so the helper strips any
 	// geography prefix and builds the /model/{modelId}/count-tokens path.
-	path := awsAnthropicCountTokensPath(o.requestModel)
+	path, err := awsAnthropicCountTokensPath(o.requestModel)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	anthropicBody, err := o.buildAnthropicBody(tokenizeReq.ChatRequest, o.requestModel)
 	if err != nil {
