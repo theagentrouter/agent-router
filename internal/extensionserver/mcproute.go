@@ -232,27 +232,38 @@ func clusterTargetsMCPProxyBackend(c *clusterv3.Cluster) bool {
 
 // mcpProxyDynamicMetadataHeaders returns the request header mutations applied on the
 // route into the in-process MCP proxy. The MCP proxy is a plain HTTP server and can
-// only read headers, so values the trusted shim sets as (unforgeable) dynamic metadata
-// are rendered into headers here. When a metadata value is empty/absent, Envoy overwrites
-// the subset header with an empty value so a client-supplied value cannot bypass the proxy's
-// static fallback behavior.
+// only read headers, so trusted (unforgeable) dynamic metadata is rendered into headers here:
+//
+//   - the backend subset set by the trusted shim.
+//   - the payload of the JWT verified by Envoy's jwt_authn filter, which the MCP proxy uses for
+//     JWT scope/claim based authorization. The proxy must never re-parse the client-controlled
+//     Authorization header for that, since it is not necessarily the token Envoy verified.
+//
+// When a metadata value is empty/absent, Envoy overwrites the header with an empty value so a
+// client-supplied value can never reach the proxy.
+//
+// The %DYNAMIC_METADATA(namespace:key)% formatter renders string values as is and structured
+// values (such as the JWT payload Struct) as JSON. The legacy JSON-array form
+// %DYNAMIC_METADATA(["namespace", "key"])% is obsolete in Envoy and must not be used.
 func mcpProxyDynamicMetadataHeaders() []*corev3.HeaderValueOption {
 	return []*corev3.HeaderValueOption{
-		dynamicMetadataHeader(internalapi.MCPBackendSubsetHeader, internalapi.MCPBackendSubsetMetadataKey),
+		dynamicMetadataHeader(internalapi.MCPBackendSubsetHeader,
+			fmt.Sprintf(`%%DYNAMIC_METADATA(%s:%s)%%`, internalapi.InternalEndpointMetadataNamespace, internalapi.MCPBackendSubsetMetadataKey)),
+		dynamicMetadataHeader(internalapi.MCPJWTClaimsHeader,
+			fmt.Sprintf(`%%DYNAMIC_METADATA(%s:%s)%%`, internalapi.EnvoyJWTAuthnFilterMetadataNamespace, internalapi.MCPJWTProviderName)),
 	}
 }
 
-// dynamicMetadataHeader builds a request header whose value is sourced from the dynamic
-// metadata key under internalapi.InternalEndpointMetadataNamespace using Envoy's
-// %DYNAMIC_METADATA% command operator. OVERWRITE and KeepEmptyValue ensure any
-// client-supplied copy is replaced even when trusted metadata is empty or absent.
-func dynamicMetadataHeader(header, metadataKey string) *corev3.HeaderValueOption {
+// dynamicMetadataHeader builds a request header whose value is the given %DYNAMIC_METADATA%
+// command operator. OVERWRITE and KeepEmptyValue ensure any client-supplied copy is replaced
+// even when trusted metadata is empty or absent.
+func dynamicMetadataHeader(header, value string) *corev3.HeaderValueOption {
 	return &corev3.HeaderValueOption{
 		AppendAction:   corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		KeepEmptyValue: true,
 		Header: &corev3.HeaderValue{
 			Key:   header,
-			Value: fmt.Sprintf(`%%DYNAMIC_METADATA(["%s", "%s"])%%`, internalapi.InternalEndpointMetadataNamespace, metadataKey),
+			Value: value,
 		},
 	}
 }

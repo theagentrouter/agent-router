@@ -114,11 +114,17 @@ func (c *MCPRouteController) ensureSecurityPolicy(ctx context.Context, mcpRoute 
 	if oauth := mcpRoute.Spec.SecurityPolicy.OAuth; oauth != nil {
 		c.logger.Info("Configuring OAuth in SecurityPolicy")
 
-		name := "mcp-jwt-provider"
 		jwtProvider := egv1a1.JWTProvider{
-			Name:      name,
+			Name:      internalapi.MCPJWTProviderName,
 			Issuer:    oauth.Issuer,
 			Audiences: oauth.Audiences,
+			// Only accept the token from the Authorization header with the Bearer scheme, as required
+			// by the MCP authorization spec ("Access tokens MUST NOT be included in the URI query
+			// string"). Without this, Envoy Gateway also extracts the token from the access_token query
+			// parameter, so the verified token may differ from the one in the Authorization header.
+			ExtractFrom: &egv1a1.JWTExtractor{
+				Headers: []egv1a1.JWTHeaderExtractor{{Name: "Authorization", ValuePrefix: ptr.To("Bearer ")}},
+			},
 		}
 
 		// Configure JWKS source: use explicit config if provided, otherwise auto-discover from authorization server metadata.
