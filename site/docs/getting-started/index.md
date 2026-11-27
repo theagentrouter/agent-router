@@ -42,6 +42,14 @@ The setup prints a ready-to-use request for the providers you chose. Point any
 OpenAI-compatible client or SDK at `http://localhost:1975/v1`, or Anthropic
 clients at `http://localhost:1975/anthropic`.
 
+### Use it with Claude Code and Codex
+
+To run a coding agent through Agent Router, use `aigw claude` or `aigw codex`
+instead of `claude` or `codex`. The first time, it asks how the agent reaches
+its models: for Claude Code, your Claude subscription, an Anthropic API key, or
+Tetrate Agent Router. Then it starts Agent Router in the background and runs
+the agent. See [Claude Code and Codex](../cli/agents.md).
+
 `aigw` can also be configured from the same environment variables as the OpenAI
 and Anthropic SDKs, front MCP servers, and run custom configuration files. See
 [Installation](../cli/installation.md) for other ways to get the `aigw` binary,
