@@ -22,6 +22,7 @@ export const providers: Provider[] = [
   { name: 'DeepInfra', logoUrl: '/img/providers/deepinfra.svg', status: 'supported' },
   { name: 'DeepSeek', logoUrl: '/img/providers/deepseek.svg', status: 'supported' },
   { name: 'Eden AI', logoUrl: '/img/providers/eden-ai.svg', status: 'supported' },
+  { name: 'EmpirioLabs AI', logoUrl: '/img/providers/empiriolabs.svg', status: 'supported' },
   { name: 'Google Gemini', logoUrl: '/img/providers/google-gemini.svg', status: 'supported' },
   { name: 'Grok', logoUrl: '/img/providers/grok.svg', status: 'supported' },
   { name: 'Groq', logoUrl: '/img/providers/groq.svg', status: 'supported' },
