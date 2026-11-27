@@ -1087,11 +1087,28 @@ func geminiLogprobsToOpenAILogprobs(logprobsResult genai.LogprobsResult) openai.
 }
 
 // buildGCPModelPathSuffix constructs a path Suffix with an optional queryParams where each string is in the form of "%s=%s".
-func buildGCPModelPathSuffix(publisher, model, gcpMethod string, queryParams ...string) string {
-	pathSuffix := fmt.Sprintf("publishers/%s/models/%s:%s", publisher, model, gcpMethod)
+func buildGCPModelPathSuffix(publisher, model, gcpMethod string, queryParams ...string) (string, error) {
+	publisherSegment, err := gcpPathSegment(publisher)
+	if err != nil {
+		return "", err
+	}
+	modelSegment, err := gcpPathSegment(model)
+	if err != nil {
+		return "", err
+	}
+	pathSuffix := fmt.Sprintf("publishers/%s/models/%s:%s", publisherSegment, modelSegment, gcpMethod)
 
 	if len(queryParams) > 0 {
 		pathSuffix += "?" + strings.Join(queryParams, "&")
 	}
-	return pathSuffix
+	return pathSuffix, nil
+}
+
+// gcpPathSegment escapes s as one path segment, with ':' escaped too so only the gateway's method follows a ':'.
+func gcpPathSegment(s string) (string, error) {
+	segment, err := modelPathSegment(s)
+	if err != nil {
+		return "", err
+	}
+	return strings.ReplaceAll(segment, ":", "%3A"), nil
 }

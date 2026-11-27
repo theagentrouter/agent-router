@@ -61,7 +61,11 @@ func (o *openAIToAzureOpenAITranslatorV1ChatCompletion) RequestBody(raw []byte, 
 	// Azure OpenAI uses a {deployment-id} that may match the deployed model's name.
 	// We use the routed model as the deployment, stored in the path.
 	pathTemplate := "/openai/deployments/%s/chat/completions?api-version=%s"
-	newHeaders = []internalapi.Header{{pathHeaderName, fmt.Sprintf(pathTemplate, modelName, o.apiVersion)}}
+	deployment, err := modelPathSegment(modelName)
+	if err != nil {
+		return nil, nil, err
+	}
+	newHeaders = []internalapi.Header{{pathHeaderName, fmt.Sprintf(pathTemplate, deployment, o.apiVersion)}}
 	if req.Stream {
 		o.stream = true
 	}
