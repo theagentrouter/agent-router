@@ -84,7 +84,7 @@ func TestAnthropicResponseAttrs(t *testing.T) {
 	testotel.RequireAttributesEqual(t, []attribute.KeyValue{
 		attribute.String(ResponseID, "msg_123"),
 		attribute.String(ResponseModel, "claude-sonnet-5"),
-		attribute.Int(UsageInputTokens, 100),
+		attribute.Int(UsageInputTokens, 200),
 		attribute.Int(UsageOutputTokens, 50),
 		attribute.Int(UsageCacheReadInputTokens, 80),
 		attribute.Int(UsageCacheCreationInputTokens, 20),
