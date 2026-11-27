@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -122,7 +121,10 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) RequestBody(_ []byte, ope
 	}
 
 	// URL encode the model name for the path to handle ARNs with special characters
-	encodedModelName := url.PathEscape(o.requestModel)
+	encodedModelName, err := modelPathSegment(o.requestModel)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	var bedrockReq awsbedrock.ConverseInput
 	// Convert InferenceConfiguration.

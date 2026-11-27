@@ -84,7 +84,10 @@ func (o *openAIToGCPAnthropicTranslatorV1ChatCompletion) RequestBody(_ []byte, o
 		o.streamParser = newAnthropicStreamParser(o.requestModel)
 	}
 
-	path := buildGCPModelPathSuffix(gcpModelPublisherAnthropic, o.requestModel, specifier)
+	path, err := buildGCPModelPathSuffix(gcpModelPublisherAnthropic, o.requestModel, specifier)
+	if err != nil {
+		return nil, nil, err
+	}
 	// b. Set the "anthropic_version" key in the JSON body
 	// Using same logic as anthropic go SDK: https://github.com/anthropics/anthropic-sdk-go/blob/e252e284244755b2b2f6eef292b09d6d1e6cd989/bedrock/bedrock.go#L167
 	anthropicVersion := anthropicVertex.DefaultVersion

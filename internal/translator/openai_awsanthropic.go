@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -61,7 +60,10 @@ func (o *openAIToAWSAnthropicTranslatorV1ChatCompletion) RequestBody(_ []byte, o
 	}
 
 	// URL encode the model name for the path to handle special characters (e.g., ARNs)
-	encodedModelName := url.PathEscape(o.requestModel)
+	encodedModelName, err := modelPathSegment(o.requestModel)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Set the path for AWS Bedrock InvokeModel API
 	// https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_InvokeModel.html#API_runtime_InvokeModel_RequestSyntax
