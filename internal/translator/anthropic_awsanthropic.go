@@ -10,7 +10,6 @@ import (
 	"cmp"
 	"fmt"
 	"io"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -242,7 +241,10 @@ func (a *anthropicToAWSAnthropicTranslator) RequestBody(rawBody []byte, body *an
 	// URL encode the model ID for the path to handle ARNs with special characters.
 	// AWS Bedrock model IDs can be simple names (e.g., "anthropic.claude-3-5-sonnet-20241022-v2:0")
 	// or full ARNs which may contain special characters.
-	encodedModelID := url.PathEscape(a.requestModel)
+	encodedModelID, err := modelPathSegment(a.requestModel)
+	if err != nil {
+		return nil, nil, err
+	}
 	path := fmt.Sprintf(pathTemplate, encodedModelID)
 
 	newHeaders = []internalapi.Header{{pathHeaderName, path}, {contentLengthHeaderName, strconv.Itoa(len(newBody))}}
