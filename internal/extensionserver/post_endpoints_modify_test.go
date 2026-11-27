@@ -84,6 +84,14 @@ func regionLocality(rule string, httpRouteBackendIndex int, backendNamespace, ba
 	return l
 }
 
+// zonalLocality returns a per-zone locality as Envoy Gateway v1.8+ builds it with preferLocal: it
+// carries the Backend in its metadata and the backendRef's priority, but no Region.
+func zonalLocality(backendName, zone string, priority uint32) *endpointv3.LocalityLbEndpoints {
+	l := egLocality("ns", backendName, zone, "10.0.0.1", 80)
+	l.Priority = priority
+	return l
+}
+
 // createAIServiceBackend creates an AIServiceBackend referencing the EG Backend of the same name.
 func createAIServiceBackend(t *testing.T, c client.Client, namespace, name, backendName string) {
 	t.Helper()
@@ -437,6 +445,38 @@ func TestStampLoadAssignment_localityMetadata(t *testing.T) {
 		require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", "aaa-default", "myroute", 2, 2), endpointBackendName(eps[1].LbEndpoints[0]))
 	})
 
+	t.Run("zonal localities of backendRefs sharing a Backend are told apart by priority", func(t *testing.T) {
+		const rule = "httproute/ns/myroute/rule/2"
+		cla := &endpointv3.ClusterLoadAssignment{
+			ClusterName: rule,
+			Endpoints: []*endpointv3.LocalityLbEndpoints{
+				zonalLocality("backend-aaa", "zone-a", 0),
+				zonalLocality("backend-aaa", "zone-b", 0),
+				zonalLocality("backend-aaa", "zone-a", 1),
+				zonalLocality("backend-aaa", "zone-b", 1),
+			},
+		}
+		resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{LoadAssignment: cla})
+		require.NoError(t, err)
+		scale := internalapi.PerRouteRuleRefBackendName("ns", "aaa-scale", "myroute", 2, 1)
+		def := internalapi.PerRouteRuleRefBackendName("ns", "aaa-default", "myroute", 2, 2)
+		var got []string
+		for _, l := range resp.GetLoadAssignment().Endpoints {
+			got = append(got, endpointBackendName(l.LbEndpoints[0]))
+		}
+		require.Equal(t, []string{scale, scale, def, def}, got)
+
+		// Rule 1: aaa and aaa-alias share the Backend and the priority, so their zonal localities
+		// cannot be told apart.
+		cla = &endpointv3.ClusterLoadAssignment{
+			ClusterName: "httproute/ns/myroute/rule/1",
+			Endpoints:   []*endpointv3.LocalityLbEndpoints{zonalLocality("backend-aaa", "zone-a", 0)},
+		}
+		resp, err = s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{LoadAssignment: cla})
+		require.NoError(t, err)
+		require.Empty(t, endpointBackendName(resp.GetLoadAssignment().Endpoints[0].LbEndpoints[0]))
+	})
+
 	t.Run("backendRefs sharing a Backend reordered while a translation was in flight", func(t *testing.T) {
 		const rule = "httproute/ns/myroute/rule/2"
 		// Translated from a revision that listed aaa-default (priority 1) before aaa-scale (priority
@@ -464,11 +504,12 @@ func TestStampLoadAssignment_localityMetadata(t *testing.T) {
 			endpoints []*endpointv3.LocalityLbEndpoints
 			expected  []string
 		}{
-			// preferLocal / weightedZones: per-zone localities carry no Region.
-			"zonal": {
+			// preferLocal / weightedZones: per-zone localities carry no Region, and aaa-scale and
+			// aaa-default would both own a priority 2 locality.
+			"zonal with a priority no backendRef has": {
 				endpoints: []*endpointv3.LocalityLbEndpoints{
-					egLocality("ns", "backend-aaa", "zone-a", "10.0.0.1", 80),
-					egLocality("ns", "backend-aaa", "zone-b", "10.0.0.2", 80),
+					zonalLocality("backend-aaa", "zone-a", 2),
+					zonalLocality("backend-aaa", "zone-b", 2),
 				},
 				expected: []string{"", ""},
 			},

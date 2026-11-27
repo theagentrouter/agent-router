@@ -18,8 +18,9 @@ import (
 
 // PostEndpointsModify is called by Envoy Gateway for the ClusterLoadAssignment of every EDS cluster.
 //
-// Envoy Gateway turns static IP endpoints (Backend `ip` endpoints, Kubernetes Services) into EDS
-// clusters, whose endpoints are not inlined in the Cluster that PostTranslateModify sees. When an
+// AIServiceBackends always reference Envoy Gateway Backends (enforced by CRD validation). Envoy
+// Gateway turns Backends with static endpoints (`ip` or `unix`) into EDS clusters, whose endpoints are
+// not inlined in the Cluster that PostTranslateModify sees; `fqdn` endpoints are inlined. When an
 // AIGatewayRoute rule has several backendRefs, their endpoints share one such cluster, so the
 // backend each endpoint belongs to can only be recorded here, on the endpoints themselves. The
 // upstream ext_proc filter reads it to pick the backend's configuration, including its credentials.

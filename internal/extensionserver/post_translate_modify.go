@@ -396,7 +396,7 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	if len(pools) == 0 {
 		if cluster.LoadAssignment == nil {
 			// LoadAssignment is nil when the cluster's endpoints are EDS-managed: Envoy Gateway turns
-			// static IP endpoints (Backend `ip` endpoints, Kubernetes Services) into an EDS cluster and
+			// static endpoints (Backend `ip` and `unix` endpoints) into an EDS cluster and
 			// delivers the ClusterLoadAssignment as a separate resource. The per-backend endpoint
 			// metadata is stamped on that resource by PostEndpointsModify; here there is no LbEndpoint.
 			// PostEndpointsModify only runs when the Envoy Gateway "Endpoints" xDS translator hook is
@@ -625,8 +625,10 @@ type ruleBackendRefs struct {
 	// byBackend maps each Envoy Gateway Backend to the indices of the non-zero-weight backendRefs that
 	// Envoy Gateway translated for it (ambiguousBackendRef when one cannot be told).
 	byBackend map[client.ObjectKey][]int
-	// weights and priorities hold, for each backendRef of the generated HTTPRoute rule, the weight
-	// and priority Envoy Gateway sets on its locality.
+	// backends, weights and priorities hold, for each backendRef of the generated HTTPRoute rule, the
+	// Backend it references (zero when it is not a Backend), and the weight and priority Envoy Gateway
+	// sets on its locality.
+	backends   []client.ObjectKey
 	weights    []int32
 	priorities []uint32
 }
@@ -720,6 +722,7 @@ func (s *Server) ruleBackendRefs(ctx context.Context, aigwRoute *aigv1b1.AIGatew
 	refs := &ruleBackendRefs{
 		byHTTPRouteIndex: matchBackendRefs(resolved, emitted),
 		byBackend:        make(map[client.ObjectKey][]int),
+		backends:         make([]client.ObjectKey, len(emitted)),
 		weights:          weights,
 		priorities:       priorities,
 	}
@@ -729,6 +732,7 @@ func (s *Server) ruleBackendRefs(ctx context.Context, aigwRoute *aigv1b1.AIGatew
 			continue
 		}
 		if emitted[m].kind == "Backend" {
+			refs.backends[m] = emitted[m].key
 			refs.byBackend[emitted[m].key] = append(refs.byBackend[emitted[m].key], i)
 		}
 	}
@@ -826,7 +830,25 @@ func (r *ruleBackendRefs) localityBackendRefIndex(locality *endpointv3.LocalityL
 	if indices := r.byBackend[backend]; len(indices) == 1 && indices[0] >= 0 {
 		return indices[0], true
 	}
-	return 0, false
+	if locality.GetLocality().GetRegion() != "" {
+		return 0, false
+	}
+	// Per-zone localities (preferLocal, weightedZones) name no backendRef, and their weight is the
+	// zone's, not the backendRef's, but they carry its priority. Among backendRefs sharing the Backend,
+	// the one with the locality's priority owns it, when it is the only one: e.g. a scale tier failing
+	// over to the default tier of the same upstream. As above, a locality that matches a backendRef on
+	// Backend and priority translates the same whichever revision built it.
+	owner := -1
+	for m, i := range r.byHTTPRouteIndex {
+		if i == zeroWeightBackendRef || r.backends[m] != backend || r.priorities[m] != locality.GetPriority() {
+			continue
+		}
+		if owner != -1 || i < 0 {
+			return 0, false
+		}
+		owner = i
+	}
+	return owner, owner != -1
 }
 
 // stampLoadAssignment stamps the backend name, upstream host and priority of the owning backendRef
