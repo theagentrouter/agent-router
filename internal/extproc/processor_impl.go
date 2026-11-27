@@ -852,7 +852,7 @@ func buildContentLengthDynamicMetadataOnRequest(contentLength int) *structpb.Str
 					StructValue: &structpb.Struct{
 						Fields: map[string]*structpb.Value{
 							"content_length": {
-								Kind: &structpb.Value_NumberValue{NumberValue: float64(contentLength)},
+								Kind: &structpb.Value_StringValue{StringValue: strconv.Itoa(contentLength)},
 							},
 						},
 					},
