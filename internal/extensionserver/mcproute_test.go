@@ -385,7 +385,7 @@ func TestServer_maybeUpdateMCPRoutes(t *testing.T) {
 											KeepEmptyValue: true,
 											Header: &corev3.HeaderValue{
 												Key:   internalapi.MCPBackendSubsetHeader,
-												Value: `%DYNAMIC_METADATA(["aigateway.envoy.io", "mcp_backend_subset"])%`,
+												Value: `%DYNAMIC_METADATA(aigateway.envoy.io:mcp_backend_subset)%`,
 											},
 										},
 										{
@@ -393,7 +393,7 @@ func TestServer_maybeUpdateMCPRoutes(t *testing.T) {
 											KeepEmptyValue: true,
 											Header: &corev3.HeaderValue{
 												Key:   internalapi.MCPJWTClaimsHeader,
-												Value: `%DYNAMIC_METADATA(["envoy.filters.http.jwt_authn", "mcp-jwt-provider"])%`,
+												Value: `%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:mcp-jwt-provider)%`,
 											},
 										},
 									},

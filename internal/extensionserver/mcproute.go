@@ -241,12 +241,16 @@ func clusterTargetsMCPProxyBackend(c *clusterv3.Cluster) bool {
 //
 // When a metadata value is empty/absent, Envoy overwrites the header with an empty value so a
 // client-supplied value can never reach the proxy.
+//
+// The %DYNAMIC_METADATA(namespace:key)% formatter renders string values as is and structured
+// values (such as the JWT payload Struct) as JSON. The legacy JSON-array form
+// %DYNAMIC_METADATA(["namespace", "key"])% is obsolete in Envoy and must not be used.
 func mcpProxyDynamicMetadataHeaders() []*corev3.HeaderValueOption {
 	return []*corev3.HeaderValueOption{
 		dynamicMetadataHeader(internalapi.MCPBackendSubsetHeader,
-			fmt.Sprintf(`%%DYNAMIC_METADATA(["%s", "%s"])%%`, internalapi.InternalEndpointMetadataNamespace, internalapi.MCPBackendSubsetMetadataKey)),
+			fmt.Sprintf(`%%DYNAMIC_METADATA(%s:%s)%%`, internalapi.InternalEndpointMetadataNamespace, internalapi.MCPBackendSubsetMetadataKey)),
 		dynamicMetadataHeader(internalapi.MCPJWTClaimsHeader,
-			fmt.Sprintf(`%%DYNAMIC_METADATA(["%s", "%s"])%%`, internalapi.EnvoyJWTAuthnFilterMetadataNamespace, internalapi.MCPJWTProviderName)),
+			fmt.Sprintf(`%%DYNAMIC_METADATA(%s:%s)%%`, internalapi.EnvoyJWTAuthnFilterMetadataNamespace, internalapi.MCPJWTProviderName)),
 	}
 }
 
