@@ -625,6 +625,10 @@ type ruleBackendRefs struct {
 	// byBackend maps each Envoy Gateway Backend to the indices of the non-zero-weight backendRefs that
 	// Envoy Gateway translated for it (ambiguousBackendRef when one cannot be told).
 	byBackend map[client.ObjectKey][]int
+	// weights and priorities hold, for each backendRef of the generated HTTPRoute rule, the weight
+	// and priority Envoy Gateway sets on its locality.
+	weights    []int32
+	priorities []uint32
 }
 
 // backendRefKey identifies the object a backendRef points to, as it appears in the HTTPRoute.
@@ -680,6 +684,7 @@ func (s *Server) ruleBackendRefs(ctx context.Context, aigwRoute *aigv1b1.AIGatew
 
 	var emitted []backendRefKey
 	var weights []int32
+	var priorities []uint32
 	var fromHTTPRoute bool
 	var httpRoute gwapiv1.HTTPRoute
 	if err := s.k8sClient.Get(ctx, client.ObjectKeyFromObject(aigwRoute), &httpRoute); err != nil {
@@ -688,7 +693,8 @@ func (s *Server) ruleBackendRefs(ctx context.Context, aigwRoute *aigv1b1.AIGatew
 		}
 	} else if ruleIndex < len(httpRoute.Spec.Rules) {
 		fromHTTPRoute = true
-		for _, ref := range httpRoute.Spec.Rules[ruleIndex].BackendRefs {
+		for j := range httpRoute.Spec.Rules[ruleIndex].BackendRefs {
+			ref := &httpRoute.Spec.Rules[ruleIndex].BackendRefs[j]
 			emitted = append(emitted, backendRefKey{
 				kind: string(ptr.Deref(ref.Kind, "Service")),
 				key: client.ObjectKey{
@@ -697,6 +703,7 @@ func (s *Server) ruleBackendRefs(ctx context.Context, aigwRoute *aigv1b1.AIGatew
 				},
 			})
 			weights = append(weights, ptr.Deref(ref.Weight, 1))
+			priorities = append(priorities, controller.HTTPBackendRefPriority(ref))
 		}
 	}
 	if !fromHTTPRoute {
@@ -705,11 +712,17 @@ func (s *Server) ruleBackendRefs(ctx context.Context, aigwRoute *aigv1b1.AIGatew
 			if r != nil {
 				emitted = append(emitted, *r)
 				weights = append(weights, ptr.Deref(rule.BackendRefs[i].Weight, 1))
+				priorities = append(priorities, ptr.Deref(rule.BackendRefs[i].Priority, 0))
 			}
 		}
 	}
 
-	refs := &ruleBackendRefs{byHTTPRouteIndex: matchBackendRefs(resolved, emitted), byBackend: make(map[client.ObjectKey][]int)}
+	refs := &ruleBackendRefs{
+		byHTTPRouteIndex: matchBackendRefs(resolved, emitted),
+		byBackend:        make(map[client.ObjectKey][]int),
+		weights:          weights,
+		priorities:       priorities,
+	}
 	for m, i := range refs.byHTTPRouteIndex {
 		if weights[m] == 0 {
 			refs.byHTTPRouteIndex[m] = zeroWeightBackendRef
@@ -797,9 +810,16 @@ func localityHTTPRouteBackendIndex(locality *endpointv3.LocalityLbEndpoints) (in
 // built from the given Backend, belongs to.
 func (r *ruleBackendRefs) localityBackendRefIndex(locality *endpointv3.LocalityLbEndpoints, backend client.ObjectKey) (int, bool) {
 	if m, ok := localityHTTPRouteBackendIndex(locality); ok && m < len(r.byHTTPRouteIndex) {
-		// Region names the HTTPRoute backendRef of the HTTPRoute revision Envoy Gateway translated,
-		// which may differ from the one read here; only trust it when it agrees on the Backend.
-		if i := r.byHTTPRouteIndex[m]; i >= 0 && slices.Contains(r.byBackend[backend], i) {
+		// Region names the backendRef of the HTTPRoute revision Envoy Gateway translated, which may
+		// not be the one read here (e.g. backendRefs sharing a Backend were reordered or removed while
+		// a translation was in flight). Only trust it when the locality matches that backendRef on
+		// everything Envoy Gateway translates from it: its Backend, weight and priority. Backend
+		// endpoints are the same for every backendRef to the Backend, so when they all match, the
+		// locality is what the backendRef read here would translate to, whichever revision built it.
+		i := r.byHTTPRouteIndex[m]
+		if i >= 0 && slices.Contains(r.byBackend[backend], i) &&
+			int64(locality.GetLoadBalancingWeight().GetValue()) == int64(r.weights[m]) &&
+			locality.GetPriority() == r.priorities[m] {
 			return i, true
 		}
 	}

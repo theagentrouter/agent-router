@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -73,10 +74,13 @@ func egLocality(backendNamespace, backendName, zone, addr string, port uint32) *
 }
 
 // regionLocality returns a non-zonal locality as Envoy Gateway v1.8+ builds it for the HTTPRoute
-// backendRef at httpRouteBackendIndex: its Region names the backendRef.
-func regionLocality(rule string, httpRouteBackendIndex int, backendNamespace, backendName, addr string, port uint32) *endpointv3.LocalityLbEndpoints {
-	l := egLocality(backendNamespace, backendName, "", addr, port)
+// backendRef at httpRouteBackendIndex: its Region names the backendRef, and its weight and priority are
+// the backendRef's.
+func regionLocality(rule string, httpRouteBackendIndex int, backendNamespace, backendName string, weight, priority uint32) *endpointv3.LocalityLbEndpoints {
+	l := egLocality(backendNamespace, backendName, "", "10.0.0.1", 80)
 	l.Locality = &corev3.Locality{Region: fmt.Sprintf("%s/backend/%d", rule, httpRouteBackendIndex)}
+	l.LoadBalancingWeight = wrapperspb.UInt32(weight)
+	l.Priority = priority
 	return l
 }
 
@@ -408,8 +412,8 @@ func TestStampLoadAssignment_localityMetadata(t *testing.T) {
 		cla := &endpointv3.ClusterLoadAssignment{
 			ClusterName: rule,
 			Endpoints: []*endpointv3.LocalityLbEndpoints{
-				regionLocality(rule, 1, "ns", "backend-aaa", "10.0.0.1", 80),
-				regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80),
+				regionLocality(rule, 1, "ns", "backend-aaa", 1, 1),
+				regionLocality(rule, 0, "ns", "backend-aaa", 1, 0),
 			},
 		}
 		resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{LoadAssignment: cla})
@@ -423,14 +427,33 @@ func TestStampLoadAssignment_localityMetadata(t *testing.T) {
 		cluster := &clusterv3.Cluster{
 			Name: rule,
 			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
-				regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80),
-				regionLocality(rule, 1, "ns", "backend-aaa", "10.0.0.1", 80),
+				regionLocality(rule, 0, "ns", "backend-aaa", 1, 0),
+				regionLocality(rule, 1, "ns", "backend-aaa", 1, 1),
 			}},
 		}
 		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
 		eps = cluster.LoadAssignment.Endpoints
 		require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", "aaa-scale", "myroute", 2, 1), endpointBackendName(eps[0].LbEndpoints[0]))
 		require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", "aaa-default", "myroute", 2, 2), endpointBackendName(eps[1].LbEndpoints[0]))
+	})
+
+	t.Run("backendRefs sharing a Backend reordered while a translation was in flight", func(t *testing.T) {
+		const rule = "httproute/ns/myroute/rule/2"
+		// Translated from a revision that listed aaa-default (priority 1) before aaa-scale (priority
+		// 0); the current one lists aaa-scale first. The Region indices are stale, which the
+		// priorities reveal.
+		cla := &endpointv3.ClusterLoadAssignment{
+			ClusterName: rule,
+			Endpoints: []*endpointv3.LocalityLbEndpoints{
+				regionLocality(rule, 0, "ns", "backend-aaa", 1, 1),
+				regionLocality(rule, 1, "ns", "backend-aaa", 1, 0),
+			},
+		}
+		resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{LoadAssignment: cla})
+		require.NoError(t, err)
+		for _, l := range resp.GetLoadAssignment().Endpoints {
+			require.Empty(t, endpointBackendName(l.LbEndpoints[0]))
+		}
 	})
 
 	t.Run("backendRefs sharing a Backend that cannot be told apart are left unstamped", func(t *testing.T) {
@@ -450,7 +473,7 @@ func TestStampLoadAssignment_localityMetadata(t *testing.T) {
 				expected: []string{"", ""},
 			},
 			"malformed region": {
-				endpoints: []*endpointv3.LocalityLbEndpoints{regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80), malformed},
+				endpoints: []*endpointv3.LocalityLbEndpoints{regionLocality(rule, 0, "ns", "backend-aaa", 1, 0), malformed},
 				expected:  []string{internalapi.PerRouteRuleRefBackendName("ns", "aaa-scale", "myroute", 2, 1), ""},
 			},
 		} {
@@ -599,7 +622,7 @@ func TestStampLoadAssignment_rejectedCrossNamespaceBackendRef(t *testing.T) {
 		resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{
 			LoadAssignment: &endpointv3.ClusterLoadAssignment{
 				ClusterName: rule,
-				Endpoints:   []*endpointv3.LocalityLbEndpoints{regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80)},
+				Endpoints:   []*endpointv3.LocalityLbEndpoints{regionLocality(rule, 0, "ns", "backend-aaa", 1, 0)},
 			},
 		})
 		require.NoError(t, err)
@@ -645,4 +668,65 @@ func TestStampLoadAssignment_rejectedCrossNamespaceBackendRef(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, endpointBackendName(resp.GetLoadAssignment().Endpoints[0].LbEndpoints[0]))
 	})
+}
+
+// TestStampLoadAssignment_httpRoutePriorityFilters checks that the priority a locality is checked
+// against comes from the backendPriority HTTPRouteFilters of the generated HTTPRoute.
+func TestStampLoadAssignment_httpRoutePriorityFilters(t *testing.T) {
+	c := newFakeClient()
+	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "ns"},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+			{Name: "aaa-scale", Weight: ptr.To[int32](3)},
+			{Name: "aaa-default", Priority: ptr.To[uint32](2)},
+		}}}},
+	}))
+	createAIServiceBackend(t, c, "ns", "aaa-scale", "backend-aaa")
+	createAIServiceBackend(t, c, "ns", "aaa-default", "backend-aaa")
+	backendRef := func(weight *int32, filters ...gwapiv1.HTTPRouteFilter) gwapiv1.HTTPBackendRef {
+		return gwapiv1.HTTPBackendRef{
+			BackendRef: gwapiv1.BackendRef{
+				BackendObjectReference: gwapiv1.BackendObjectReference{
+					Name:  "backend-aaa",
+					Kind:  ptr.To[gwapiv1.Kind]("Backend"),
+					Group: ptr.To[gwapiv1.Group]("gateway.envoyproxy.io"),
+				},
+				Weight: weight,
+			},
+			Filters: filters,
+		}
+	}
+	require.NoError(t, c.Create(t.Context(), &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "ns"},
+		Spec: gwapiv1.HTTPRouteSpec{Rules: []gwapiv1.HTTPRouteRule{{BackendRefs: []gwapiv1.HTTPBackendRef{
+			backendRef(ptr.To[int32](3)),
+			backendRef(nil, gwapiv1.HTTPRouteFilter{
+				Type: gwapiv1.HTTPRouteFilterExtensionRef,
+				ExtensionRef: &gwapiv1.LocalObjectReference{
+					Group: "gateway.envoyproxy.io", Kind: "HTTPRouteFilter", Name: "ai-eg-backend-priority-2",
+				},
+			}),
+		}}}},
+	}))
+	s := newTestEndpointsServer(t, c)
+	const rule = "httproute/ns/myroute/rule/0"
+
+	for name, tc := range map[string]struct {
+		locality *endpointv3.LocalityLbEndpoints
+		expected string
+	}{
+		"scale":                  {regionLocality(rule, 0, "ns", "backend-aaa", 3, 0), internalapi.PerRouteRuleRefBackendName("ns", "aaa-scale", "myroute", 0, 0)},
+		"default":                {regionLocality(rule, 1, "ns", "backend-aaa", 1, 2), internalapi.PerRouteRuleRefBackendName("ns", "aaa-default", "myroute", 0, 1)},
+		"stale weight":           {regionLocality(rule, 0, "ns", "backend-aaa", 1, 0), ""},
+		"stale priority":         {regionLocality(rule, 1, "ns", "backend-aaa", 1, 0), ""},
+		"stale index past range": {regionLocality(rule, 2, "ns", "backend-aaa", 1, 0), ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{
+				LoadAssignment: &endpointv3.ClusterLoadAssignment{ClusterName: rule, Endpoints: []*endpointv3.LocalityLbEndpoints{tc.locality}},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, endpointBackendName(resp.GetLoadAssignment().Endpoints[0].LbEndpoints[0]))
+		})
+	}
 }
