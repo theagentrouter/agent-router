@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/envoyproxy/ai-gateway/internal/controller"
@@ -147,7 +148,7 @@ func TestUpgrade(t *testing.T) {
 			ipAddress := e2elib.RequireGatewayListenerAddressViaMetalLB(t, "default", "upgrade-test")
 
 			// Ensure that first request works.
-			require.NoError(t, makeRequest(t, ipAddress, phase.String()))
+			requireGatewayServing(t, ipAddress, phase.String())
 
 			requestLoopCtx, cancelRequests := context.WithCancel(t.Context())
 			defer cancelRequests()
@@ -239,6 +240,15 @@ func (p *phase) String() string {
 	defer p.currentPodsMu.RUnlock()
 	currentPods := p.currentPods
 	return fmt.Sprintf("%s (requests made: %d, current pods: %s)", phase, p.requestCounts.Load(), currentPods)
+}
+
+// requireGatewayServing retries makeRequest until the gateway serves a successful response. The Envoy pods
+// report Ready before the route and the extproc filter config are fully programmed, so the first requests
+// after applying the manifest can return 404 or 500.
+func requireGatewayServing(t *testing.T, ipAddress string, phase string) {
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.NoError(c, makeRequest(t, ipAddress, phase))
+	}, 2*time.Minute, time.Second)
 }
 
 // makeRequest makes a single request to the given IP address and returns an error if the request fails.
@@ -498,7 +508,7 @@ func TestCRDVersionUpgrade(t *testing.T) {
 
 	// Step 3: Verify inference calls work with v1alpha1
 	t.Log("Step 3: Verifying inference calls work with v1alpha1 resources")
-	require.NoError(t, makeRequest(t, ipAddress, "before upgrade"))
+	requireGatewayServing(t, ipAddress, "before upgrade")
 	t.Log("Inference calls successful with v1alpha1")
 
 	// Step 4: Upgrade to latest version (with v1beta1 CRDs)
