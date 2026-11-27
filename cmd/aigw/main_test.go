@@ -31,6 +31,7 @@ func Test_doMain(t *testing.T) {
 		rf           runFn
 		hf           healthcheckFn
 		df           downloadEnvoyFn
+		vf           validateFn
 		expOut       string
 		expPanicCode *int
 	}{
@@ -64,6 +65,9 @@ Commands:
 
   download-envoy [flags]
     Download Envoy binary for the Envoy Gateway default version.
+
+  validate [<paths> ...] [flags]
+    Validate AI Gateway config YAML file(s) against the CRD schemas.
 
 Run "aigw <command> --help" for more information on a command.
 `,
@@ -203,10 +207,10 @@ Flags:
 			out := &bytes.Buffer{}
 			if tt.expPanicCode != nil {
 				require.PanicsWithValue(t, *tt.expPanicCode, func() {
-					doMain(t.Context(), out, os.Stderr, tt.args, func(code int) { panic(code) }, tt.rf, tt.hf, tt.df)
+					doMain(t.Context(), out, os.Stderr, tt.args, func(code int) { panic(code) }, tt.rf, tt.hf, tt.df, tt.vf)
 				})
 			} else {
-				doMain(t.Context(), out, os.Stderr, tt.args, nil, tt.rf, tt.hf, tt.df)
+				doMain(t.Context(), out, os.Stderr, tt.args, nil, tt.rf, tt.hf, tt.df, tt.vf)
 			}
 			fmt.Println(out.String())
 			require.Equal(t, tt.expOut, out.String())
