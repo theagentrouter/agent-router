@@ -1468,6 +1468,15 @@ func Test_maybeResponseModify(t *testing.T) {
 		require.Contains(t, string(msg.Result), `"ttlMs":5000`)
 		require.Contains(t, string(msg.Result), `"cacheScope":"public"`)
 	})
+
+	t.Run("prompts/get rewrites resource link and embedded resource URIs", func(t *testing.T) {
+		msg := &jsonrpc.Response{Result: []byte(`{"messages":[{"role":"user","content":{"type":"resource_link","uri":"file:///data"}},{"role":"assistant","content":{"type":"resource","resource":{"uri":"ui://prefab/embed.html"}}}],"_meta":{"ui":{"resourceUri":"ui://app/view"}}}`)}
+		require.NoError(t, m.maybeResponseModify(ctx, &jsonrpc.Request{Method: "prompts/get"}, msg, backend))
+		body := string(msg.Result)
+		require.Contains(t, body, `"uri":"backend1+file:///data"`)
+		require.Contains(t, body, `"uri":"ui://backend1/prefab/embed.html"`)
+		require.Contains(t, body, `"resourceUri":"ui://backend1/app/view"`)
+	})
 }
 
 func TestExtractSubject(t *testing.T) {
@@ -2338,6 +2347,9 @@ func Test_parseParamsAndMaybeStartSpan(t *testing.T) {
 	require.NotNil(t, s)
 	// Make sure that traceparent is not empty, that's span started.
 	require.NotEmpty(t, p.GetMeta()["traceparent"])
+	// Injected _meta must be written back onto req.Params so modern handlers
+	// that re-marshal from the request forward the gateway's trace context.
+	require.Contains(t, string(req.Params), "traceparent")
 }
 
 func Test_parseParamsAndMaybeStartSpan_NilParam(t *testing.T) {
@@ -2410,6 +2422,11 @@ func Test_errorType(t *testing.T) {
 		{
 			name:     "invalid prompt name error",
 			err:      errInvalidPromptName,
+			expected: metrics.MCPErrorInvalidParam,
+		},
+		{
+			name:     "invalid resource URI error",
+			err:      errInvalidResourceURI,
 			expected: metrics.MCPErrorInvalidParam,
 		},
 		{
@@ -2802,7 +2819,9 @@ func TestHandlePromptGetRequest_PromptSelector(t *testing.T) {
 			_, err := proxy.handlePromptGetRequest(t.Context(), s, rr, &jsonrpc.Request{}, &mcp.GetPromptParams{Name: name})
 			require.ErrorIs(t, err, errInvalidPromptName)
 			require.Equal(t, http.StatusBadRequest, rr.Code)
+			require.Equal(t, "text/plain; charset=utf-8", rr.Header().Get("Content-Type"))
 			require.Contains(t, rr.Body.String(), "invalid prompt name")
+			require.NotContains(t, rr.Body.String(), "jsonrpc")
 		})
 	}
 	require.Zero(t, hits.Load(), "excluded prompts must not be forwarded to the backend")
@@ -2848,6 +2867,9 @@ func TestMCPProxy_handleCompletionComplete_PromptSelector(t *testing.T) {
 	}, nil)
 	require.ErrorIs(t, err, errInvalidPromptName)
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, "text/plain; charset=utf-8", rr.Header().Get("Content-Type"))
+	require.Contains(t, rr.Body.String(), "invalid prompt name")
+	require.NotContains(t, rr.Body.String(), "jsonrpc")
 	require.Zero(t, hits.Load(), "excluded prompts must not be forwarded to the backend")
 
 	rr = httptest.NewRecorder()

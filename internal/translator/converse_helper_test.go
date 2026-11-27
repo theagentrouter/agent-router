@@ -118,6 +118,26 @@ func TestOpenAIToolsToBedrockToolConfig(t *testing.T) {
 			},
 		},
 		{
+			name:  "tool_choice none does not force a tool named none on anthropic claude models",
+			tools: []openai.Tool{weatherTool},
+			toolChoice: &openai.ChatCompletionToolChoiceUnion{
+				Value: "none",
+			},
+			model: "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+			expected: &awsbedrock.ToolConfiguration{
+				Tools: []*awsbedrock.Tool{
+					{
+						ToolSpec: &awsbedrock.ToolSpecification{
+							Name:        ptr.To("get_current_weather"),
+							Description: ptr.To("Get the current weather in a given location"),
+							InputSchema: &awsbedrock.ToolInputSchema{JSON: map[string]any{"type": "object"}},
+						},
+					},
+				},
+				ToolChoice: nil,
+			},
+		},
+		{
 			name:  "named tool_choice string applies for anthropic claude models",
 			tools: []openai.Tool{weatherTool},
 			toolChoice: &openai.ChatCompletionToolChoiceUnion{

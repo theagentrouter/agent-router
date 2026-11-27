@@ -13,6 +13,8 @@ import (
 	"mime"
 	"net/url"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -644,14 +646,34 @@ func openAIToolChoiceToGeminiToolConfig(toolChoice *openai.ChatCompletionToolCho
 // Check and Update these functions when new Gemini model versions are released
 // and their feature support changes.
 
+// geminiVersionPattern captures the major version that follows "gemini-" in a model name,
+// e.g. 3 in "gemini-3.1-pro-preview" and 4 in "publishers/google/models/gemini-4-neon".
+var geminiVersionPattern = regexp.MustCompile(`gemini-(\d+)`)
+
+// geminiMajorVersion returns the major version of a Gemini model name, or 0 when the name has no
+// "gemini-<number>" part (e.g. "gemini-pro", "gemini-embedding-001").
+func geminiMajorVersion(requestModel internalapi.RequestModel) int {
+	m := geminiVersionPattern.FindStringSubmatch(strings.ToLower(requestModel))
+	if m == nil {
+		return 0
+	}
+	v, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
 // mediaResolutionAvailable checks if the model supports media resolution settings.
-// Only Gemini 3.0+ models support this feature for controlling image/video quality.
+// Gemini 3 and later models support this feature for controlling image/video quality.
+// https://ai.google.dev/gemini-api/docs/media-resolution
 func mediaResolutionAvailable(requestModel internalapi.RequestModel) bool {
 	return isGemini3OrNewer(requestModel)
 }
 
 // reasoningEffortAvailable checks if the model supports reasoning effort.
-// Only Gemini 3.0+ models support this feature for controlling reasoning depth.
+// Gemini 3 and later models support this feature (as thinking_level) for controlling reasoning depth.
+// https://ai.google.dev/gemini-api/docs/thinking#thinking-levels
 func reasoningEffortAvailable(requestModel internalapi.RequestModel) bool {
 	return isGemini3OrNewer(requestModel)
 }
