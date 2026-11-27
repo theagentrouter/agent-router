@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"testing"
 
+	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	egextension "github.com/envoyproxy/gateway/proto/extension"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -224,6 +225,9 @@ func TestPostEndpointsModify(t *testing.T) {
 			}},
 		}},
 	}))
+	for _, name := range []string{"aaa", "disabled", "bbb"} {
+		createAIServiceBackend(t, c, "ns", name, name)
+	}
 	s := newTestEndpointsServer(t, c)
 
 	t.Run("nil load assignment", func(t *testing.T) {
@@ -770,4 +774,98 @@ func TestStampLoadAssignment_httpRoutePriorityFilters(t *testing.T) {
 			require.Equal(t, tc.expected, endpointBackendName(resp.GetLoadAssignment().Endpoints[0].LbEndpoints[0]))
 		})
 	}
+}
+
+// TestStampLoadAssignment_fallbackBackend checks that a backendRef without a priority is expected to
+// have the priority Envoy Gateway derives from its Backend's fallback setting.
+func TestStampLoadAssignment_fallbackBackend(t *testing.T) {
+	c := newFakeClient()
+	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "ns"},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+			{Name: "aaa-scale", Weight: ptr.To[int32](3)},
+			{Name: "aaa-default"},
+		}}}},
+	}))
+	createAIServiceBackend(t, c, "ns", "aaa-scale", "backend-aaa")
+	createAIServiceBackend(t, c, "ns", "aaa-default", "backend-aaa")
+	createHTTPRoute(t, c, "ns", "myroute", []string{"backend-aaa", "backend-aaa"})
+	require.NoError(t, c.Create(t.Context(), &egv1a1.Backend{
+		ObjectMeta: metav1.ObjectMeta{Name: "backend-aaa", Namespace: "ns"},
+		Spec:       egv1a1.BackendSpec{Fallback: ptr.To(true)},
+	}))
+	s := newTestEndpointsServer(t, c)
+	const rule = "httproute/ns/myroute/rule/0"
+	// createHTTPRoute sets no weights, so both HTTPRoute backendRefs have weight 1.
+	for name, tc := range map[string]struct {
+		locality *endpointv3.LocalityLbEndpoints
+		expected string
+	}{
+		"region":            {regionLocality(rule, 1, "ns", "backend-aaa", 1, 1), internalapi.PerRouteRuleRefBackendName("ns", "aaa-default", "myroute", 0, 1)},
+		"region priority 0": {regionLocality(rule, 1, "ns", "backend-aaa", 1, 0), ""},
+		"zonal":             {zonalLocality("backend-aaa", "zone-a", 1), ""}, // both aliases have priority 1
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{
+				LoadAssignment: &endpointv3.ClusterLoadAssignment{ClusterName: rule, Endpoints: []*endpointv3.LocalityLbEndpoints{tc.locality}},
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, endpointBackendName(resp.GetLoadAssignment().Endpoints[0].LbEndpoints[0]))
+		})
+	}
+
+	t.Run("Backend get error", func(t *testing.T) {
+		failing := newTestEndpointsServer(t, interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*egv1a1.Backend); ok {
+					return errors.New("boom")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}))
+		_, err := failing.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{ClusterName: rule, Endpoints: []*endpointv3.LocalityLbEndpoints{regionLocality(rule, 0, "ns", "backend-aaa", 1, 1)}},
+		})
+		require.ErrorContains(t, err, "boom")
+	})
+}
+
+// TestStampLoadAssignment_perBackendCluster checks that the backend index of a per-backend cluster
+// name, an HTTPRoute backendRef index, is mapped to the AIGatewayRoute backendRef and checked against
+// the cluster's localities.
+func TestStampLoadAssignment_perBackendCluster(t *testing.T) {
+	c := newFakeClient()
+	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "ns"},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+			{Name: "missing"}, // left out of the HTTPRoute
+			{Name: "aaa"},
+			{Name: "bbb"},
+		}}}},
+	}))
+	createAIServiceBackend(t, c, "ns", "aaa", "backend-aaa")
+	createAIServiceBackend(t, c, "ns", "bbb", "backend-bbb")
+	createHTTPRoute(t, c, "ns", "myroute", []string{"backend-aaa", "backend-bbb"})
+	s := newTestEndpointsServer(t, c)
+	stamped := func(t *testing.T, cluster string, l *endpointv3.LocalityLbEndpoints) string {
+		resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{ClusterName: cluster, Endpoints: []*endpointv3.LocalityLbEndpoints{l}},
+		})
+		require.NoError(t, err)
+		return endpointBackendName(resp.GetLoadAssignment().Endpoints[0].LbEndpoints[0])
+	}
+
+	// HTTPRoute backendRef 1 is AIGatewayRoute backendRef 2.
+	require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", "bbb", "myroute", 0, 2),
+		stamped(t, "httproute/ns/myroute/rule/0/backend/1", egLocality("ns", "backend-bbb", "", "10.0.0.1", 80)))
+	// Translated from a revision where backendRef 1 was backend-aaa.
+	require.Empty(t, stamped(t, "httproute/ns/myroute/rule/0/backend/1", egLocality("ns", "backend-aaa", "", "10.0.0.1", 80)))
+	// No HTTPRoute backendRef 2.
+	require.Empty(t, stamped(t, "httproute/ns/myroute/rule/0/backend/2", egLocality("ns", "backend-bbb", "", "10.0.0.1", 80)))
+
+	t.Run("nil LoadAssignment", func(t *testing.T) {
+		cluster := &clusterv3.Cluster{Name: "httproute/ns/myroute/rule/0/backend/0"}
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
+		require.Equal(t, internalapi.PerRouteRuleRefBackendName("ns", "aaa", "myroute", 0, 1), clusterBackendName(cluster))
+	})
 }

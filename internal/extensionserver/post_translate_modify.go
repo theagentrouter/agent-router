@@ -589,7 +589,8 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 // not available, the backendRefs the controller would keep are assumed (see ruleBackendRefs).
 func (s *Server) singleClusterBackendRefIndex(ctx context.Context, aigwRoute *aigv1b1.AIGatewayRoute, ruleIndex, backendRefIndex int) (int, bool, error) {
 	if backendRefIndex != noBackendRefIndex {
-		return backendRefIndex, true, nil
+		i, _, ok, err := s.perBackendClusterRefIndex(ctx, aigwRoute, ruleIndex, backendRefIndex)
+		return i, ok, err
 	}
 	refs, err := s.ruleBackendRefs(ctx, aigwRoute, ruleIndex)
 	if err != nil {
@@ -726,17 +727,62 @@ func (s *Server) ruleBackendRefs(ctx context.Context, aigwRoute *aigv1b1.AIGatew
 		weights:          weights,
 		priorities:       priorities,
 	}
+	fallback := make(map[client.ObjectKey]bool)
 	for m, i := range refs.byHTTPRouteIndex {
 		if weights[m] == 0 {
 			refs.byHTTPRouteIndex[m] = zeroWeightBackendRef
 			continue
 		}
-		if emitted[m].kind == "Backend" {
-			refs.backends[m] = emitted[m].key
-			refs.byBackend[emitted[m].key] = append(refs.byBackend[emitted[m].key], i)
+		if emitted[m].kind != "Backend" {
+			continue
+		}
+		refs.backends[m] = emitted[m].key
+		refs.byBackend[emitted[m].key] = append(refs.byBackend[emitted[m].key], i)
+		// Without a backendPriority (priority 0 gets no filter), Envoy Gateway derives the priority
+		// from the Backend's fallback setting.
+		if priorities[m] == 0 {
+			isFallback, ok := fallback[emitted[m].key]
+			if !ok {
+				var err error
+				if isFallback, err = s.isFallbackBackend(ctx, emitted[m].key); err != nil {
+					return nil, err
+				}
+				fallback[emitted[m].key] = isFallback
+			}
+			if isFallback {
+				refs.priorities[m] = 1
+			}
 		}
 	}
 	return refs, nil
+}
+
+// isFallbackBackend reports whether the given Envoy Gateway Backend has its fallback setting, which
+// makes Envoy Gateway give its endpoints priority 1 unless a backendPriority overrides it.
+func (s *Server) isFallbackBackend(ctx context.Context, key client.ObjectKey) (bool, error) {
+	var backend egv1a1.Backend
+	if err := s.k8sClient.Get(ctx, key, &backend); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get Backend %s: %w", key, err)
+	}
+	return ptr.Deref(backend.Spec.Fallback, false), nil
+}
+
+// perBackendClusterRefIndex returns the index of the AIGatewayRoute backendRef of a per-backend
+// cluster ("httproute/<ns>/<name>/rule/<N>/backend/<M>"). M is the index of the backendRef in the
+// generated HTTPRoute, which differs from the AIGatewayRoute one when the controller left backendRefs
+// out of it, so it is mapped through ruleBackendRefs.
+func (s *Server) perBackendClusterRefIndex(ctx context.Context, aigwRoute *aigv1b1.AIGatewayRoute, ruleIndex, httpRouteIndex int) (int, *ruleBackendRefs, bool, error) {
+	refs, err := s.ruleBackendRefs(ctx, aigwRoute, ruleIndex)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	if httpRouteIndex >= len(refs.byHTTPRouteIndex) || refs.byHTTPRouteIndex[httpRouteIndex] < 0 {
+		return 0, nil, false, nil
+	}
+	return refs.byHTTPRouteIndex[httpRouteIndex], refs, true, nil
 }
 
 // matchBackendRefs returns, for each emitted backendRef, the index of the resolved backendRef it
@@ -876,8 +922,27 @@ func (s *Server) stampLoadAssignment(ctx context.Context, clusterName string, cl
 		}
 	}
 	if backendRefIndex != noBackendRefIndex {
+		// backendRefIndex is the HTTPRoute backendRef index from the cluster name. The cluster was
+		// translated from an HTTPRoute revision that may not be the one read here (e.g. backendRefs
+		// were reordered while a translation was in flight), so, as for shared clusters, only stamp
+		// localities that match the backendRef on its Backend and priority.
+		i, refs, ok, err := s.perBackendClusterRefIndex(ctx, aigwRoute, ruleIndex, backendRefIndex)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			s.log.Info("cannot tell which backendRef a per-backend cluster belongs to; not setting its backend metadata",
+				"cluster_name", clusterName, "backend_index", backendRefIndex)
+			return nil
+		}
 		for _, endpoints := range cla.Endpoints {
-			stamp(endpoints, backendRefIndex)
+			backend, hasBackend := localityBackend(endpoints)
+			if (hasBackend && backend != refs.backends[backendRefIndex]) || endpoints.GetPriority() != refs.priorities[backendRefIndex] {
+				s.log.Info("cluster locality does not match the backendRef of its per-backend cluster; not setting its backend metadata",
+					"cluster_name", clusterName, "backend", backend.String(), "priority", endpoints.GetPriority())
+				continue
+			}
+			stamp(endpoints, i)
 		}
 		return nil
 	}

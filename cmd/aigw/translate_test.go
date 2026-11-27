@@ -105,7 +105,7 @@ spec:
 		{"A+A", a + "---\n" + a, []string{"team-a/mcp-route"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, routes, _, _, _, _, _, _, _, err := collectObjects(tc.input, io.Discard, slog.New(slog.DiscardHandler))
+			_, routes, _, _, _, _, _, _, _, _, err := collectObjects(tc.input, io.Discard, slog.New(slog.DiscardHandler))
 			require.NoError(t, err)
 			var got []string
 			for _, route := range routes {

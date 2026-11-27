@@ -716,6 +716,17 @@ func TestMaybeModifyClusterPerBackendClusterName(t *testing.T) {
 				},
 			}}},
 		}))
+		for _, name := range []string{"primary", "fallback"} {
+			require.NoError(t, c.Create(t.Context(), &aigv1b1.AIServiceBackend{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+				Spec: aigv1b1.AIServiceBackendSpec{BackendRef: gwapiv1.BackendObjectReference{
+					Name: gwapiv1.ObjectName(name), Kind: ptr.To[gwapiv1.Kind]("Backend"), Group: ptr.To[gwapiv1.Group]("gateway.envoyproxy.io"),
+				}},
+			}))
+		}
+		// An HTTPRoute generated before the backendPriority filters: Envoy Gateway leaves priority 0
+		// and the legacy rewrite applies the AIGatewayRoute priority.
+		createHTTPRoute(t, c, "ns", "myroute", []string{"primary", "fallback"})
 		s, err := New(c, logr.Discard(), udsPath, false, nil, nil, "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
 		require.NoError(t, err)
 		return s
