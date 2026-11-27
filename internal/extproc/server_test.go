@@ -919,15 +919,20 @@ func TestServer_processMsg_RedactsCredentialMutation(t *testing.T) {
 		return m, nil
 	})
 
-	hm := &corev3.HeaderMap{Headers: []*corev3.HeaderValue{{Key: "foo", Value: "bar"}}}
+	hm := &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
+		{Key: "x-goog-api-key", Value: "secret-client-key"},
+		{Key: ":path", RawValue: []byte("/gemini/v1beta/models/gemini:generateContent?key=secret-query-key")},
+	}}
 	expResponse := &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_RequestHeaders{
 			RequestHeaders: &extprocv3.HeadersResponse{
 				Response: &extprocv3.CommonResponse{
 					HeaderMutation: &extprocv3.HeaderMutation{
-						SetHeaders: []*corev3.HeaderValueOption{{
-							Header: &corev3.HeaderValue{Key: "Authorization", RawValue: []byte("Bearer secret-backend-key")},
-						}},
+						SetHeaders: []*corev3.HeaderValueOption{
+							{Header: &corev3.HeaderValue{Key: "Authorization", RawValue: []byte("Bearer secret-backend-key")}},
+							{Header: &corev3.HeaderValue{Key: "x-goog-api-key", RawValue: []byte("secret-google-key")}},
+							{Header: &corev3.HeaderValue{Key: internalapi.OriginalPathHeader, RawValue: []byte("/gemini/v1beta/models/gemini:generateContent?key=secret-retry-key")}},
+						},
 					},
 				},
 			},
@@ -952,6 +957,26 @@ func TestServer_processMsg_RedactsCredentialMutation(t *testing.T) {
 	// But the debug log must not leak the credential.
 	require.Contains(t, buf.String(), "[REDACTED]")
 	require.NotContains(t, buf.String(), "secret-backend-key")
+	require.NotContains(t, buf.String(), "secret-google-key")
+	require.NotContains(t, buf.String(), "secret-client-key")
+	require.NotContains(t, buf.String(), "secret-query-key")
+	require.NotContains(t, buf.String(), "secret-retry-key")
+}
+
+func TestGoogleAPIKeyExcludedFromAccessLogMetadata(t *testing.T) {
+	original := LogRequestHeaderAttributes
+	t.Cleanup(func() { LogRequestHeaderAttributes = original })
+	LogRequestHeaderAttributes = map[string]string{
+		internalapi.GoogleAPIKeyHeader: "provider.credential",
+		"x-tenant-id":                  "tenant.id",
+	}
+	metadata := buildRequestHeaderDynamicMetadata(map[string]string{
+		internalapi.GoogleAPIKeyHeader: "test-credential",
+		"x-tenant-id":                  "example-tenant",
+	})
+	fields := metadata.GetFields()[internalapi.AIGatewayFilterMetadataNamespace].GetStructValue().GetFields()
+	require.Len(t, fields, 1)
+	require.Equal(t, "example-tenant", fields["tenant.id"].GetStringValue())
 }
 
 func Test_redactImmediateResponse(t *testing.T) {

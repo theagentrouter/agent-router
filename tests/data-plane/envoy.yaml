@@ -299,6 +299,22 @@ static_resources:
                           route:
                             cluster: testupstream-modelname-override-and-fallback
                         - match:
+                            path_separated_prefix: "/gemini/v1beta/models"
+                            headers:
+                              - name: x-ai-eg-model
+                                string_match:
+                                  exact: native-gemini
+                          route:
+                            cluster: testupstream-modelname-override-and-fallback
+                        - match:
+                            prefix: "/"
+                            headers:
+                              - name: x-ai-eg-model
+                                string_match:
+                                  exact: native-gemini
+                          route:
+                            cluster: testupstream-modelname-override
+                        - match:
                             prefix: "/"
                             headers:
                               - name: x-test-backend

@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -59,12 +61,14 @@ var LogRequestHeaderAttributes map[string]string
 func NewFactory[ReqT any, RespT any, RespChunkT any, EndpointSpecT endpointspec.Spec[ReqT, RespT, RespChunkT]](
 	f metrics.Factory,
 	tracer tracingapi.RequestTracer[ReqT, RespT, RespChunkT],
-	_ EndpointSpecT, // This is a type marker to bind EndpointSpecT without specifying ReqT, RespT, RespChunkT explicitly.
+	spec EndpointSpecT,
 ) ProcessorFactory {
 	return func(config *filterapi.RuntimeConfig, requestHeaders map[string]string, logger *slog.Logger, isUpstreamFilter bool, enableRedaction bool) (Processor, error) {
 		logger = logger.With("isUpstreamFilter", fmt.Sprintf("%v", isUpstreamFilter))
 		if !isUpstreamFilter {
-			return newRouterProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](config, requestHeaders, logger, tracer, enableRedaction), nil
+			p := newRouterProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](config, requestHeaders, logger, tracer, enableRedaction)
+			p.eh = spec
+			return p, nil
 		}
 		return newUpstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT](requestHeaders, f.NewMetrics(), logger), nil
 	}
@@ -122,6 +126,7 @@ type (
 		compressedBuf            []byte // accumulates raw compressed bytes across streaming chunks
 		decompressedOffset       int    // tracks decompressed bytes already returned
 		responseStreamTerminated bool   // a terminal SSE error was returned; discard any later upstream chunks
+		responseStreamFailed     bool   // a native error was recorded; continue forwarding provider bytes
 		translator               translator.Translator[ReqT, tracingapi.Span[RespT, RespChunkT]]
 		modelNameOverride        internalapi.ModelNameOverride
 		headerMutator            *headermutator.HeaderMutator
@@ -130,6 +135,7 @@ type (
 		aiServiceBackendName     string
 		routeName                string
 		handler                  filterapi.BackendAuthHandler
+		retryCredentialHeader    string
 		// unsupportedBackendErr is set by SetBackend and answered as a 422 in ProcessRequestHeaders.
 		unsupportedBackendErr error
 		// cost is the cost of the request that is accumulated during the processing of the response.
@@ -398,6 +404,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	}
 
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
+	if remover, ok := u.translator.(translator.RequestHeadersRemover); ok {
+		headerMutation.RemoveHeaders = append(headerMutation.RemoveHeaders, remover.RemovedRequestHeaders()...)
+	}
 
 	// Apply header mutations from the route and also restore original headers on retry.
 	if h := u.headerMutator; h != nil {
@@ -443,8 +452,18 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessReque
 	headerMutation.RemoveHeaders = append(headerMutation.RemoveHeaders, internalapi.UpstreamHostHeader)
 
 	if h := u.handler; h != nil {
+		authHeaders := u.requestHeaders
+		if name := u.retryCredentialHeader; u.onRetry() && name != "" {
+			// Restore the original credential source only for authentication.
+			authHeaders = maps.Clone(authHeaders)
+			if value, ok := u.parent.requestHeaders[name]; ok {
+				authHeaders[name] = value
+			} else {
+				delete(authHeaders, name)
+			}
+		}
 		var hdrs []internalapi.Header
-		hdrs, err = h.Do(ctx, u.requestHeaders, bodyMutation.GetBody())
+		hdrs, err = h.Do(ctx, authHeaders, bodyMutation.GetBody())
 		if err != nil {
 			if errors.Is(err, backendauth.ErrCredentialMissing) {
 				return u.respondLocally(ctx, 401, "Unauthorized", "missing upstream credential"), nil
@@ -528,6 +547,7 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 	u.compressedBuf = nil
 	u.decompressedOffset = 0
 	u.responseStreamTerminated = false
+	u.responseStreamFailed = false
 	newHeaders, err := u.translator.ResponseHeaders(u.responseHeaders)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transform response headers: %w", err)
@@ -580,6 +600,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 
 	recordRequestCompletionErr := false
 	defer func() {
+		if u.responseStreamFailed && !recordRequestCompletionErr {
+			return
+		}
 		if err != nil || recordRequestCompletionErr {
 			u.metrics.RecordRequestCompletion(ctx, false, u.requestHeaders)
 			return
@@ -636,8 +659,20 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 
 	newHeaders, newBody, tokenUsage, responseModel, err := u.translator.ResponseBody(u.responseHeaders, decodingResult.reader, body.EndOfStream, u.parent.span)
 	if err != nil {
+		var nativeErr *translator.StreamResponseError
 		var streamErr *translator.StreamOverloadedError
-		if u.parent.stream && errors.As(err, &streamErr) && len(newBody) > 0 {
+		switch {
+		case u.parent.stream && errors.As(err, &nativeErr):
+			if !u.responseStreamFailed {
+				u.responseStreamFailed = true
+				recordRequestCompletionErr = true
+				if u.parent.span != nil {
+					u.parent.span.EndSpanOnError(nativeErr.StatusCode, nativeErr.Body)
+					u.parent.span = nil
+				}
+			}
+			err = nil
+		case u.parent.stream && errors.As(err, &streamErr) && len(newBody) > 0:
 			if u.logger != nil {
 				u.logger.Warn("upstream returned an overload error in the response stream")
 			}
@@ -659,8 +694,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 					},
 				},
 			}, nil
+		default:
+			return nil, fmt.Errorf("failed to transform response: %w", err)
 		}
-		return nil, fmt.Errorf("failed to transform response: %w", err)
 	}
 	headerMutation, bodyMutation := mutationsFromTranslationResult(newHeaders, newBody)
 
@@ -772,13 +808,17 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	)
 	u.routeName = routeName
 	u.handler = backend.Handler
-	u.headerMutator = headermutator.NewHeaderMutator(backend.Backend.HeaderMutation, rp.requestHeaders)
 	u.bodyMutator = bodymutator.NewBodyMutator(backend.Backend.BodyMutation, rp.originalRequestBodyRaw)
 	// Header-derived labels/CEL must be able to see the overridden request model.
 	if u.modelNameOverride != "" {
 		u.requestHeaders[internalapi.ModelNameHeaderKeyDefault] = u.modelNameOverride
 	}
 	u.parent = rp // Set parent before GetTranslator so it can access rp.eh
+	if backend.Backend.Schema.Name == filterapi.APISchemaGoogleAIStudio &&
+		(backend.Backend.Auth == nil || backend.Backend.Auth.GoogleAPIKey == nil) {
+		u.unsupportedBackendErr = errors.New("GoogleAIStudio requires a GoogleAPIKey backend security policy")
+		return nil
+	}
 
 	u.translator, err = u.parent.eh.GetTranslator(backend.Backend.Schema, u.modelNameOverride)
 	if err != nil {
@@ -796,6 +836,26 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	if setter, ok := u.translator.(translator.ContentTypeSetter); ok {
 		setter.SetContentType(rp.requestHeaders["content-type"])
 	}
+	originalHeaders := rp.requestHeaders
+	u.retryCredentialHeader = ""
+	if remover, ok := u.translator.(translator.RequestHeadersRemover); ok {
+		originalHeaders = maps.Clone(originalHeaders)
+		var overrideHeader string
+		if auth := backend.Backend.Auth; auth != nil && auth.CredentialOverride != nil {
+			overrideHeader = auth.CredentialOverride.HeaderName
+			if mutation := backend.Backend.HeaderMutation; mutation != nil &&
+				slices.ContainsFunc(mutation.Set, func(h filterapi.HTTPHeader) bool { return h.Name == overrideHeader }) {
+				overrideHeader = ""
+			}
+		}
+		for _, name := range remover.RemovedRequestHeaders() {
+			delete(originalHeaders, name)
+			if name == overrideHeader {
+				u.retryCredentialHeader = name
+			}
+		}
+	}
+	u.headerMutator = headermutator.NewHeaderMutator(backend.Backend.HeaderMutation, originalHeaders)
 	rp.upstreamFilter = u // Only assign after translator is confirmed valid
 
 	if headerSetter, ok := u.translator.(translator.RequestHeadersSetter); ok {
@@ -892,6 +952,9 @@ func buildRequestHeaderDynamicMetadata(requestHeaders map[string]string) *struct
 	}
 	fields := make(map[string]*structpb.Value, len(LogRequestHeaderAttributes))
 	for header, attr := range LogRequestHeaderAttributes {
+		if strings.EqualFold(header, internalapi.GoogleAPIKeyHeader) {
+			continue
+		}
 		value, ok := requestHeaders[header]
 		if !ok || value == "" {
 			continue

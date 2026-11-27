@@ -6,6 +6,7 @@
 package extproc
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -39,7 +40,7 @@ var (
 	// They cover every credential header set by the backendauth handlers: "authorization" (API key,
 	// Azure, GCP, AWS SigV4), "x-api-key" (Anthropic), "api-key" (Azure API key) and
 	// "x-amz-security-token" (AWS SigV4 session token).
-	sensitiveHeaderKeys = []string{"authorization", "x-api-key", "api-key", "x-amz-security-token"}
+	sensitiveHeaderKeys = []string{"authorization", "x-api-key", "api-key", "x-amz-security-token", internalapi.GoogleAPIKeyHeader}
 )
 
 // contextKey is a type for context keys to avoid collisions.
@@ -262,7 +263,7 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 					return status.Error(codes.Unavailable, err.Error())
 				}
 				if errors.Is(err, errNoProcessor) {
-					path := headersMap[":path"]
+					path, _, _ := strings.Cut(headersMap[":path"], "?")
 					_ = stream.Send(&extprocv3.ProcessingResponse{
 						Response: &extprocv3.ProcessingResponse_ImmediateResponse{
 							ImmediateResponse: &extprocv3.ImmediateResponse{
@@ -574,14 +575,25 @@ func filterSensitiveHeadersForLogging(headers *corev3.HeaderMap, sensitiveKeys [
 		if isSensitiveHeader(header.GetKey(), sensitiveKeys) {
 			filteredHeaders[i] = slog.String(header.GetKey(), string(sensitiveHeaderRedactedValue))
 		} else {
-			if len(header.Value) > 0 {
-				filteredHeaders[i] = slog.String(header.GetKey(), header.Value)
-			} else if utf8.Valid(header.RawValue) {
-				filteredHeaders[i] = slog.String(header.GetKey(), string(header.RawValue))
+			value := header.Value
+			if value == "" && utf8.Valid(header.RawValue) {
+				value = string(header.RawValue)
+			}
+			if value != "" {
+				filteredHeaders[i] = slog.String(header.GetKey(), headerValueForLogging(header.GetKey(), value))
 			}
 		}
 	}
 	return filteredHeaders
+}
+
+func headerValueForLogging(key, value string) string {
+	switch strings.ToLower(key) {
+	case ":path", internalapi.OriginalPathHeader, internalapi.EnvoyOriginalPathHeader:
+		// Request URLs can contain credentials in query parameters.
+		value, _, _ = strings.Cut(value, "?")
+	}
+	return value
 }
 
 // redactProcessingResponseRequestHeaders creates a safe-to-log copy of the request headers processing response.
@@ -638,7 +650,16 @@ func redactHeaderMutation(originalHeaderMutation *extprocv3.HeaderMutation, logg
 				},
 			})
 		} else {
-			redactedHeaderMutation.SetHeaders = append(redactedHeaderMutation.SetHeaders, setHeader)
+			value := cmp.Or(setHeader.Header.GetValue(), string(setHeader.Header.GetRawValue()))
+			if safeValue := headerValueForLogging(setHeader.Header.GetKey(), value); safeValue != value {
+				redactedHeaderMutation.SetHeaders = append(redactedHeaderMutation.SetHeaders, &corev3.HeaderValueOption{
+					Header:         &corev3.HeaderValue{Key: setHeader.Header.GetKey(), RawValue: []byte(safeValue)},
+					AppendAction:   setHeader.AppendAction,
+					KeepEmptyValue: setHeader.KeepEmptyValue,
+				})
+			} else {
+				redactedHeaderMutation.SetHeaders = append(redactedHeaderMutation.SetHeaders, setHeader)
+			}
 		}
 	}
 	return redactedHeaderMutation

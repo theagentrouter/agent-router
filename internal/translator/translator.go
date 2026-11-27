@@ -102,6 +102,18 @@ func (e *StreamOverloadedError) Unwrap() error {
 	return e.Err
 }
 
+// StreamResponseError reports a failure already present in the provider's stream.
+// The response processor records the failure while forwarding all bytes as received.
+type StreamResponseError struct {
+	StatusCode int
+	Body       []byte
+}
+
+// Error implements error.
+func (e *StreamResponseError) Error() string {
+	return "upstream returned an error in the response stream"
+}
+
 // ContentTypeSetter is an optional interface that translators can implement
 // to receive the original request Content-Type header. This is needed for
 // multipart/form-data endpoints where the translator needs the boundary
@@ -114,6 +126,11 @@ type ContentTypeSetter interface {
 // request headers to translate provider-specific request fields.
 type RequestHeadersSetter interface {
 	SetRequestHeaders(headers map[string]string)
+}
+
+// RequestHeadersRemover identifies client headers that may not be forwarded on any attempt.
+type RequestHeadersRemover interface {
+	RemovedRequestHeaders() []string
 }
 
 // HeaderValueFilterSetter is an optional interface for translators that can filter individual

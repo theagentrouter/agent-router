@@ -24,6 +24,8 @@ const (
 	EnvoyOriginalPathHeader = "x-envoy-original-path"
 	// OriginalPathHeader is the AI Gateway header used to preserve the original request path.
 	OriginalPathHeader = EnvoyAIGatewayHeaderPrefix + "original-path"
+	// GoogleAPIKeyHeader carries an API key for Google APIs.
+	GoogleAPIKeyHeader = "x-goog-api-key" // #nosec G101 - header name, not a credential.
 	// InternalEndpointMetadataNamespace is the namespace used for the dynamic metadata for internal use.
 	InternalEndpointMetadataNamespace = "aigateway.envoy.io"
 	// InternalMetadataBackendNameKey is the key used to store the backend name
@@ -343,6 +345,8 @@ type EndpointPrefixes struct {
 	Anthropic string
 	// TypeSafe defaults to "/typesafe"
 	TypeSafe string
+	// Gemini defaults to "/gemini".
+	Gemini string
 }
 
 // ParseEndpointPrefixes parses a comma-separated list of key:value pairs to populate EndpointPrefixes.
@@ -352,6 +356,7 @@ type EndpointPrefixes struct {
 //   - cohere
 //   - anthropic
 //   - typesafe
+//   - gemini
 //
 // Format example:
 //
@@ -364,6 +369,7 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 		Cohere:    "/cohere",
 		Anthropic: "/anthropic",
 		TypeSafe:  "/typesafe",
+		Gemini:    "/gemini",
 	}
 	if s == "" {
 		return out, nil
@@ -393,8 +399,10 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 			out.Anthropic = value
 		case "typesafe":
 			out.TypeSafe = value
+		case "gemini":
+			out.Gemini = value
 		default:
-			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic, typesafe)", key, i+1)
+			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic, typesafe, gemini)", key, i+1)
 		}
 	}
 	return out, nil

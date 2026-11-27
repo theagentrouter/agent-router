@@ -32,6 +32,7 @@ func TestProviderBySchema_matchesFilterAPI(t *testing.T) {
 		{schema: filterapi.APISchemaAWSBedrock, expected: ProviderAWSBedrock},
 		{schema: filterapi.APISchemaAWSAnthropic, expected: ProviderAWSAnthropic},
 		{schema: filterapi.APISchemaGCPVertexAI, expected: ProviderGCPVertexAI},
+		{schema: filterapi.APISchemaGoogleAIStudio, expected: ProviderGCPGemini},
 		{schema: filterapi.APISchemaGCPAnthropic, expected: ProviderGCPAnthropic},
 		{schema: filterapi.APISchemaAnthropic, expected: ProviderAnthropic},
 		{schema: filterapi.APISchemaCohere, expected: ProviderCohere},

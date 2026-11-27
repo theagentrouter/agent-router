@@ -20,6 +20,7 @@ const (
 	BackendSecurityPolicyTypeAWSCredentials    BackendSecurityPolicyType = "AWSCredentials"
 	BackendSecurityPolicyTypeAzureAPIKey       BackendSecurityPolicyType = "AzureAPIKey"
 	BackendSecurityPolicyTypeAnthropicAPIKey   BackendSecurityPolicyType = "AnthropicAPIKey" // #nosec G101
+	BackendSecurityPolicyTypeGoogleAPIKey      BackendSecurityPolicyType = "GoogleAPIKey"    // #nosec G101
 	BackendSecurityPolicyTypeAzureCredentials  BackendSecurityPolicyType = "AzureCredentials"
 	BackendSecurityPolicyTypeGCPCredentials    BackendSecurityPolicyType = "GCPCredentials"
 	BackendSecurityPolicyTypeOpenAICredentials BackendSecurityPolicyType = "OpenAICredentials" // #nosec G101
@@ -48,13 +49,14 @@ type BackendSecurityPolicy struct {
 //
 // Only one type of BackendSecurityPolicy can be defined.
 // +kubebuilder:validation:MaxProperties=4
-// +kubebuilder:validation:XValidation:rule="self.type == 'APIKey' ? (has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is APIKey, only apiKey field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'AWSCredentials' ? (has(self.awsCredentials) && !has(self.apiKey) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is AWSCredentials, only awsCredentials field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'AzureAPIKey' ? (has(self.azureAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is AzureAPIKey, only azureAPIKey field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'AzureCredentials' ? (has(self.azureCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is AzureCredentials, only azureCredentials field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'GCPCredentials' ? (has(self.gcpCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true",message="When type is GCPCredentials, only gcpCredentials field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'AnthropicAPIKey' ? (has(self.anthropicAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.openAICredentials)) : true",message="When type is AnthropicAPIKey, only anthropicAPIKey field should be set"
-// +kubebuilder:validation:XValidation:rule="self.type == 'OpenAICredentials' ? (has(self.openAICredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey)) : true",message="When type is OpenAICredentials, only openAICredentials field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'APIKey' ? (has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.googleAPIKey)) : true",message="When type is APIKey, only apiKey field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'AWSCredentials' ? (has(self.awsCredentials) && !has(self.apiKey) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.googleAPIKey)) : true",message="When type is AWSCredentials, only awsCredentials field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'AzureAPIKey' ? (has(self.azureAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.googleAPIKey)) : true",message="When type is AzureAPIKey, only azureAPIKey field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'AzureCredentials' ? (has(self.azureCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.googleAPIKey)) : true",message="When type is AzureCredentials, only azureCredentials field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'GCPCredentials' ? (has(self.gcpCredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.googleAPIKey)) : true",message="When type is GCPCredentials, only gcpCredentials field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'AnthropicAPIKey' ? (has(self.anthropicAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.openAICredentials) && !has(self.googleAPIKey)) : true",message="When type is AnthropicAPIKey, only anthropicAPIKey field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'GoogleAPIKey' ? (has(self.googleAPIKey) && !has(self.anthropicAPIKey) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.openAICredentials)) : true",message="When type is GoogleAPIKey, only googleAPIKey field should be set"
+// +kubebuilder:validation:XValidation:rule="self.type == 'OpenAICredentials' ? (has(self.openAICredentials) && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.googleAPIKey)) : true",message="When type is OpenAICredentials, only openAICredentials field should be set"
 type BackendSecurityPolicySpec struct {
 	// TargetRefs are the names of the AIServiceBackend or InferencePool resources this BackendSecurityPolicy is being attached to.
 	// Attaching multiple BackendSecurityPolicies to the same resource is invalid and will result in an error
@@ -67,7 +69,7 @@ type BackendSecurityPolicySpec struct {
 
 	// Type specifies the type of the backend security policy.
 	//
-	// +kubebuilder:validation:Enum=APIKey;AWSCredentials;AzureAPIKey;AzureCredentials;GCPCredentials;AnthropicAPIKey;OpenAICredentials
+	// +kubebuilder:validation:Enum=APIKey;AWSCredentials;AzureAPIKey;AzureCredentials;GCPCredentials;AnthropicAPIKey;OpenAICredentials;GoogleAPIKey
 	Type BackendSecurityPolicyType `json:"type"`
 
 	// APIKey is a mechanism to access a backend(s). The API key will be injected into the Authorization header.
@@ -101,6 +103,10 @@ type BackendSecurityPolicySpec struct {
 	// +optional
 	AnthropicAPIKey *BackendSecurityPolicyAnthropicAPIKey `json:"anthropicAPIKey,omitempty"`
 
+	// GoogleAPIKey injects the configured API key into the x-goog-api-key header.
+	// +optional
+	GoogleAPIKey *BackendSecurityPolicyGoogleAPIKey `json:"googleAPIKey,omitempty"`
+
 	// OpenAICredentials is a mechanism to access OpenAI backend(s) without a static API key. The controller
 	// exchanges a subject token for a short-lived access token via OpenAI Workload Identity Federation, which is
 	// injected into the Authorization header.
@@ -133,6 +139,13 @@ type BackendSecurityPolicyAPIKey struct {
 	// SecretRef is the reference to the secret containing the API key.
 	// ai-gateway must be given the permission to read this secret.
 	// The key of the secret should be "apiKey".
+	SecretRef *gwapiv1.SecretObjectReference `json:"secretRef"`
+}
+
+// BackendSecurityPolicyGoogleAPIKey specifies a Google API key.
+type BackendSecurityPolicyGoogleAPIKey struct {
+	// SecretRef references the Secret containing the "apiKey" entry.
+	// ai-gateway must be given permission to read this Secret.
 	SecretRef *gwapiv1.SecretObjectReference `json:"secretRef"`
 }
 
@@ -475,6 +488,7 @@ type CredentialOverrideFromRequestHeaders struct {
 	// Defaults to the x-aigw-* header for the configured auth type:
 	//   APIKey          → x-aigw-api-key
 	//   AnthropicAPIKey → x-aigw-anthropic-api-key
+	//   GoogleAPIKey → x-aigw-google-api-key
 	//   AzureAPIKey     → x-aigw-azure-api-key
 	//   AzureCredentials → x-aigw-azure-access-token
 	//   GCPCredentials  → x-aigw-gcp-access-token

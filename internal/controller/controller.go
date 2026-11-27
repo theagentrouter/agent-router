@@ -557,6 +557,8 @@ func backendSecurityPolicySecretRef(bsp *aigv1b1.BackendSecurityPolicy) (name, n
 		secretRef = bsp.Spec.AzureAPIKey.SecretRef
 	case aigv1b1.BackendSecurityPolicyTypeAnthropicAPIKey:
 		secretRef = bsp.Spec.AnthropicAPIKey.SecretRef
+	case aigv1b1.BackendSecurityPolicyTypeGoogleAPIKey:
+		secretRef = bsp.Spec.GoogleAPIKey.SecretRef
 	case aigv1b1.BackendSecurityPolicyTypeAzureCredentials:
 		if bsp.Spec.AzureCredentials.ClientSecretRef != nil {
 			secretRef = bsp.Spec.AzureCredentials.ClientSecretRef

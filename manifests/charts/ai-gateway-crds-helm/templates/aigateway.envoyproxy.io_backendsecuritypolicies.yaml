@@ -6229,6 +6229,49 @@ spec:
                     must be specified
                   rule: (has(self.credentialsFile) && !has(self.workloadIdentityFederationConfig))
                     || (has(self.workloadIdentityFederationConfig) && !has(self.credentialsFile))
+              googleAPIKey:
+                description: GoogleAPIKey injects the configured API key into the
+                  x-goog-api-key header.
+                properties:
+                  secretRef:
+                    description: |-
+                      SecretRef references the Secret containing the "apiKey" entry.
+                      ai-gateway must be given permission to read this Secret.
+                    properties:
+                      group:
+                        default: ""
+                        description: |-
+                          Group is the group of the referent. For example, "gateway.networking.k8s.io".
+                          When unspecified or empty string, core API group is inferred.
+                        maxLength: 253
+                        pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                      kind:
+                        default: Secret
+                        description: Kind is kind of the referent. For example "Secret".
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
+                        type: string
+                      name:
+                        description: Name is the name of the referent.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is the namespace of the referenced object. When unspecified, the local
+                          namespace is inferred.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - secretRef
+                type: object
               targetRefs:
                 description: TargetRefs are the names of the AIServiceBackend or InferencePool
                   resources this BackendSecurityPolicy is being attached to.
@@ -6276,6 +6319,7 @@ spec:
                 - AzureCredentials
                 - GCPCredentials
                 - AnthropicAPIKey
+                - GoogleAPIKey
                 type: string
             required:
             - type
@@ -6284,30 +6328,39 @@ spec:
             - message: When type is APIKey, only apiKey field should be set
               rule: 'self.type == ''APIKey'' ? (has(self.apiKey) && !has(self.awsCredentials)
                 && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials)
-                && !has(self.anthropicAPIKey)) : true'
+                && !has(self.anthropicAPIKey) && !has(self.googleAPIKey)) : true'
             - message: When type is AWSCredentials, only awsCredentials field should
                 be set
               rule: 'self.type == ''AWSCredentials'' ? (has(self.awsCredentials) &&
                 !has(self.apiKey) && !has(self.azureAPIKey) && !has(self.azureCredentials)
-                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey)) : true'
+                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.googleAPIKey))
+                : true'
             - message: When type is AzureAPIKey, only azureAPIKey field should be
                 set
               rule: 'self.type == ''AzureAPIKey'' ? (has(self.azureAPIKey) && !has(self.apiKey)
                 && !has(self.awsCredentials) && !has(self.azureCredentials) && !has(self.gcpCredentials)
-                && !has(self.anthropicAPIKey)) : true'
+                && !has(self.anthropicAPIKey) && !has(self.googleAPIKey)) : true'
             - message: When type is AzureCredentials, only azureCredentials field
                 should be set
               rule: 'self.type == ''AzureCredentials'' ? (has(self.azureCredentials)
                 && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
-                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey)) : true'
+                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.googleAPIKey))
+                : true'
             - message: When type is GCPCredentials, only gcpCredentials field should
                 be set
               rule: 'self.type == ''GCPCredentials'' ? (has(self.gcpCredentials) &&
                 !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
-                && !has(self.azureCredentials) && !has(self.anthropicAPIKey)) : true'
+                && !has(self.azureCredentials) && !has(self.anthropicAPIKey) && !has(self.googleAPIKey))
+                : true'
             - message: When type is AnthropicAPIKey, only anthropicAPIKey field should
                 be set
               rule: 'self.type == ''AnthropicAPIKey'' ? (has(self.anthropicAPIKey)
+                && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
+                && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.googleAPIKey))
+                : true'
+            - message: When type is GoogleAPIKey, only googleAPIKey field should be
+                set
+              rule: 'self.type == ''GoogleAPIKey'' ? (has(self.googleAPIKey) && !has(self.anthropicAPIKey)
                 && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
                 && !has(self.azureCredentials) && !has(self.gcpCredentials)) : true'
           status:
@@ -12632,6 +12685,49 @@ spec:
                 - message: At most one of credentialsFile or workloadIdentityFederationConfig
                     may be specified
                   rule: '!(has(self.credentialsFile) && has(self.workloadIdentityFederationConfig))'
+              googleAPIKey:
+                description: GoogleAPIKey injects the configured API key into the
+                  x-goog-api-key header.
+                properties:
+                  secretRef:
+                    description: |-
+                      SecretRef references the Secret containing the "apiKey" entry.
+                      ai-gateway must be given permission to read this Secret.
+                    properties:
+                      group:
+                        default: ""
+                        description: |-
+                          Group is the group of the referent. For example, "gateway.networking.k8s.io".
+                          When unspecified or empty string, core API group is inferred.
+                        maxLength: 253
+                        pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                        type: string
+                      kind:
+                        default: Secret
+                        description: Kind is kind of the referent. For example "Secret".
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
+                        type: string
+                      name:
+                        description: Name is the name of the referent.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace is the namespace of the referenced object. When unspecified, the local
+                          namespace is inferred.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - secretRef
+                type: object
               openAICredentials:
                 description: OpenAICredentials is a mechanism to access OpenAI backend(s)
                   without a static API key.
@@ -14747,6 +14843,7 @@ spec:
                 - GCPCredentials
                 - AnthropicAPIKey
                 - OpenAICredentials
+                - GoogleAPIKey
                 type: string
             required:
             - type
@@ -14755,33 +14852,41 @@ spec:
             - message: When type is APIKey, only apiKey field should be set
               rule: 'self.type == ''APIKey'' ? (has(self.apiKey) && !has(self.awsCredentials)
                 && !has(self.azureAPIKey) && !has(self.azureCredentials) && !has(self.gcpCredentials)
-                && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true'
+                && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.googleAPIKey))
+                : true'
             - message: When type is AWSCredentials, only awsCredentials field should
                 be set
               rule: 'self.type == ''AWSCredentials'' ? (has(self.awsCredentials) &&
                 !has(self.apiKey) && !has(self.azureAPIKey) && !has(self.azureCredentials)
-                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials))
-                : true'
+                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)
+                && !has(self.googleAPIKey)) : true'
             - message: When type is AzureAPIKey, only azureAPIKey field should be
                 set
               rule: 'self.type == ''AzureAPIKey'' ? (has(self.azureAPIKey) && !has(self.apiKey)
                 && !has(self.awsCredentials) && !has(self.azureCredentials) && !has(self.gcpCredentials)
-                && !has(self.anthropicAPIKey) && !has(self.openAICredentials)) : true'
+                && !has(self.anthropicAPIKey) && !has(self.openAICredentials) && !has(self.googleAPIKey))
+                : true'
             - message: When type is AzureCredentials, only azureCredentials field
                 should be set
               rule: 'self.type == ''AzureCredentials'' ? (has(self.azureCredentials)
                 && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
-                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials))
-                : true'
+                && !has(self.gcpCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)
+                && !has(self.googleAPIKey)) : true'
             - message: When type is GCPCredentials, only gcpCredentials field should
                 be set
               rule: 'self.type == ''GCPCredentials'' ? (has(self.gcpCredentials) &&
                 !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
-                && !has(self.azureCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials))
-                : true'
+                && !has(self.azureCredentials) && !has(self.anthropicAPIKey) && !has(self.openAICredentials)
+                && !has(self.googleAPIKey)) : true'
             - message: When type is AnthropicAPIKey, only anthropicAPIKey field should
                 be set
               rule: 'self.type == ''AnthropicAPIKey'' ? (has(self.anthropicAPIKey)
+                && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
+                && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.openAICredentials)
+                && !has(self.googleAPIKey)) : true'
+            - message: When type is GoogleAPIKey, only googleAPIKey field should be
+                set
+              rule: 'self.type == ''GoogleAPIKey'' ? (has(self.googleAPIKey) && !has(self.anthropicAPIKey)
                 && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
                 && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.openAICredentials))
                 : true'
@@ -14789,8 +14894,8 @@ spec:
                 should be set
               rule: 'self.type == ''OpenAICredentials'' ? (has(self.openAICredentials)
                 && !has(self.apiKey) && !has(self.awsCredentials) && !has(self.azureAPIKey)
-                && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey))
-                : true'
+                && !has(self.azureCredentials) && !has(self.gcpCredentials) && !has(self.anthropicAPIKey)
+                && !has(self.googleAPIKey)) : true'
           status:
             description: Status defines the status details of the BackendSecurityPolicy.
             properties:

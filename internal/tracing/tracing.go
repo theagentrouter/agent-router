@@ -24,22 +24,23 @@ import (
 var _ tracingapi.Tracing = (*tracingImpl)(nil)
 
 type tracingImpl struct {
-	chatCompletionTracer       tracingapi.ChatCompletionTracer
-	completionTracer           tracingapi.CompletionTracer
-	imageGenerationTracer      tracingapi.ImageGenerationTracer
-	embeddingsTracer           tracingapi.EmbeddingsTracer
-	responsesTracer            tracingapi.ResponsesTracer
-	decisionsTracer            tracingapi.DecisionsTracer
-	speechTracer               tracingapi.SpeechTracer
-	transcriptionTracer        tracingapi.TranscriptionTracer
-	translationTracer          tracingapi.TranslationTracer
-	rerankTracer               tracingapi.RerankTracer
-	systemOneTracer            tracingapi.SystemOneTracer
-	messageTracer              tracingapi.MessageTracer
-	tokenizeTracer             tracingapi.TokenizeTracer
-	responsesInputTokensTracer tracingapi.ResponsesInputTokensTracer
-	countTokensTracer          tracingapi.CountTokensTracer
-	mcpTracer                  tracingapi.MCPTracer
+	chatCompletionTracer        tracingapi.ChatCompletionTracer
+	completionTracer            tracingapi.CompletionTracer
+	imageGenerationTracer       tracingapi.ImageGenerationTracer
+	embeddingsTracer            tracingapi.EmbeddingsTracer
+	responsesTracer             tracingapi.ResponsesTracer
+	decisionsTracer             tracingapi.DecisionsTracer
+	speechTracer                tracingapi.SpeechTracer
+	transcriptionTracer         tracingapi.TranscriptionTracer
+	translationTracer           tracingapi.TranslationTracer
+	rerankTracer                tracingapi.RerankTracer
+	systemOneTracer             tracingapi.SystemOneTracer
+	messageTracer               tracingapi.MessageTracer
+	tokenizeTracer              tracingapi.TokenizeTracer
+	responsesInputTokensTracer  tracingapi.ResponsesInputTokensTracer
+	countTokensTracer           tracingapi.CountTokensTracer
+	geminiGenerateContentTracer tracingapi.GeminiGenerateContentTracer
+	mcpTracer                   tracingapi.MCPTracer
 	// shutdown is nil when we didn't create tp.
 	shutdown func(context.Context) error
 }
@@ -117,6 +118,11 @@ func (t *tracingImpl) TokenizeTracer() tracingapi.TokenizeTracer {
 // ResponsesInputTokensTracer implements the same method as documented on tracingapi.Tracing.
 func (t *tracingImpl) ResponsesInputTokensTracer() tracingapi.ResponsesInputTokensTracer {
 	return t.responsesInputTokensTracer
+}
+
+// GeminiGenerateContentTracer implements the same method as documented on tracingapi.Tracing.
+func (t *tracingImpl) GeminiGenerateContentTracer() tracingapi.GeminiGenerateContentTracer {
+	return t.geminiGenerateContentTracer
 }
 
 // CountTokensTracer implements the same method as documented on tracingapi.Tracing.
@@ -339,7 +345,8 @@ func NewTracingFromEnv(ctx context.Context, stdout io.Writer, headerAttributeMap
 			recorders.countTokens,
 			headerAttrs,
 		),
-		mcpTracer: newMCPTracer(tracer, propagator, headerAttrs, recorders.mcp),
-		shutdown:  tp.Shutdown, // we have to shut down what we create.
+		geminiGenerateContentTracer: newGeminiGenerateContentTracer(tracer, propagator, recorders.geminiGenerateContent, headerAttrs),
+		mcpTracer:                   newMCPTracer(tracer, propagator, headerAttrs, recorders.mcp),
+		shutdown:                    tp.Shutdown, // we have to shut down what we create.
 	}, nil
 }

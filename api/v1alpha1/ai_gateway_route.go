@@ -408,6 +408,14 @@ type AIGatewayRouteRuleBackendRef struct {
 }
 
 type AIGatewayRouteRuleMatch struct {
+	// PathPrefix matches complete path segments after the gateway's root prefix.
+	// +optional
+	// +kubebuilder:validation:MaxLength=1024
+	// +kubebuilder:validation:Pattern="^/(?:[-A-Za-z0-9/._~!$&'()*+,;=:@]|[%][0-9a-fA-F]{2})*$"
+	// +kubebuilder:validation:XValidation:rule="!self.contains('//') && !self.contains('/./') && !self.contains('/../') && !self.endsWith('/.') && !self.endsWith('/..')",message="pathPrefix must not contain empty or dot segments"
+	// +kubebuilder:validation:XValidation:rule="!self.contains('%2f') && !self.contains('%2F')",message="pathPrefix must not contain an encoded slash"
+	PathPrefix *string `json:"pathPrefix,omitempty"`
+
 	// Headers specifies HTTP request header matchers. See HeaderMatch in the Gateway API for the details:
 	// https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io%2fv1.HTTPHeaderMatch
 	//

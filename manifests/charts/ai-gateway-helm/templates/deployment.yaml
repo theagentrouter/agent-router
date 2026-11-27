@@ -109,6 +109,10 @@ spec:
               {{- $typesafe := .Values.endpointConfig.typesafe -}}
               {{- $endpointPrefixes = append $endpointPrefixes (printf "typesafe:%s" $typesafe) -}}
             {{- end -}}
+            {{- if hasKey .Values.endpointConfig "gemini" -}}
+              {{- $gemini := .Values.endpointConfig.gemini -}}
+              {{- $endpointPrefixes = append $endpointPrefixes (printf "gemini:%s" $gemini) -}}
+            {{- end -}}
             {{- if $endpointPrefixes }}
             - "--endpointPrefixes={{ join "," $endpointPrefixes }}"
             {{- end }}

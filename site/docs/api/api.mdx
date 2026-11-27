@@ -575,6 +575,7 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [BackendSecurityPolicyAzureAPIKey](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyazureapikey)
 - [BackendSecurityPolicyAzureCredentials](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyazurecredentials)
 - [BackendSecurityPolicyGCPCredentials](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicygcpcredentials)
+- [BackendSecurityPolicyGoogleAPIKey](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicygoogleapikey)
 - [BackendSecurityPolicyOIDC](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyoidc)
 - [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyspec)
 - [BackendSecurityPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicystatus)
@@ -759,6 +760,11 @@ It can reference either an AIServiceBackend or an InferencePool resource.
 
 
 <ApiField
+  name="pathPrefix"
+  type="string"
+  required="false"
+  description="PathPrefix matches complete path segments after the gateway's root prefix."
+/><ApiField
   name="headers"
   type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheadermatch) array"
   required="false"
@@ -918,6 +924,11 @@ APISchema defines the API schema.
   type="enum"
   required="false"
   description="APISchemaGCPVertexAI is the schema followed by Gemini models hosted on GCP's Vertex AI platform.<br />Note: Using this schema requires a BackendSecurityPolicy to be configured and attached,<br />as the transformation will use the gcp-region and project-name from the BackendSecurityPolicy.<br />https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.endpoints/generateContent?hl=en<br />"
+/><ApiField
+  name="GoogleAIStudio"
+  type="enum"
+  required="false"
+  description="APISchemaGoogleAIStudio is the Gemini Developer API schema.<br />"
 /><ApiField
   name="GCPAnthropic"
   type="enum"
@@ -1223,6 +1234,27 @@ BackendSecurityPolicyGCPCredentials contains the supported authentication mechan
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicygoogleapikey">BackendSecurityPolicyGoogleAPIKey</a>
+
+
+
+**Appears in:**
+- [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyspec)
+
+BackendSecurityPolicyGoogleAPIKey specifies a Google API key.
+
+##### Fields
+
+
+
+<ApiField
+  name="secretRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="true"
+  description="SecretRef references the Secret containing the `apiKey` entry.<br />ai-gateway must be given permission to read this Secret."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyoidc">BackendSecurityPolicyOIDC</a>
 
 
@@ -1312,6 +1344,11 @@ Only one type of BackendSecurityPolicy can be defined.
   type="[BackendSecurityPolicyAnthropicAPIKey](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicyanthropicapikey)"
   required="false"
   description="AnthropicAPIKey is a mechanism to access Anthropic backend(s). The API key will be injected into the `x-api-key` header.<br />https://docs.claude.com/en/api/overview#authentication"
+/><ApiField
+  name="googleAPIKey"
+  type="[BackendSecurityPolicyGoogleAPIKey](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicygoogleapikey)"
+  required="false"
+  description="GoogleAPIKey injects the configured API key into the x-goog-api-key header."
 />
 
 
@@ -1366,6 +1403,11 @@ BackendSecurityPolicyType specifies the type of auth mechanism used to access a 
   description=""
 /><ApiField
   name="AnthropicAPIKey"
+  type="enum"
+  required="false"
+  description=""
+/><ApiField
+  name="GoogleAPIKey"
   type="enum"
   required="false"
   description=""
@@ -3186,6 +3228,7 @@ MCPRouteList contains a list of MCPRoute.
 - [BackendSecurityPolicyAzureCredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyazurecredentials)
 - [BackendSecurityPolicyCredentialOverride](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicycredentialoverride)
 - [BackendSecurityPolicyGCPCredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicygcpcredentials)
+- [BackendSecurityPolicyGoogleAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicygoogleapikey)
 - [BackendSecurityPolicyOIDC](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyoidc)
 - [BackendSecurityPolicyOpenAICredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyopenaicredentials)
 - [BackendSecurityPolicySPIFFEJWTSVID](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspiffejwtsvid)
@@ -3372,6 +3415,11 @@ It can reference either an AIServiceBackend or an InferencePool resource.
 
 
 <ApiField
+  name="pathPrefix"
+  type="string"
+  required="false"
+  description="PathPrefix matches complete path segments after the gateway's root prefix."
+/><ApiField
   name="headers"
   type="[HTTPHeaderMatch](https://gateway-api.sigs.k8s.io/reference/spec/?h=httproutetimeouts#httpheadermatch) array"
   required="false"
@@ -3536,6 +3584,11 @@ APISchema defines the API schema.
   type="enum"
   required="false"
   description="APISchemaGCPVertexAI is the schema followed by Gemini models hosted on GCP's Vertex AI platform.<br />Note: Using this schema requires a BackendSecurityPolicy to be configured and attached,<br />as the transformation will use the gcp-region and project-name from the BackendSecurityPolicy.<br />https://cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.endpoints/generateContent?hl=en<br />"
+/><ApiField
+  name="GoogleAIStudio"
+  type="enum"
+  required="false"
+  description="APISchemaGoogleAIStudio is the Gemini Developer API schema.<br />"
 /><ApiField
   name="GCPAnthropic"
   type="enum"
@@ -3874,6 +3927,27 @@ default service account credentials when running on GCP.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicygoogleapikey">BackendSecurityPolicyGoogleAPIKey</a>
+
+
+
+**Appears in:**
+- [BackendSecurityPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyspec)
+
+BackendSecurityPolicyGoogleAPIKey specifies a Google API key.
+
+##### Fields
+
+
+
+<ApiField
+  name="secretRef"
+  type="[SecretObjectReference](https://gateway-api.sigs.k8s.io/references/spec/#gateway.networking.k8s.io/v1.SecretObjectReference)"
+  required="true"
+  description="SecretRef references the Secret containing the `apiKey` entry.<br />ai-gateway must be given permission to read this Secret."
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyoidc">BackendSecurityPolicyOIDC</a>
 
 
@@ -4022,6 +4096,11 @@ Only one type of BackendSecurityPolicy can be defined.
   required="false"
   description="AnthropicAPIKey is a mechanism to access Anthropic backend(s). The API key will be injected into the `x-api-key` header.<br />https://docs.claude.com/en/api/overview#authentication"
 /><ApiField
+  name="googleAPIKey"
+  type="[BackendSecurityPolicyGoogleAPIKey](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicygoogleapikey)"
+  required="false"
+  description="GoogleAPIKey injects the configured API key into the x-goog-api-key header."
+/><ApiField
   name="openAICredentials"
   type="[BackendSecurityPolicyOpenAICredentials](#github-com-envoyproxy-ai-gateway-api-v1beta1-backendsecuritypolicyopenaicredentials)"
   required="false"
@@ -4085,6 +4164,11 @@ BackendSecurityPolicyType specifies the type of auth mechanism used to access a 
   description=""
 /><ApiField
   name="AnthropicAPIKey"
+  type="enum"
+  required="false"
+  description=""
+/><ApiField
+  name="GoogleAPIKey"
   type="enum"
   required="false"
   description=""
@@ -4154,7 +4238,7 @@ CredentialOverrideFromRequestHeaders sources the per-request credential from a r
   name="header"
   type="string"
   required="false"
-  description="Header is the name of the request header that carries the credential.<br />Defaults to the x-aigw-* header for the configured auth type:<br />  APIKey          → x-aigw-api-key<br />  AnthropicAPIKey → x-aigw-anthropic-api-key<br />  AzureAPIKey     → x-aigw-azure-api-key<br />  AzureCredentials → x-aigw-azure-access-token<br />  GCPCredentials  → x-aigw-gcp-access-token<br />  OpenAICredentials → x-aigw-openai-access-token<br />For AWSCredentials this is a prefix, not a single header name, since SigV4 needs three<br />inputs. Defaults to `x-aigw-aws-`, yielding:<br />  x-aigw-aws-access-key-id<br />  x-aigw-aws-secret-access-key<br />  x-aigw-aws-session-token     (optional; omit for long-lived credentials)<br />All three are stripped before the backend sees them. An access key ID without a secret<br />access key, or the reverse, fails the request instead of falling back.<br />Prefer FromDynamicMetadata for AWSCredentials. Headers are client-settable, and a secret<br />access key on the wire is a worse leak than an API key."
+  description="Header is the name of the request header that carries the credential.<br />Defaults to the x-aigw-* header for the configured auth type:<br />  APIKey          → x-aigw-api-key<br />  AnthropicAPIKey → x-aigw-anthropic-api-key<br />  GoogleAPIKey → x-aigw-google-api-key<br />  AzureAPIKey     → x-aigw-azure-api-key<br />  AzureCredentials → x-aigw-azure-access-token<br />  GCPCredentials  → x-aigw-gcp-access-token<br />  OpenAICredentials → x-aigw-openai-access-token<br />For AWSCredentials this is a prefix, not a single header name, since SigV4 needs three<br />inputs. Defaults to `x-aigw-aws-`, yielding:<br />  x-aigw-aws-access-key-id<br />  x-aigw-aws-secret-access-key<br />  x-aigw-aws-session-token     (optional; omit for long-lived credentials)<br />All three are stripped before the backend sees them. An access key ID without a secret<br />access key, or the reverse, fails the request instead of falling back.<br />Prefer FromDynamicMetadata for AWSCredentials. Headers are client-settable, and a secret<br />access key on the wire is a worse leak than an API key."
 /><ApiField
   name="fallbackToConfigured"
   type="boolean"

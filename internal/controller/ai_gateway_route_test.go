@@ -8,6 +8,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -545,6 +546,32 @@ func TestAIGatewayRouteController_syncGateway_DeletionWithMissingGateway(t *test
 		require.NotContains(t, current.Finalizers, aiGatewayControllerFinalizer)
 	} else {
 		require.True(t, apierrors.IsNotFound(err))
+	}
+}
+
+func Test_newHTTPRoute_PathMatch(t *testing.T) {
+	for _, root := range []string{"/", "/gateway", "/gateway/"} {
+		t.Run(root, func(t *testing.T) {
+			c := NewAIGatewayRouteController(requireNewFakeClientWithIndexes(t), nil, logr.Discard(), nil, root)
+			headers := []gwapiv1.HTTPHeaderMatch{{Name: aigv1b1.AIModelHeaderKey, Value: "same-model"}}
+			prefix := "/gemini/v1beta/models"
+			route := &aigv1b1.AIGatewayRoute{Spec: aigv1b1.AIGatewayRouteSpec{
+				Rules: []aigv1b1.AIGatewayRouteRule{
+					{Matches: []aigv1b1.AIGatewayRouteRuleMatch{
+						{Headers: headers, PathPrefix: &prefix},
+						{Headers: headers},
+					}},
+				},
+			}}
+			dst := &gwapiv1.HTTPRoute{}
+			require.NoError(t, c.newHTTPRoute(t.Context(), dst, route))
+			rootPath := strings.TrimRight(root, "/")
+			require.Equal(t, []gwapiv1.HTTPRouteMatch{
+				{Headers: headers, Path: &gwapiv1.HTTPPathMatch{Value: ptr.To(rootPath + prefix)}},
+				{Headers: headers, Path: &gwapiv1.HTTPPathMatch{Value: &root}},
+			}, dst.Spec.Rules[0].Matches)
+			require.Equal(t, prefix, *route.Spec.Rules[0].Matches[0].PathPrefix)
+		})
 	}
 }
 

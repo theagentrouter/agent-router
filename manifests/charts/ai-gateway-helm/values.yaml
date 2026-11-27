@@ -37,6 +37,7 @@ endpointConfig:
   cohere: "/cohere"
   anthropic: "/anthropic"
   typesafe: "/typesafe"
+  gemini: "/gemini"
 
 extProc:
   image:
