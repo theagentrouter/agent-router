@@ -299,7 +299,7 @@ func (s *session) sendToAllBackends(ctx context.Context, httpMethod string, requ
 // sendToBackendsFiltered sends an HTTP request to backends in this session that pass the given filter,
 // and returns a channel that streams the response events from those backends.
 // If filter is nil, all backends are included.
-func (s *session) sendToBackendsFiltered(ctx context.Context, httpMethod string, request *jsonrpc.Request, params mcpsdk.Params, span tracingapi.MCPSpan, filter func(*compositeSessionEntry) bool) <-chan *backendEvent {
+func (s *session) sendToBackendsFiltered(ctx context.Context, httpMethod string, request *jsonrpc.Request, params mcpsdk.Params, span tracingapi.MCPSpan, filter func(filterapi.MCPBackendName, *compositeSessionEntry) bool) <-chan *backendEvent {
 	var (
 		logger      = s.reqCtx.l
 		backendMsgs = make(chan *backendEvent, 200)
@@ -307,7 +307,7 @@ func (s *session) sendToBackendsFiltered(ctx context.Context, httpMethod string,
 	)
 
 	for backendName, cse := range s.perBackendSessions {
-		if filter != nil && !filter(cse) {
+		if filter != nil && !filter(backendName, cse) {
 			continue
 		}
 		wg.Add(1)
