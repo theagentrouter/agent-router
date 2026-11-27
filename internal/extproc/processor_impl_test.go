@@ -2142,6 +2142,21 @@ func Test_buildDynamicMetadata(t *testing.T) {
 	})
 }
 
+func Test_buildContentLengthDynamicMetadataOnRequest(t *testing.T) {
+	for _, length := range []int{0, 99999, 100000, 32000000} {
+		t.Run(strconv.Itoa(length), func(t *testing.T) {
+			md := buildContentLengthDynamicMetadataOnRequest(length)
+			require.NotNil(t, md)
+			val := md.Fields[internalapi.AIGatewayFilterMetadataNamespace].
+				GetStructValue().Fields["content_length"]
+			require.NotNil(t, val)
+			strVal, ok := val.Kind.(*structpb.Value_StringValue)
+			require.True(t, ok, "content_length must be stored as a StringValue so Envoy formats round lengths as digits, not exponent notation")
+			require.Equal(t, strconv.Itoa(length), strVal.StringValue)
+		})
+	}
+}
+
 func Test_buildBackendDynamicMetadata(t *testing.T) {
 	t.Run("empty backend name yields no metadata", func(t *testing.T) {
 		require.Nil(t, buildBackendDynamicMetadata(""))
