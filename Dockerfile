@@ -37,7 +37,8 @@ ARG TARGETARCH
 COPY --from=build /home/nonroot /home/nonroot
 COPY --from=build /app /app
 
-USER nonroot:nonroot
+# Numeric, so the kubelet can verify runAsNonRoot when no runAsUser is set.
+USER 65532:65532
 
 # Set AIGW_RUN_ID=0 for predictable file paths in containers.
 # This creates the following directory structure:
