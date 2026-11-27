@@ -1488,6 +1488,60 @@ data: {"type":"response.completed","sequence_number":10,"response":{"id":"resp_6
 			expResponseBody: `{"id":"chatcmpl-tool","type":"message","role":"assistant","content":[{"type":"tool_use","id":"call_abc","name":"get_weather","input":{"location":"Paris"}}],"model":"gpt-4o","stop_reason":"tool_use","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":50,"output_tokens":15}}`,
 		},
 		{
+			name:            "anthropic-openai reasoning round trip",
+			backend:         "openai",
+			path:            "/anthropic/v1/messages",
+			method:          http.MethodPost,
+			requestBody:     `{"model":"qwen3","max_tokens":100,"messages":[{"role":"user","content":"First question"},{"role":"assistant","content":[{"type":"thinking","thinking":"Prior thought","signature":"sig"},{"type":"text","text":"First answer"}]},{"role":"user","content":"Follow up"}]}`,
+			expRequestBody:  `{"messages":[{"content":"First question","role":"user"},{"role":"assistant","content":"First answer","reasoning_content":"Prior thought","thinking_blocks":[{"type":"thinking","thinking":"Prior thought","signature":"sig"}]},{"content":"Follow up","role":"user"}],"model":"qwen3","max_completion_tokens":100}`,
+			expPath:         "/v1/chat/completions",
+			responseBody:    `{"id":"chatcmpl-reasoning","model":"qwen3","choices":[{"message":{"role":"assistant","reasoning":"New thought","content":"New answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":3}}`,
+			expStatus:       http.StatusOK,
+			expResponseBody: `{"id":"chatcmpl-reasoning","type":"message","role":"assistant","content":[{"type":"thinking","thinking":"New thought"},{"type":"text","text":"New answer"}],"model":"qwen3","stop_reason":"end_turn","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":10,"output_tokens":3}}`,
+		},
+		{
+			name:           "anthropic-openai reasoning stream",
+			backend:        "openai",
+			path:           "/anthropic/v1/messages",
+			method:         http.MethodPost,
+			responseType:   "sse",
+			requestBody:    `{"model":"qwen3","max_tokens":100,"messages":[{"role":"user","content":"Say hi"}],"stream":true}`,
+			expRequestBody: `{"messages":[{"content":"Say hi","role":"user"}],"model":"qwen3","max_completion_tokens":100,"stream":true,"stream_options":{"include_usage":true}}`,
+			expPath:        "/v1/chat/completions",
+			responseBody: `{"id":"chatcmpl-reasoning-stream","model":"qwen3","choices":[{"index":0,"delta":{"role":"assistant","reasoning":"New thought"},"finish_reason":null}],"usage":null}
+{"id":"chatcmpl-reasoning-stream","model":"qwen3","choices":[{"index":0,"delta":{"content":"New answer"},"finish_reason":null}],"usage":null}
+{"id":"chatcmpl-reasoning-stream","model":"qwen3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}
+{"id":"chatcmpl-reasoning-stream","model":"qwen3","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":3}}
+[DONE]`,
+			expStatus: http.StatusOK,
+			expResponseBody: `event: message_start
+data: {"type":"message_start","message":{"id":"chatcmpl-reasoning-stream","type":"message","role":"assistant","content":[],"model":"qwen3","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"New thought"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"New answer"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":10,"output_tokens":3}}
+
+event: message_stop
+data: {"type":"message_stop"}`,
+		},
+		{
 			name:           "anthropic-openai - /anthropic/v1/messages - streaming text response",
 			backend:        "openai",
 			path:           "/anthropic/v1/messages",
