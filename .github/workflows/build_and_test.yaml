@@ -270,8 +270,8 @@ jobs:
             envoy_gateway_version: v0.0.0-latest
           - name: v1.10.0
             envoy_gateway_version: v1.10.0
-          - name: v1.9.3
-            envoy_gateway_version: v1.9.3
+          - name: v1.9.4
+            envoy_gateway_version: v1.9.4
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
@@ -329,7 +329,7 @@ jobs:
       - run: make test-e2e-upgrade
         env:
           # We only need to test the upgrade from the latest stable version of EG.
-          EG_VERSION: v1.9.3
+          EG_VERSION: v1.10.0
           K8S_VERSION: ${{ matrix.k8s-version }}
 
   test_e2e_inference_extension:
