@@ -22,6 +22,13 @@ import (
 
 // TestTrafficSplittingFallback tests the end-to-end functionality of traffic splitting and fallback.
 func TestTrafficSplittingFallback(t *testing.T) {
+	// The backendRef priorities in the manifest are set through Envoy Gateway's backendPriority
+	// HTTPRouteFilter, which older Envoy Gateway releases lack. There, the backendRefs end up in separate
+	// clusters and do not fail over. See e2elib.EnvoyGatewaySupportsBackendPriority.
+	if !e2elib.EnvoyGatewaySupportsBackendPriority() {
+		t.Skipf("needs Envoy Gateway %s or later for backendRef priorities, have %s",
+			"v1.10.0", e2elib.EnvoyGatewayVersion())
+	}
 	const manifest = "testdata/traffic_splitting_fallback.yaml"
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), manifest))
 	t.Cleanup(func() {

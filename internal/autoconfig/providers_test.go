@@ -74,3 +74,31 @@ func TestAPIKeyEnvIsAlwaysAString(t *testing.T) {
 		})
 	}
 }
+
+//go:embed testdata/providers-header-match.yaml
+var providersHeaderMatchYAML string
+
+// TestAddProviderHeaderMatch checks providers routed by a request header, with removed headers
+// and a custom request timeout, as used by "aigw claude" and "aigw codex".
+func TestAddProviderHeaderMatch(t *testing.T) {
+	data := ConfigData{OTELLog: &otelLogConfig{Exporter: "console"}}
+	require.NoError(t, AddProvider(&data, &Provider{
+		Name: "agent-claude", SchemaName: "Anthropic", ModelMatch: AllModels,
+		HeaderMatch: &Header{Name: "x-aigw-agent", Value: "claude"}, RequestTimeout: "30m",
+		Headers:       []Header{{Name: "x-tars-api-key", Value: "${TARS_API_KEY}"}},
+		RemoveHeaders: []string{"x-aigw-agent"},
+	}, "https://api.router.tetrate.ai/v1"))
+	require.NoError(t, AddProvider(&data, &Provider{
+		Name: "agent-codex", SchemaName: "OpenAI", ModelMatch: AllModels, APIKeyEnv: "OPENAI_API_KEY",
+		HeaderMatch: &Header{Name: "x-aigw-agent", Value: "codex"}, RequestTimeout: "30m",
+		RemoveHeaders: []string{"x-aigw-agent", "authorization", "x-api-key"},
+	}, "https://api.openai.com/v1"))
+
+	got, err := WriteConfig(&data)
+	require.NoError(t, err)
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		require.NoError(t, os.WriteFile("testdata/providers-header-match.yaml", []byte(got), 0o600))
+		return
+	}
+	require.Equal(t, providersHeaderMatchYAML, got) //nolint:testifylint // compare the exact output, including comments.
+}

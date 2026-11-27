@@ -236,6 +236,25 @@ extProc:
 Note: Hiding inputs/outputs prevents human or LLM-as-a-Judge evaluation of your
 LLM requests, such as done with the [Phoenix Evals library][phoenix-evals].
 
+### Reduce duplicate prompt data in chat traces
+
+For OpenAI chat completions, OpenInference records a text prompt in both the
+raw request body (`input.value`) and a structured message attribute such as
+`llm.input_messages.0.message.content` by default. Use these Helm values to
+omit the per-message attributes and reduce span size.
+
+```yaml
+extProc:
+  extraEnvVars:
+    - name: OPENINFERENCE_HIDE_INPUTS
+      value: "false"
+    - name: OPENINFERENCE_HIDE_INPUT_MESSAGES
+      value: "true"
+```
+
+The full prompt remains readable in `input.value`. To redact the raw input as
+well, set `OPENINFERENCE_HIDE_INPUTS` to `"true"`.
+
 ## Session Tracking
 
 Sessions help track and organize related traces across multi-turn conversations
