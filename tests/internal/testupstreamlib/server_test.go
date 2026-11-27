@@ -313,14 +313,19 @@ func Test_main(t *testing.T) {
 		request, err := http.NewRequestWithContext(t.Context(), "GET", "http://"+l.Addr().String()+"/", strings.NewReader("some-body"))
 		require.NoError(t, err)
 		request.Header.Set(ResponseTypeKey, "aws-event-stream")
+		const firstEvent = `{"contentBlockIndex": 0, "delta":{"text":"1"}}`
 		request.Header.Set(ResponseBodyHeaderKey,
 			base64.StdEncoding.EncodeToString([]byte(strings.Join([]string{
-				"{\"contentBlockIndex\": 0, \"delta\":{\"text\":\"1\"}}",
+				firstEvent,
 				"{\"contentBlockIndex\": 0, \"delta\":{\"text\":\"2\"}}",
 				"{\"contentBlockIndex\": 0, \"delta\":{\"text\":\"3\"}}",
 				"{\"contentBlockIndex\": 0, \"delta\":{\"text\":\"4\"}}",
 				"{\"contentBlockIndex\": 0, \"delta\":{\"text\":\"5\"}}",
 			}, "\n"))))
+
+		// Warm the handler's JSON decoder before measuring event delivery.
+		var firstPayload map[string]any
+		require.NoError(t, json.Unmarshal([]byte(firstEvent), &firstPayload))
 
 		now := time.Now()
 		response, err := http.DefaultClient.Do(request)
