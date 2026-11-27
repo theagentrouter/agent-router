@@ -66,6 +66,11 @@ func TestAIGatewayRoutes(t *testing.T) {
 			name:   "too_many_rules.yaml",
 			expErr: "spec.rules: Too many: 16: must have at most 15 items",
 		},
+		{name: "priority_max.yaml"},
+		{
+			name:   "priority_too_large.yaml",
+			expErr: "spec.rules[0].backendRefs[1].priority: Invalid value: 129: spec.rules[0].backendRefs[1].priority in body should be less than or equal to 128",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data, err := testdata.ReadFile(path.Join("testdata/aigatewayroutes", tc.name))

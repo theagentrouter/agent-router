@@ -336,9 +336,7 @@ func extractFilterConfigFromBundle(ctx context.Context, indexSecretName string) 
 	return string(raw), nil
 }
 
-// TestPromptCacheTranslationMatrix proves OpenAI-shim cache_control markers survive
-// translation onto the AWSAnthropic InvokeModel body for the known prompt shapes.
-func TestPromptCacheTranslationMatrix(t *testing.T) {
+func TestTranslationMatrix(t *testing.T) {
 	const manifest = "testdata/testupstream.yaml"
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), manifest))
 	t.Cleanup(func() {
@@ -348,6 +346,17 @@ func TestPromptCacheTranslationMatrix(t *testing.T) {
 	const egSelector = "gateway.envoyproxy.io/owning-gateway-name=translation-testupstream"
 	e2elib.RequireWaitForGatewayPodReady(t, egSelector)
 
+	t.Run("PromptCache", func(t *testing.T) {
+		testPromptCacheTranslation(t, egSelector)
+	})
+	t.Run("AnthropicBetaHeader", func(t *testing.T) {
+		testAnthropicBetaHeaderTranslation(t, egSelector)
+	})
+}
+
+// testPromptCacheTranslation proves OpenAI-shim cache_control markers survive
+// translation onto the AWSAnthropic InvokeModel body for the known prompt shapes.
+func testPromptCacheTranslation(t *testing.T, egSelector string) {
 	const (
 		expPath    = "/model/anthropic.claude-cache-matrix/invoke"
 		expHost    = "testupstream.default.svc.cluster.local"
@@ -489,7 +498,7 @@ func TestPromptCacheTranslationMatrix(t *testing.T) {
 	}
 }
 
-// TestAnthropicBetaHeaderTranslationMatrix proves anthropic-beta header flags survive
+// testAnthropicBetaHeaderTranslation proves anthropic-beta header flags survive
 // translation onto the AWSAnthropic InvokeModel body's anthropic_beta field, including
 // the rewrite of Anthropic-API-only flag names to their Bedrock equivalents.
 //
@@ -501,16 +510,7 @@ func TestPromptCacheTranslationMatrix(t *testing.T) {
 //   - tool-search-tool-2025-10-19 -> tool-search-tool-2025-10-19 (native Bedrock spelling).
 //   - code-execution-2025-08-25, files-api-2025-04-14 -> null (unsupported, must be dropped;
 //     Bedrock rejects the whole request with a 400 on unrecognized flags).
-func TestAnthropicBetaHeaderTranslationMatrix(t *testing.T) {
-	const manifest = "testdata/testupstream.yaml"
-	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), manifest))
-	t.Cleanup(func() {
-		_ = e2elib.KubectlDeleteManifest(context.Background(), manifest)
-	})
-
-	const egSelector = "gateway.envoyproxy.io/owning-gateway-name=translation-testupstream"
-	e2elib.RequireWaitForGatewayPodReady(t, egSelector)
-
+func testAnthropicBetaHeaderTranslation(t *testing.T, egSelector string) {
 	const (
 		expPath    = "/model/anthropic.claude-cache-matrix/invoke"
 		expHost    = "testupstream.default.svc.cluster.local"

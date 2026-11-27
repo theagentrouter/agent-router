@@ -20,6 +20,14 @@ type Provider struct {
 	APIKey     string   // API key, stored inline in the generated Secret. Empty means no authentication.
 	APIKeyEnv  string   // Environment variable holding the API key, referenced from the Secret instead of APIKey.
 	Headers    []Header // Headers added to every request sent to the provider.
+	// HeaderMatch, when set, routes the requests carrying this exact header to the provider
+	// instead of matching the model name with ModelMatch.
+	HeaderMatch *Header
+	// RemoveHeaders are request headers removed before the request is sent to the provider.
+	RemoveHeaders []string
+	// RequestTimeout is the maximum time for a request, including a whole streamed response.
+	// Empty means 120s.
+	RequestTimeout string
 }
 
 // Header is an HTTP header name and value.

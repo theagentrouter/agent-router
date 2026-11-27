@@ -119,6 +119,10 @@ export type QuickstartTab = {
   id: string;
   label: string;
   cta: Cta;
+  /** Heading beside the terminal for this tab. */
+  title: string;
+  /** Paragraph beside the terminal, describing this tab's path. */
+  body: string;
   /** Small muted line under the CTA, e.g. who provides a hosted option. */
   note?: string;
   terminal: TerminalLine[];
@@ -126,31 +130,36 @@ export type QuickstartTab = {
 
 export const quickstart = {
   label: 'Get started',
-  title: 'From laptop to production',
-  body:
-    'One command on your laptop. The same configuration ships to a dedicated gateway or a Kubernetes cluster — only the packaging changes. Or skip the install and use a hosted service.',
   tabs: [
     {
       id: 'local',
+      title: 'Running in 60 seconds',
       label: 'On your laptop',
-      cta: { label: 'Read the guide', to: '/docs/cli/aigwrun' },
+      cta: { label: 'Read the guide', to: '/docs/next/cli/aigwagents' },
+      body:
+        'One command runs Agent Router on your laptop — no Docker, no Kubernetes. Run Claude Code or Codex through it, or pick your providers and point any OpenAI- or Anthropic-compatible client at it. The same configuration later ships to a dedicated gateway or a Kubernetes cluster.',
       terminal: [
         { kind: 'comment', text: '# 1 — install the router' },
         { kind: 'command', text: 'curl -sSL https://theagentrouter.ai/install.sh | sh' },
         { kind: 'command', text: 'export PATH="$HOME/.local/bin:$PATH"' },
         { kind: 'blank' },
-        { kind: 'comment', text: '# 2 — start it, then pick your providers and paste their API keys' },
-        { kind: 'command', text: 'aigw run' },
+        { kind: 'comment', text: '# 2 — run your coding agent through it, then pick its provider' },
+        { kind: 'command', text: 'aigw claude   # or: aigw codex' },
         { kind: 'blank' },
-        { kind: 'comment', text: '# 3 — from another terminal, send a request (OpenAI or Tetrate Agent Router Service)' },
+        { kind: 'comment', text: '# or run it on its own' },
+        { kind: 'command', text: 'aigw run' },
+        { kind: 'comment', text: '# and send a request from another terminal' },
         { kind: 'command', text: 'curl http://localhost:1975/v1/chat/completions -H "Content-Type: application/json" \\' },
         { kind: 'command', text: `  -d '{"model": "gpt-5-mini", "messages": [{"role": "user", "content": "Hello!"}]}'` },
       ],
     },
     {
       id: 'kubernetes',
+      title: 'Production on Kubernetes',
       label: 'On Kubernetes',
       cta: { label: 'Read the guide', to: '/docs/getting-started/' },
+      body:
+        'For production, Agent Router runs on Envoy Gateway in your Kubernetes cluster, with the same configuration you tested on your laptop. Install it with Helm, deploy a gateway, and send your first request.',
       terminal: [
         { kind: 'comment', text: '# 1 — install Envoy Gateway and Agent Router' },
         { kind: 'command', text: `helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm --version v${vars.egVersion} \\` },
@@ -184,9 +193,30 @@ export const quickstart = {
       ],
     },
     {
+      id: 'python',
+      title: 'Call models from Python',
+      label: 'From Python',
+      cta: { label: 'Read the guide', to: '/docs/python-sdk' },
+      body:
+        'Building an agent in Python? Install the SDK and call OpenAI, Anthropic, Gemini, Bedrock and more with LiteLLM\'s API. On macOS (Apple silicon) and recent Linux, the first call starts Agent Router on your laptop for you. Elsewhere, or for your team, point the same code at a shared gateway with two environment variables.',
+      terminal: [
+        { kind: 'comment', text: '# 1 — install the Python SDK (it includes the router)' },
+        { kind: 'command', text: 'pip install theagentrouter' },
+        { kind: 'command', text: 'export ANTHROPIC_API_KEY=...' },
+        { kind: 'blank' },
+        { kind: 'comment', text: '# 2 — call a model; the first call starts the router' },
+        { kind: 'command', text: `python -c "import theagentrouter as ar; print(ar.completion(` },
+        { kind: 'command', text: `  model='anthropic/claude-sonnet-5-5',` },
+        { kind: 'command', text: `  messages=[{'role': 'user', 'content': 'Hello!'}]).choices[0].message.content)"` },
+      ],
+    },
+    {
       id: 'hosted',
+      title: 'Nothing to install',
       label: 'Hosted',
       cta: { label: 'Sign in with Google or GitHub', to: 'https://router.tetrate.ai/sign-in' },
+      body:
+        'Skip the install and use Agent Router as a service. Create an API key, then point your agent\'s OpenAI-compatible client at the hosted endpoint.',
       note: 'Hosted service provided by Tetrate. Nothing to install.',
       terminal: [
         { kind: 'comment', text: '# 1 — sign in at router.tetrate.ai and create an API key' },

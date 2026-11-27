@@ -116,7 +116,6 @@ The AI Gateway Controller manages AI-specific components and configurations:
 
 - As explained, [Envoy Gateway Extension server] is used for fine-tuning the xDS configuration to implement our features. This allows us to leverage Envoy Gateway for core proxy management while still customizing the configuration for AI-specific needs.
   - For example, upstream filters (HTTP filter attached per Backend) is not supported in Envoy Gateway, so the AI Gateway controller uses the extension server to achieve this, which is essential to implement per-model priority routing.
-  - Another example is that backendRef level priority configuration is not supported in Gateway API or Envoy Gateway, so the AI Gateway controller uses the extension server to insert this configuration into the xDS.
 - Delegating core proxy management to Envoy Gateway allows us to focus on AI-specific features and configurations, reducing duplication of effort and leveraging the strengths of both controllers.
   - For example, we don't need to re-implement Gateway API resource translation, service discovery, load balancing, and TLS management.
 - Inserting the ExtProc as a sidecar container brings the following benefits:
