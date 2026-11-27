@@ -3177,6 +3177,39 @@ func TestApplyHostAllowlistToQuotaCluster(t *testing.T) {
 		require.False(t, clusterWrappedInHostAllowlist(c))
 	})
 
+	t.Run("per-backend cluster stamps every locality group", func(t *testing.T) {
+		// With zone-aware load balancing Envoy Gateway builds one cluster per backend, with one
+		// locality group per zone, all belonging to the same backendRef.
+		c := &clusterv3.Cluster{
+			Name: routePrefix + "/backend/0",
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				{Locality: &corev3.Locality{Zone: "zone-a"}, LbEndpoints: []*endpointv3.LbEndpoint{{}}},
+				{Locality: &corev3.Locality{Zone: "zone-b"}, LbEndpoints: []*endpointv3.LbEndpoint{{}}},
+			}},
+		}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		for i, group := range c.LoadAssignment.Endpoints {
+			b, m, stamped := endpointQuotaMeta(group.LbEndpoints[0])
+			require.True(t, stamped, "group %d", i)
+			require.Equal(t, "default/be-a", b)
+			require.Equal(t, "gpt-4", m)
+		}
+		require.True(t, clusterWrappedInHostAllowlist(c))
+	})
+
+	t.Run("per-backend cluster of a non-quota backend is not wrapped", func(t *testing.T) {
+		c := &clusterv3.Cluster{
+			Name: routePrefix + "/backend/1",
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{Endpoints: []*endpointv3.LocalityLbEndpoints{
+				{Locality: &corev3.Locality{Zone: "zone-a"}, LbEndpoints: []*endpointv3.LbEndpoint{{}}},
+			}},
+		}
+		s.applyHostAllowlistToQuotaCluster(context.Background(), c, quotaOnA)
+		_, _, stamped := endpointQuotaMeta(c.LoadAssignment.Endpoints[0].LbEndpoints[0])
+		require.False(t, stamped)
+		require.False(t, clusterWrappedInHostAllowlist(c))
+	})
+
 	t.Run("maps non-first backend positionally", func(t *testing.T) {
 		// Quota is on be-c, the third (index 2) BackendRef.
 		quotaOnC := map[string][]aigv1a1.QuotaPolicy{

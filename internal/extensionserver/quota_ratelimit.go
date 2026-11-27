@@ -413,6 +413,9 @@ func (s *Server) routeHasQuotaBackend(
 type clusterRouteInfo struct {
 	namespace string
 	rule      *aigv1b1.AIGatewayRouteRule
+	// perBackend is true for a per-backend cluster. rule then holds only the backendRef of that
+	// cluster, and every endpoint group of the cluster belongs to it.
+	perBackend bool
 }
 
 // resolveClusterRule parses a cluster name and fetches the corresponding AIGatewayRoute rule.
@@ -450,8 +453,9 @@ func (s *Server) resolveClusterRule(ctx context.Context, clusterName string) *cl
 	}
 
 	return &clusterRouteInfo{
-		namespace: name.namespace,
-		rule:      rule,
+		namespace:  name.namespace,
+		rule:       rule,
+		perBackend: name.backendRefIndex != noBackendRefIndex,
 	}
 }
 
@@ -485,6 +489,9 @@ func (s *Server) clusterHasQuotaBackend(ctx context.Context, clusterName string,
 //
 // Endpoint groups are mapped to BackendRefs positionally, matching maybeModifyCluster: zero-weight
 // BackendRefs are omitted from the LoadAssignment by Envoy Gateway, so they are skipped here too.
+// A per-backend cluster is the exception, also as in maybeModifyCluster: all of its endpoint groups
+// belong to its one BackendRef. Envoy Gateway can split them into several groups, for example one
+// per zone with zone-aware load balancing.
 //
 // The cluster is wrapped only when at least one quota endpoint was actually stamped. A quota backend
 // whose endpoint group is not present (nil LoadAssignment for EDS clusters, or a stale revision with
@@ -502,6 +509,24 @@ func (s *Server) applyHostAllowlistToQuotaCluster(ctx context.Context, cluster *
 	}
 
 	stamped := false
+	if info.perBackend {
+		backendRef := &info.rule.BackendRefs[0]
+		if !backendRefHasQuotaForModel(backendRef, info.namespace, quotaBackendPolicies) {
+			return
+		}
+		namespace := backendRef.GetNamespace(info.namespace)
+		for _, group := range cluster.GetLoadAssignment().GetEndpoints() {
+			for _, endpoint := range group.GetLbEndpoints() {
+				setEndpointMetadataQuotaRouting(endpoint, namespace, backendRef.Name, backendRef.ModelNameOverride)
+				stamped = true
+			}
+		}
+		if stamped {
+			s.wrapQuotaClusterLB(cluster)
+		}
+		return
+	}
+
 	var lbEndpointIndex int
 	for _, backendRef := range info.rule.BackendRefs {
 		if backendRef.Weight != nil && *backendRef.Weight == 0 {
@@ -526,9 +551,15 @@ func (s *Server) applyHostAllowlistToQuotaCluster(ctx context.Context, cluster *
 	}
 
 	if stamped {
-		if err := wrapClusterLBInHostAllowlist(cluster); err != nil {
-			s.log.Error(err, "failed to wrap cluster LB in host_allowlist policy", "cluster", cluster.Name)
-		}
+		s.wrapQuotaClusterLB(cluster)
+	}
+}
+
+// wrapQuotaClusterLB wraps the cluster's load balancing policy with the host_allowlist policy and logs
+// a failure, which leaves the cluster as it was.
+func (s *Server) wrapQuotaClusterLB(cluster *clusterv3.Cluster) {
+	if err := wrapClusterLBInHostAllowlist(cluster); err != nil {
+		s.log.Error(err, "failed to wrap cluster LB in host_allowlist policy", "cluster", cluster.Name)
 	}
 }
 
