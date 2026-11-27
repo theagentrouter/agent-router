@@ -359,6 +359,9 @@ func Test_maybeModifyCluster(t *testing.T) {
 							},
 						},
 						{
+							// Envoy Gateway already set the priority from the backendPriority HTTPRouteFilter, so the
+							// legacy rewrite is a no-op and logs nothing.
+							Priority: 1,
 							LbEndpoints: []*endpointv3.LbEndpoint{
 								{HostIdentifier: &endpointv3.LbEndpoint_Endpoint{Endpoint: &endpointv3.Endpoint{
 									Address: &corev3.Address{Address: &corev3.Address_SocketAddress{
@@ -3680,5 +3683,44 @@ func TestSetEndpointMetadataUpstreamHost(t *testing.T) {
 		require.Equal(t, "aws-bedrock", m.Fields[internalapi.InternalMetadataBackendNameKey].GetStringValue())
 		require.Equal(t, "vpce-123.bedrock-runtime.us-east-1.vpce.amazonaws.com",
 			m.Fields[internalapi.InternalMetadataUpstreamHostKey].GetStringValue())
+	})
+}
+
+func TestApplyLegacyBackendRefPriority(t *testing.T) {
+	var buf bytes.Buffer
+	s, err := New(newFakeClient(), logr.FromSlogHandler(slog.NewTextHandler(&buf, &slog.HandlerOptions{})), udsPath, false, nil, nil, "envoy-ai-gateway-ratelimit.envoy-gateway-system", 5, false)
+	require.NoError(t, err)
+	const msg = "legacy backendRef priority rewrite changed the priority set by Envoy Gateway"
+
+	t.Run("nil priority", func(t *testing.T) {
+		buf.Reset()
+		endpoints := &endpointv3.LocalityLbEndpoints{Priority: 2}
+		s.applyLegacyBackendRefPriority(endpoints, nil, "c", "b")
+		require.Equal(t, uint32(2), endpoints.Priority)
+		require.NotContains(t, buf.String(), msg)
+	})
+	t.Run("zero priority keeps the fallback-derived priority", func(t *testing.T) {
+		buf.Reset()
+		// Envoy Gateway set 1 from the Backend's spec.fallback, which priority 0 does not override.
+		endpoints := &endpointv3.LocalityLbEndpoints{Priority: 1}
+		s.applyLegacyBackendRefPriority(endpoints, ptr.To[uint32](0), "c", "b")
+		require.Equal(t, uint32(1), endpoints.Priority)
+		require.NotContains(t, buf.String(), msg)
+	})
+	t.Run("already set by Envoy Gateway", func(t *testing.T) {
+		buf.Reset()
+		endpoints := &endpointv3.LocalityLbEndpoints{Priority: 1}
+		s.applyLegacyBackendRefPriority(endpoints, ptr.To[uint32](1), "c", "b")
+		require.Equal(t, uint32(1), endpoints.Priority)
+		require.NotContains(t, buf.String(), msg)
+	})
+	t.Run("rewritten", func(t *testing.T) {
+		buf.Reset()
+		endpoints := &endpointv3.LocalityLbEndpoints{}
+		s.applyLegacyBackendRefPriority(endpoints, ptr.To[uint32](1), "my-cluster", "my-backend")
+		require.Equal(t, uint32(1), endpoints.Priority)
+		require.Contains(t, buf.String(), msg)
+		require.Contains(t, buf.String(), "cluster_name=my-cluster")
+		require.Contains(t, buf.String(), "backend=my-backend")
 	})
 }

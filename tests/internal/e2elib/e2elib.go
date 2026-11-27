@@ -418,6 +418,24 @@ func EnvoyGatewaySupportsLimitFromMetadata() bool {
 	return EnvoyGatewayVersion() == EnvoyGatewayLatestVersion
 }
 
+// envoyGatewayBackendPriorityVersion is the first Envoy Gateway release with
+// HTTPRouteFilter.spec.backendPriority (envoyproxy/gateway#10027, #10248).
+const envoyGatewayBackendPriorityVersion = "v1.10.0"
+
+// EnvoyGatewaySupportsBackendPriority reports whether the installed Envoy Gateway supports the
+// backendPriority HTTPRouteFilter, which the controller uses to set AIGatewayRouteRuleBackendRef.priority:
+// the main build, or v1.10.0 and later.
+//
+// On older releases, backendRef priorities do not fail over. The CRD prunes the unknown backendPriority
+// field, and since any backendRef filter makes Envoy Gateway build one cluster per backendRef of the rule,
+// the backendRefs end up behind weighted_clusters, where a per-cluster priority has no effect.
+// Such releases are below the minimum Envoy Gateway version the controller supports.
+func EnvoyGatewaySupportsBackendPriority() bool {
+	v := EnvoyGatewayVersion()
+	return v == EnvoyGatewayLatestVersion ||
+		semver.Compare(v, envoyGatewayBackendPriorityVersion) >= 0
+}
+
 // envoyGatewayMultipleInferencePoolsPerRuleVersion is the first Envoy Gateway release that builds
 // one cluster per InferencePool backendRef of a route rule.
 const envoyGatewayMultipleInferencePoolsPerRuleVersion = "v1.11.0-rc.1"
