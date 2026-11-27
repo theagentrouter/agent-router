@@ -114,11 +114,10 @@ func (s *Server) handleInferencePoolCluster(cluster *clusterv3.Cluster, inferenc
 	// InferencePool's spec.appProtocol. This cluster's backend is a Pod, not a Kubernetes
 	// Service, so Envoy Gateway has no appProtocol hint to translate on its own; without this,
 	// Envoy always defaults to HTTP/1.1 and requests to h2c-only backends fail.
-	protocolOptions, err := httpProtocolOptionsForInferencePoolBackend(inferencePool)
-	if err != nil {
+	if err := mergeHTTPProtocolOptionsForInferencePoolBackend(cluster, inferencePool); err != nil {
+		s.log.Error(err, "failed to merge InferencePool HTTP protocol options", "cluster_name", cluster.Name)
 		return err
 	}
-	cluster.TypedExtensionProtocolOptions = protocolOptions
 
 	// Add InferencePool metadata to the cluster for reference by other components.
 	buildEPPMetadataForCluster(cluster, []*gwaiev1.InferencePool{inferencePool})

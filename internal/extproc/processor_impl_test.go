@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"strconv"
 	"testing"
 	"unsafe"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/propagation"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
@@ -136,19 +138,17 @@ func Test_chatCompletionProcessorRouterFilter_ProcessRequestBody(t *testing.T) {
 		require.NotNil(t, re)
 		require.NotNil(t, re.RequestBody)
 		setHeaders := re.RequestBody.GetResponse().GetHeaderMutation().SetHeaders
-		require.Len(t, setHeaders, 3)
+		require.Len(t, setHeaders, 2)
 		require.Equal(t, internalapi.ModelNameHeaderKeyDefault, setHeaders[0].Header.Key)
 		require.Equal(t, "some-model", string(setHeaders[0].Header.RawValue))
 		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, setHeaders[0].AppendAction)
 		require.Equal(t, internalapi.OriginalPathHeader, setHeaders[1].Header.Key)
 		require.Equal(t, "/foo", string(setHeaders[1].Header.RawValue))
-		require.Equal(t, internalapi.EnvoyOriginalPathHeader, setHeaders[2].Header.Key)
-		require.Equal(t, "/foo", string(setHeaders[2].Header.RawValue))
 	})
 
-	t.Run("original path headers overwrite pre-existing values", func(t *testing.T) {
+	t.Run("original path header overwrites pre-existing value and reserved header is not set", func(t *testing.T) {
 		// A client-supplied or pre-existing original-path header must not shadow the
-		// gateway's own value: extproc is the authoritative writer of these headers.
+		// gateway's own value: extproc is the authoritative writer of this header.
 		headers := map[string]string{
 			":path":                             "/foo",
 			internalapi.OriginalPathHeader:      "/client-supplied",
@@ -165,15 +165,18 @@ func Test_chatCompletionProcessorRouterFilter_ProcessRequestBody(t *testing.T) {
 		re, ok := resp.Response.(*extprocv3.ProcessingResponse_RequestBody)
 		require.True(t, ok)
 		setHeaders := re.RequestBody.GetResponse().GetHeaderMutation().SetHeaders
-		require.Len(t, setHeaders, 3)
+		require.Len(t, setHeaders, 2)
 		require.Equal(t, internalapi.OriginalPathHeader, setHeaders[1].Header.Key)
 		require.Equal(t, "/foo", string(setHeaders[1].Header.RawValue))
 		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, setHeaders[1].AppendAction)
-		require.Equal(t, internalapi.EnvoyOriginalPathHeader, setHeaders[2].Header.Key)
-		require.Equal(t, "/foo", string(setHeaders[2].Header.RawValue))
-		require.Equal(t, corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD, setHeaders[2].AppendAction)
-		// The in-place request header map is updated too, not just the mutation.
-		require.Equal(t, "/foo", headers[internalapi.EnvoyOriginalPathHeader])
+		for _, h := range setHeaders {
+			require.NotEqual(t, internalapi.EnvoyOriginalPathHeader, h.Header.Key,
+				"extproc must not set the reserved x-envoy-original-path header")
+		}
+		// The in-place request header map is updated for the extproc-owned header,
+		// while the reserved header is left exactly as the client sent it.
+		require.Equal(t, "/foo", headers[internalapi.OriginalPathHeader])
+		require.Equal(t, "/client-supplied", headers[internalapi.EnvoyOriginalPathHeader])
 	})
 
 	t.Run("model header overwrites pre-existing value", func(t *testing.T) {
@@ -2598,4 +2601,104 @@ func mustCompileCEL(t *testing.T, expr string) cel.Program {
 	prog, err := llmcostcel.NewProgram(expr)
 	require.NoError(t, err)
 	return prog
+}
+
+func Test_formatUserFacingErrorJSON(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		errorType  string
+		statusCode int
+		message    string
+		want       string
+	}{
+		{
+			name:       "plain message keeps the documented shape",
+			errorType:  "BadRequest",
+			statusCode: 400,
+			message:    "ordinary error",
+			want:       `{"type":"error","error":{"type":"BadRequest","code":"400","message":"ordinary error"}}`,
+		},
+		{
+			name:       "quotes in the type and the message",
+			errorType:  `Bad"Request`,
+			statusCode: 400,
+			message:    `message says "hello"`,
+			want:       `{"type":"error","error":{"type":"Bad\"Request","code":"400","message":"message says \"hello\""}}`,
+		},
+		{
+			name:       "backslashes",
+			errorType:  `Bad\Request`,
+			statusCode: 422,
+			message:    `path C:\temp`,
+			want:       `{"type":"error","error":{"type":"Bad\\Request","code":"422","message":"path C:\\temp"}}`,
+		},
+		{
+			name:       "newline, tab and NUL",
+			errorType:  "BadRequest",
+			statusCode: 400,
+			message:    "line one\nline two\ttab\x00nul",
+			want:       `{"type":"error","error":{"type":"BadRequest","code":"400","message":"line one\nline two\ttab\u0000nul"}}`,
+		},
+		{
+			name:       "the malformed temperature message from the transcription path",
+			errorType:  "BadRequest",
+			statusCode: 400,
+			message:    "malformed request: invalid temperature value \"bad\": strconv.ParseFloat: parsing \"bad\": invalid syntax",
+			want:       `{"type":"error","error":{"type":"BadRequest","code":"400","message":"malformed request: invalid temperature value \"bad\": strconv.ParseFloat: parsing \"bad\": invalid syntax"}}`,
+		},
+		{
+			name:       "unicode",
+			errorType:  "BadRequest",
+			statusCode: 422,
+			message:    "temperature 雪 🌡️",
+			want:       `{"type":"error","error":{"type":"BadRequest","code":"422","message":"temperature 雪 🌡️"}}`,
+		},
+		{
+			name:       "empty strings",
+			errorType:  "",
+			statusCode: 400,
+			message:    "",
+			want:       `{"type":"error","error":{"type":"","code":"400","message":""}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := formatUserFacingErrorJSON(tc.errorType, tc.statusCode, tc.message)
+			// The decoder behind JSONEq is lenient about raw control bytes in
+			// strings, so the exact escaped form is what pins the escaping.
+			require.JSONEq(t, tc.want, string(body))
+			require.NotContains(t, string(body), "\n", "control bytes must be escaped, not written raw")
+			require.NotContains(t, string(body), "\t")
+			require.NotContains(t, string(body), "\x00")
+		})
+	}
+}
+
+func Test_createUserFacingErrorResponse(t *testing.T) {
+	message := `temperature "bad" at 20°C ☃`
+	for _, tc := range []struct {
+		statusCode int
+		want       typev3.StatusCode
+	}{
+		{400, typev3.StatusCode_BadRequest},
+		{422, typev3.StatusCode_UnprocessableEntity},
+	} {
+		statusCode := tc.statusCode
+		t.Run(strconv.Itoa(statusCode), func(t *testing.T) {
+			resp := createUserFacingErrorResponse(statusCode, "BadRequest", message)
+			imm := resp.GetImmediateResponse()
+			require.NotNil(t, imm)
+			require.Equal(t, tc.want, imm.Status.Code)
+			require.Equal(t, uint32(codes.InvalidArgument), imm.GetGrpcStatus().GetStatus())
+
+			headers := map[string]string{}
+			for _, h := range imm.Headers.SetHeaders {
+				headers[h.Header.Key] = string(h.Header.RawValue)
+			}
+			require.Equal(t, map[string]string{
+				"content-type":   "application/json",
+				"content-length": strconv.Itoa(len(imm.Body)),
+			}, headers)
+			require.JSONEq(t, fmt.Sprintf(`{"type":"error","error":{"type":"BadRequest","code":"%d","message":"temperature \"bad\" at 20°C ☃"}}`, statusCode), string(imm.Body))
+		})
+	}
 }
