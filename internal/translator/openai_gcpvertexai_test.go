@@ -358,6 +358,37 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
     }
 }`)
 
+	wantBdyTrailingAssistant := []byte(`{
+    "contents": [
+        {
+            "parts": [
+                {
+                    "text": "Tell me about AI Gateways"
+                }
+            ],
+            "role": "user"
+        },
+        {
+            "parts": [
+                {
+                    "text": "AI Gateways route requests to LLM providers."
+                }
+            ],
+            "role": "model"
+        },
+        {
+            "parts": [
+                {
+                    "text": "Please continue."
+                }
+            ],
+            "role": "user"
+        }
+    ],
+    "tools": null,
+    "generationConfig": {}
+}`)
+
 	tests := []struct {
 		name              string
 		modelNameOverride internalapi.ModelNameOverride
@@ -779,6 +810,30 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_RequestBody(t *testing.T)
 				{":path", "publishers/google/models/gemini-1.5-pro:generateContent"},
 			},
 			wantBody: wantBdyWithEnterpriseWebSearch,
+		},
+		{
+			name: "request ending with an assistant message gets a continue user turn",
+			input: openai.ChatCompletionRequest{
+				Model: "gemini-pro",
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{
+						OfUser: &openai.ChatCompletionUserMessageParam{
+							Content: openai.StringOrUserRoleContentUnion{Value: "Tell me about AI Gateways"},
+							Role:    openai.ChatMessageRoleUser,
+						},
+					},
+					{
+						OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+							Content: openai.StringOrAssistantRoleContentUnion{Value: "AI Gateways route requests to LLM providers."},
+							Role:    openai.ChatMessageRoleAssistant,
+						},
+					},
+				},
+			},
+			wantHeaderMut: []internalapi.Header{
+				{":path", "publishers/google/models/gemini-pro:generateContent"},
+			},
+			wantBody: wantBdyTrailingAssistant,
 		},
 	}
 
