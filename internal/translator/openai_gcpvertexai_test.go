@@ -1237,7 +1237,7 @@ data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}],"usageMetadata":{
 			wantHeaderMut: nil,
 			wantBodyMut: []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"let me think step by step and reply you."}}],"object":"chat.completion.chunk"}
 
-data: {"choices":[{"index":0,"delta":{"content":"Hello","role":"assistant"}}],"object":"chat.completion.chunk"}
+data: {"choices":[{"index":0,"delta":{"content":"Hello"}}],"object":"chat.completion.chunk"}
 
 data: {"choices":[],"object":"chat.completion.chunk","usage":{"prompt_tokens":5,"completion_tokens":13,"total_tokens":18,"completion_tokens_details":{"reasoning_tokens":10},"prompt_tokens_details":{}}}
 
@@ -1259,7 +1259,7 @@ data: {"candidates":[{"content":{"parts":[{"text":"The answer is 42.", "thoughtS
 			wantHeaderMut: nil,
 			wantBodyMut: []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"let me think about this."}}],"object":"chat.completion.chunk"}
 
-data: {"choices":[{"index":0,"delta":{"content":"The answer is 42.","role":"assistant","thinking_blocks":[{"type":"thinking","signature":"dGVzdHNpZ25hdHVyZQ=="}]}}],"object":"chat.completion.chunk"}
+data: {"choices":[{"index":0,"delta":{"content":"The answer is 42.","thinking_blocks":[{"type":"thinking","signature":"dGVzdHNpZ25hdHVyZQ=="}]}}],"object":"chat.completion.chunk"}
 
 data: {"choices":[],"object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":23,"total_tokens":33,"completion_tokens_details":{"reasoning_tokens":15},"prompt_tokens_details":{}}}
 
@@ -1852,7 +1852,6 @@ data: {"candidates": [
 				{
 					Index: int64(0),
 					Delta: &openai.ChatCompletionResponseChunkChoiceDelta{
-						Role: "assistant",
 						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
 							{
 								Index: int64(1),
@@ -1997,6 +1996,31 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishRe
 	outputTokens, ok := tokenUsage.OutputTokens()
 	require.True(t, ok)
 	require.Equal(t, uint32(18), outputTokens)
+}
+
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingRoleOnce(t *testing.T) {
+	translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+	for _, tt := range []struct {
+		event       string
+		wantChoices string
+	}{
+		{
+			event:       `{"responseId":"local-two-deltas","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello"}]}}]}`,
+			wantChoices: `[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]`,
+		},
+		{
+			event:       `{"responseId":"local-two-deltas","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" from Gemini!"}]},"finishReason":"STOP"}]}`,
+			wantChoices: `[{"index":0,"delta":{"content":" from Gemini!"},"finish_reason":"stop"}]`,
+		},
+	} {
+		_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader("data: "+tt.event+"\n\n"), false, nil)
+		require.NoError(t, err)
+		var chunk struct {
+			Choices json.RawMessage `json:"choices"`
+		}
+		require.NoError(t, json.Unmarshal(bytes.TrimPrefix(body, []byte("data: ")), &chunk))
+		assert.JSONEq(t, tt.wantChoices, string(chunk.Choices))
+	}
 }
 
 func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingEndOfStream(t *testing.T) {

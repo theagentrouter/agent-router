@@ -82,6 +82,7 @@ type openAIToGCPVertexAITranslatorV1ChatCompletion struct {
 	bufferedBody      []byte // Buffer for incomplete JSON chunks.
 	requestModel      internalapi.RequestModel
 	toolCallIndex     int64
+	roleSent          map[int64]bool // Tracks the first content delta for each OpenAI choice.
 	// streamedToolCall records whether any tool call has been emitted so far in
 	// the streaming response. Newer Gemini models (e.g. gemini-3.5-flash,
 	// gemini-3.1-flash-lite) stream the terminal STOP on a separate chunk that no
@@ -397,6 +398,9 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) extractToolCallsFromGemi
 func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAIStreamingChoices(candidates []*genai.Candidate) ([]openai.ChatCompletionResponseChunkChoice, error) {
 	responseMode := o.responseMode
 	choices := make([]openai.ChatCompletionResponseChunkChoice, 0, len(candidates))
+	if o.roleSent == nil {
+		o.roleSent = make(map[int64]bool)
+	}
 
 	for i, candidate := range candidates {
 		if candidate == nil {
@@ -411,9 +415,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 		toolCalls := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
 		var err error
 		if candidate.Content != nil {
-			delta := &openai.ChatCompletionResponseChunkChoiceDelta{
-				Role: openai.ChatMessageRoleAssistant,
-			}
+			delta := &openai.ChatCompletionResponseChunkChoiceDelta{}
 
 			// Extract thought summary and text from parts for streaming (delta).
 			thoughtSummary, content, signature := extractTextAndThoughtSummaryFromGeminiParts(candidate.Content.Parts, responseMode)
@@ -447,6 +449,10 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 				}}
 			}
 
+			if !o.roleSent[choice.Index] {
+				delta.Role = openai.ChatMessageRoleAssistant
+				o.roleSent[choice.Index] = true
+			}
 			choice.Delta = delta
 		} else {
 			choice.Delta = &openai.ChatCompletionResponseChunkChoiceDelta{}

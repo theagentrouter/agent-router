@@ -637,17 +637,17 @@ data: [DONE]
 			expStatus: http.StatusOK,
 			expResponseBody: `data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"Hello","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"! How","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"! How"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" can I","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" can I"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" help","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" help"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" you","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" you"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" today","role":"assistant"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":" today"}}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
-data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"?","role":"assistant"},"finish_reason":"stop"}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
+data: {"id":"msg_123","choices":[{"index":0,"delta":{"content":"?"},"finish_reason":"stop"}],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk"}
 
 data: {"id":"msg_123","choices":[],"created":123,"model":"gemini-3.5-flash","object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":7,"total_tokens":17,"completion_tokens_details":{},"prompt_tokens_details":{}}}
 
