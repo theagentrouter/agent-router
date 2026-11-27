@@ -162,6 +162,49 @@ func TestResponseModel_AWSAnthropic(t *testing.T) {
 	require.Equal(t, uint32(5), outputTokens)
 }
 
+func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_StructuredOutput(t *testing.T) {
+	const schema = `{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`
+	request := &openai.ChatCompletionRequest{
+		Model: "claude",
+		Messages: []openai.ChatCompletionMessageParamUnion{{
+			OfUser: &openai.ChatCompletionUserMessageParam{
+				Role:    openai.ChatMessageRoleUser,
+				Content: openai.StringOrUserRoleContentUnion{Value: "Say hello"},
+			},
+		}},
+		ResponseFormat: &openai.ChatCompletionResponseFormatUnion{
+			OfJSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+				Type: "json_schema",
+				JSONSchema: openai.ChatCompletionResponseFormatJSONSchemaJSONSchema{
+					Name:   "answer",
+					Schema: []byte(schema),
+				},
+			},
+		},
+	}
+	for _, model := range []string{
+		"anthropic.claude-opus-5-5",
+		"global.anthropic.claude-sonnet-5-5",
+		"global.anthropic.claude-haiku-5-5",
+		"global.anthropic.claude-opus-4-7",
+		"global.anthropic.claude-opus-4-8",
+		"global.anthropic.claude-opus-5",
+		"global.anthropic.claude-sonnet-5",
+		"global.anthropic.claude-fable-5",
+		"global.anthropic.claude-fable-5-1",
+		"global.anthropic.claude-fable-5-2",
+	} {
+		t.Run(model, func(t *testing.T) {
+			translator := NewChatCompletionOpenAIToAWSAnthropicTranslator("", model)
+			_, body, err := translator.RequestBody(nil, request, false)
+			require.NoError(t, err)
+			format := gjson.GetBytes(body, "output_config.format")
+			require.Equal(t, "json_schema", format.Get("type").String())
+			require.JSONEq(t, schema, format.Get("schema").Raw)
+		})
+	}
+}
+
 func TestOpenAIToAWSAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T) {
 	// Define a common input request to use for both standard and vertex tests.
 	openAIReq := &openai.ChatCompletionRequest{

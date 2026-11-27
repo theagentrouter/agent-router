@@ -808,7 +808,7 @@ func TestOutputConfigAvailable(t *testing.T) {
 			model:     "claude-sonnet-4-6",
 			expected:  true,
 		},
-		// Newer models: supported on GCP Vertex AI, not on AWS Bedrock (InvokeModel).
+		// Additional model identifiers for Vertex AI and Bedrock.
 		{
 			name:      "claude-opus-4-7 supported on GCP",
 			apiSchema: filterapi.APISchemaGCPAnthropic,
@@ -816,10 +816,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-opus-4-7 not supported on AWS",
+			name:      "claude-opus-4-7 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-opus-4-7",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "claude-opus-4-8 supported on GCP",
@@ -828,10 +828,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-opus-4-8 not supported on AWS",
+			name:      "claude-opus-4-8 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-opus-4-8",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "claude-fable-5 supported on GCP",
@@ -840,10 +840,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-fable-5 not supported on AWS",
+			name:      "claude-fable-5 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-fable-5",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "claude-opus-5 supported on GCP",
@@ -852,10 +852,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-opus-5 not supported on AWS",
+			name:      "claude-opus-5 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-opus-5",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "claude-opus-5-5 supported on GCP",
@@ -864,10 +864,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-opus-5-5 not supported on AWS",
+			name:      "claude-opus-5-5 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-opus-5-5",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "claude-sonnet-5-5 supported on GCP",
@@ -876,10 +876,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-sonnet-5-5 not supported on AWS",
+			name:      "claude-sonnet-5-5 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-sonnet-5-5",
-			expected:  false,
+			expected:  true,
 		},
 		{
 			name:      "claude-haiku-5-5 supported on GCP",
@@ -888,10 +888,10 @@ func TestOutputConfigAvailable(t *testing.T) {
 			expected:  true,
 		},
 		{
-			name:      "claude-haiku-5-5 not supported on AWS",
+			name:      "claude-haiku-5-5 supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-haiku-5-5",
-			expected:  false,
+			expected:  true,
 		},
 		// Unsupported models on either backend.
 		{
@@ -1491,12 +1491,10 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			},
 		},
 		{
-			// claude-opus-4-8 is supported on GCP Vertex AI but not on AWS Bedrock
-			// (InvokeModel), so structured output must be enabled here.
 			name:      "structured output enabled on GCP for GCP-only model",
 			apiSchema: filterapi.APISchemaGCPAnthropic,
 			request: &openai.ChatCompletionRequest{
-				Model:               "claude-opus-4-8",
+				Model:               "claude-mythos-preview",
 				MaxCompletionTokens: ptr.To(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{
@@ -1520,12 +1518,10 @@ func TestBuildAnthropicParamsWithStructuredOutput(t *testing.T) {
 			},
 		},
 		{
-			// Mirror of the case above: the same GCP-only model must NOT enable
-			// structured output on the AWS Bedrock (InvokeModel) path.
 			name:      "structured output skipped on AWS for GCP-only model",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			request: &openai.ChatCompletionRequest{
-				Model:               "claude-opus-4-8",
+				Model:               "claude-mythos-preview",
 				MaxCompletionTokens: ptr.To(int64(1024)),
 				Messages: []openai.ChatCompletionMessageParamUnion{
 					{OfUser: &openai.ChatCompletionUserMessageParam{

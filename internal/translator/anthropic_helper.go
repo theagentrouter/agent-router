@@ -653,20 +653,23 @@ func modelContainsAny(model internalapi.RequestModel, identifiers []string) bool
 	return false
 }
 
-// Structured output (OutputConfig) support differs by backend. The supported
-// model list on AWS Bedrock (InvokeModel) is a strict subset of the list on
-// GCP Vertex AI, so the lists are maintained separately and selected by schema.
-// See: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
-
 // awsOutputConfigModels lists model identifiers that support structured outputs
-// on AWS Bedrock via the InvokeModel API: Claude Opus 4.6, Claude Sonnet 4.6,
-// Claude Sonnet 4.5, Claude Opus 4.5, and Claude Haiku 4.5.
+// on AWS Bedrock via the InvokeModel API.
+// See: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-structured-outputs.html
 var awsOutputConfigModels = []string{
 	"opus-4-5",   // Claude Opus 4.5
 	"sonnet-4-5", // Claude Sonnet 4.5
 	"haiku-4-5",  // Claude Haiku 4.5
 	"opus-4-6",   // Claude Opus 4.6
 	"sonnet-4-6", // Claude Sonnet 4.6
+	"opus-5-5",   // Claude Opus 5.5
+	"sonnet-5-5", // Claude Sonnet 5.5
+	"haiku-5-5",  // Claude Haiku 5.5
+	"opus-4-7",   // Claude Opus 4.7
+	"opus-4-8",   // Claude Opus 4.8
+	"opus-5",     // Claude Opus 5
+	"sonnet-5",   // Claude Sonnet 5
+	"fable-5",    // Claude Fable 5
 }
 
 // gcpOutputConfigModels lists model identifiers that support structured outputs
