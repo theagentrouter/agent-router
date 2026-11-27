@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwapiv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -290,6 +291,9 @@ func TestMaybeModifyCluster_nilLoadAssignmentSingleBackend(t *testing.T) {
 			{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "aaa"}, {Name: "bbb"}}},
 		}},
 	}))
+	for _, name := range []string{"only", "disabled", "live", "aaa", "bbb"} {
+		createAIServiceBackend(t, c, "ns", name, name)
+	}
 	s := newTestEndpointsServer(t, c)
 
 	for _, tc := range []struct {
@@ -310,26 +314,36 @@ func TestMaybeModifyCluster_nilLoadAssignmentSingleBackend(t *testing.T) {
 	}
 }
 
-func TestSingleBackendRefIndex(t *testing.T) {
-	zero := ptr.To[int32](0)
+func TestMatchBackendRefs(t *testing.T) {
+	key := func(name string) *backendRefKey {
+		return &backendRefKey{kind: "Backend", key: client.ObjectKey{Namespace: "ns", Name: name}}
+	}
+	emit := func(names ...string) []backendRefKey {
+		var keys []backendRefKey
+		for _, n := range names {
+			keys = append(keys, *key(n))
+		}
+		return keys
+	}
+	const amb = ambiguousBackendRef
 	for _, tc := range []struct {
-		name      string
-		refs      []aigv1b1.AIGatewayRouteRuleBackendRef
-		wantIndex int
-		wantOK    bool
+		name     string
+		resolved []*backendRefKey
+		emitted  []backendRefKey
+		want     []int
 	}{
-		{name: "no backendRefs", wantIndex: -1},
-		{name: "all zero weight", refs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Weight: zero}}, wantIndex: -1},
-		{name: "one", refs: []aigv1b1.AIGatewayRouteRuleBackendRef{{}}, wantIndex: 0, wantOK: true},
-		{name: "one live", refs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Weight: zero}, {}}, wantIndex: 1, wantOK: true},
-		{name: "several", refs: []aigv1b1.AIGatewayRouteRuleBackendRef{{}, {}}},
+		{name: "all kept", resolved: []*backendRefKey{key("a"), key("b")}, emitted: emit("a", "b"), want: []int{0, 1}},
+		{name: "unresolved left out", resolved: []*backendRefKey{nil, key("a"), key("b")}, emitted: emit("a", "b"), want: []int{1, 2}},
+		{name: "shared Backend all kept", resolved: []*backendRefKey{key("a"), key("a")}, emitted: emit("a", "a"), want: []int{0, 1}},
+		// One of two backendRefs to the same Backend was left out, e.g. for a missing ReferenceGrant,
+		// which the AIServiceBackend lookup cannot see.
+		{name: "shared Backend one left out", resolved: []*backendRefKey{key("a"), key("a")}, emitted: emit("a"), want: []int{amb}},
+		{name: "shared Backend one left out, others kept", resolved: []*backendRefKey{key("a"), key("b"), key("a")}, emitted: emit("b", "a"), want: []int{1, 2}},
+		{name: "revision skew", resolved: []*backendRefKey{key("a")}, emitted: emit("b"), want: []int{amb}},
+		{name: "nothing emitted", resolved: []*backendRefKey{key("a")}, want: []int{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			index, ok := singleBackendRefIndex(&aigv1b1.AIGatewayRouteRule{BackendRefs: tc.refs})
-			require.Equal(t, tc.wantOK, ok)
-			if ok || tc.wantIndex == -1 {
-				require.Equal(t, tc.wantIndex, index)
-			}
+			require.Equal(t, tc.want, matchBackendRefs(tc.resolved, tc.emitted))
 		})
 	}
 }
@@ -421,29 +435,31 @@ func TestStampLoadAssignment_localityMetadata(t *testing.T) {
 
 	t.Run("backendRefs sharing a Backend that cannot be told apart are left unstamped", func(t *testing.T) {
 		const rule = "httproute/ns/myroute/rule/2"
-		for name, endpoints := range map[string][]*endpointv3.LocalityLbEndpoints{
+		malformed := egLocality("ns", "backend-aaa", "", "10.0.0.1", 80)
+		malformed.Locality = &corev3.Locality{Region: rule + "/backend/x"}
+		for name, tc := range map[string]struct {
+			endpoints []*endpointv3.LocalityLbEndpoints
+			expected  []string
+		}{
 			// preferLocal / weightedZones: per-zone localities carry no Region.
 			"zonal": {
-				egLocality("ns", "backend-aaa", "zone-a", "10.0.0.1", 80),
-				egLocality("ns", "backend-aaa", "zone-b", "10.0.0.2", 80),
+				endpoints: []*endpointv3.LocalityLbEndpoints{
+					egLocality("ns", "backend-aaa", "zone-a", "10.0.0.1", 80),
+					egLocality("ns", "backend-aaa", "zone-b", "10.0.0.2", 80),
+				},
+				expected: []string{"", ""},
 			},
-			// Fewer localities than backendRefs, e.g. one was left out of the HTTPRoute.
-			"count mismatch": {regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80)},
 			"malformed region": {
-				regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80),
-				func() *endpointv3.LocalityLbEndpoints {
-					l := egLocality("ns", "backend-aaa", "", "10.0.0.1", 80)
-					l.Locality = &corev3.Locality{Region: rule + "/backend/x"}
-					return l
-				}(),
+				endpoints: []*endpointv3.LocalityLbEndpoints{regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80), malformed},
+				expected:  []string{internalapi.PerRouteRuleRefBackendName("ns", "aaa-scale", "myroute", 2, 1), ""},
 			},
 		} {
 			t.Run(name, func(t *testing.T) {
-				cla := &endpointv3.ClusterLoadAssignment{ClusterName: rule, Endpoints: endpoints}
+				cla := &endpointv3.ClusterLoadAssignment{ClusterName: rule, Endpoints: tc.endpoints}
 				resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{LoadAssignment: cla})
 				require.NoError(t, err)
-				for _, l := range resp.GetLoadAssignment().Endpoints {
-					require.Empty(t, endpointBackendName(l.LbEndpoints[0]))
+				for i, l := range resp.GetLoadAssignment().Endpoints {
+					require.Equal(t, tc.expected[i], endpointBackendName(l.LbEndpoints[0]))
 				}
 			})
 		}
@@ -548,5 +564,85 @@ func TestMaybeModifyCluster_nilLoadAssignmentDroppedBackendRef(t *testing.T) {
 			},
 		}))
 		require.ErrorContains(t, failing.maybeModifyCluster(t.Context(), &clusterv3.Cluster{Name: "httproute/ns/myroute/rule/0"}, nil), "boom")
+	})
+}
+
+// TestStampLoadAssignment_rejectedCrossNamespaceBackendRef checks that a cross-namespace backendRef
+// that the controller left out of the HTTPRoute for lack of a ReferenceGrant does not make a kept
+// backendRef resolving to the same Backend ambiguous.
+func TestStampLoadAssignment_rejectedCrossNamespaceBackendRef(t *testing.T) {
+	c := newFakeClient()
+	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "ns"},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+			{Name: "rejected", Namespace: ptr.To[gwapiv1.Namespace]("other")},
+			{Name: "aaa"},
+		}}}},
+	}))
+	createAIServiceBackend(t, c, "ns", "aaa", "backend-aaa")
+	// An AIServiceBackend in another namespace using the same EG Backend.
+	require.NoError(t, c.Create(t.Context(), &aigv1b1.AIServiceBackend{
+		ObjectMeta: metav1.ObjectMeta{Name: "rejected", Namespace: "other"},
+		Spec: aigv1b1.AIServiceBackendSpec{BackendRef: gwapiv1.BackendObjectReference{
+			Name:      "backend-aaa",
+			Namespace: ptr.To[gwapiv1.Namespace]("ns"),
+			Kind:      ptr.To[gwapiv1.Kind]("Backend"),
+			Group:     ptr.To[gwapiv1.Group]("gateway.envoyproxy.io"),
+		}},
+	}))
+	createHTTPRoute(t, c, "ns", "myroute", []string{"backend-aaa"})
+	s := newTestEndpointsServer(t, c)
+	const rule = "httproute/ns/myroute/rule/0"
+	aaa := internalapi.PerRouteRuleRefBackendName("ns", "aaa", "myroute", 0, 1)
+
+	t.Run("locality", func(t *testing.T) {
+		resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{
+				ClusterName: rule,
+				Endpoints:   []*endpointv3.LocalityLbEndpoints{regionLocality(rule, 0, "ns", "backend-aaa", "10.0.0.1", 80)},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, aaa, endpointBackendName(resp.GetLoadAssignment().Endpoints[0].LbEndpoints[0]))
+	})
+
+	t.Run("zonal locality", func(t *testing.T) {
+		resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{
+				ClusterName: rule,
+				Endpoints:   []*endpointv3.LocalityLbEndpoints{egLocality("ns", "backend-aaa", "zone-a", "10.0.0.1", 80)},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, aaa, endpointBackendName(resp.GetLoadAssignment().Endpoints[0].LbEndpoints[0]))
+	})
+
+	t.Run("nil LoadAssignment", func(t *testing.T) {
+		cluster := &clusterv3.Cluster{Name: rule}
+		require.NoError(t, s.maybeModifyCluster(t.Context(), cluster, nil))
+		require.Equal(t, aaa, clusterBackendName(cluster))
+	})
+
+	t.Run("granted", func(t *testing.T) {
+		// Once a ReferenceGrant allows it, the controller keeps both backendRefs, and a single
+		// locality cannot be told apart without its Region.
+		require.NoError(t, c.Create(t.Context(), &gwapiv1b1.ReferenceGrant{
+			ObjectMeta: metav1.ObjectMeta{Name: "grant", Namespace: "other"},
+			Spec: gwapiv1b1.ReferenceGrantSpec{
+				From: []gwapiv1b1.ReferenceGrantFrom{{Group: "aigateway.envoyproxy.io", Kind: "AIGatewayRoute", Namespace: "ns"}},
+				To:   []gwapiv1b1.ReferenceGrantTo{{Group: "aigateway.envoyproxy.io", Kind: "AIServiceBackend"}},
+			},
+		}))
+		t.Cleanup(func() {
+			_ = c.Delete(context.Background(), &gwapiv1b1.ReferenceGrant{ObjectMeta: metav1.ObjectMeta{Name: "grant", Namespace: "other"}})
+		})
+		resp, err := s.PostEndpointsModify(t.Context(), &egextension.PostEndpointsModifyRequest{
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{
+				ClusterName: rule,
+				Endpoints:   []*endpointv3.LocalityLbEndpoints{egLocality("ns", "backend-aaa", "zone-a", "10.0.0.1", 80)},
+			},
+		})
+		require.NoError(t, err)
+		require.Empty(t, endpointBackendName(resp.GetLoadAssignment().Endpoints[0].LbEndpoints[0]))
 	})
 }
