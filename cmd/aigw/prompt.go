@@ -280,3 +280,81 @@ func (u *terminalUI) confirm(label string, def bool) (bool, error) {
 		}
 	}
 }
+
+// selectOne draws items as a list of choices and returns the index the user selected.
+// The cursor starts at def.
+func (u *terminalUI) selectOne(title string, items []selectItem, def int) (int, error) {
+	cursor, drawn := def, 0
+
+	width := 0
+	for _, it := range items {
+		width = max(width, utf8.RuneCountInString(it.label))
+	}
+
+	render := func(final bool) {
+		var b strings.Builder
+		if drawn > 0 {
+			// Return to the top of the previous drawing and clear from there down.
+			fmt.Fprintf(&b, "\x1b[%dA\x1b[J", drawn)
+		}
+		lines := 0
+		writeln := func(s string) {
+			b.WriteString(s + "\r\n")
+			lines++
+		}
+		writeln("  " + u.bold(title))
+		if !final {
+			writeln("  " + u.dim("↑↓/jk move · enter selects · q aborts"))
+			writeln("")
+		}
+		for i, it := range items {
+			if final && i != cursor {
+				continue
+			}
+			pointer, radio := "  ", "( )"
+			if i == cursor {
+				radio = u.cyan("(•)")
+				if !final {
+					pointer = u.cyan("› ")
+				}
+			}
+			pad := strings.Repeat(" ", width-utf8.RuneCountInString(it.label))
+			writeln(fmt.Sprintf("%s%s %s%s  %s", pointer, radio, it.label, pad, u.dim(it.detail)))
+		}
+		_, _ = io.WriteString(u.out, b.String())
+		drawn = lines
+	}
+
+	render(false)
+	for {
+		c, err := u.readByte()
+		if err != nil {
+			return 0, err
+		}
+		switch c {
+		case 'k':
+			cursor = max(cursor-1, 0)
+		case 'j':
+			cursor = min(cursor+1, len(items)-1)
+		case '\r', '\n':
+			render(true)
+			return cursor, nil
+		case 'q', keyCtrlC, keyCtrlD:
+			return 0, errSetupAborted
+		case keyEscape:
+			key, err := u.skipEscapeSequence()
+			if err != nil {
+				return 0, errSetupAborted
+			}
+			switch key {
+			case 'A':
+				cursor = max(cursor-1, 0)
+			case 'B':
+				cursor = min(cursor+1, len(items)-1)
+			}
+		default:
+			continue
+		}
+		render(false)
+	}
+}
