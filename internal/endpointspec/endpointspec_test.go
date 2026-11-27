@@ -2023,10 +2023,11 @@ func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
 
 	t.Run("chat completions assistant thinking_blocks", func(t *testing.T) {
 		const thinkingMarker = "The user asked about account marker-12345"
+		const reasoningMarker = "streamed-reasoning-marker"
 		const signatureMarker = "sig-marker"
 		const dataMarker = "ZGF0YS1tYXJrZXI="
 		body := `{"model":"m","messages":[{"role":"user","content":"u"},` +
-			`{"role":"assistant","content":"a","thinking_blocks":[` +
+			`{"role":"assistant","content":"a","reasoning_content":"` + reasoningMarker + `","thinking_blocks":[` +
 			`{"type":"thinking","thinking":"` + thinkingMarker + `","signature":"` + signatureMarker + `"},` +
 			`{"type":"redacted_thinking","data":"` + dataMarker + `"}]}]}`
 		_, req, _, _, err := ChatCompletionsEndpointSpec{}.ParseBody([]byte(body), false)
@@ -2035,6 +2036,7 @@ func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
 		require.NoError(t, err)
 		out := mustMarshal(t, redacted)
 		require.NotContains(t, out, thinkingMarker)
+		require.NotContains(t, out, reasoningMarker)
 		require.NotContains(t, out, signatureMarker)
 		require.NotContains(t, out, dataMarker)
 		require.Equal(t, []openai.ThinkingBlock{
@@ -2042,6 +2044,7 @@ func TestRedactSensitiveInfoFromRequest_EndUserIdentifiers(t *testing.T) {
 			{Type: "redacted_thinking", Data: redaction.RedactString(dataMarker)},
 		}, redacted.Messages[1].OfAssistant.ThinkingBlocks)
 		require.Contains(t, mustMarshal(t, req), thinkingMarker, "original must not be mutated")
+		require.Contains(t, mustMarshal(t, req), reasoningMarker)
 	})
 
 	t.Run("chat completions audio_url and video_url parts", func(t *testing.T) {

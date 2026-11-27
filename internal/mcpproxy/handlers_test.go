@@ -85,9 +85,7 @@ func TestMergeToolsList_AuthorizationFiltering(t *testing.T) {
 		if len(scopes) > 0 {
 			claims["scope"] = scopes
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
-		signed, _ := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
-		return signed
+		return verifiedJWTClaims(claims)
 	}
 
 	auth := &filterapi.MCPRouteAuthorization{
@@ -147,7 +145,7 @@ func TestMergeToolsList_AuthorizationFiltering(t *testing.T) {
 			// Clear static toolSelectors so only authorization rules govern visibility.
 			proxy.routes["test-route"].toolSelectors = nil
 			if tt.token != "" {
-				proxy.requestHeaders = http.Header{"Authorization": []string{"Bearer " + tt.token}}
+				proxy.requestHeaders = http.Header{jwtClaimsHeaderKey: []string{tt.token}}
 			} else {
 				proxy.requestHeaders = http.Header{}
 			}

@@ -377,7 +377,7 @@ func TestServer_maybeUpdateMCPRoutes(t *testing.T) {
 										filterNameExtAuth:    emptyConfig,
 									},
 									// rule/0 (frontend MCP proxy route) gets the dynamic-metadata -> header
-									// injection so the HTTP MCP proxy can read the backend subset; authn is
+									// injection so the HTTP MCP proxy can read the backend subset and the verified JWT payload; authn is
 									// preserved.
 									RequestHeadersToAdd: []*corev3.HeaderValueOption{
 										{
@@ -385,7 +385,15 @@ func TestServer_maybeUpdateMCPRoutes(t *testing.T) {
 											KeepEmptyValue: true,
 											Header: &corev3.HeaderValue{
 												Key:   internalapi.MCPBackendSubsetHeader,
-												Value: `%DYNAMIC_METADATA(["aigateway.envoy.io", "mcp_backend_subset"])%`,
+												Value: `%DYNAMIC_METADATA(aigateway.envoy.io:mcp_backend_subset)%`,
+											},
+										},
+										{
+											AppendAction:   corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+											KeepEmptyValue: true,
+											Header: &corev3.HeaderValue{
+												Key:   internalapi.MCPJWTClaimsHeader,
+												Value: `%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:mcp-jwt-provider)%`,
 											},
 										},
 									},

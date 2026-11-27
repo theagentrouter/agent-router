@@ -678,6 +678,15 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy_ClaimToHeaders(t *testing
 	require.Equal(t, egv1a1.ClaimToHeader{Claim: "sub", Header: "X-User-Id"}, provider.ClaimToHeaders[1])
 	require.Equal(t, egv1a1.ClaimToHeader{Claim: "email", Header: "X-User-Email"}, provider.ClaimToHeaders[2])
 	require.Equal(t, egv1a1.ClaimToHeader{Claim: "realm_access.roles", Header: "X-User-Roles"}, provider.ClaimToHeaders[3])
+
+	// The provider name keys the verified payload in the jwt_authn dynamic metadata, which the
+	// extension server renders into internalapi.MCPJWTClaimsHeader for the MCP proxy.
+	require.Equal(t, internalapi.MCPJWTProviderName, provider.Name)
+	// The token must only be extracted from the Authorization Bearer header, never from the
+	// access_token query parameter.
+	require.Equal(t, &egv1a1.JWTExtractor{
+		Headers: []egv1a1.JWTHeaderExtractor{{Name: "Authorization", ValuePrefix: ptr.To("Bearer ")}},
+	}, provider.ExtractFrom)
 }
 
 func Test_buildWWWAuthenticateHeaderValue(t *testing.T) {

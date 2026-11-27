@@ -55,6 +55,19 @@ const (
 	// MCPSubjectHeader carries the authenticated subject (the JWT "sub" claim) as extracted
 	// and verified by Envoy's JWT filter via a claimToHeaders mapping.
 	MCPSubjectHeader = EnvoyAIGatewayHeaderPrefix + "mcp-subject"
+	// MCPJWTClaimsHeader carries the JSON payload of the JWT that Envoy's JWT filter verified for the
+	// request. The gateway renders it from the jwt_authn filter's dynamic metadata (see
+	// MCPJWTProviderName) and always overwrites any client-supplied value, so it is the only source of
+	// JWT claims and scopes the MCP proxy trusts for authorization. The proxy must never parse the
+	// client-controlled Authorization header for that purpose: Envoy may have verified a different
+	// token (e.g. one passed in the access_token query parameter) than the one in that header.
+	MCPJWTClaimsHeader = EnvoyAIGatewayHeaderPrefix + "mcp-jwt-claims"
+	// MCPJWTProviderName is the name of the JWT provider in the SecurityPolicy generated for an
+	// MCPRoute with OAuth configured. Envoy Gateway uses it as the key of the verified payload in the
+	// jwt_authn filter's dynamic metadata.
+	MCPJWTProviderName = "mcp-jwt-provider"
+	// EnvoyJWTAuthnFilterMetadataNamespace is the dynamic metadata namespace of Envoy's jwt_authn filter.
+	EnvoyJWTAuthnFilterMetadataNamespace = "envoy.filters.http.jwt_authn"
 	// MCPBackendSubsetHeader is the trusted, shim-supplied comma-separated backend subset a request may fan out to.
 	MCPBackendSubsetHeader = EnvoyAIGatewayHeaderPrefix + "mcp-backend-subset"
 	// MCPBackendSubsetMetadataKey is the dynamic metadata key the shim sets; Envoy renders it into MCPBackendSubsetHeader.
