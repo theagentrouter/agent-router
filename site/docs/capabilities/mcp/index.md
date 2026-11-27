@@ -469,6 +469,62 @@ spec:
 
 Rules are evaluated in order. The first rule that matches the request (Target, Source, and CEL) determines the action (Allow/Deny). If no rules match, the `defaultAction` is applied.
 
+Authorization applies to the MCP methods a client sends to backends, not only to tool calls:
+`resources/*`, `prompts/*`, `completion/complete`, `logging/setLevel`, `subscriptions/listen` and `notifications/roots/list_changed`
+are evaluated against the same rules, with `request.mcp.method` and `request.mcp.backend` set accordingly.
+Two kinds of messages are not evaluated. The first is session setup and discovery (`initialize` and
+`server/discover`); `backendSelector` controls which backends those reach. The second is
+replies to requests a backend sent to the client, such as sampling or elicitation results and their
+`notifications/progress`.
+Rules with a `target` only match `tools/call` (and the `tools/list` filtering), so under the default
+`defaultAction: Deny` these other methods are denied unless a rule without a `target` allows them.
+
+How a denial looks depends on the method:
+
+- **Methods addressed to one backend** (`resources/read`, `resources/subscribe`, `resources/unsubscribe`, `prompts/get`,
+  `completion/complete`) are rejected with `403`.
+- **Methods that fan out to every backend** (`resources/list`, `resources/templates/list`, `prompts/list`,
+  `logging/setLevel` and `notifications/roots/list_changed`) are evaluated per backend, and backends that are
+  not allowed are skipped.
+- **`subscriptions/listen`** skips denied backends for list-change notifications. If any resource in
+  `resourceSubscriptions` belongs to a denied backend, the whole request is rejected with `403`.
+- **`tools/list`** is not evaluated per backend or as `tools/list`. Each listed tool is evaluated as a
+  `tools/call` of that tool, and the response only includes the tools the caller may call. A rule on
+  `request.mcp.method == "tools/list"` never matches.
+
+When a route has an authorization policy, list and `resources/read` results are returned with
+`cacheScope: private`, since what they contain depends on the caller.
+
+For example, to allow reading resources and prompts on the `github` backend:
+
+```yaml
+authorization:
+  rules:
+    - cel: request.mcp.method in ["resources/list", "resources/read", "prompts/list", "prompts/get"] && request.mcp.backend == "github"
+```
+
+:::note
+Earlier releases evaluated `authorization` only for `tools/call` and `tools/list`, and forwarded every other
+method without checking it. Routes whose rules all have a `target` therefore exposed resources and prompts
+even with `defaultAction: Deny`. These methods are now denied on such routes. To keep the previous behavior
+while you write narrower rules, add this rule **first** in the list. It allows every method except tool calls,
+so tool authorization is unaffected:
+
+```yaml
+authorization:
+  rules:
+    - cel: request.mcp.method != "tools/call" # allow all non-tool methods (previous behavior)
+    # ...existing rules
+```
+
+This rule leaves resources and prompts open to every caller. Prefer rules scoped to specific methods and backends, like the example above.
+
+Rules without a `target` are now also evaluated for non-tool methods. If such a rule's CEL expression reads
+tool-only fields, such as `request.mcp.params.arguments`, guard it with
+`request.mcp.method == "tools/call" && ...` or `has(...)`. Otherwise the expression fails to evaluate on other
+methods, and evaluation errors deny the request.
+:::
+
 #### Matchers
 
 | Matcher    | Description                                                                                                                                                         |

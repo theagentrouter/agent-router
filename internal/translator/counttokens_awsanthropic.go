@@ -80,7 +80,10 @@ func (t *countTokensToAWSAnthropicTranslator) RequestBody(rawBody []byte, body *
 
 	// awsAnthropicCountTokensPath strips any cross-region inference prefix and builds
 	// the /model/{modelId}/count-tokens path.
-	path := awsAnthropicCountTokensPath(model)
+	path, err := awsAnthropicCountTokensPath(model)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	newHeaders = []internalapi.Header{{pathHeaderName, path}, {contentLengthHeaderName, strconv.Itoa(len(newBody))}}
 	return

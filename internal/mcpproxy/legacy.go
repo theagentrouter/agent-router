@@ -704,21 +704,9 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 			Params:     p,
 		})
 		if !allowed {
-			// Specify the minimum required scopes in the WWW-Authenticate header.
-			// Reference: https://mcp.mintlify.app/specification/2025-11-25/basic/authorization#runtime-insufficient-scope-errors
-			if len(requiredScopes) > 0 {
-				// The resource_metadata URL is derived from this request so that it points at
-				// the host the client actually reached, whatever hostname or port that is.
-				var metadataURL string
-				if route.prm != nil {
-					metadataURL = resourceMetadataURL(r, route.prm, externalPath(r))
-				}
-				if challenge := buildInsufficientScopeHeader(requiredScopes, metadataURL); challenge != "" {
-					w.Header().Set("WWW-Authenticate", challenge)
-				}
-			}
+			m.setInsufficientScopeChallenge(w, r, route, requiredScopes)
 			onLegacyErrorResponse(w, http.StatusForbidden, "access denied")
-			return result, fmt.Errorf("authorization failed")
+			return result, errAuthorizationDenied
 		}
 	}
 
@@ -769,7 +757,7 @@ func (m *mcpRequestContext) proxyResponseBody(ctx context.Context, s *session, w
 				body, _ = jsonrpc.EncodeMessage(msg)
 			case *jsonrpc.Response:
 				if req != nil {
-					if err = m.maybeResponseModify(ctx, req, msg, backend.Name); err != nil {
+					if err = m.maybeResponseModify(ctx, s, req, msg, backend.Name); err != nil {
 						m.l.Error("failed to modify response", slog.String("error", err.Error()))
 						return err
 					}
@@ -841,7 +829,7 @@ func (m *mcpRequestContext) proxyResponseBody(ctx context.Context, s *session, w
 				case *jsonrpc.Response:
 					// Correct the ID to match the original request if possible.
 					if req != nil {
-						if err = m.maybeResponseModify(ctx, req, msg, backend.Name); err != nil {
+						if err = m.maybeResponseModify(ctx, s, req, msg, backend.Name); err != nil {
 							m.l.Error("failed to modify response", slog.String("error", err.Error()))
 							continue
 						}
@@ -912,13 +900,20 @@ func (m *mcpRequestContext) maybeUpdateProgressTokenMetadata(ctx context.Context
 // maybeResponseModify modifies the client->server response to include the backend name where needed.
 // URI rewriting uses the same raw-JSON helpers as the modern path so unknown
 // fields on tools/call, prompts/get, and resources/read results are preserved.
-func (m *mcpRequestContext) maybeResponseModify(_ context.Context, req *jsonrpc.Request, msg *jsonrpc.Response, backend filterapi.MCPBackendName) error {
+//
+// s is the client session the request belongs to; it may be nil, in which case no route-specific
+// rewriting (such as forcing private caching on authorized routes) is applied.
+func (m *mcpRequestContext) maybeResponseModify(_ context.Context, s *session, req *jsonrpc.Request, msg *jsonrpc.Response, backend filterapi.MCPBackendName) error {
 	if msg.Result == nil {
 		return nil
 	}
 	switch req.Method {
 	case "resources/read":
-		if rewritten, ok := rewriteResourcesReadResult(json.RawMessage(msg.Result), backend); ok {
+		var route *mcpProxyConfigRoute
+		if s != nil {
+			route = m.routes[s.route]
+		}
+		if rewritten, ok := rewriteResourcesReadResult(json.RawMessage(msg.Result), backend, routeHasAuthorization(route)); ok {
 			msg.Result = []byte(rewritten)
 		}
 	case "tools/call":
@@ -1078,6 +1073,9 @@ func (m *mcpRequestContext) handleResourceReadRequest(ctx context.Context, s *se
 		onLegacyErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in resource name %s", errBackendNotFound, backendName, p.URI)
 	}
+	if !m.authorizeBackendMethod(w, s, req.Method, backendName, p) {
+		return result, errAuthorizationDenied
+	}
 	sess := s.getCompositeSessionEntry(backendName)
 	if sess == nil {
 		// No session for this backend usually means backendSelector excluded it for this
@@ -1131,6 +1129,9 @@ func (m *mcpRequestContext) handleResourcesSubscriptionRequest(ctx context.Conte
 		onLegacyErrorResponse(w, http.StatusNotFound, fmt.Sprintf("unknown backend %s", backendName))
 		return result, fmt.Errorf("%w: unknown backend %s in resource name %s", errBackendNotFound, backendName, uri)
 	}
+	if !m.authorizeBackendMethod(w, s, req.Method, backendName, p) {
+		return result, errAuthorizationDenied
+	}
 	cse := s.getCompositeSessionEntry(backendName)
 	if cse == nil {
 		// No session for this backend usually means backendSelector excluded it for this
@@ -1162,6 +1163,19 @@ func (m *mcpRequestContext) handleResourcesSubscriptionRequest(ctx context.Conte
 	}
 	req.Params = param
 	return result, m.invokeAndProxyResponse(ctx, s, w, backend, cse, req, p, nil)
+}
+
+// authorizeBackendMethod evaluates the session route's authorization policy for a non-tool MCP
+// method addressed to a single backend (resources/read, resources/subscribe, prompts/get,
+// completion/complete, ...). On denial it writes the 403 response and returns false.
+func (m *mcpRequestContext) authorizeBackendMethod(w http.ResponseWriter, s *session, method string, backendName filterapi.MCPBackendName, params mcp.Params) bool {
+	route := m.routes[s.route]
+	allowed, requiredScopes := m.authorizeMethod(route, method, backendName, params)
+	if !allowed {
+		m.setInsufficientScopeChallenge(w, m.httpRequest, route, requiredScopes)
+		onLegacyErrorResponse(w, http.StatusForbidden, "access denied")
+	}
+	return allowed
 }
 
 var emptyJSONRPCMessage = []byte(`{}`)
@@ -1222,6 +1236,9 @@ func (m *mcpRequestContext) handlePromptGetRequest(ctx context.Context, s *sessi
 		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", p.Name))
 		return result, fmt.Errorf("%w: %s", errInvalidPromptName, p.Name)
 	}
+	if !m.authorizeBackendMethod(w, s, req.Method, backendName, p) {
+		return result, errAuthorizationDenied
+	}
 	cse := s.getCompositeSessionEntry(backendName)
 	if cse == nil {
 		// No session for this backend usually means backendSelector excluded it for this
@@ -1250,6 +1267,15 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 		// promptName is the client-facing prompt name, kept for error messages.
 		promptName string
 	)
+	if param.Ref == nil {
+		onLegacyErrorResponse(w, http.StatusBadRequest, "invalid params: missing ref")
+		return handlerResult{}, errors.New("invalid params: missing completion ref")
+	}
+	// Authorization sees the params as sent by the client, before the backend prefix is
+	// stripped below, consistent with tools/call, resources/read and prompts/get.
+	authzParams := *param
+	authzRef := *param.Ref
+	authzParams.Ref = &authzRef
 	switch param.Ref.Type {
 	case "ref/prompt":
 		promptName = param.Ref.Name
@@ -1274,6 +1300,9 @@ func (m *mcpRequestContext) handleCompletionComplete(ctx context.Context, s *ses
 	if param.Ref.Type == "ref/prompt" && !m.promptAllowed(s.route, backendName, param.Ref.Name) {
 		onLegacyErrorResponse(w, http.StatusBadRequest, fmt.Sprintf("invalid prompt name: %s", promptName))
 		return result, fmt.Errorf("%w: %s", errInvalidPromptName, promptName)
+	}
+	if !m.authorizeBackendMethod(w, s, req.Method, backendName, &authzParams) {
+		return result, errAuthorizationDenied
 	}
 
 	cse := s.getCompositeSessionEntry(backend.Name)
@@ -1424,9 +1453,19 @@ func sendToAllBackendsAndAggregateResponses[responseType any, paramsType mcp.Par
 	// This must be set early to handle any early returns that might occur.
 	m.perBackendMetricsRecorded = true
 
+	// Only backends the route's authorization policy allows for this method are contacted.
+	// Authorization sees the params as sent by the client. tools/list is excluded: it is
+	// authorized per tool in mergeToolsList, and a backend-level check (with no tool name)
+	// would never match tool-targeted rules and hide every allowed tool.
+	authorized := func(filterapi.MCPBackendName) bool { return true }
+	if request.Method != "tools/list" {
+		authorized = m.authorizedBackendFilter(m.routes[s.route], request.Method, p)
+	}
 	encoded, _ := json.Marshal(p)
 	request.Params = encoded
-	backendMsgs := s.sendToBackendsFiltered(ctx, http.MethodPost, request, p, span, filter)
+	backendMsgs := s.sendToBackendsFiltered(ctx, http.MethodPost, request, p, span, func(backendName filterapi.MCPBackendName, cse *compositeSessionEntry) bool {
+		return authorized(backendName) && (filter == nil || filter(cse))
+	})
 	return sendToAllBackendsAndAggregateResponsesImpl(ctx, backendMsgs, m, w, s, request, p, mergeFn, span)
 }
 
@@ -1634,7 +1673,11 @@ func parseParamsAndMaybeStartSpan[paramType mcp.Params](ctx context.Context, m *
 // handleNotificationsRootsListChanged handles the "notifications/roots/list_changed" JSON-RPC method.
 func (m *mcpRequestContext) handleNotificationsRootsListChanged(ctx context.Context, s *session, w http.ResponseWriter, req *jsonrpc.Request, params mcp.Params, span tracingapi.MCPSpan) error {
 	// Since notifications request doesn't expect a response, we can just send the request to all backends and return 202 Accepted per the spec.
-	eventChan := s.sendToAllBackends(ctx, http.MethodPost, req, params, span)
+	// Only backends the route's authorization policy allows for this method are notified.
+	authorized := m.authorizedBackendFilter(m.routes[s.route], req.Method, params)
+	eventChan := s.sendToBackendsFiltered(ctx, http.MethodPost, req, params, span, func(backendName filterapi.MCPBackendName, _ *compositeSessionEntry) bool {
+		return authorized(backendName)
+	})
 	w.Header().Set(sessionIDHeader, string(s.clientGatewaySessionID()))
 	w.WriteHeader(http.StatusAccepted)
 	// Just wait for all requests to complete and return 202 Accepted. There should be events sent from the backends per the spec.

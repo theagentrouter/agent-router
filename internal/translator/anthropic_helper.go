@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 	"time"
 
@@ -1502,11 +1501,15 @@ func messageToChatCompletion(anthropicResp *anthropic.Message, responseModel int
 // ("anthropic.claude-...") has the segment at index 0 and is left as-is. The base
 // model ID is then URL-escaped so ARNs and special characters are safe in the path.
 // See: https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CountTokens.html
-func awsAnthropicCountTokensPath(model string) string {
+func awsAnthropicCountTokensPath(model string) (string, error) {
 	if i := strings.Index(model, "anthropic."); i > 0 {
 		model = model[i:]
 	}
-	return fmt.Sprintf(awsBedrockCountTokensPathFormat, url.PathEscape(model))
+	segment, err := modelPathSegment(model)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(awsBedrockCountTokensPathFormat, segment), nil
 }
 
 // openAIToAnthropicCountTokensParams builds the Anthropic MessageCountTokensParams

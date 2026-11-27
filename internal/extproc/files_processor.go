@@ -173,7 +173,7 @@ func (p *filesProcessor) handleListRequestHeaders() (*extprocv3.ProcessingRespon
 
 	if after := queryParam(path, "after"); after != "" {
 		decoded, err := p.codec.Decode(after)
-		if err != nil || decoded.Kind != idcodec.KindFile {
+		if err != nil || decoded.Kind != idcodec.KindFile || !isSafeNativeID(decoded.NativeID) {
 			p.logger.Error("rejecting files list request with undecodable after id", slog.String("after", after))
 			return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error", "invalid after cursor"), nil
 		}
@@ -201,7 +201,8 @@ func (p *filesProcessor) handleListRequestHeaders() (*extprocv3.ProcessingRespon
 // 404.
 func (p *filesProcessor) handleIDBearingRequestHeaders(op filesOperation, gatewayID string) (*extprocv3.ProcessingResponse, error) {
 	decoded, err := p.codec.Decode(gatewayID)
-	if err != nil || decoded.Kind != idcodec.KindFile {
+	// The native id is used in the upstream :path, so it must be a single safe path segment.
+	if err != nil || decoded.Kind != idcodec.KindFile || !isSafeNativeID(decoded.NativeID) {
 		p.logger.Error("rejecting files request with undecodable id", slog.String("id", gatewayID))
 		return createUserFacingErrorResponse(http.StatusNotFound, "NotFoundError", fmt.Sprintf("No such File object: %s", gatewayID)), nil
 	}
@@ -469,7 +470,12 @@ func (p *filesProcessor) translatedResponseBody(raw []byte, kind string) ([]byte
 }
 
 // encodeFileID encodes a backend-native file id into a gateway file id for the current backend.
+// It refuses native ids that are not safe path segments, so an upstream cannot get the gateway to
+// mint an id that would later be spliced into an upstream path as something other than an id.
 func (p *filesProcessor) encodeFileID(nativeID string) (string, error) {
+	if !isSafeNativeID(nativeID) {
+		return "", fmt.Errorf("unsafe backend-native file id %q", nativeID)
+	}
 	return p.codec.Encode(&idcodec.BackendID{
 		Namespace: p.backend.namespace,
 		Name:      p.backend.name,
@@ -651,11 +657,30 @@ func (p *filesProcessor) rewrittenPath(op filesOperation, nativeID string) strin
 	pathOnly, query := splitQuery(p.requestHeaders[":path"])
 	idx := strings.Index(pathOnly, filesPathMarker)
 	base := pathOnly[:idx+len(filesPathMarker)]
-	suffix := "/" + nativeID
+	// Callers validate nativeID with isSafeNativeID; escaping keeps any remaining reserved
+	// characters (e.g. "?", "#") inside the path segment.
+	suffix := "/" + url.PathEscape(nativeID)
 	if op == filesOpContent {
 		suffix += "/content"
 	}
 	return base + suffix + query
+}
+
+// isSafeNativeID reports whether a backend-native id can be used as a single path segment of the
+// upstream request once escaped with url.PathEscape. It rejects empty ids, the dot segments "." and
+// "..", path separators ("/" and backslash), and control characters, which escaping does not make
+// safe. It also rejects "%", so an upstream that decodes the path more than once cannot turn an
+// escaped id back into a path separator. Any other character is escaped in the upstream path.
+func isSafeNativeID(id string) bool {
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	for _, r := range id {
+		if r == '/' || r == '\\' || r == '%' || r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // classifyFilesRequest determines the Files API operation and (where present) the path id from
