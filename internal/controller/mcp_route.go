@@ -143,6 +143,15 @@ func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1
 		return fmt.Errorf("failed to list existing per-backend HTTPRoutes: %w", err)
 	}
 
+	// Each backend's HTTPRoute is labeled and annotated with the MCPBackendExtensionPolicy in effect for it. The
+	// EnvoyExtensionPolicy generated for that policy selects routes by the label, and the extension server reads the
+	// annotation from the route metadata.
+	policies, err := listMCPBackendExtensionPoliciesForMCPRoute(ctx, c.client, mcpRoute)
+	if err != nil {
+		return fmt.Errorf("failed to list MCPBackendExtensionPolicies: %w", err)
+	}
+	extensionPolicies := effectiveMCPBackendExtensionPolicies(mcpRoute, policies)
+
 	// Build HTTPRoute for each backend in the MCPRoute to avoid the hard limit of 16 Rules per HTTPRoute.
 	// The route here will be moved to the backend listener in the extension server behind the MCP Proxy.
 	//
@@ -160,6 +169,9 @@ func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1
 		}
 		if err = c.newPerBackendRefHTTPRoute(ctx, httpRoute, mcpRoute, ref); err != nil {
 			return fmt.Errorf("failed to construct a new HTTPRoute for backend %s: %w", ref.Name, err)
+		}
+		if err = c.setMCPBackendExtensionPolicy(ctx, httpRoute, extensionPolicies[ref.Name]); err != nil {
+			return fmt.Errorf("failed to set MCPBackendExtensionPolicy on HTTPRoute for backend %s: %w", ref.Name, err)
 		}
 		if err = c.createOrUpdateHTTPRoute(ctx, httpRoute, existing); err != nil {
 			return fmt.Errorf("failed to create or update HTTPRoute for backend %s: %w", ref.Name, err)

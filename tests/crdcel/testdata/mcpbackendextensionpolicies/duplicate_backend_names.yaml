@@ -1,0 +1,31 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# This should fail validation: backend names must be unique.
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: MCPBackendExtensionPolicy
+metadata:
+  name: duplicate-backend-names
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: my-route
+  backends:
+    - name: sts
+      backendRef:
+        name: keycloak
+        port: 8080
+    - name: sts
+      backendRef:
+        name: other
+        port: 8080
+  dynamicModule:
+    - name: test-module
+      filterName: set_request_header
+      config:
+        name: x-ext
+        value: value

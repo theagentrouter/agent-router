@@ -27,6 +27,8 @@ API group.
 - [BackendSecurityPolicyList](#github-com-envoyproxy-ai-gateway-api-v1alpha1-backendsecuritypolicylist)
 - [GatewayConfig](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfig)
 - [GatewayConfigList](#github-com-envoyproxy-ai-gateway-api-v1alpha1-gatewayconfiglist)
+- [MCPBackendExtensionPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicy)
+- [MCPBackendExtensionPolicyList](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicylist)
 - [MCPRoute](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproute)
 - [MCPRouteList](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproutelist)
 - [QuotaPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-quotapolicy)
@@ -391,6 +393,89 @@ GatewayConfigList contains a list of GatewayConfig.
 />
 
 
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicy">MCPBackendExtensionPolicy</a>
+
+
+
+**Appears in:**
+- [MCPBackendExtensionPolicyList](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicylist)
+
+MCPBackendExtensionPolicy attaches Envoy Gateway extensions to the requests the MCP proxy sends to MCPRoute
+backends.
+
+For each policy, AI Gateway generates one EnvoyExtensionPolicy that selects, by label, the per-backend HTTPRoutes
+the policy is in effect for, and copies the resulting filters to the MCP backend listener.
+
+##### Fields
+
+<ApiField
+  name="apiVersion"
+  type="String"
+  required="true"
+  description="We are on version <code>aigateway.envoyproxy.io/v1alpha1</code> of the API."
+/>
+
+<ApiField
+  name="kind"
+  type="String"
+  required="true"
+  description="This is a <code>MCPBackendExtensionPolicy</code> resource"
+/>
+
+<ApiField
+  name="metadata"
+  type="[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#objectmeta-v1-meta)"
+  required="true"
+  description="Refer to Kubernetes API documentation for fields of `metadata`."
+/><ApiField
+  name="spec"
+  type="[MCPBackendExtensionPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicyspec)"
+  required="true"
+  description="Spec defines the details of MCPBackendExtensionPolicy."
+/><ApiField
+  name="status"
+  type="[MCPBackendExtensionPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicystatus)"
+  required="true"
+  description="Status defines the status details of the MCPBackendExtensionPolicy."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicylist">MCPBackendExtensionPolicyList</a>
+
+
+
+
+MCPBackendExtensionPolicyList contains a list of MCPBackendExtensionPolicy
+
+##### Fields
+
+<ApiField
+  name="apiVersion"
+  type="String"
+  required="true"
+  description="We are on version <code>aigateway.envoyproxy.io/v1alpha1</code> of the API."
+/>
+
+<ApiField
+  name="kind"
+  type="String"
+  required="true"
+  description="This is a <code>MCPBackendExtensionPolicyList</code> resource"
+/>
+
+<ApiField
+  name="metadata"
+  type="[ListMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#listmeta-v1-meta)"
+  required="true"
+  description="Refer to Kubernetes API documentation for fields of `metadata`."
+/><ApiField
+  name="items"
+  type="[MCPBackendExtensionPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicy) array"
+  required="true"
+  description=""
+/>
+
+
 #### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcproute">MCPRoute</a>
 
 
@@ -597,6 +682,8 @@ QuotaPolicyList contains a list of QuotaPolicy
 - [MCPAuthorizationSource](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpauthorizationsource)
 - [MCPAuthorizationTarget](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpauthorizationtarget)
 - [MCPBackendAPIKey](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendapikey)
+- [MCPBackendExtensionPolicySpec](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicyspec)
+- [MCPBackendExtensionPolicyStatus](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicystatus)
 - [MCPBackendSecurityPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendsecuritypolicy)
 - [MCPBackendSelector](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselector)
 - [MCPBackendSelectorRule](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendselectorrule)
@@ -1879,6 +1966,60 @@ When both `header` and `queryParam` are unspecified, the API key will be injecte
   type="string"
   required="false"
   description="QueryParam is the HTTP query parameter to inject the API key into.<br />For example, if QueryParam is set to `api_key`, and the API key is `mysecretkey`, the request URL will be modified to include<br />`?api_key=mysecretkey`.<br />Either one of Header or QueryParam can be specified to inject the API key."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicyspec">MCPBackendExtensionPolicySpec</a>
+
+
+
+**Appears in:**
+- [MCPBackendExtensionPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicy)
+
+MCPBackendExtensionPolicySpec specifies the Envoy Gateway extensions attached to MCPRoute backends.
+
+The extension fields reuse Envoy Gateway's EnvoyExtensionPolicy types unchanged.
+
+##### Fields
+
+
+
+<ApiField
+  name="targetRefs"
+  type="[LocalPolicyTargetReferenceWithSectionName](https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.LocalPolicyTargetReferenceWithSectionName) array"
+  required="true"
+  description="TargetRefs are the MCPRoutes, in the policy's namespace, that this policy attaches to. SectionName selects one<br />backend by its MCPRoute.spec.backendRefs[].name; without it, the policy applies to all backends of the MCPRoute.<br />When several policies select the same backend, one takes effect, following Gateway API policy attachment<br />(GEP-713): a policy with a sectionName beats one without, then the oldest wins, then the name that sorts first."
+/><ApiField
+  name="backends"
+  type="[ExtensionBackend](https://gateway.envoyproxy.io/docs/api/extension_types/#extensionbackend) array"
+  required="false"
+  description="Backends declares the callout targets of the extensions.<br />Same type and semantics as EnvoyExtensionPolicy.spec.backends."
+/><ApiField
+  name="dynamicModule"
+  type="[DynamicModule](https://gateway.envoyproxy.io/docs/api/extension_types/#dynamicmodule) array"
+  required="true"
+  description="DynamicModule is an ordered list of dynamic module filters.<br />Same type and semantics as EnvoyExtensionPolicy.spec.dynamicModule."
+/>
+
+
+#### <a id="github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicystatus">MCPBackendExtensionPolicyStatus</a>
+
+
+
+**Appears in:**
+- [MCPBackendExtensionPolicy](#github-com-envoyproxy-ai-gateway-api-v1alpha1-mcpbackendextensionpolicy)
+
+MCPBackendExtensionPolicyStatus contains the conditions by the reconciliation result.
+
+##### Fields
+
+
+
+<ApiField
+  name="conditions"
+  type="[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.29/#condition-v1-meta) array"
+  required="true"
+  description="Conditions is the list of conditions by the reconciliation result.<br />Currently, at most one condition is set.<br />Known .status.conditions.type are: `Accepted`, `NotAccepted`."
 />
 
 

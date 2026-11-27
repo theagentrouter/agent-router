@@ -73,6 +73,16 @@ const (
 	MCPPerBackendHTTPRouteFilterPrefix = MCPGeneratedResourceCommonPrefix + "brf-"
 	// MCPPerBackendCredentialSecretPrefix is the prefix for the credential secrets created for per-backend credential injection.
 	MCPPerBackendCredentialSecretPrefix = MCPGeneratedResourceCommonPrefix + "cred-"
+	// MCPBackendExtensionPolicyPrefix is the prefix for the EnvoyExtensionPolicy generated for each MCPBackendExtensionPolicy.
+	MCPBackendExtensionPolicyPrefix = MCPGeneratedResourceCommonPrefix + "bre-"
+	// MCPBackendExtensionPolicyLabel names the MCPBackendExtensionPolicy in effect for a per-backend HTTPRoute. The
+	// generated EnvoyExtensionPolicy selects HTTPRoutes by it, so it is reserved: any HTTPRoute in the policy's
+	// namespace that carries it gets the policy's extensions.
+	MCPBackendExtensionPolicyLabel = "aigateway.envoyproxy.io/mcp-backend-extension-policy"
+	// MCPBackendExtensionPolicyAnnotation names the MCPBackendExtensionPolicy in effect for a per-backend HTTPRoute,
+	// like MCPBackendExtensionPolicyLabel, for the extension server. It is set with Envoy Gateway's annotation prefix,
+	// which Envoy Gateway strips when it copies the annotation into the metadata of the routes it generates.
+	MCPBackendExtensionPolicyAnnotation = "ai-gateway-mcp-backend-extension-policy"
 
 	// MCPMetadataHeaderPrefix is the prefix for special headers used to pass metadata in the filter metadata.
 	// These headers are added internally to the requests to the upstream servers so they can be populated in the filter

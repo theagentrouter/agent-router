@@ -21,6 +21,7 @@ type AigatewayV1alpha1Interface interface {
 	AIServiceBackendsGetter
 	BackendSecurityPoliciesGetter
 	GatewayConfigsGetter
+	MCPBackendExtensionPoliciesGetter
 	MCPRoutesGetter
 	QuotaPoliciesGetter
 }
@@ -44,6 +45,10 @@ func (c *AigatewayV1alpha1Client) BackendSecurityPolicies(namespace string) Back
 
 func (c *AigatewayV1alpha1Client) GatewayConfigs(namespace string) GatewayConfigInterface {
 	return newGatewayConfigs(c, namespace)
+}
+
+func (c *AigatewayV1alpha1Client) MCPBackendExtensionPolicies(namespace string) MCPBackendExtensionPolicyInterface {
+	return newMCPBackendExtensionPolicies(c, namespace)
 }
 
 func (c *AigatewayV1alpha1Client) MCPRoutes(namespace string) MCPRouteInterface {

@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
@@ -545,12 +546,126 @@ func TestServer_extractMCPBackendFiltersFromMCPProxyListener(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &Server{log: testr.New(t)}
-			filters, accessLogConfigs, err := s.extractMCPBackendFiltersFromMCPProxyListener(tt.listeners)
+			filters, accessLogConfigs, err := s.extractMCPBackendFiltersFromMCPProxyListener(tt.listeners, nil)
 			require.NoError(t, err)
 			require.Empty(t, cmp.Diff(tt.expectedFilters, filters, protocmp.Transform()))
 			require.Empty(t, cmp.Diff(tt.expectedAccessLogs, accessLogConfigs, protocmp.Transform()))
 		})
 	}
+}
+
+const (
+	// testMCPBackendExtensionFilter is a dynamic module filter as Envoy Gateway names it for the EnvoyExtensionPolicy
+	// generated for an MCPBackendExtensionPolicy.
+	testMCPBackendExtensionFilter = "envoy.filters.http.dynamic_modules/envoyextensionpolicy/default/ai-eg-mcp-bre-p1/dynamic-module/0"
+	// testGatewayWideModuleFilter is a dynamic module filter of a Gateway-wide EnvoyExtensionPolicy.
+	testGatewayWideModuleFilter = "envoy.filters.http.dynamic_modules/envoyextensionpolicy/default/gateway-wide/dynamic-module/0"
+	// testGatewayWideExtAuthFilter is the ext_authz filter of a Gateway-wide SecurityPolicy.
+	testGatewayWideExtAuthFilter = "envoy.filters.http.ext_authz/securitypolicy/default/gateway-wide"
+)
+
+// newTestMCPListener returns a listener with one HCM holding the given HTTP filters.
+func newTestMCPListener(t *testing.T, name string, filters ...*httpconnectionmanagerv3.HttpFilter) *listenerv3.Listener {
+	return &listenerv3.Listener{
+		Name: name,
+		FilterChains: []*listenerv3.FilterChain{{
+			Filters: []*listenerv3.Filter{{
+				Name: wellknown.HTTPConnectionManager,
+				ConfigType: &listenerv3.Filter_TypedConfig{
+					TypedConfig: mustToAny(t, &httpconnectionmanagerv3.HttpConnectionManager{StatPrefix: "http", HttpFilters: filters}),
+				},
+			}},
+		}},
+	}
+}
+
+// httpFilterNames returns the names of the HTTP filters in the listener's first HCM.
+func httpFilterNames(t *testing.T, listener *listenerv3.Listener) []string {
+	hcm, _, err := findHCM(listener.FilterChains[0])
+	require.NoError(t, err)
+	var names []string
+	for _, filter := range hcm.HttpFilters {
+		names = append(names, filter.Name)
+	}
+	return names
+}
+
+// newTestPerBackendRoute returns a per-backend route enabling the given filters, with the Envoy Gateway metadata of an
+// HTTPRoute that has an MCPBackendExtensionPolicy in effect, or not.
+func newTestPerBackendRoute(t *testing.T, name string, withPolicy bool, filters ...string) *routev3.Route {
+	annotations := map[string]any{}
+	if withPolicy {
+		annotations[internalapi.MCPBackendExtensionPolicyAnnotation] = "p1"
+	}
+	metadata, err := structpb.NewStruct(map[string]any{
+		envoyGatewayMetadataResourcesKey: []any{map[string]any{
+			"kind":        "HTTPRoute",
+			"name":        internalapi.MCPPerBackendRefHTTPRoutePrefix + name,
+			"namespace":   "default",
+			"annotations": annotations,
+		}},
+	})
+	require.NoError(t, err)
+	route := &routev3.Route{
+		Name:                 "httproute/default/" + internalapi.MCPPerBackendRefHTTPRoutePrefix + name + "/rule/0",
+		Action:               &routev3.Route_Route{Route: &routev3.RouteAction{ClusterSpecifier: &routev3.RouteAction_Cluster{}}},
+		Metadata:             &corev3.Metadata{FilterMetadata: map[string]*structpb.Struct{envoyGatewayMetadataNamespace: metadata}},
+		TypedPerFilterConfig: map[string]*anypb.Any{},
+	}
+	for _, filter := range filters {
+		route.TypedPerFilterConfig[filter] = mustToAny(t, &routev3.FilterConfig{})
+	}
+	return route
+}
+
+func TestServer_extractMCPBackendFiltersFromMCPProxyListener_mcpBackendExtensionFilters(t *testing.T) {
+	const otherModuleFilter = "envoy.filters.http.dynamic_modules/envoyextensionpolicy/default/ai-eg-mcp-bre-p2/dynamic-module/0"
+	mcpBackendFilter := internalapi.MCPPerBackendHTTPRouteFilterPrefix + "test-filter"
+	listeners := []*listenerv3.Listener{
+		newTestMCPListener(t, "l1",
+			&httpconnectionmanagerv3.HttpFilter{Name: mcpBackendFilter},
+			&httpconnectionmanagerv3.HttpFilter{Name: otherModuleFilter, Disabled: true},
+			&httpconnectionmanagerv3.HttpFilter{Name: "envoy.filters.http.router"}),
+		newTestMCPListener(t, "l2",
+			&httpconnectionmanagerv3.HttpFilter{Name: testMCPBackendExtensionFilter, Disabled: true},
+			&httpconnectionmanagerv3.HttpFilter{Name: otherModuleFilter, Disabled: true},
+			&httpconnectionmanagerv3.HttpFilter{Name: testGatewayWideModuleFilter, Disabled: true},
+			&httpconnectionmanagerv3.HttpFilter{Name: "envoy.filters.http.router"}),
+	}
+
+	s := &Server{log: testr.New(t)}
+	filters, _, err := s.extractMCPBackendFiltersFromMCPProxyListener(listeners,
+		map[string]struct{}{testMCPBackendExtensionFilter: {}, otherModuleFilter: {}})
+	require.NoError(t, err)
+
+	// MCP backend filters move as before; MCPBackendExtensionPolicy filters are copied once each, in the order found.
+	require.Empty(t, cmp.Diff([]*httpconnectionmanagerv3.HttpFilter{
+		{Name: mcpBackendFilter},
+		{Name: otherModuleFilter, Disabled: true},
+		{Name: testMCPBackendExtensionFilter, Disabled: true},
+	}, filters, protocmp.Transform()))
+	// Copied filters stay on the original listeners; the MCP backend filter doesn't.
+	require.Equal(t, []string{otherModuleFilter, "envoy.filters.http.router"}, httpFilterNames(t, listeners[0]))
+	require.Equal(t, []string{testMCPBackendExtensionFilter, otherModuleFilter, testGatewayWideModuleFilter, "envoy.filters.http.router"},
+		httpFilterNames(t, listeners[1]))
+}
+
+func Test_mcpBackendExtensionFilterNames(t *testing.T) {
+	routes := &routev3.RouteConfiguration{VirtualHosts: []*routev3.VirtualHost{{Routes: []*routev3.Route{
+		// An MCPBackendExtensionPolicy is in effect: its dynamic module filter counts; the Gateway-wide ext_authz and a
+		// dynamic module not from a generated EnvoyExtensionPolicy, which the route also enables, don't.
+		newTestPerBackendRoute(t, "with-policy", true, testMCPBackendExtensionFilter, testGatewayWideExtAuthFilter, testGatewayWideModuleFilter),
+		// No MCPBackendExtensionPolicy: a Gateway-wide EnvoyExtensionPolicy's module doesn't count.
+		newTestPerBackendRoute(t, "without-policy", false, testGatewayWideModuleFilter),
+	}}}}
+	require.Equal(t, map[string]struct{}{testMCPBackendExtensionFilter: {}}, mcpBackendExtensionFilterNames(routes))
+	require.Empty(t, mcpBackendExtensionFilterNames(nil))
+}
+
+func Test_hasMCPBackendExtensionPolicy(t *testing.T) {
+	require.True(t, hasMCPBackendExtensionPolicy(newTestPerBackendRoute(t, "a", true)))
+	require.False(t, hasMCPBackendExtensionPolicy(newTestPerBackendRoute(t, "a", false)))
+	require.False(t, hasMCPBackendExtensionPolicy(&routev3.Route{Name: "no-metadata"}))
 }
 
 func TestServer_maybeGenerateResourcesForMCPGateway(t *testing.T) {
@@ -632,6 +747,41 @@ func TestServer_maybeGenerateResourcesForMCPGateway(t *testing.T) {
 				// a panic here says a lot less than a failure does.
 				require.NotNil(t, req.Clusters[0].GetClusterDiscoveryType())
 				require.Equal(t, clusterv3.Cluster_STATIC, req.Clusters[0].GetClusterDiscoveryType().(*clusterv3.Cluster_Type).Type)
+			},
+		},
+		{
+			name: "dynamic module filters of MCPBackendExtensionPolicies are copied to the backend listener",
+			req: &egextension.PostTranslateModifyRequest{
+				Listeners: []*listenerv3.Listener{
+					newTestMCPListener(t, "test-listener",
+						&httpconnectionmanagerv3.HttpFilter{Name: testMCPBackendExtensionFilter, Disabled: true},
+						&httpconnectionmanagerv3.HttpFilter{Name: testGatewayWideModuleFilter, Disabled: true},
+						&httpconnectionmanagerv3.HttpFilter{Name: testGatewayWideExtAuthFilter, Disabled: true},
+						&httpconnectionmanagerv3.HttpFilter{Name: "envoy.filters.http.router"}),
+				},
+				Routes: []*routev3.RouteConfiguration{{
+					VirtualHosts: []*routev3.VirtualHost{{
+						Name:    "mcp-vh",
+						Domains: []string{"*"},
+						Routes: []*routev3.Route{
+							newTestPerBackendRoute(t, "with-policy", true, testMCPBackendExtensionFilter, testGatewayWideExtAuthFilter),
+							newTestPerBackendRoute(t, "without-policy", false, testGatewayWideModuleFilter),
+						},
+					}},
+				}},
+			},
+			check: func(t *testing.T, req *egextension.PostTranslateModifyRequest) {
+				require.Len(t, req.Listeners, 2)
+				// The Gateway listener is left as Envoy Gateway built it.
+				require.Equal(t, []string{
+					testMCPBackendExtensionFilter, testGatewayWideModuleFilter, testGatewayWideExtAuthFilter, "envoy.filters.http.router",
+				}, httpFilterNames(t, req.Listeners[0]))
+				// Only the MCPBackendExtensionPolicy's module reaches the backend listener.
+				require.Equal(t, mcpBackendListenerName, req.Listeners[1].Name)
+				backendFilters := httpFilterNames(t, req.Listeners[1])
+				require.Contains(t, backendFilters, testMCPBackendExtensionFilter)
+				require.NotContains(t, backendFilters, testGatewayWideModuleFilter)
+				require.NotContains(t, backendFilters, testGatewayWideExtAuthFilter)
 			},
 		},
 	}

@@ -1,0 +1,183 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: mcp-gateway-class-ext
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: mcp-gateway-ext
+  namespace: default
+spec:
+  gatewayClassName: mcp-gateway-class-ext
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-mcp-gateway-ext
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: MCPRoute
+metadata:
+  name: mcp-route-ext
+  namespace: default
+spec:
+  parentRefs:
+    - name: mcp-gateway-ext
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  backendRefs:
+    - name: mcp-ext-a
+      port: 1063
+    - name: mcp-ext-b
+      port: 1063
+---
+# Applies to every backend of the MCPRoute, except where a policy naming the backend takes precedence.
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: MCPBackendExtensionPolicy
+metadata:
+  name: mcp-ext-wide
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: mcp-route-ext
+  dynamicModule:
+    - name: test-module
+      filterName: set_request_header
+      config:
+        name: x-ext
+        value: wide
+---
+# Names backend mcp-ext-a, so it takes precedence over mcp-ext-wide there.
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: MCPBackendExtensionPolicy
+metadata:
+  name: mcp-ext-section
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: mcp-route-ext
+      sectionName: mcp-ext-a
+  dynamicModule:
+    - name: test-module
+      filterName: set_request_header
+      config:
+        name: x-ext
+        value: section
+---
+# Each backend rejects requests without the header value its effective policy sets.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-ext-a
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-ext-a
+  template:
+    metadata:
+      labels:
+        app: mcp-ext-a
+    spec:
+      containers:
+        - name: mcp-ext-a
+          image: docker.io/envoyproxy/ai-gateway-testmcpserver:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 1063
+          env:
+            - name: TEST_EXPECTED_CLAIM_HEADERS
+              value: "x-ext=section"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-ext-a
+  namespace: default
+spec:
+  selector:
+    app: mcp-ext-a
+  ports:
+    - protocol: TCP
+      port: 1063
+      targetPort: 1063
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-ext-b
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-ext-b
+  template:
+    metadata:
+      labels:
+        app: mcp-ext-b
+    spec:
+      containers:
+        - name: mcp-ext-b
+          image: docker.io/envoyproxy/ai-gateway-testmcpserver:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 1063
+          env:
+            - name: TEST_EXPECTED_CLAIM_HEADERS
+              value: "x-ext=wide"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-ext-b
+  namespace: default
+spec:
+  selector:
+    app: mcp-ext-b
+  ports:
+    - protocol: TCP
+      port: 1063
+      targetPort: 1063
+  type: ClusterIP
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-mcp-gateway-ext
+  namespace: default
+spec:
+  # The test dynamic module, built into the Envoy image below (tests/internal/testdynamicmodule).
+  dynamicModules:
+    - name: test-module
+      source:
+        type: Local
+        local:
+          path: /usr/local/lib/libtestdynamicmodule.so
+      doNotClose: true # A Go module's runtime can't be unloaded.
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        container:
+          image: docker.io/envoyproxy/ai-gateway-testdynamicmodule:e2e
+          # Clear the default memory/cpu requirements for local tests.
+          resources: {}

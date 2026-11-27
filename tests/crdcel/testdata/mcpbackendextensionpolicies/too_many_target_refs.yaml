@@ -1,0 +1,70 @@
+# Copyright Envoy AI Gateway Authors
+# SPDX-License-Identifier: Apache-2.0
+# The full text of the Apache license is available in the LICENSE file at
+# the root of the repo.
+
+# This should fail validation: at most 16 targetRefs.
+apiVersion: aigateway.envoyproxy.io/v1alpha1
+kind: MCPBackendExtensionPolicy
+metadata:
+  name: too-many-target-refs
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-1
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-2
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-3
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-4
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-5
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-6
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-7
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-8
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-9
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-10
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-11
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-12
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-13
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-14
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-15
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-16
+    - group: aigateway.envoyproxy.io
+      kind: MCPRoute
+      name: route-17
+  dynamicModule:
+    - name: test-module
+      filterName: set_request_header
+      config:
+        name: x-ext
+        value: value

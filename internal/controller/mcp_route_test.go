@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
@@ -1556,5 +1557,139 @@ func TestValidatePerBackendPrefixMode(t *testing.T) {
 				require.ErrorContains(t, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestMCPRouteController_MCPBackendExtensionPolicyLabel(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewMCPRouteController(fakeClient, fakekube.NewClientset(), ctrl.Log, eventCh.Ch)
+
+	require.NoError(t, fakeClient.Create(t.Context(), &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"}}))
+	require.NoError(t, fakeClient.Create(t.Context(), newTestMCPRouteForExtensionPolicy("r", "a", "b")))
+
+	reconcileRoute := func(t *testing.T) {
+		t.Helper()
+		_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "r"}})
+		require.NoError(t, err)
+	}
+	requireLabels := func(t *testing.T, exp map[gwapiv1.ObjectName]string) {
+		t.Helper()
+		for backend, policyName := range exp {
+			var httpRoute gwapiv1.HTTPRoute
+			require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: mcpPerBackendRefHTTPRouteName("r", backend), Namespace: "default"}, &httpRoute))
+			value, ok := httpRoute.Labels[internalapi.MCPBackendExtensionPolicyLabel]
+			annotation, annotated := httpRoute.Annotations[httpRouteAnnotationForMCPBackendExtensionPolicy]
+			if policyName == "" {
+				require.False(t, ok, "backend %s: unexpected label %q", backend, value)
+				require.False(t, annotated, "backend %s: unexpected annotation %q", backend, annotation)
+			} else {
+				require.Equal(t, policyName, value, "backend %s", backend)
+				require.Equal(t, policyName, annotation, "backend %s", backend)
+			}
+		}
+	}
+	requireEnvoyExtensionPolicyControlledBy := func(t *testing.T, policy *aigv1a1.MCPBackendExtensionPolicy) {
+		t.Helper()
+		var eep egv1a1.EnvoyExtensionPolicy
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: internalapi.MCPBackendExtensionPolicyPrefix + policy.Name, Namespace: "default"}, &eep))
+		require.True(t, metav1.IsControlledBy(&eep, policy))
+	}
+
+	t.Run("no policy", func(t *testing.T) {
+		reconcileRoute(t)
+		requireLabels(t, map[gwapiv1.ObjectName]string{"a": "", "b": ""})
+	})
+
+	p1 := newTestMCPBackendExtensionPolicy("p1", mcpRouteTargetRef("r"))
+	t.Run("route-wide policy", func(t *testing.T) {
+		require.NoError(t, fakeClient.Create(t.Context(), p1))
+		reconcileRoute(t)
+		requireLabels(t, map[gwapiv1.ObjectName]string{"a": "p1", "b": "p1"})
+		// Ensured before labeling, without waiting for the MCPBackendExtensionPolicyController.
+		requireEnvoyExtensionPolicyControlledBy(t, p1)
+	})
+
+	p2 := newTestMCPBackendExtensionPolicy("p2", mcpRouteTargetRef("r", "a"))
+	t.Run("section policy takes its backend", func(t *testing.T) {
+		require.NoError(t, fakeClient.Create(t.Context(), p2))
+		reconcileRoute(t)
+		requireLabels(t, map[gwapiv1.ObjectName]string{"a": "p2", "b": "p1"})
+		requireEnvoyExtensionPolicyControlledBy(t, p2)
+	})
+
+	t.Run("section policy deleted", func(t *testing.T) {
+		require.NoError(t, fakeClient.Delete(t.Context(), p2))
+		reconcileRoute(t)
+		requireLabels(t, map[gwapiv1.ObjectName]string{"a": "p1", "b": "p1"})
+	})
+
+	t.Run("route-wide policy deleted", func(t *testing.T) {
+		require.NoError(t, fakeClient.Delete(t.Context(), p1))
+		reconcileRoute(t)
+		requireLabels(t, map[gwapiv1.ObjectName]string{"a": "", "b": ""})
+	})
+}
+
+func TestMCPRouteController_MCPBackendExtensionPolicyLabel_Reserved(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewMCPRouteController(fakeClient, fakekube.NewClientset(), ctrl.Log, eventCh.Ch)
+
+	require.NoError(t, fakeClient.Create(t.Context(), &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"}}))
+	route := newTestMCPRouteForExtensionPolicy("r", "a")
+	// The label and annotation are reserved: values set on the MCPRoute must not reach the per-backend HTTPRoutes.
+	route.Labels = map[string]string{internalapi.MCPBackendExtensionPolicyLabel: "user-value"}
+	route.Annotations = map[string]string{httpRouteAnnotationForMCPBackendExtensionPolicy: "user-value"}
+	require.NoError(t, fakeClient.Create(t.Context(), route))
+
+	requireLabel := func(t *testing.T, expected string) {
+		t.Helper()
+		_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "r"}})
+		require.NoError(t, err)
+		var httpRoute gwapiv1.HTTPRoute
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: mcpPerBackendRefHTTPRouteName("r", "a"), Namespace: "default"}, &httpRoute))
+		value, ok := httpRoute.Labels[internalapi.MCPBackendExtensionPolicyLabel]
+		annotation, annotated := httpRoute.Annotations[httpRouteAnnotationForMCPBackendExtensionPolicy]
+		if expected == "" {
+			require.False(t, ok, "unexpected label %q", value)
+			require.False(t, annotated, "unexpected annotation %q", annotation)
+		} else {
+			require.Equal(t, expected, value)
+			require.Equal(t, expected, annotation)
+		}
+	}
+
+	t.Run("no policy", func(t *testing.T) { requireLabel(t, "") })
+	t.Run("policy", func(t *testing.T) {
+		require.NoError(t, fakeClient.Create(t.Context(), newTestMCPBackendExtensionPolicy("p1", mcpRouteTargetRef("r"))))
+		requireLabel(t, "p1")
+	})
+}
+
+func TestMCPRouteController_MCPBackendExtensionPolicyLabel_NotOwned(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewMCPRouteController(fakeClient, fakekube.NewClientset(), ctrl.Log, eventCh.Ch)
+
+	require.NoError(t, fakeClient.Create(t.Context(), &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"}}))
+	require.NoError(t, fakeClient.Create(t.Context(), newTestMCPRouteForExtensionPolicy("r", "a")))
+	require.NoError(t, fakeClient.Create(t.Context(), newTestMCPBackendExtensionPolicy("p1", mcpRouteTargetRef("r"))))
+	// An EnvoyExtensionPolicy with the generated name that the policy doesn't control.
+	require.NoError(t, fakeClient.Create(t.Context(), &egv1a1.EnvoyExtensionPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: internalapi.MCPBackendExtensionPolicyPrefix + "p1", Namespace: "default"},
+	}))
+
+	_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "r"}})
+	require.ErrorContains(t, err, "EnvoyExtensionPolicy ai-eg-mcp-bre-p1 already exists and is not owned by MCPBackendExtensionPolicy p1")
+
+	// The route isn't labeled with a policy whose EnvoyExtensionPolicy isn't in place.
+	var httpRoute gwapiv1.HTTPRoute
+	err = fakeClient.Get(t.Context(), client.ObjectKey{Name: mcpPerBackendRefHTTPRouteName("r", "a"), Namespace: "default"}, &httpRoute)
+	if err == nil {
+		require.NotContains(t, httpRoute.Labels, internalapi.MCPBackendExtensionPolicyLabel)
+		require.NotContains(t, httpRoute.Annotations, httpRouteAnnotationForMCPBackendExtensionPolicy)
+	} else {
+		require.True(t, apierrors.IsNotFound(err))
 	}
 }

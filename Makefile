@@ -315,6 +315,7 @@ else
 	@$(MAKE) docker-build.testupstream CMD_PATH_PREFIX=tests/internal/testupstreamlib DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.testmcpserver CMD_PATH_PREFIX=tests/internal/testmcp DOCKER_BUILD_ARGS="--load"
 	@$(MAKE) docker-build.testextauthserver CMD_PATH_PREFIX=tests/internal/testextauth DOCKER_BUILD_ARGS="--load"
+	@docker buildx build tests/internal/testdynamicmodule -t $(OCI_REPOSITORY_PREFIX)-testdynamicmodule:e2e --load
 endif
 
 # This builds a docker image for a given command.

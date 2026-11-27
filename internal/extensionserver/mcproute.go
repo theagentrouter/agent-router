@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	egextension "github.com/envoyproxy/gateway/proto/extension"
 	accesslogv3 "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -50,8 +51,9 @@ func (s *Server) maybeGenerateResourcesForMCPGateway(req *egextension.PostTransl
 
 	// Only create the backend listener if there are routes for it
 	if mcpBackendRoutes != nil {
-		// Extract MCP backend filters from existing listeners and create the backend listener with those filters.
-		mcpBackendHTTPFilters, accessLogConfig, err := s.extractMCPBackendFiltersFromMCPProxyListener(req.Listeners)
+		// Extract MCP backend filters from existing listeners and create the backend listener with those filters,
+		// including copies of the dynamic module filters of the MCPBackendExtensionPolicies on the moved routes.
+		mcpBackendHTTPFilters, accessLogConfig, err := s.extractMCPBackendFiltersFromMCPProxyListener(req.Listeners, mcpBackendExtensionFilterNames(mcpBackendRoutes))
 		if err != nil {
 			return fmt.Errorf("failed to extract MCP backend filters from existing listeners: %w", err)
 		}
@@ -355,6 +357,10 @@ func (s *Server) modifyMCPGatewayGeneratedCluster(clusters []*clusterv3.Cluster)
 // that correspond to MCP backend processing (those with MCPBackendFilterPrefix in their names)
 // and extracts them from the proxy listeners so they can be moved to the backend listener.
 //
+// It also copies the dynamic module filters of MCPBackendExtensionPolicies (mcpBackendExtensionFilters, see
+// mcpBackendExtensionFilterNames) to the backend listener, once each. They stay on the proxy listener, disabled and
+// enabled by no route there, as Envoy Gateway left them.
+//
 // This method also returns the access log configuration to use in the MCP backend listener. We want to use the same
 // access log configuration that has been configured in the Gateway.
 // The challenge is that the MCP backend listener will have a single HCM, and here we have N listeners, each with its own
@@ -370,10 +376,11 @@ func (s *Server) modifyMCPGatewayGeneratedCluster(clusters []*clusterv3.Cluster)
 // When using the envoy Gateway `mergeGateways` feature, this method will receive all the listeners attached to the GatewayClass instead.
 // This is still safe because in the end all Gateway objects will be attached to the same "infrastructure", so it is still safe to assume
 // that all received listeners will have the same access log configuration
-func (s *Server) extractMCPBackendFiltersFromMCPProxyListener(listeners []*listenerv3.Listener) ([]*httpconnectionmanagerv3.HttpFilter, []*accesslogv3.AccessLog, error) {
+func (s *Server) extractMCPBackendFiltersFromMCPProxyListener(listeners []*listenerv3.Listener, mcpBackendExtensionFilters map[string]struct{}) ([]*httpconnectionmanagerv3.HttpFilter, []*accesslogv3.AccessLog, error) {
 	var (
 		mcpHTTPFilters  []*httpconnectionmanagerv3.HttpFilter
 		accessLogConfig []*accesslogv3.AccessLog
+		copied          = make(map[string]struct{})
 	)
 
 	for _, listener := range listeners {
@@ -407,8 +414,16 @@ func (s *Server) extractMCPBackendFiltersFromMCPProxyListener(listeners []*liste
 				if s.isMCPBackendHTTPFilter(filter) {
 					s.log.Info("Found MCP HTTP filter, extracting from original listener", "filterName", filter.Name, "listener", listener.Name)
 					mcpHTTPFilters = append(mcpHTTPFilters, filter)
-				} else {
-					remainingFilters = append(remainingFilters, filter)
+					continue
+				}
+				remainingFilters = append(remainingFilters, filter)
+				if _, ok := mcpBackendExtensionFilters[filter.Name]; !ok {
+					continue
+				}
+				if _, ok := copied[filter.Name]; !ok {
+					s.log.Info("Found MCPBackendExtensionPolicy filter, copying from original listener", "filterName", filter.Name, "listener", listener.Name)
+					copied[filter.Name] = struct{}{}
+					mcpHTTPFilters = append(mcpHTTPFilters, proto.Clone(filter).(*httpconnectionmanagerv3.HttpFilter))
 				}
 			}
 
@@ -431,6 +446,47 @@ func (s *Server) extractMCPBackendFiltersFromMCPProxyListener(listeners []*liste
 		s.log.Info("Extracted MCP HTTP filters", "count", len(mcpHTTPFilters))
 	}
 	return mcpHTTPFilters, accessLogConfig, nil
+}
+
+// mcpBackendExtensionFilterNames returns the dynamic module filters that the moved per-backend routes enable on behalf
+// of an MCPBackendExtensionPolicy.
+//
+// Such a route carries internalapi.MCPBackendExtensionPolicyAnnotation in its Envoy Gateway metadata. Envoy Gateway
+// applies the policy's EnvoyExtensionPolicy to that route in place of any Gateway-wide one. A filter is taken if its
+// name starts with Envoy Gateway's dynamic module type prefix, which is also how Envoy Gateway matches
+// EnvoyProxy.spec.filterOrder, and contains internalapi.MCPBackendExtensionPolicyPrefix, the generated
+// EnvoyExtensionPolicy's name, as the MCPPerBackendHTTPRouteFilterPrefix filters are matched. Filters of other types,
+// such as authentication from a Gateway-wide SecurityPolicy, are left out: the routes still enable them, with no effect
+// on the backend listener.
+func mcpBackendExtensionFilterNames(mcpBackendRoutes *routev3.RouteConfiguration) map[string]struct{} {
+	names := make(map[string]struct{})
+	for _, vh := range mcpBackendRoutes.GetVirtualHosts() {
+		for _, route := range vh.Routes {
+			if !hasMCPBackendExtensionPolicy(route) {
+				continue
+			}
+			for name := range route.TypedPerFilterConfig {
+				if strings.HasPrefix(name, string(egv1a1.EnvoyFilterDynamicModules)) &&
+					strings.Contains(name, internalapi.MCPBackendExtensionPolicyPrefix) {
+					names[name] = struct{}{}
+				}
+			}
+		}
+	}
+	return names
+}
+
+// hasMCPBackendExtensionPolicy reports whether the route's Envoy Gateway metadata carries
+// internalapi.MCPBackendExtensionPolicyAnnotation, copied from its HTTPRoute.
+func hasMCPBackendExtensionPolicy(route *routev3.Route) bool {
+	resources := route.GetMetadata().GetFilterMetadata()[envoyGatewayMetadataNamespace].GetFields()[envoyGatewayMetadataResourcesKey]
+	for _, resource := range resources.GetListValue().GetValues() {
+		annotations := resource.GetStructValue().GetFields()["annotations"].GetStructValue().GetFields()
+		if _, ok := annotations[internalapi.MCPBackendExtensionPolicyAnnotation]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // isMCPBackendHTTPFilter checks if an HTTP filter is used for MCP backend processing.
