@@ -1407,7 +1407,6 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingResponseBody(t *
 }
 
 func TestExtractToolCallsFromGeminiPartsStream(t *testing.T) {
-	toolCalls := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
 	tests := []struct {
 		name     string
 		input    []*genai.Part
@@ -1652,8 +1651,7 @@ func TestExtractToolCallsFromGeminiPartsStream(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
-			calls, _, err := o.extractToolCallsFromGeminiPartsStream(toolCalls, tt.input, json.MarshalForDeterministicTesting)
+			calls, _, err := extractToolCallsFromGeminiPartsStream(tt.input, 0, json.MarshalForDeterministicTesting)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -1675,7 +1673,6 @@ func TestExtractToolCallsFromGeminiPartsStream(t *testing.T) {
 // TestExtractToolCallsStreamVsNonStream tests the differences between streaming and non-streaming extraction
 func TestExtractToolCallsStreamVsNonStream(t *testing.T) {
 	toolCalls := []openai.ChatCompletionMessageToolCallParam{}
-	toolCallsStream := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
 	parts := []*genai.Part{
 		{
 			FunctionCall: &genai.FunctionCall{
@@ -1687,10 +1684,8 @@ func TestExtractToolCallsStreamVsNonStream(t *testing.T) {
 			},
 		},
 	}
-	o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
-
 	// Get results from both functions
-	streamCalls, _, err := o.extractToolCallsFromGeminiPartsStream(toolCallsStream, parts, json.MarshalForDeterministicTesting)
+	streamCalls, _, err := extractToolCallsFromGeminiPartsStream(parts, 0, json.MarshalForDeterministicTesting)
 	require.NoError(t, err)
 	require.Len(t, streamCalls, 1)
 
@@ -1730,7 +1725,6 @@ func TestExtractToolCallsStreamVsNonStream(t *testing.T) {
 
 // TestExtractToolCallsStreamIndexing specifically tests that multiple tool calls get correct indices
 func TestExtractToolCallsStreamIndexing(t *testing.T) {
-	toolCalls := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
 	parts := []*genai.Part{
 		{
 			FunctionCall: &genai.FunctionCall{
@@ -1752,9 +1746,7 @@ func TestExtractToolCallsStreamIndexing(t *testing.T) {
 			},
 		},
 	}
-	o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
-
-	calls, _, err := o.extractToolCallsFromGeminiPartsStream(toolCalls, parts, json.MarshalForDeterministicTesting)
+	calls, _, err := extractToolCallsFromGeminiPartsStream(parts, 0, json.MarshalForDeterministicTesting)
 	require.NoError(t, err)
 	require.Len(t, calls, 3)
 
@@ -1781,6 +1773,48 @@ func TestExtractToolCallsStreamIndexing(t *testing.T) {
 	for _, call := range calls {
 		assert.False(t, ids[*call.ID], "Tool call ID should be unique: %s", *call.ID)
 		ids[*call.ID] = true
+	}
+}
+
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingToolCallIndexPerChoice(t *testing.T) {
+	type event struct {
+		body      string
+		choice    int64
+		name      string
+		arguments string
+	}
+	weather := event{
+		body:   `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Oslo"}}}]}}]}`,
+		choice: 0, name: "get_weather", arguments: `{"city":"Oslo"}`,
+	}
+	clock := event{
+		body:   `{"candidates":[{"index":1,"content":{"role":"model","parts":[{"functionCall":{"name":"get_time","args":{"timezone":"UTC"}}}]}}]}`,
+		choice: 1, name: "get_time", arguments: `{"timezone":"UTC"}`,
+	}
+	for _, tt := range []struct {
+		name   string
+		events []event
+	}{
+		{"weather first", []event{weather, clock}},
+		{"time first", []event{clock, weather}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+			for _, e := range tt.events {
+				_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader("data: "+e.body+"\n\n"), false, nil)
+				require.NoError(t, err)
+				chunks := getChatCompletionResponseChunk(body)
+				require.Len(t, chunks, 1)
+				require.Len(t, chunks[0].Choices, 1)
+				choice := chunks[0].Choices[0]
+				assert.Equal(t, e.choice, choice.Index)
+				require.Len(t, choice.Delta.ToolCalls, 1)
+				call := choice.Delta.ToolCalls[0]
+				assert.Equal(t, int64(0), call.Index, "first tool call for choice %d", e.choice)
+				assert.Equal(t, e.name, call.Function.Name)
+				assert.JSONEq(t, e.arguments, call.Function.Arguments)
+			}
+		})
 	}
 }
 

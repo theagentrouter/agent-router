@@ -68,7 +68,7 @@ type gcpVertexAIErrorDetails struct {
 // NewChatCompletionOpenAIToGCPVertexAITranslator implements [Factory] for OpenAI to GCP Gemini translation.
 // This translator converts OpenAI ChatCompletion API requests to GCP Gemini API format.
 func NewChatCompletionOpenAIToGCPVertexAITranslator(modelNameOverride internalapi.ModelNameOverride) OpenAIChatCompletionTranslator {
-	return &openAIToGCPVertexAITranslatorV1ChatCompletion{modelNameOverride: modelNameOverride, toolCallIndex: int64(0)}
+	return &openAIToGCPVertexAITranslatorV1ChatCompletion{modelNameOverride: modelNameOverride}
 }
 
 // openAIToGCPVertexAITranslatorV1ChatCompletion translates OpenAI Chat Completions API to GCP Vertex AI Gemini API.
@@ -81,9 +81,8 @@ type openAIToGCPVertexAITranslatorV1ChatCompletion struct {
 	streamDelimiter   []byte
 	bufferedBody      []byte // Buffer for incomplete JSON chunks.
 	requestModel      internalapi.RequestModel
-	toolCallIndex     int64
-	roleSent          map[int64]bool // Tracks the first content delta for each OpenAI choice.
-	streamedToolCalls map[int64]bool // Records which choices have emitted a tool call.
+	roleSent          map[int64]bool  // Tracks the first content delta for each OpenAI choice.
+	toolCallCounts    map[int64]int64 // Number of tool calls emitted for each OpenAI choice.
 	// Redaction configuration for debug logging
 	debugLogEnabled bool
 	enableRedaction bool
@@ -340,12 +339,13 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) parseGCPStreamingChunks(
 }
 
 // extractToolCallsFromGeminiPartsStream extracts tool calls from Gemini parts for streaming responses.
-// Each tool call is assigned an incremental index starting from 0, matching OpenAI's streaming protocol.
+// The first call starts at the number of tool calls already emitted for this choice.
 // Returns ChatCompletionChunkChoiceDeltaToolCall types suitable for streaming responses, or nil if no tool calls are found.
-func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) extractToolCallsFromGeminiPartsStream(
-	toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall, parts []*genai.Part,
+func extractToolCallsFromGeminiPartsStream(
+	parts []*genai.Part, startIndex int64,
 	argsMarshaller json.Marshaler,
 ) ([]openai.ChatCompletionChunkChoiceDeltaToolCall, string, error) {
+	var toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall
 	var signatureBuilder strings.Builder
 
 	for _, part := range parts {
@@ -369,10 +369,8 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) extractToolCallsFromGemi
 				Name:      part.FunctionCall.Name,
 				Arguments: string(args),
 			},
-			Index: o.toolCallIndex,
+			Index: startIndex + int64(len(toolCalls)),
 		}
-		// a new toolCall
-		o.toolCallIndex++
 
 		// Extract ThoughtSignature if present (only the first one)
 		if part.ThoughtSignature != nil && signatureBuilder.Len() == 0 {
@@ -407,7 +405,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 			Index: int64(candidate.Index),
 		}
 
-		toolCalls := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
+		var toolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall
 		var err error
 		if candidate.Content != nil {
 			delta := &openai.ChatCompletionResponseChunkChoiceDelta{}
@@ -426,7 +424,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 
 			// Extract tool calls if any.
 			var toolCallSignature string
-			toolCalls, toolCallSignature, err = o.extractToolCallsFromGeminiPartsStream(toolCalls, candidate.Content.Parts, json.Marshal)
+			toolCalls, toolCallSignature, err = extractToolCallsFromGeminiPartsStream(candidate.Content.Parts, o.toolCallCounts[choice.Index], json.Marshal)
 			if err != nil {
 				return nil, fmt.Errorf("error extracting tool calls: %w", err)
 			}
@@ -454,15 +452,15 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 		}
 
 		if len(toolCalls) > 0 {
-			if o.streamedToolCalls == nil {
-				o.streamedToolCalls = make(map[int64]bool)
+			if o.toolCallCounts == nil {
+				o.toolCallCounts = make(map[int64]int64)
 			}
-			o.streamedToolCalls[choice.Index] = true
+			o.toolCallCounts[choice.Index] += int64(len(toolCalls))
 		}
 
 		choice.FinishReason = geminiFinishReasonToOpenAI(candidate.FinishReason, toolCalls)
 		// Gemini can send STOP in a later event than the functionCall for this candidate.
-		if choice.FinishReason == openai.ChatCompletionChoicesFinishReasonStop && o.streamedToolCalls[choice.Index] {
+		if choice.FinishReason == openai.ChatCompletionChoicesFinishReasonStop && o.toolCallCounts[choice.Index] > 0 {
 			choice.FinishReason = openai.ChatCompletionChoicesFinishReasonToolCalls
 		}
 
