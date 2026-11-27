@@ -23,6 +23,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/gcp"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai/tokenize"
 	typesafeschema "github.com/envoyproxy/ai-gateway/internal/apischema/typesafe"
@@ -134,6 +135,9 @@ type (
 	ResponsesInputTokensEndpointSpec struct{}
 	// MessagesCountTokensEndpointSpec implements EndpointSpec for /v1/messages/count_tokens.
 	MessagesCountTokensEndpointSpec struct{}
+	// InteractionsEndpointSpec implements EndpointSpec for the Gemini Interactions API create
+	// endpoint (POST /interactions).
+	InteractionsEndpointSpec struct{}
 )
 
 var errMultipartNotSupported = fmt.Errorf("%w: multipart body not supported for this endpoint", internalapi.ErrMalformedRequest)
@@ -1566,4 +1570,64 @@ func readFormField(part *multipart.Part) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// ParseBody implements [Spec.ParseBody].
+//
+// The gateway serves the Interactions API for zero data retention only: the provider must not keep
+// the interaction. The provider stores interactions unless the request sets "store": false, so
+// the body is given "store": false when it has no "store" field. Requests that need stored state
+// are rejected: "store": true, "background": true (which requires storage), and
+// "previous_interaction_id" (which continues a stored interaction). For the same reason, the
+// endpoints that act on stored interactions (get, cancel, delete) are not served.
+func (InteractionsEndpointSpec) ParseBody(body []byte, _ bool) (internalapi.OriginalModel, *gcp.InteractionsRequest, bool, []byte, error) {
+	var req gcp.InteractionsRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", nil, false, nil, fmt.Errorf("%w: failed to parse JSON for /interactions: %w", internalapi.ErrMalformedRequest, err)
+	}
+	model := req.RoutingModel()
+	if model == "" {
+		return "", nil, false, nil, fmt.Errorf("%w: the 'model' or 'agent' field is required", internalapi.ErrInvalidRequestBody)
+	}
+	switch {
+	case req.Store != nil && *req.Store:
+		return "", nil, false, nil, fmt.Errorf("%w: 'store' must be false: this gateway does not allow the provider to retain interactions", internalapi.ErrInvalidRequestBody)
+	case req.Background != nil && *req.Background:
+		return "", nil, false, nil, fmt.Errorf("%w: 'background' is not supported: background interactions require the provider to retain the interaction", internalapi.ErrInvalidRequestBody)
+	case req.PreviousInteractionID != "":
+		return "", nil, false, nil, fmt.Errorf("%w: 'previous_interaction_id' is not supported: continuing an interaction requires the provider to retain it", internalapi.ErrInvalidRequestBody)
+	}
+
+	var mutatedBody []byte
+	if req.Store == nil {
+		var err error
+		if mutatedBody, err = sjson.SetBytes(body, "store", false); err != nil {
+			return "", nil, false, nil, fmt.Errorf("failed to set store=false: %w", err)
+		}
+		req.Store = ptr.To(false)
+	}
+	return model, &req, req.Stream, mutatedBody, nil
+}
+
+// ParseMultipartBody implements [Spec.ParseMultipartBody].
+func (InteractionsEndpointSpec) ParseMultipartBody([]byte, string, bool) (internalapi.OriginalModel, *gcp.InteractionsRequest, bool, []byte, error) {
+	return "", nil, false, nil, errMultipartNotSupported
+}
+
+// GetTranslator implements [Spec.GetTranslator].
+func (InteractionsEndpointSpec) GetTranslator(schema filterapi.VersionedAPISchema, modelNameOverride string) (translator.InteractionsTranslator, error) {
+	switch schema.Name {
+	case filterapi.APISchemaGCPVertexAI:
+		return translator.NewInteractionsGCPVertexAITranslator(modelNameOverride), nil
+	default:
+		return nil, fmt.Errorf("%w: the Interactions API only supports backends with the %s schema: backend=%s",
+			internalapi.ErrInvalidRequestBody, filterapi.APISchemaGCPVertexAI, schema)
+	}
+}
+
+// RedactSensitiveInfoFromRequest implements [Spec.RedactSensitiveInfoFromRequest]. The parsed
+// request holds no user content, so it is returned as a copy.
+func (InteractionsEndpointSpec) RedactSensitiveInfoFromRequest(req *gcp.InteractionsRequest) (*gcp.InteractionsRequest, error) {
+	redacted := *req
+	return &redacted, nil
 }

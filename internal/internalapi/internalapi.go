@@ -343,6 +343,9 @@ type EndpointPrefixes struct {
 	Anthropic string
 	// TypeSafe defaults to "/typesafe"
 	TypeSafe string
+	// Gemini defaults to "/gemini". It prefixes the Gemini-native endpoints such as the
+	// Interactions API ("/v1beta/interactions"), which have no OpenAI or Anthropic equivalent.
+	Gemini string
 }
 
 // ParseEndpointPrefixes parses a comma-separated list of key:value pairs to populate EndpointPrefixes.
@@ -352,10 +355,11 @@ type EndpointPrefixes struct {
 //   - cohere
 //   - anthropic
 //   - typesafe
+//   - gemini
 //
 // Format example:
 //
-//	"openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe"
+//	"openai:/,cohere:/cohere,anthropic:/anthropic,typesafe:/typesafe,gemini:/gemini"
 //
 // Unknown keys cause an error; values must be non-empty.
 func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
@@ -364,6 +368,7 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 		Cohere:    "/cohere",
 		Anthropic: "/anthropic",
 		TypeSafe:  "/typesafe",
+		Gemini:    "/gemini",
 	}
 	if s == "" {
 		return out, nil
@@ -393,8 +398,10 @@ func ParseEndpointPrefixes(s string) (EndpointPrefixes, error) {
 			out.Anthropic = value
 		case "typesafe":
 			out.TypeSafe = value
+		case "gemini":
+			out.Gemini = value
 		default:
-			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic, typesafe)", key, i+1)
+			return EndpointPrefixes{}, fmt.Errorf("unknown endpointPrefixes key %q at position %d (allowed: openai, cohere, anthropic, typesafe, gemini)", key, i+1)
 		}
 	}
 	return out, nil
