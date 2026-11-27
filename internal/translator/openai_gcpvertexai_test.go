@@ -1237,7 +1237,7 @@ data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}],"usageMetadata":{
 			wantHeaderMut: nil,
 			wantBodyMut: []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"let me think step by step and reply you."}}],"object":"chat.completion.chunk"}
 
-data: {"choices":[{"index":0,"delta":{"content":"Hello","role":"assistant"}}],"object":"chat.completion.chunk"}
+data: {"choices":[{"index":0,"delta":{"content":"Hello"}}],"object":"chat.completion.chunk"}
 
 data: {"choices":[],"object":"chat.completion.chunk","usage":{"prompt_tokens":5,"completion_tokens":13,"total_tokens":18,"completion_tokens_details":{"reasoning_tokens":10},"prompt_tokens_details":{}}}
 
@@ -1259,7 +1259,7 @@ data: {"candidates":[{"content":{"parts":[{"text":"The answer is 42.", "thoughtS
 			wantHeaderMut: nil,
 			wantBodyMut: []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"let me think about this."}}],"object":"chat.completion.chunk"}
 
-data: {"choices":[{"index":0,"delta":{"content":"The answer is 42.","role":"assistant","thinking_blocks":[{"type":"thinking","signature":"dGVzdHNpZ25hdHVyZQ=="}]}}],"object":"chat.completion.chunk"}
+data: {"choices":[{"index":0,"delta":{"content":"The answer is 42.","thinking_blocks":[{"type":"thinking","signature":"dGVzdHNpZ25hdHVyZQ=="}]}}],"object":"chat.completion.chunk"}
 
 data: {"choices":[],"object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":23,"total_tokens":33,"completion_tokens_details":{"reasoning_tokens":15},"prompt_tokens_details":{}}}
 
@@ -1407,7 +1407,6 @@ func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingResponseBody(t *
 }
 
 func TestExtractToolCallsFromGeminiPartsStream(t *testing.T) {
-	toolCalls := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
 	tests := []struct {
 		name     string
 		input    []*genai.Part
@@ -1652,8 +1651,7 @@ func TestExtractToolCallsFromGeminiPartsStream(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
-			calls, _, err := o.extractToolCallsFromGeminiPartsStream(toolCalls, tt.input, json.MarshalForDeterministicTesting)
+			calls, _, err := extractToolCallsFromGeminiPartsStream(tt.input, 0, json.MarshalForDeterministicTesting)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -1675,7 +1673,6 @@ func TestExtractToolCallsFromGeminiPartsStream(t *testing.T) {
 // TestExtractToolCallsStreamVsNonStream tests the differences between streaming and non-streaming extraction
 func TestExtractToolCallsStreamVsNonStream(t *testing.T) {
 	toolCalls := []openai.ChatCompletionMessageToolCallParam{}
-	toolCallsStream := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
 	parts := []*genai.Part{
 		{
 			FunctionCall: &genai.FunctionCall{
@@ -1687,10 +1684,8 @@ func TestExtractToolCallsStreamVsNonStream(t *testing.T) {
 			},
 		},
 	}
-	o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
-
 	// Get results from both functions
-	streamCalls, _, err := o.extractToolCallsFromGeminiPartsStream(toolCallsStream, parts, json.MarshalForDeterministicTesting)
+	streamCalls, _, err := extractToolCallsFromGeminiPartsStream(parts, 0, json.MarshalForDeterministicTesting)
 	require.NoError(t, err)
 	require.Len(t, streamCalls, 1)
 
@@ -1730,7 +1725,6 @@ func TestExtractToolCallsStreamVsNonStream(t *testing.T) {
 
 // TestExtractToolCallsStreamIndexing specifically tests that multiple tool calls get correct indices
 func TestExtractToolCallsStreamIndexing(t *testing.T) {
-	toolCalls := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
 	parts := []*genai.Part{
 		{
 			FunctionCall: &genai.FunctionCall{
@@ -1752,9 +1746,7 @@ func TestExtractToolCallsStreamIndexing(t *testing.T) {
 			},
 		},
 	}
-	o := NewChatCompletionOpenAIToGCPVertexAITranslator("gemini-2.0-flash-001").(*openAIToGCPVertexAITranslatorV1ChatCompletion)
-
-	calls, _, err := o.extractToolCallsFromGeminiPartsStream(toolCalls, parts, json.MarshalForDeterministicTesting)
+	calls, _, err := extractToolCallsFromGeminiPartsStream(parts, 0, json.MarshalForDeterministicTesting)
 	require.NoError(t, err)
 	require.Len(t, calls, 3)
 
@@ -1781,6 +1773,48 @@ func TestExtractToolCallsStreamIndexing(t *testing.T) {
 	for _, call := range calls {
 		assert.False(t, ids[*call.ID], "Tool call ID should be unique: %s", *call.ID)
 		ids[*call.ID] = true
+	}
+}
+
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingToolCallIndexPerChoice(t *testing.T) {
+	type event struct {
+		body      string
+		choice    int64
+		name      string
+		arguments string
+	}
+	weather := event{
+		body:   `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Oslo"}}}]}}]}`,
+		choice: 0, name: "get_weather", arguments: `{"city":"Oslo"}`,
+	}
+	clock := event{
+		body:   `{"candidates":[{"index":1,"content":{"role":"model","parts":[{"functionCall":{"name":"get_time","args":{"timezone":"UTC"}}}]}}]}`,
+		choice: 1, name: "get_time", arguments: `{"timezone":"UTC"}`,
+	}
+	for _, tt := range []struct {
+		name   string
+		events []event
+	}{
+		{"weather first", []event{weather, clock}},
+		{"time first", []event{clock, weather}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+			for _, e := range tt.events {
+				_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader("data: "+e.body+"\n\n"), false, nil)
+				require.NoError(t, err)
+				chunks := getChatCompletionResponseChunk(body)
+				require.Len(t, chunks, 1)
+				require.Len(t, chunks[0].Choices, 1)
+				choice := chunks[0].Choices[0]
+				assert.Equal(t, e.choice, choice.Index)
+				require.Len(t, choice.Delta.ToolCalls, 1)
+				call := choice.Delta.ToolCalls[0]
+				assert.Equal(t, int64(0), call.Index, "first tool call for choice %d", e.choice)
+				assert.Equal(t, e.name, call.Function.Name)
+				assert.JSONEq(t, e.arguments, call.Function.Arguments)
+			}
+		})
 	}
 }
 
@@ -1852,7 +1886,6 @@ data: {"candidates": [
 				{
 					Index: int64(0),
 					Delta: &openai.ChatCompletionResponseChunkChoiceDelta{
-						Role: "assistant",
 						ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
 							{
 								Index: int64(1),
@@ -1997,6 +2030,99 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishRe
 	outputTokens, ok := tokenUsage.OutputTokens()
 	require.True(t, ok)
 	require.Equal(t, uint32(18), outputTokens)
+}
+
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingFinishReasonPerChoice(t *testing.T) {
+	type event struct {
+		body       string
+		wantIndex  int64
+		wantFinish openai.ChatCompletionChoicesFinishReason
+	}
+	textStart := event{body: `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Blue"}]}}]}`, wantIndex: 0}
+	toolCall := event{body: `{"candidates":[{"index":1,"content":{"role":"model","parts":[{"functionCall":{"name":"get_weather","args":{"city":"Oslo"}}}]}}]}`, wantIndex: 1}
+	textStop := event{
+		body:      `{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" jay."}]},"finishReason":"STOP"}]}`,
+		wantIndex: 0, wantFinish: openai.ChatCompletionChoicesFinishReasonStop,
+	}
+	toolStop := event{
+		body:      `{"candidates":[{"index":1,"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}`,
+		wantIndex: 1, wantFinish: openai.ChatCompletionChoicesFinishReasonToolCalls,
+	}
+
+	for _, tt := range []struct {
+		name   string
+		events []event
+	}{
+		{"tool before text stop", []event{textStart, toolCall, textStop, toolStop}},
+		{"tool after text stop", []event{textStart, textStop, toolCall, toolStop}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+			for _, e := range tt.events {
+				_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader("data: "+e.body+"\n\n"), false, nil)
+				require.NoError(t, err)
+				chunks := getChatCompletionResponseChunk(body)
+				require.Len(t, chunks, 1)
+				require.Len(t, chunks[0].Choices, 1)
+				choice := chunks[0].Choices[0]
+				assert.Equal(t, e.wantIndex, choice.Index)
+				assert.Equal(t, e.wantFinish, choice.FinishReason, "choice %d", e.wantIndex)
+			}
+		})
+	}
+}
+
+func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingRoleOnce(t *testing.T) {
+	type streamEvent struct {
+		event       string
+		wantChoices string
+	}
+	checkStream := func(t *testing.T, events []streamEvent) {
+		t.Helper()
+		translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+		for _, tt := range events {
+			_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader("data: "+tt.event+"\n\n"), false, nil)
+			require.NoError(t, err)
+			var chunk struct {
+				Choices json.RawMessage `json:"choices"`
+			}
+			require.NoError(t, json.Unmarshal(bytes.TrimPrefix(body, []byte("data: ")), &chunk))
+			assert.JSONEq(t, tt.wantChoices, string(chunk.Choices))
+		}
+	}
+
+	t.Run("single choice", func(t *testing.T) {
+		checkStream(t, []streamEvent{
+			{
+				event:       `{"responseId":"local-two-deltas","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello"}]}}]}`,
+				wantChoices: `[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]`,
+			},
+			{
+				event:       `{"responseId":"local-two-deltas","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" from Gemini!"}]},"finishReason":"STOP"}]}`,
+				wantChoices: `[{"index":0,"delta":{"content":" from Gemini!"},"finish_reason":"stop"}]`,
+			},
+		})
+	})
+	t.Run("interleaved choices", func(t *testing.T) {
+		checkStream(t, []streamEvent{
+			{
+				event:       `{"responseId":"two-interleaved-choices","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Red"}]}}]}`,
+				wantChoices: `[{"index":0,"delta":{"role":"assistant","content":"Red"}}]`,
+			},
+			{
+				event:       `{"responseId":"two-interleaved-choices","candidates":[{"index":1,"content":{"role":"model","parts":[{"text":"Blue"}]}}]}`,
+				wantChoices: `[{"index":1,"delta":{"role":"assistant","content":"Blue"}}]`,
+			},
+			{
+				event:       `{"responseId":"two-interleaved-choices","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" fox."}]},"finishReason":"STOP"}]}`,
+				wantChoices: `[{"index":0,"delta":{"content":" fox."},"finish_reason":"stop"}]`,
+			},
+			{
+				event:       `{"responseId":"two-interleaved-choices","candidates":[{"index":1,"content":{"role":"model","parts":[{"text":" jay."}]},"finishReason":"STOP"}]}`,
+				wantChoices: `[{"index":1,"delta":{"content":" jay."},"finish_reason":"stop"}]`,
+			},
+		})
+	})
 }
 
 func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingEndOfStream(t *testing.T) {
