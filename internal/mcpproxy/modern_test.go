@@ -395,7 +395,7 @@ func TestHandleServerDiscover_BackendSelectorFilters(t *testing.T) {
 	proxy.backendListenerAddr = server.URL
 	proxy.routes["test-route"].backendSelector = jwtBackendSelectorAllowing(t)
 	proxy.requestHeaders = http.Header{
-		"Authorization": []string{"Bearer " + bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
+		jwtClaimsHeaderKey: []string{verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
 	}
 
 	rr := httptest.NewRecorder()
@@ -423,9 +423,9 @@ func TestHandleModernToolsList_BackendSelectorFilters(t *testing.T) {
 	delete(proxy.routes["test-route"].toolSelectors, "backend1")
 	proxy.routes["test-route"].backendSelector = jwtBackendSelectorAllowing(t)
 
-	token := bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})
+	token := verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})
 	r := newModernRequest("tools/list")
-	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(internalapi.MCPJWTClaimsHeader, token)
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "tools/list", nil)
 
@@ -1420,9 +1420,9 @@ func TestResolveModernRouteBackends_PerBackendHeadersOnlyForSelected(t *testing.
 	proxy := newTestMCPProxy()
 	proxy.routes["test-route"].backendSelector = jwtBackendSelectorAllowing(t)
 	proxy.requestHeaders = http.Header{
-		"Authorization": []string{"Bearer " + bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
-		"X-B1":          []string{"secret-b1"},
-		"X-B2":          []string{"secret-b2"},
+		jwtClaimsHeaderKey: []string{verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
+		"X-B1":             []string{"secret-b1"},
+		"X-B2":             []string{"secret-b2"},
 	}
 	b1 := proxy.routes["test-route"].backends["backend1"]
 	b1.ForwardHeaders = []filterapi.MCPHeaderForward{{Name: "X-B1"}}
@@ -3263,7 +3263,7 @@ func TestHandleModernToolsCall_AuthorizationScopeChallenge(t *testing.T) {
 
 	// Caller only presents the "read" scope, so the "read write" rule is not satisfied.
 	r := newModernRequest("tools/call")
-	r.Header.Set("Authorization", "Bearer "+bearerTokenWithClaims(jwt.MapClaims{"scope": []string{"read"}}))
+	r.Header.Set(internalapi.MCPJWTClaimsHeader, verifiedJWTClaims(jwt.MapClaims{"scope": []string{"read"}}))
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "tools/call", fmt.Appendf(nil, `{"name":%q}`, downstreamResourceName("do-it", "backend2")))
 
@@ -3316,7 +3316,7 @@ func TestHandleModernToolsCall_AuthorizationAllowed(t *testing.T) {
 	})
 
 	r := newModernRequest("tools/call")
-	r.Header.Set("Authorization", "Bearer "+bearerTokenWithClaims(jwt.MapClaims{"scope": []string{"read"}}))
+	r.Header.Set(internalapi.MCPJWTClaimsHeader, verifiedJWTClaims(jwt.MapClaims{"scope": []string{"read"}}))
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "tools/call", fmt.Appendf(nil, `{"name":%q}`, downstreamResourceName("do-it", "backend2")))
 
@@ -3341,7 +3341,7 @@ func TestHandleModernToolsCall_BackendExcludedBySelector(t *testing.T) {
 
 	// Caller is only authorized for backend2, but targets backend1 (on the route).
 	r := newModernRequest("tools/call")
-	r.Header.Set("Authorization", "Bearer "+bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}}))
+	r.Header.Set(internalapi.MCPJWTClaimsHeader, verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}}))
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "tools/call", fmt.Appendf(nil, `{"name":%q}`, downstreamResourceName("do-it", "backend1")))
 

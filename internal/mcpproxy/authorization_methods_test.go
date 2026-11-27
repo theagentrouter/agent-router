@@ -298,18 +298,16 @@ func TestAuthorization_NonToolMethodInsufficientScope(t *testing.T) {
 		}},
 	})
 	token := func(scopes ...string) string {
-		signed, err := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"scope": scopes}).SignedString(jwt.UnsafeAllowNoneSignatureType)
-		require.NoError(t, err)
-		return "Bearer " + signed
+		return verifiedJWTClaims(jwt.MapClaims{"scope": scopes})
 	}
 	params := &mcp.GetPromptParams{Name: "backend1__secret_prompt"}
 
-	rr := doMCPPost(t, proxy, sessionID, "prompts/get", params, map[string]string{"Authorization": token("other")})
+	rr := doMCPPost(t, proxy, sessionID, "prompts/get", params, map[string]string{internalapi.MCPJWTClaimsHeader: token("other")})
 	require.Equal(t, http.StatusForbidden, rr.Code)
 	require.Contains(t, rr.Header().Get("WWW-Authenticate"), `scope="read"`)
 	require.Empty(t, backend.reset())
 
-	rr = doMCPPost(t, proxy, sessionID, "prompts/get", params, map[string]string{"Authorization": token("read")})
+	rr = doMCPPost(t, proxy, sessionID, "prompts/get", params, map[string]string{internalapi.MCPJWTClaimsHeader: token("read")})
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	require.Equal(t, []string{"backend1 prompts/get"}, backend.reset())
 }
@@ -673,7 +671,7 @@ func TestAuthorization_ScopeChallengeOnlyForMatchingRules(t *testing.T) {
 			},
 		},
 	})
-	headers := map[string]string{"Authorization": "Bearer " + bearerTokenWithClaims(jwt.MapClaims{"scope": "other"})}
+	headers := map[string]string{internalapi.MCPJWTClaimsHeader: verifiedJWTClaims(jwt.MapClaims{"scope": "other"})}
 
 	rr := doMCPPost(t, proxy, sessionID, "resources/read", &mcp.ReadResourceParams{URI: downstreamResourceURI("file:///secret", "backend1")}, headers)
 	require.Equal(t, http.StatusForbidden, rr.Code)
@@ -741,7 +739,7 @@ func TestAuthorization_ModernSubscriptionsListenScopeChallenge(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	r := newModernRequest("subscriptions/listen")
-	r.Header.Set("Authorization", "Bearer "+bearerTokenWithClaims(jwt.MapClaims{"scope": "other"}))
+	r.Header.Set(internalapi.MCPJWTClaimsHeader, verifiedJWTClaims(jwt.MapClaims{"scope": "other"}))
 	rr := httptest.NewRecorder()
 
 	_, err = proxy.handleSubscriptionsListen(t.Context(), rr, r, modernReq(t, "subscriptions/listen", params), "test-route", nil)
@@ -765,12 +763,12 @@ func TestAuthorization_ScopeChallengeWithScopeDependentCEL(t *testing.T) {
 	})
 	params := &mcp.ReadResourceParams{URI: downstreamResourceURI("file:///secret", "backend1")}
 
-	rr := doMCPPost(t, proxy, sessionID, "resources/read", params, map[string]string{"Authorization": "Bearer " + bearerTokenWithClaims(jwt.MapClaims{"scope": "other"})})
+	rr := doMCPPost(t, proxy, sessionID, "resources/read", params, map[string]string{internalapi.MCPJWTClaimsHeader: verifiedJWTClaims(jwt.MapClaims{"scope": "other"})})
 	require.Equal(t, http.StatusForbidden, rr.Code)
 	require.Contains(t, rr.Header().Get("WWW-Authenticate"), `scope="read"`)
 	require.Empty(t, backend.reset())
 
-	rr = doMCPPost(t, proxy, sessionID, "resources/read", params, map[string]string{"Authorization": "Bearer " + bearerTokenWithClaims(jwt.MapClaims{"scope": "read"})})
+	rr = doMCPPost(t, proxy, sessionID, "resources/read", params, map[string]string{internalapi.MCPJWTClaimsHeader: verifiedJWTClaims(jwt.MapClaims{"scope": "read"})})
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	require.Equal(t, []string{"backend1 resources/read"}, backend.reset())
 }
