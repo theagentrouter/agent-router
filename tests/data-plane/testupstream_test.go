@@ -1685,6 +1685,10 @@ data: {"type":"message_stop"}`,
 		})
 	}
 
+	t.Run("Gemini zero-argument tool round trip", func(t *testing.T) {
+		testGeminiZeroArgumentToolRoundTrip(t, listenerPort)
+	})
+
 	t.Run("stream non blocking", func(t *testing.T) {
 		if was5xx {
 			return // rather than also failing subsequent tests, which confuses root cause.
@@ -1753,6 +1757,77 @@ data: {"type":"message_stop"}`,
 		require.True(t, asserted)
 		require.NoError(t, stream.Err())
 	})
+}
+
+func testGeminiZeroArgumentToolRoundTrip(t *testing.T, listenerPort int) {
+	const (
+		// Gemini omits args when the tool has no parameters.
+		modelCall = `"content":{"role":"model","parts":[{"functionCall":{"name":"now"}}]}`
+		complete  = `{"candidates":[{` + modelCall + `,"finishReason":"STOP"}]}`
+		streamed  = `{"candidates":[{` + modelCall + `}]}` + "\n" +
+			`{"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}]}`
+		final = `{"candidates":[{"content":{"role":"model","parts":[{"text":"The clock reads 12:00:00Z."}]},"finishReason":"STOP"}]}`
+		// The mock only returns the final answer if the replay and tool result match.
+		secondRequest = `{"contents":[{"parts":[{"text":"Call now."}],"role":"user"},` +
+			`{"parts":[{"functionCall":{"name":"now"},"thoughtSignature":"c2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3I="}],"role":"model"},` +
+			`{"parts":[{"functionResponse":{"name":"now","response":{"output":"12:00:00Z"}}}],"role":"user"}],` +
+			`"tools":[{"functionDeclarations":[{"name":"now","parametersJsonSchema":{"type":"object"}}]}],"generationConfig":{}}`
+	)
+	client := openaigo.NewClient(option.WithBaseURL(fmt.Sprintf("http://localhost:%d/v1/", listenerPort)),
+		option.WithHeader("x-test-backend", "gcp-vertexai"), option.WithMaxRetries(0))
+	bodyHeader := func(key, body string) option.RequestOption {
+		return option.WithHeader(key, base64.StdEncoding.EncodeToString([]byte(body)))
+	}
+	for _, mode := range []string{"non-streamed", "streamed"} {
+		t.Run(mode, func(t *testing.T) {
+			params := openaigo.ChatCompletionNewParams{
+				Model:    "gemini-3.5-flash",
+				Messages: []openaigo.ChatCompletionMessageParamUnion{openaigo.UserMessage("Call now.")},
+				Tools: []openaigo.ChatCompletionToolParam{{Function: openaigo.FunctionDefinitionParam{
+					Name: "now", Parameters: openaigo.FunctionParameters{"type": "object"},
+				}}},
+			}
+			var first *openaigo.ChatCompletion
+			if mode == "streamed" {
+				stream := client.Chat.Completions.NewStreaming(t.Context(), params,
+					option.WithHeader(testupstreamlib.ResponseTypeKey, "sse"), bodyHeader(testupstreamlib.ResponseBodyHeaderKey, streamed))
+				defer func() { _ = stream.Close() }()
+				var acc openaigo.ChatCompletionAccumulator
+				for stream.Next() {
+					require.True(t, acc.AddChunk(stream.Current()))
+				}
+				require.NoError(t, stream.Err())
+				first = &acc.ChatCompletion
+			} else {
+				var err error
+				first, err = client.Chat.Completions.New(t.Context(), params, bodyHeader(testupstreamlib.ResponseBodyHeaderKey, complete))
+				require.NoError(t, err)
+			}
+			require.Len(t, first.Choices, 1)
+			require.Equal(t, "tool_calls", first.Choices[0].FinishReason)
+			message := first.Choices[0].Message
+			params.Messages = append(params.Messages, message.ToParam())
+			invocations := 0
+			now := func() string {
+				invocations++
+				return "12:00:00Z"
+			}
+			for _, call := range message.ToolCalls {
+				require.NotEmpty(t, call.ID)
+				require.Equal(t, "now", call.Function.Name)
+				require.JSONEq(t, "{}", call.Function.Arguments)
+				params.Messages = append(params.Messages, openaigo.ToolMessage(now(), call.ID))
+			}
+			require.Equal(t, 1, invocations)
+			answer, err := client.Chat.Completions.New(t.Context(), params,
+				bodyHeader(testupstreamlib.ExpectedRequestBodyHeaderKey, secondRequest), bodyHeader(testupstreamlib.ResponseBodyHeaderKey, final))
+			require.NoError(t, err)
+			require.Len(t, answer.Choices, 1)
+			require.Equal(t, "stop", answer.Choices[0].FinishReason)
+			require.Empty(t, answer.Choices[0].Message.ToolCalls)
+			require.Equal(t, "The clock reads 12:00:00Z.", answer.Choices[0].Message.Content)
+		})
+	}
 }
 
 func checkModels(want openai.ModelList) func(t require.TestingT, body []byte) {
