@@ -6,6 +6,7 @@
 package dataplane
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/base64"
@@ -17,13 +18,16 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	openaigo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"sigs.k8s.io/yaml"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -43,6 +47,40 @@ func failIf5xx(t *testing.T, resp *http.Response, was5xx *bool) {
 		*was5xx = true
 		t.Fatalf("received %d response with body: %s", resp.StatusCode, string(body))
 	}
+}
+
+type bedrockDelta struct {
+	field, want string
+}
+
+// readStream releases the mock after decoding the expected delta and preserves the full SSE body.
+func (d bedrockDelta) readStream(t *testing.T, resp *http.Response, upstreamBody <-chan []byte, expectedRequest string) []byte {
+	t.Helper()
+	var wire bytes.Buffer
+	decoder := ssestream.NewDecoder(&http.Response{Header: resp.Header, Body: io.NopCloser(io.TeeReader(resp.Body, &wire))})
+	defer func() { _ = decoder.Close() }()
+	for decoder.Next() {
+		if value := gjson.GetBytes(decoder.Event().Data, "choices.0.delta."+d.field).String(); value != "" {
+			require.Equal(t, d.want, value, "first streamed delta.%s", d.field)
+			select {
+			case body, acknowledged := <-upstreamBody:
+				if acknowledged {
+					require.JSONEq(t, expectedRequest, string(body), "translated Bedrock request")
+				} else {
+					t.Errorf("mock timed out waiting for the client to decode delta.%s", d.field)
+				}
+			case <-resp.Request.Context().Done():
+				t.Fatalf("mock did not pause for delta.%s: %v", d.field, resp.Request.Context().Err())
+			}
+			// Bytes prefetched by the decoder are already in wire.
+			_, err := io.Copy(&wire, resp.Body)
+			require.NoError(t, err)
+			return wire.Bytes()
+		}
+	}
+	require.NoError(t, decoder.Err())
+	t.Fatalf("stream ended before delta.%s", d.field)
+	return nil
 }
 
 // TestWithTestUpstream tests the end-to-end flow of the external processor with Envoy and the test upstream.
@@ -97,7 +135,23 @@ func TestWithTestUpstream(t *testing.T) {
 
 	configBytes, err := yaml.Marshal(config)
 	require.NoError(t, err)
-	env := startTestEnvironment(t, string(configBytes), true, false)
+	const streamCaseHeader = "x-test-bedrock-stream-case"
+	var streamRequests sync.Map // Subtest name to its unbuffered request-body channel.
+	env := startTestEnvironmentWithUpstream(t, string(configBytes), true, false, &testupstreamlib.Server{
+		AfterFirstBedrockDelta: func(r *http.Request, body []byte) {
+			value, ok := streamRequests.LoadAndDelete(r.Header.Get(streamCaseHeader))
+			if !ok {
+				return
+			}
+			requestBody := value.(chan []byte)
+			defer close(requestBody)
+			// Sending the request body for comparison waits for this fixture's downstream reader.
+			select {
+			case requestBody <- body:
+			case <-time.After(2 * time.Second):
+			}
+		},
+	})
 
 	listenerPort := env.EnvoyListenerPort()
 
@@ -124,7 +178,7 @@ func TestWithTestUpstream(t *testing.T) {
 		requestBody,
 		// responseBody is the response body to return from the test upstream.
 		responseBody,
-		// responseType is either empty, "sse" or "aws-event-stream" as implemented by the test upstream.
+		// responseType selects the response format implemented by the test upstream.
 		responseType,
 		// responseStatus is the HTTP status code of the response returned by the test upstream.
 		responseStatus,
@@ -160,6 +214,7 @@ func TestWithTestUpstream(t *testing.T) {
 		expResponseBody string
 		// expResponseBodyFunc is a function to check the response body. This can be used instead of the expResponseBody field.
 		expResponseBodyFunc func(require.TestingT, []byte)
+		firstDelta          *bedrockDelta
 	}{
 		{
 			name:            "openai - /v1/images/generations",
@@ -516,9 +571,10 @@ func TestWithTestUpstream(t *testing.T) {
 		},
 		{
 			name:            "aws - /v1/chat/completions - streaming with tool use",
+			firstDelta:      &bedrockDelta{field: "content", want: "Don"},
 			backend:         "aws-bedrock",
 			path:            "/v1/chat/completions",
-			responseType:    "aws-event-stream",
+			responseType:    testupstreamlib.FastAWSEventStream,
 			method:          http.MethodPost,
 			requestBody:     `{"model":"something","messages":[{"role":"system","content":"You are a chatbot."}], "stream": true}`,
 			expRequestBody:  `{"inferenceConfig":{},"messages":[],"system":[{"text":"You are a chatbot."}]}`,
@@ -564,9 +620,10 @@ data: [DONE]
 		},
 		{
 			name:         "aws-bedrock - /v1/chat/completions - streaming with thinking config",
+			firstDelta:   &bedrockDelta{field: "reasoning_content", want: "First, I'll start by acknowledging the user..."},
 			backend:      "aws-bedrock",
 			path:         "/v1/chat/completions",
-			responseType: "aws-event-stream",
+			responseType: testupstreamlib.FastAWSEventStream,
 			method:       http.MethodPost,
 			requestBody: `{
 		"model":"something",
@@ -1607,7 +1664,13 @@ data: {"type":"message_stop"}`,
 			if tc.responseHeaders != "" {
 				req.Header.Set(testupstreamlib.ResponseHeadersKey, base64.StdEncoding.EncodeToString([]byte(tc.responseHeaders)))
 			}
-			if tc.expRequestBody != "" {
+			var upstreamBody chan []byte
+			if tc.firstDelta != nil {
+				upstreamBody = make(chan []byte)
+				streamRequests.Store(t.Name(), upstreamBody)
+				defer streamRequests.Delete(t.Name())
+				req.Header.Set(streamCaseHeader, t.Name())
+			} else if tc.expRequestBody != "" {
 				req.Header.Set(testupstreamlib.ExpectedRequestBodyHeaderKey, base64.StdEncoding.EncodeToString([]byte(tc.expRequestBody)))
 			}
 			for k, v := range tc.requestHeaders {
@@ -1624,7 +1687,7 @@ data: {"type":"message_stop"}`,
 			var lastStatusCode int
 			var lastBody []byte
 			var lastHeaders http.Header
-			require.Eventually(t, func() bool {
+			doRequest := func() bool {
 				var resp *http.Response
 				resp, lastErr = http.DefaultClient.Do(req)
 				if lastErr != nil {
@@ -1637,7 +1700,11 @@ data: {"type":"message_stop"}`,
 					failIf5xx(t, resp, &was5xx)
 				}
 
-				lastBody, lastErr = io.ReadAll(resp.Body)
+				if tc.firstDelta != nil && resp.StatusCode == tc.expStatus {
+					lastBody = tc.firstDelta.readStream(t, resp, upstreamBody, tc.expRequestBody)
+				} else {
+					lastBody, lastErr = io.ReadAll(resp.Body)
+				}
 				if lastErr != nil {
 					return false
 				}
@@ -1648,9 +1715,19 @@ data: {"type":"message_stop"}`,
 				lastStatusCode = resp.StatusCode
 				lastHeaders = resp.Header
 				return resp.StatusCode == tc.expStatus
-			}, eventuallyTimeout, eventuallyInterval,
-				"Test failed - Last error: %v, Last status code: %d (expected: %d), Last body: %s",
-				lastErr, lastStatusCode, tc.expStatus, lastBody)
+			}
+			if tc.firstDelta != nil {
+				ctx, cancel := context.WithTimeout(t.Context(), eventuallyTimeout)
+				defer cancel()
+				req = req.WithContext(ctx)
+				ok := doRequest()
+				require.NoError(t, lastErr)
+				require.True(t, ok, "unexpected status %d: %s", lastStatusCode, lastBody)
+			} else {
+				require.Eventually(t, doRequest, eventuallyTimeout, eventuallyInterval,
+					"Test failed - Last error: %v, Last status code: %d (expected: %d), Last body: %s",
+					lastErr, lastStatusCode, tc.expStatus, lastBody)
+			}
 
 			// Now perform assertions on the body outside the Eventually loop
 			switch {

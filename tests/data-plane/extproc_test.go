@@ -219,15 +219,25 @@ func TestMain(m *testing.M) {
 }
 
 func startTestEnvironment(t testing.TB, extprocConfig string, okToDumpLogOnFailure, extProcInProcess bool) *dataplaneenv.TestEnvironment {
+	return startTestEnvironmentWithUpstream(t, extprocConfig, okToDumpLogOnFailure, extProcInProcess, &testupstreamlib.Server{})
+}
+
+func startTestEnvironmentWithUpstream(t testing.TB, extprocConfig string, okToDumpLogOnFailure, extProcInProcess bool, upstream *testupstreamlib.Server) *dataplaneenv.TestEnvironment {
+	serve := func(t testing.TB, out io.Writer, ports map[string]int) {
+		startTestUpstream(t, out, ports, upstream)
+	}
 	return dataplaneenv.StartTestEnvironment(t,
-		requireUpstream, map[string]int{"upstream": 8080},
+		serve, map[string]int{"upstream": 8080},
 		extprocConfig, nil, envoyConfig, okToDumpLogOnFailure, extProcInProcess, 120*time.Second,
 	)
 }
 
-// requireUpstream starts the external processor with the given configuration.
 func requireUpstream(t testing.TB, out io.Writer, ports map[string]int) {
-	s := testupstreamlib.Server{ID: "extproc_test", Logger: log.New(out, "[testupstream] ", 0)}
+	startTestUpstream(t, out, ports, &testupstreamlib.Server{})
+}
+
+func startTestUpstream(t testing.TB, out io.Writer, ports map[string]int, s *testupstreamlib.Server) {
+	s.ID, s.Logger = "extproc_test", log.New(out, "[testupstream] ", 0)
 	l, err := net.Listen("tcp", ":"+strconv.Itoa(ports["upstream"])) // nolint: gosec
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)

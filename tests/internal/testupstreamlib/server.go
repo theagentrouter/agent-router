@@ -35,6 +35,8 @@ type Server struct {
 	ID string
 	// Logger is the logger used to log messages.
 	Logger *log.Logger
+	// AfterFirstBedrockDelta runs after the fast stream flushes its first content block delta.
+	AfterFirstBedrockDelta func(r *http.Request, requestBody []byte)
 
 	streamingInterval time.Duration
 }
@@ -327,8 +329,14 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Logger.Println("response sent")
 		r.Context().Done()
-	case "aws-event-stream":
+	case "aws-event-stream", FastAWSEventStream:
 		w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		interval := s.streamingInterval
+		var afterFirstDelta func(*http.Request, []byte)
+		if r.Header.Get(ResponseTypeKey) == FastAWSEventStream {
+			interval = 10 * time.Millisecond
+			afterFirstDelta = s.AfterFirstBedrockDelta
+		}
 
 		var expResponseBody []byte
 		expResponseBody, err = base64.StdEncoding.DecodeString(r.Header.Get(ResponseBodyHeaderKey))
@@ -344,7 +352,7 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 			if len(line) == 0 {
 				continue
 			}
-			time.Sleep(s.streamingInterval)
+			time.Sleep(interval)
 			var bedrockStreamEvent map[string]any
 			err = json.Unmarshal(line, &bedrockStreamEvent)
 			if err != nil {
@@ -371,6 +379,10 @@ func (s *Server) handler(w http.ResponseWriter, r *http.Request) {
 				s.Logger.Println("failed to encode the response body")
 			}
 			w.(http.Flusher).Flush()
+			if afterFirstDelta != nil && eventType == "contentBlockDelta" {
+				afterFirstDelta(r, requestBody)
+				afterFirstDelta = nil
+			}
 			s.Logger.Println("response line sent:", string(line))
 		}
 
