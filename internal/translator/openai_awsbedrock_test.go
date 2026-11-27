@@ -1472,6 +1472,10 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody_SignedThinking
 	}`
 	const toolHistoryFields = `"thinking_blocks": [{"type": "thinking", "thinking": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}],
 		"tool_calls": [{"type": "function", "id": "call_clock_01", "function": {"name": "get_time", "arguments": "{\"timezone\":\"UTC\"}"}}]`
+	const streamedToolHistory = `{"role": "assistant", "content": "", "reasoning_content": "synthetic reasoning for turn one",
+		"thinking_blocks": %s,
+		"tool_calls": [{"id": "call_clock_01", "function": {"arguments": "{\"timezone\":\"UTC\"}", "name": "get_time"}, "type": "function", "index": 0}]
+	}`
 	const wantText = `{
 		"role": "assistant",
 		"content": [
@@ -1488,6 +1492,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody_SignedThinking
 	}`
 	for _, tc := range []struct {
 		name, request, assistant, want string
+		reasoningOnly                  bool
 	}{
 		{
 			name:    "content parts",
@@ -1528,13 +1533,30 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody_SignedThinking
 			assistant: `{"role": "assistant", ` + toolHistoryFields + `}`,
 		},
 		{
-			name:    "streamed tool call with separate reasoning text and signature",
-			request: toolRequest,
-			want:    wantTool,
-			assistant: `{"role": "assistant", "content": "", "reasoning_content": "synthetic reasoning for turn one",
-				"thinking_blocks": [{"type": "thinking", "signature": "sig_local_roundtrip_01"}],
-				"tool_calls": [{"id": "call_clock_01", "function": {"arguments": "{\"timezone\":\"UTC\"}", "name": "get_time"}, "type": "function", "index": 0}]
-			}`,
+			name:      "streamed tool call with separate reasoning text and signature",
+			request:   toolRequest,
+			want:      wantTool,
+			assistant: fmt.Sprintf(streamedToolHistory, `[{"type": "thinking", "signature": "sig_local_roundtrip_01"}]`),
+		},
+		{
+			name:          "one signature and a redacted block",
+			request:       toolRequest,
+			reasoningOnly: true,
+			assistant: fmt.Sprintf(streamedToolHistory, `[
+				{"type": "thinking", "signature": "sig_local_roundtrip_01"},
+				{"type": "redacted_thinking", "data": "c3ludGhldGljIHJlZGFjdGVkIGJsb2Nr"}
+			]`),
+			want: `[{"text": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}]`,
+		},
+		{
+			name:          "two signatures cannot share the streamed text",
+			request:       toolRequest,
+			reasoningOnly: true,
+			assistant: fmt.Sprintf(streamedToolHistory, `[
+				{"type": "thinking", "signature": "sig_local_roundtrip_01"},
+				{"type": "thinking", "signature": "sig_local_roundtrip_02"}
+			]`),
+			want: `[{"text": "", "signature": "sig_local_roundtrip_01"}, {"text": "", "signature": "sig_local_roundtrip_02"}]`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1544,7 +1566,11 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody_SignedThinking
 			translator := NewChatCompletionOpenAIToAWSBedrockTranslator("")
 			_, body, err := translator.RequestBody(raw, &req, false)
 			require.NoError(t, err)
-			require.JSONEq(t, tc.want, gjson.GetBytes(body, "messages.1").Raw)
+			got := gjson.GetBytes(body, "messages.1")
+			if tc.reasoningOnly {
+				got = got.Get("content.#.reasoningContent.reasoningText")
+			}
+			require.JSONEq(t, tc.want, got.Raw)
 		})
 	}
 }
