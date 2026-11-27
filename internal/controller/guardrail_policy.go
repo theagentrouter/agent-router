@@ -262,6 +262,9 @@ func (c *GuardrailPolicyController) notifyAIGatewayRoutesForGuardrailPolicy(ctx 
 }
 
 func (c *GuardrailPolicyController) updateGuardrailPolicyStatus(ctx context.Context, policy *aigv1b1.GuardrailPolicy, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := policy.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: policy.Name, Namespace: policy.Namespace}, policy); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -269,7 +272,7 @@ func (c *GuardrailPolicyController) updateGuardrailPolicyStatus(ctx context.Cont
 			}
 			return err
 		}
-		policy.Status.Conditions = newConditions(conditionType, message)
+		policy.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, policy)
 	})
 	if err != nil {

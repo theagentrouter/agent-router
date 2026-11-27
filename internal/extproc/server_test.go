@@ -208,7 +208,7 @@ func TestServer_Process_BeforeFirstConfigLoad(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := NewServer(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: tc.logLevel})), false)
 			require.NoError(t, err)
-			s.Register("/v1/chat/completions", NewFactory(&mockMetricsFactory{}, tracingapi.NoopChatCompletionTracer{},
+			s.Register("/v1/chat/completions", NewFactory(&mockMetricsFactory{}, nil, tracingapi.NoopChatCompletionTracer{},
 				endpointspec.ChatCompletionsEndpointSpec{}))
 			s.RegisterPrefix("/v1/files", NewFilesProcessorFactory(newTestCodec()))
 
