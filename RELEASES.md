@@ -2,11 +2,16 @@
 
 ## Release Cycles
 
-Since Envoy AI Gateway depends on the Envoy Gateway and Envoy Proxy, we will normally follow the release cycle of the Envoy Gateway.
-In other words, we aim to cut the release of the Envoy AI Gateway a few days or a week after the new version of the Envoy Gateway is released. Therefore, the release cycle of the Envoy AI Gateway will be approximately every 2-3 months.
+Since Envoy AI Gateway depends on Envoy Gateway and Envoy Proxy, its minor releases follow the Envoy Gateway release cycle, which is roughly every 2-3 months.
+Many users run both on the same gateways, so they can only move to a new Envoy Gateway minor once there's an Envoy AI Gateway release built on it. To keep that gap short:
 
-However, given the rapidly changing nature of the AI ecosystem, we aim to release frequently, as soon as features are available.
-The main branch of Envoy AI Gateway is tested against both the latest stable version of Envoy Gateway and its main branch, allowing us to confidently release the Envoy AI Gateway at any time if needed.
+- When Envoy Gateway cuts a release candidate for a new minor, we bump main to that release candidate and cut an Envoy AI Gateway release candidate from it.
+- When Envoy Gateway releases the new minor, we bump main to it and cut the Envoy AI Gateway minor release within about a week.
+
+Each Envoy AI Gateway minor is built on and tested against exactly one Envoy Gateway minor, so the [compatibility matrix](site/docs/compatibility.md) maps them one to one.
+
+Given the rapidly changing nature of the AI ecosystem, we may also cut feature releases between Envoy Gateway releases, as soon as features are available.
+The main branch of Envoy AI Gateway is tested against the Envoy Gateway release it builds on, the previous Envoy Gateway minor, and Envoy Gateway main, allowing us to confidently release the Envoy AI Gateway at any time if needed.
 
 ## Versioning
 
@@ -60,9 +65,11 @@ We guarantee that simply upgrading the controller will not break the existing co
 
 Since Envoy AI Gateway is built on top of Envoy Gateway, the compatibility between the two is important.
 
-We use the latest released version of Envoy Gateway as the base of the Envoy AI Gateway when we release a new version.
+Each Envoy AI Gateway minor release is built on one Envoy Gateway minor release, as listed in the [compatibility matrix](site/docs/compatibility.md).
+Upgrade Envoy Gateway to that version before upgrading Envoy AI Gateway.
 
-Since Envoy Gateway is a stable project and supposed to work across versions, we do not expect any compatibility issue as long as the Envoy Gateway version is also up-to-date prior to the upgrade of the Envoy AI Gateway.
+CI also runs the end-to-end tests against the previous Envoy Gateway minor, to catch breakage while the two are being upgraded one after the other.
+That combination is meant for the upgrade window, not for long-term use.
 
 ## Release Process
 
@@ -72,11 +79,14 @@ This section is for maintainers of the project. Let's say we are going to releas
 
 Each non-patch release should start with Release Candidate (RC) phase as follows:
 
-1. First, notify the community that we are going to cut the release candidate and therefore the main branch is frozen.
+1. Make sure main builds on the target Envoy Gateway version: the Envoy Gateway release candidate if Envoy Gateway has not released the new minor yet, otherwise the release itself.
+   Bumping it means updating `go.mod`, the `EG_VERSION` pins in `.github/workflows` (including the previous-minor end-to-end test row), and the `main` row of the compatibility matrix.
+
+2. Notify the community that we are going to cut the release candidate and therefore the main branch is frozen.
    The main branch should only accept the bug fixes, the security fixes, and documentation changes.
    The release candidate should always be cut from the main branch.
 
-2. Prepare the docs site with the new version:
+3. Prepare the docs site with the new version:
 
    ```
    cd site
@@ -87,7 +97,7 @@ Each non-patch release should start with Release Candidate (RC) phase as follows
    make sure all the versions are correct.
    You also need to udpate the version list in `docusaurus.config.ts` and point the `latestVersion` to the version being released.
 
-3. Cut the request candidate tag from the main branch. The tag should be v0.50.0-rc1. Assuming the remote `origin` is the main envoyproxy/ai-gateway repository,
+4. Cut the release candidate tag from the main branch. The tag should be v0.50.0-rc1. Assuming the remote `origin` is the main envoyproxy/ai-gateway repository,
    the command to cut the tag is:
 
    ```
@@ -99,18 +109,20 @@ Each non-patch release should start with Release Candidate (RC) phase as follows
    Pushing a tag will trigger the pipeline to build the release candidate image and the helm chart tagged with the release candidate tag.
    The release candidate image will be available in the Docker Hub.
 
-4. Generate the release notes using the Claude Code `/release-notes` command (defined in `.claude/commands/release-notes`).
+5. Generate the release notes using the Claude Code `/release-notes` command (defined in `.claude/commands/release-notes`).
    This command analyzes commits since the last release, verifies features against the actual code, and generates
    the release notes JSON data file, MDX page, plain-markdown copy, and navigation updates for the docs site.
    Review the generated output and make any necessary adjustments.
 
-5. The release candidate should be tested by the maintainers and the community. If there is any issue, the issue should be fixed in the main branch
+6. The release candidate should be tested by the maintainers and the community. If there is any issue, the issue should be fixed in the main branch
    and the new rc tag should be created. For example, if there is an issue in the release candidate v0.50.0-rc1, replace `v0.50.0-rc1` with `v0.50.0-rc2`
    in the above command and repeat the process.
 
 ### Release Phase
 
-1. Once the release candidate is stable, we will cut the release from the main branch, assuming that's exactly the same as the last release candidate.
+1. If the release candidate was built on an Envoy Gateway release candidate, bump main to the Envoy Gateway release once it's out.
+   This bump is allowed while main is frozen. Cut a new release candidate from it so the release is still identical to the last release candidate.
+2. Once the release candidate is stable, we will cut the release from the main branch, assuming that's exactly the same as the last release candidate.
    The command to cut the release is exactly the same as the release candidate:
    ```
    git fetch origin # make sure you have the latest main branch locally.
@@ -119,10 +131,10 @@ Each non-patch release should start with Release Candidate (RC) phase as follows
    ```
    Pushing a tag will trigger the pipeline to build the release image and the helm chart tagged with the release tag.
    The release image will be available in the Docker Hub.
-2. The draft release note will be created in the GitHub repository after the pipeline is completed.
+3. The draft release note will be created in the GitHub repository after the pipeline is completed.
    Edit the release note nicely by hand to reflect the changes in the release.
-3. Announce the release in the community.
-4. Create `release/v0.50` branch from the tag for the future backports, bug fixes, etc.
+4. Announce the release in the community.
+5. Create `release/v0.50` branch from the tag for the future backports, bug fixes, etc.
 
 ### Backport Phase
 
