@@ -1698,7 +1698,7 @@ func TestHandleModernResourcesRead_RePrefixesContentURIs(t *testing.T) {
 func TestRewriteResourcesReadResult_CachingHints(t *testing.T) {
 	t.Run("injects defaults when backend omits hints", func(t *testing.T) {
 		in := []byte(`{"contents":[{"uri":"file:///a","text":"x"}]}`)
-		out, ok := rewriteResourcesReadResult(in, "backend1")
+		out, ok := rewriteResourcesReadResult(in, "backend1", false)
 		require.True(t, ok)
 
 		var m map[string]json.RawMessage
@@ -1714,7 +1714,7 @@ func TestRewriteResourcesReadResult_CachingHints(t *testing.T) {
 
 	t.Run("preserves backend-provided hints", func(t *testing.T) {
 		in := []byte(`{"contents":[{"uri":"file:///a","text":"x"}],"ttlMs":60000,"cacheScope":"public"}`)
-		out, ok := rewriteResourcesReadResult(in, "backend1")
+		out, ok := rewriteResourcesReadResult(in, "backend1", false)
 		require.True(t, ok)
 
 		var m map[string]json.RawMessage
@@ -1727,7 +1727,7 @@ func TestRewriteResourcesReadResult_CachingHints(t *testing.T) {
 		// mcp.ReadResourceResult embeds Cacheable without omitempty, so a backend
 		// that never sets hints still serializes cacheScope as "".
 		in := []byte(`{"contents":[{"uri":"file:///a","text":"x"}],"ttlMs":0,"cacheScope":""}`)
-		out, ok := rewriteResourcesReadResult(in, "backend1")
+		out, ok := rewriteResourcesReadResult(in, "backend1", false)
 		require.True(t, ok)
 
 		var m map[string]json.RawMessage
@@ -1738,7 +1738,7 @@ func TestRewriteResourcesReadResult_CachingHints(t *testing.T) {
 
 	t.Run("skips interim input_required results", func(t *testing.T) {
 		in := []byte(`{"resultType":"input_required","inputRequests":{"q":{"type":"text"}}}`)
-		out, ok := rewriteResourcesReadResult(in, "backend1")
+		out, ok := rewriteResourcesReadResult(in, "backend1", false)
 		require.False(t, ok)
 		require.Nil(t, out)
 	})
