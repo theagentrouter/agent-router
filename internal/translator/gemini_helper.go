@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -61,8 +62,27 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 	var systemInstruction *genai.Content
 	knownToolCalls := make(map[string]string)
 	var gcpParts []*genai.Part
+	// Gemini matches parallel responses to same-name calls by their position.
+	type toolResult struct {
+		position int
+		part     *genai.Part
+	}
+	callPositions := make(map[string]int)
+	var pending []toolResult
+	flushToolResults := func() {
+		slices.SortStableFunc(pending, func(a, b toolResult) int {
+			return cmp.Compare(a.position, b.position)
+		})
+		for _, result := range pending {
+			gcpParts = append(gcpParts, result.part)
+		}
+		pending = pending[:0]
+	}
 
 	for _, msgUnion := range messages {
+		if msgUnion.OfTool == nil {
+			flushToolResults()
+		}
 		switch {
 		case msgUnion.OfDeveloper != nil:
 			msg := msgUnion.OfDeveloper
@@ -102,7 +122,12 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 			if err != nil {
 				return nil, nil, fmt.Errorf("invalid tool message: %w", err)
 			}
-			gcpParts = append(gcpParts, part)
+			if position, ok := callPositions[msg.ToolCallID]; ok {
+				pending = append(pending, toolResult{position: position, part: part})
+			} else {
+				flushToolResults()
+				gcpParts = append(gcpParts, part)
+			}
 		case msgUnion.OfAssistant != nil:
 			// Flush any accumulated user/tool parts before assistant.
 			if len(gcpParts) > 0 {
@@ -115,6 +140,10 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 				return nil, nil, fmt.Errorf("invalid assistant message: %w", err)
 			}
 			maps.Copy(knownToolCalls, toolCalls)
+			clear(callPositions)
+			for i, call := range msg.ToolCalls {
+				callPositions[*call.ID] = i
+			}
 			gcpContents = append(gcpContents, genai.Content{Role: genai.RoleModel, Parts: assistantParts})
 		default:
 			return nil, nil, fmt.Errorf("%w: invalid role in message", internalapi.ErrInvalidRequestBody)
@@ -122,6 +151,7 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 	}
 
 	// If there are any remaining parts after processing all messages, add them as user content.
+	flushToolResults()
 	if len(gcpParts) > 0 {
 		gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
 	}

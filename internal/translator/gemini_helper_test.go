@@ -25,6 +25,50 @@ import (
 )
 
 func TestOpenAIMessagesToGeminiContents(t *testing.T) {
+	const (
+		seattleOutput = "Seattle-Tacoma International Airport"
+		jfkOutput     = "John F. Kennedy International Airport"
+	)
+	stationCalls := openai.ChatCompletionMessageParamUnion{
+		OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+			Role: openai.ChatMessageRoleAssistant,
+			ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+				{
+					ID:       ptr.To("call_9"),
+					Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+					Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "lookup_station", Arguments: `{"code":"KSEA"}`},
+				},
+				{
+					ID:       ptr.To("call_2"),
+					Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+					Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "lookup_station", Arguments: `{"code":"KJFK"}`},
+				},
+			},
+		},
+	}
+	seattleResult := openai.ChatCompletionMessageParamUnion{OfTool: &openai.ChatCompletionToolMessageParam{
+		Role:       openai.ChatMessageRoleTool,
+		ToolCallID: "call_9",
+		Content:    openai.ContentUnion{Value: seattleOutput},
+	}}
+	jfkResult := openai.ChatCompletionMessageParamUnion{OfTool: &openai.ChatCompletionToolMessageParam{
+		Role:       openai.ChatMessageRoleTool,
+		ToolCallID: "call_2",
+		Content:    openai.ContentUnion{Value: jfkOutput},
+	}}
+	stationContents := []genai.Content{
+		{Role: genai.RoleModel, Parts: []*genai.Part{
+			{
+				FunctionCall:     &genai.FunctionCall{Name: "lookup_station", Args: map[string]any{"code": "KSEA"}},
+				ThoughtSignature: dummyThoughtSignature,
+			},
+			genai.NewPartFromFunctionCall("lookup_station", map[string]any{"code": "KJFK"}),
+		}},
+		{Role: genai.RoleUser, Parts: []*genai.Part{
+			genai.NewPartFromFunctionResponse("lookup_station", map[string]any{"output": seattleOutput}),
+			genai.NewPartFromFunctionResponse("lookup_station", map[string]any{"output": jfkOutput}),
+		}},
+	}
 	tests := []struct {
 		name                      string
 		messages                  []openai.ChatCompletionMessageParamUnion
@@ -119,6 +163,16 @@ func TestOpenAIMessagesToGeminiContents(t *testing.T) {
 					{Text: "This is a system message"},
 				},
 			},
+		},
+		{
+			name:             "same-name tool results in call order",
+			messages:         []openai.ChatCompletionMessageParamUnion{stationCalls, seattleResult, jfkResult},
+			expectedContents: stationContents,
+		},
+		{
+			name:             "same-name tool results JFK first",
+			messages:         []openai.ChatCompletionMessageParamUnion{stationCalls, jfkResult, seattleResult},
+			expectedContents: stationContents,
 		},
 	}
 
