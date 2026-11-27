@@ -388,8 +388,16 @@ func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.
 // syncAIGatewayRoute is the main logic for reconciling the AIGatewayRoute resource.
 // This is decoupled from the Reconcile method to centralize the error handling and status updates.
 func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
+	// Delete the shared backendPriority HTTPRouteFilters that no other AIGatewayRoute uses before the finalizer
+	// is removed. They have no owner, and once this AIGatewayRoute is gone nothing guarantees another reconcile
+	// in the namespace, so a failure is returned here to keep the finalizer and retry.
+	if !aiGatewayRoute.DeletionTimestamp.IsZero() && ctrlutil.ContainsFinalizer(aiGatewayRoute, aiGatewayControllerFinalizer) {
+		if err := c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace); err != nil {
+			return err
+		}
+	}
 	// Propagate the AIGatewayRoute deletion all the way up to relevant Gateways.
-	onDelete, err := handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.onAIGatewayRouteDeletion)
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.syncGateways)
 	if err != nil {
 		return err
 	}
@@ -658,13 +666,6 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 
 	dst.Spec.Hostnames = aiGatewayRoute.Spec.Hostnames
 	return errors.Join(errs...)
-}
-
-// onAIGatewayRouteDeletion handles the deletion of the AIGatewayRoute: it deletes the shared backendPriority
-// HTTPRouteFilters that no other AIGatewayRoute uses, and propagates the deletion to the Gateways.
-func (c *AIGatewayRouteController) onAIGatewayRouteDeletion(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
-	gcErr := c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace)
-	return errors.Join(gcErr, c.syncGateways(ctx, aiGatewayRoute))
 }
 
 // syncGateways synchronizes the gateways referenced by the AIGatewayRoute by sending events to the gateway controller.

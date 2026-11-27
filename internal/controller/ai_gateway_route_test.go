@@ -21,6 +21,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -1874,4 +1875,47 @@ func Test_backendPriorityFilterChangedPredicate(t *testing.T) {
 
 	require.False(t, p.Create(event.CreateEvent{Object: shared}))
 	require.False(t, p.Generic(event.GenericEvent{Object: shared}))
+}
+
+func TestAIGatewayRouteController_syncAIGatewayRoute_deletionKeepsFinalizerOnFilterGCError(t *testing.T) {
+	const ns = "ns1"
+	var failDelete bool
+	base := requireNewFakeClientWithIndexes(t)
+	fakeClient := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*egv1a1.HTTPRouteFilter); ok && failDelete {
+				return fmt.Errorf("delete failed")
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	s := NewAIGatewayRouteController(fakeClient, fake2.NewClientset(), logr.Discard(), eventCh.Ch, "/")
+
+	route := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: ns, Finalizers: []string{aiGatewayControllerFinalizer}},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{
+			BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "b", Priority: ptr.To[uint32](1)}},
+		}}},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), route))
+	require.NoError(t, fakeClient.Create(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, 1)))
+	require.NoError(t, fakeClient.Delete(t.Context(), route))
+	getDeleting := func() *aigv1b1.AIGatewayRoute {
+		var r aigv1b1.AIGatewayRoute
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(route), &r))
+		return &r
+	}
+
+	// The filter deletion fails, so the error is returned and the finalizer is kept for a retry.
+	failDelete = true
+	require.ErrorContains(t, s.syncAIGatewayRoute(t.Context(), getDeleting()), "delete failed")
+	require.Contains(t, getDeleting().Finalizers, aiGatewayControllerFinalizer)
+
+	// The retry deletes the filter and removes the finalizer.
+	failDelete = false
+	require.NoError(t, s.syncAIGatewayRoute(t.Context(), getDeleting()))
+	requireFilterNotFound(t, fakeClient, ns, 1)
+	var r aigv1b1.AIGatewayRoute
+	require.True(t, apierrors.IsNotFound(fakeClient.Get(t.Context(), client.ObjectKeyFromObject(route), &r)))
 }
