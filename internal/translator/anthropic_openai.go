@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/tidwall/sjson"
+	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -61,7 +62,10 @@ func (a *anthropicToOpenAIV1ChatCompletionTranslator) RequestBody(_ []byte, body
 	a.requestModel = cmp.Or(a.modelNameOverride, body.Model)
 
 	// Convert Anthropic message request body to OpenAI format.
-	openAIReq := buildOpenAIChatCompletionRequest(body, a.modelNameOverride)
+	openAIReq, err := buildOpenAIChatCompletionRequest(body, a.modelNameOverride)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	newBody, err = json.Marshal(openAIReq)
 	if err != nil {
@@ -121,11 +125,19 @@ func (a *anthropicToOpenAIV1ChatCompletionTranslator) responseBodyNonStreaming(b
 
 	responseModel = cmp.Or(openAIResp.Model, a.requestModel)
 
+	uncached, cacheRead, cacheWrite := splitPromptTokens(openAIResp.Usage.PromptTokens, openAIResp.Usage.PromptTokensDetails)
+	// Without prompt_tokens_details the backend says nothing about a cache
+	// (vLLM without --enable-prompt-tokens-details), so the cache counts stay
+	// unset rather than 0, as in the OpenAI to OpenAI translator.
+	var cacheReadTokens, cacheWriteTokens *int64
+	if openAIResp.Usage.PromptTokensDetails != nil {
+		cacheReadTokens, cacheWriteTokens = ptr.To(int64(cacheRead)), ptr.To(int64(cacheWrite))
+	}
 	tokenUsage = metrics.ExtractTokenUsageFromExplicitCaching(
-		int64(openAIResp.Usage.PromptTokens),
+		int64(uncached),
 		int64(openAIResp.Usage.CompletionTokens),
-		nil,
-		nil,
+		cacheReadTokens,
+		cacheWriteTokens,
 	)
 
 	anthropicResp := openAIResponseToAnthropic(openAIResp, responseModel)
@@ -275,6 +287,7 @@ func (a *anthropicToOpenAIV1ChatCompletionTranslator) RedactAnthropicBody(resp *
 			redacted.Content[i] = redactAnthropicContent(&resp.Content[i])
 		}
 	}
+	redacted.StopDetails = redactRefusalStopDetails(resp.StopDetails)
 
 	return &redacted
 }

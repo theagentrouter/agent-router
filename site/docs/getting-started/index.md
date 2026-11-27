@@ -12,25 +12,57 @@ configuration then ships to Kubernetes for production.
 ## Run locally in 60 seconds
 
 The standalone CLI starts an OpenAI-compatible router on your machine — no
-Kubernetes, no Docker required (Linux and macOS):
+Kubernetes and no Docker required (Linux and macOS).
+
+Install `aigw` and start it:
 
 ```shell
-OPENAI_API_KEY=sk-your-key aigw run
+curl -sSL https://theagentrouter.ai/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+aigw run
 ```
 
-Then point any OpenAI-compatible client or SDK at `http://localhost:1975/v1`:
+The first time, `aigw run` asks which providers you want to use (OpenAI,
+Anthropic, Tetrate Agent Router Service, Azure OpenAI, Ollama or any
+OpenAI-compatible API) and their API keys, then starts routing to them. It can
+save the configuration, so the next `aigw run` starts right away. The API keys
+are not saved: the setup tells you which environment variables to export for the
+next runs.
+
+When it prints `listening on http://localhost:1975`, send a request from a
+second terminal, using a model of a provider you configured:
 
 ```shell
 curl http://localhost:1975/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "gpt-5", "messages": [{"role": "user", "content": "Say this is a test!"}]}'
+  -d '{"model": "gpt-5-mini", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-`aigw` auto-configures from the same environment variables as the OpenAI SDK,
-and can also front self-hosted models (Ollama, vLLM) and MCP servers. See
-[Installation](../cli/installation.md) for how to get the `aigw` binary, and
-[aigw run](../cli/run.md) for provider auto-configuration, MCP gateway mode, and
-custom configuration files.
+The setup prints a ready-to-use request for the providers you chose. Point any
+OpenAI-compatible client or SDK at `http://localhost:1975/v1`, or Anthropic
+clients at `http://localhost:1975/anthropic`.
+
+### Use it with Claude Code and Codex
+
+To run a coding agent through Agent Router, use `aigw claude` or `aigw codex`
+instead of `claude` or `codex`. The first time, it asks how the agent reaches
+its models: for Claude Code, your Claude subscription, an Anthropic API key, or
+Tetrate Agent Router. Then it starts Agent Router in the background and runs
+the agent. See [Claude Code and Codex](../cli/agents.md).
+
+`aigw` can also be configured from the same environment variables as the OpenAI
+and Anthropic SDKs, front MCP servers, and run custom configuration files. See
+[Installation](../cli/installation.md) for other ways to get the `aigw` binary,
+and [aigw run](../cli/run.md) for all the options.
+
+## Call models from Python
+
+Building an agent in Python? The [Python SDK](../python-sdk.md) runs Agent
+Router for you: `pip install theagentrouter`, then call OpenAI, Anthropic,
+Gemini, Bedrock and other providers' models with LiteLLM's API. On macOS (Apple
+silicon) and recent Linux, the first call starts a local router; elsewhere, and
+later in production, the same code points at a shared Agent Router with two
+environment variables.
 
 ## Deploy on Kubernetes
 

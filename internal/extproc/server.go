@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -33,7 +35,11 @@ import (
 
 var (
 	sensitiveHeaderRedactedValue = []byte("[REDACTED]")
-	sensitiveHeaderKeys          = []string{"authorization", "x-api-key"}
+	// sensitiveHeaderKeys are the (lowercased) header names whose values are redacted in debug logs.
+	// They cover every credential header set by the backendauth handlers: "authorization" (API key,
+	// Azure, GCP, AWS SigV4), "x-api-key" (Anthropic), "api-key" (Azure API key) and
+	// "x-amz-security-token" (AWS SigV4 session token).
+	sensitiveHeaderKeys = []string{"authorization", "x-api-key", "api-key", "x-amz-security-token", "x-tars-api-key"}
 )
 
 // contextKey is a type for context keys to avoid collisions.
@@ -56,11 +62,20 @@ type Server struct {
 	logger                        *slog.Logger
 	debugLogEnabled               bool
 	enableRedaction               bool
-	config                        *filterapi.RuntimeConfig
+	config                        atomic.Pointer[filterapi.RuntimeConfig] // nil until the first LoadConfig.
 	processorFactories            map[string]ProcessorFactory
+	prefixProcessorFactories      []prefixProcessorFactory
 	routerProcessorsPerReqID      map[string]Processor
 	routerProcessorsPerReqIDMutex sync.RWMutex
 	uuidFn                        func() string
+}
+
+// prefixProcessorFactory associates a path prefix with a processor factory. It is used for
+// endpoints whose paths contain variable segments (e.g. the Files API "/v1/files/{id}"),
+// which cannot be matched by the exact-path map.
+type prefixProcessorFactory struct {
+	prefix  string
+	factory ProcessorFactory
 }
 
 // NewServer creates a new external processor server.
@@ -83,7 +98,7 @@ func (s *Server) LoadConfig(ctx context.Context, config *filterapi.Config) error
 	if err != nil {
 		return fmt.Errorf("cannot create runtime filter config: %w", err)
 	}
-	s.config = newConfig // This is racey, but we don't care.
+	s.config.Store(newConfig)
 	return nil
 }
 
@@ -93,10 +108,25 @@ func (s *Server) Register(path string, newProcessor ProcessorFactory) {
 	s.processorFactories[path] = newProcessor
 }
 
+// RegisterPrefix registers a processor for any request path equal to prefix or nested under
+// it (i.e. starting with prefix+"/"). Exact-path registrations take precedence, and the
+// longest matching prefix wins. This supports endpoints with variable path segments such as
+// the Files API ("/v1/files", "/v1/files/{id}", "/v1/files/{id}/content").
+func (s *Server) RegisterPrefix(prefix string, newProcessor ProcessorFactory) {
+	s.logger.Info("Registering prefix processor", slog.String("prefix", prefix))
+	s.prefixProcessorFactories = append(s.prefixProcessorFactories, prefixProcessorFactory{prefix: prefix, factory: newProcessor})
+}
+
 var errNoProcessor = errors.New("no processor registered for the given path")
 
+// errConfigNotLoaded is returned for streams that arrive before the first filter config is loaded. The config bundle
+// watcher tolerates an incomplete bundle on the initial load and retries on the next tick, so the server can be
+// reachable before it has a config. [Server.Check] reports NOT_SERVING until then.
+var errConfigNotLoaded = errors.New("the filter config is not loaded yet, retry the request")
+
 // processorForPath returns the processor for the given path.
-// Only exact path matching is supported currently.
+// Exact path matching is tried first; if no exact match exists, the longest registered
+// prefix (see RegisterPrefix) that matches the path on a segment boundary is used.
 func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFilter bool, logger *slog.Logger) (Processor, error) {
 	pathHeader := ":path"
 	if isUpstreamFilter {
@@ -111,9 +141,26 @@ func (s *Server) processorForPath(requestHeaders map[string]string, isUpstreamFi
 
 	newProcessor, ok := s.processorFactories[path]
 	if !ok {
+		// Fall back to the longest matching prefix registration.
+		bestLen := -1
+		for i := range s.prefixProcessorFactories {
+			pf := &s.prefixProcessorFactories[i]
+			if (path == pf.prefix || strings.HasPrefix(path, pf.prefix+"/")) && len(pf.prefix) > bestLen {
+				newProcessor = pf.factory
+				bestLen = len(pf.prefix)
+			}
+		}
+	}
+	if newProcessor == nil {
 		return nil, fmt.Errorf("%w: %s", errNoProcessor, path)
 	}
-	return newProcessor(s.config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
+	// Processors are registered at startup, so an unsupported path is reported as such even before the first config
+	// load. A supported one cannot be processed without a config.
+	config := s.config.Load()
+	if config == nil {
+		return nil, errConfigNotLoaded
+	}
+	return newProcessor(config, requestHeaders, logger, isUpstreamFilter, s.enableRedaction)
 }
 
 // originalPathHeader is the header used to pass the original path to the processor.
@@ -128,7 +175,11 @@ const internalReqIDHeader = internalapi.EnvoyAIGatewayHeaderPrefix + "internal-r
 func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {
 	ctx := stream.Context()
 	if s.debugLogEnabled {
-		s.logger.Debug("handling a new stream", slog.Any("config_uuid", s.config.UUID))
+		var configUUID string
+		if c := s.config.Load(); c != nil {
+			configUUID = c.UUID
+		}
+		s.logger.Debug("handling a new stream", slog.String("config_uuid", configUUID))
 	}
 
 	// The processor will be instantiated when the first message containing the request headers is received.
@@ -203,6 +254,13 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 
 			p, err = s.processorForPath(headersMap, isUpstreamFilter, logger)
 			if err != nil {
+				if errors.Is(err, errConfigNotLoaded) {
+					// No processor can work without a config: answer with a retryable 503 instead.
+					resp := createUserFacingErrorResponse(http.StatusServiceUnavailable, "ServiceUnavailable", err.Error())
+					resp.GetImmediateResponse().GrpcStatus.Status = uint32(codes.Unavailable)
+					_ = stream.Send(resp)
+					return status.Error(codes.Unavailable, err.Error())
+				}
 				if errors.Is(err, errNoProcessor) {
 					path := headersMap[":path"]
 					_ = stream.Send(&extprocv3.ProcessingResponse{
@@ -300,7 +358,7 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 			case *extprocv3.ProcessingResponse_RequestHeaders:
 				logContent = redactProcessingResponseRequestHeaders(val, s.logger, sensitiveHeaderKeys, s.enableRedaction)
 			case *extprocv3.ProcessingResponse_ImmediateResponse:
-				logContent = val
+				logContent = redactImmediateResponse(val, l, sensitiveHeaderKeys)
 			}
 			l.Debug("request headers processed", slog.Any("response", logContent))
 		}
@@ -320,8 +378,9 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 				logContent := redactRequestBodyResponse(val, l, sensitiveHeaderKeys, s.enableRedaction)
 				l.Debug("request body processed", slog.Any("response", logContent))
 			case *extprocv3.ProcessingResponse_ImmediateResponse:
-				// ImmediateResponse (e.g., for malformed requests) doesn't need request body redaction
-				l.Debug("request body processed", slog.Any("response", val))
+				// ImmediateResponse (e.g., for malformed requests) doesn't need request body redaction,
+				// but its header mutation is still filtered.
+				l.Debug("request body processed", slog.Any("response", redactImmediateResponse(val, l, sensitiveHeaderKeys)))
 			}
 		}
 		return resp, nil
@@ -355,7 +414,7 @@ func (s *Server) processMsg(ctx context.Context, p Processor, req *extprocv3.Pro
 				case *extprocv3.ProcessingResponse_ResponseBody:
 					logContent = redactResponseBodyResponseFull(val, l, sensitiveHeaderKeys)
 				case *extprocv3.ProcessingResponse_ImmediateResponse:
-					logContent = val
+					logContent = redactImmediateResponse(val, l, sensitiveHeaderKeys)
 				}
 			} else {
 				logContent = resp
@@ -384,7 +443,8 @@ func (s *Server) setBackend(ctx context.Context, p Processor, internalReqID stri
 	}
 	routeName := resolveRouteName(attributes)
 
-	backend, ok := s.config.Backends[backendName]
+	// processorForPath has already checked that a config is loaded, and a loaded config is never unset.
+	backend, ok := s.config.Load().Backends[backendName]
 	if !ok {
 		return status.Errorf(codes.Internal, "unknown backend: %s", backendName)
 	}
@@ -454,9 +514,18 @@ func setUpstreamHostAttributes(headers map[string]string, attributes *structpb.S
 	}
 }
 
+// servingStatus reports NOT_SERVING until the first filter config is loaded, so that the readiness probe keeps this
+// instance out of rotation while the config bundle watcher retries an incomplete bundle.
+func (s *Server) servingStatus() grpc_health_v1.HealthCheckResponse_ServingStatus {
+	if s.config.Load() == nil {
+		return grpc_health_v1.HealthCheckResponse_NOT_SERVING
+	}
+	return grpc_health_v1.HealthCheckResponse_SERVING
+}
+
 // Check implements [grpc_health_v1.HealthServer].
 func (s *Server) Check(context.Context, *grpc_health_v1.HealthCheckRequest) (*grpc_health_v1.HealthCheckResponse, error) {
-	return &grpc_health_v1.HealthCheckResponse{Status: grpc_health_v1.HealthCheckResponse_SERVING}, nil
+	return &grpc_health_v1.HealthCheckResponse{Status: s.servingStatus()}, nil
 }
 
 // Watch implements [grpc_health_v1.HealthServer].
@@ -467,7 +536,7 @@ func (s *Server) Watch(*grpc_health_v1.HealthCheckRequest, grpc_health_v1.Health
 // List implements [grpc_health_v1.HealthServer].
 func (s *Server) List(context.Context, *grpc_health_v1.HealthListRequest) (*grpc_health_v1.HealthListResponse, error) {
 	return &grpc_health_v1.HealthListResponse{Statuses: map[string]*grpc_health_v1.HealthCheckResponse{
-		"extproc": {Status: grpc_health_v1.HealthCheckResponse_SERVING},
+		"extproc": {Status: s.servingStatus()},
 	}}, nil
 }
 
@@ -650,6 +719,28 @@ func redactRequestBodyResponse(resp *extprocv3.ProcessingResponse_RequestBody, l
 				BodyMutation:    bodyMutation,
 				ClearRouteCache: resp.RequestBody.Response.GetClearRouteCache(),
 			},
+		},
+	}
+}
+
+// redactImmediateResponse creates a safe-to-log copy of an immediate response with sensitive
+// header values redacted. The status, body and details are local error information generated by
+// the filter and are logged as-is.
+func redactImmediateResponse(resp *extprocv3.ProcessingResponse_ImmediateResponse, logger *slog.Logger, sensitiveKeys []string) *extprocv3.ProcessingResponse_ImmediateResponse {
+	if resp == nil || resp.ImmediateResponse == nil {
+		return &extprocv3.ProcessingResponse_ImmediateResponse{}
+	}
+	var headers *extprocv3.HeaderMutation
+	if original := resp.ImmediateResponse.GetHeaders(); original != nil {
+		headers = redactHeaderMutation(original, logger, sensitiveKeys)
+	}
+	return &extprocv3.ProcessingResponse_ImmediateResponse{
+		ImmediateResponse: &extprocv3.ImmediateResponse{
+			Status:     resp.ImmediateResponse.GetStatus(),
+			Headers:    headers,
+			Body:       resp.ImmediateResponse.GetBody(),
+			GrpcStatus: resp.ImmediateResponse.GetGrpcStatus(),
+			Details:    resp.ImmediateResponse.GetDetails(),
 		},
 	}
 }

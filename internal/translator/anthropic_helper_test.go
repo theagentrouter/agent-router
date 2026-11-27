@@ -546,9 +546,24 @@ func TestFinishReasonTranslation(t *testing.T) {
 			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonLength,
 		},
 		{
+			name:                 "pause turn stop reason",
+			input:                anthropic.StopReasonPauseTurn,
+			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonPauseTurn,
+		},
+		{
 			name:                 "refusal stop reason",
 			input:                anthropic.StopReasonRefusal,
 			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonContentFilter,
+		},
+		{
+			name:                 "model context window exceeded stop reason",
+			input:                "model_context_window_exceeded",
+			expectedFinishReason: openai.ChatCompletionChoicesFinishReasonContextWindowExceeded,
+		},
+		{
+			name:      "unknown stop reason",
+			input:     "unknown_reason",
+			expectErr: true,
 		},
 	}
 
@@ -864,6 +879,18 @@ func TestOutputConfigAvailable(t *testing.T) {
 			name:      "claude-sonnet-5-5 not supported on AWS",
 			apiSchema: filterapi.APISchemaAWSAnthropic,
 			model:     "claude-sonnet-5-5",
+			expected:  false,
+		},
+		{
+			name:      "claude-haiku-5-5 supported on GCP",
+			apiSchema: filterapi.APISchemaGCPAnthropic,
+			model:     "claude-haiku-5-5",
+			expected:  true,
+		},
+		{
+			name:      "claude-haiku-5-5 not supported on AWS",
+			apiSchema: filterapi.APISchemaAWSAnthropic,
+			model:     "claude-haiku-5-5",
 			expected:  false,
 		},
 		// Unsupported models on either backend.
@@ -1290,6 +1317,11 @@ func TestEffortAvailable(t *testing.T) {
 		{
 			name:     "claude-sonnet-5-5 supported",
 			model:    "claude-sonnet-5-5",
+			expected: true,
+		},
+		{
+			name:     "claude-haiku-5-5 supported",
+			model:    "claude-haiku-5-5",
 			expected: true,
 		},
 		{
@@ -2116,6 +2148,91 @@ data: {"type":"message_stop"}
 	}, contents, "thinking content is dropped: every thinking_delta arrives as an empty string")
 }
 
+// TestAnthropicStreamParser_Refusal asserts that an Anthropic refusal maps to finish_reason content_filter and that the stop_details explanation and category reach the final OpenAI chunk only when present, so callers can tell refusal types apart without parsing the free-text explanation.
+func TestAnthropicStreamParser_Refusal(t *testing.T) {
+	tests := []struct {
+		name             string
+		stopDetails      string
+		expectedRefusal  *string
+		expectedCategory *string
+	}{
+		{
+			name:             "with category and explanation",
+			stopDetails:      `{"type":"refusal","category":"cyber","explanation":"This request was declined."}`,
+			expectedRefusal:  ptr.To("This request was declined."),
+			expectedCategory: ptr.To("cyber"),
+		},
+		{
+			name:        "null category and explanation",
+			stopDetails: `{"type":"refusal","category":null,"explanation":null}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newAnthropicStreamParser("claude-sonnet-4-5")
+
+			stream := `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"usage":{"input_tokens":9,"output_tokens":0}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"refusal","stop_details":` + tt.stopDetails + `},"usage":{"output_tokens":3}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+			_, body, _, _, err := p.Process(strings.NewReader(stream), true, nil)
+			require.NoError(t, err)
+
+			var final *openai.ChatCompletionResponseChunkChoice
+			for line := range strings.SplitSeq(string(body), "\n") {
+				payload, ok := strings.CutPrefix(line, "data: ")
+				if !ok || payload == "[DONE]" {
+					continue
+				}
+				var chunk openai.ChatCompletionResponseChunk
+				require.NoError(t, json.Unmarshal([]byte(payload), &chunk), "payload: %s", payload)
+				for i := range chunk.Choices {
+					if chunk.Choices[i].FinishReason != "" {
+						final = &chunk.Choices[i]
+					}
+				}
+			}
+			require.NotNil(t, final, "no chunk carried a finish_reason")
+			require.Equal(t, openai.ChatCompletionChoicesFinishReasonContentFilter, final.FinishReason)
+			require.NotNil(t, final.Delta)
+			require.Equal(t, tt.expectedRefusal, final.Delta.Refusal)
+			require.Equal(t, tt.expectedCategory, final.Delta.RefusalCategory)
+		})
+	}
+}
+
+func TestMessageToChatCompletion_Refusal(t *testing.T) {
+	var msg anthropic.Message
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber","explanation":"This request was declined."},"usage":{"input_tokens":9,"output_tokens":3}}`), &msg))
+
+	resp, _, err := messageToChatCompletion(&msg, "claude-sonnet-4-5")
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	require.Equal(t, openai.ChatCompletionChoicesFinishReasonContentFilter, resp.Choices[0].FinishReason)
+	require.Equal(t, ptr.To("This request was declined."), resp.Choices[0].Message.Refusal)
+	require.Equal(t, ptr.To("cyber"), resp.Choices[0].Message.RefusalCategory)
+}
+
+// TestMessageToChatCompletion_RefusalWithoutCategory covers a refusal that does not map to a named category, where Anthropic returns null category and explanation: neither refusal nor refusal_category is emitted, and content_filter still signals it.
+func TestMessageToChatCompletion_RefusalWithoutCategory(t *testing.T) {
+	var msg anthropic.Message
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"msg_01","type":"message","role":"assistant","model":"claude-sonnet-4-5","content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":null,"explanation":null},"usage":{"input_tokens":9,"output_tokens":0}}`), &msg))
+
+	resp, _, err := messageToChatCompletion(&msg, "claude-sonnet-4-5")
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	require.Equal(t, openai.ChatCompletionChoicesFinishReasonContentFilter, resp.Choices[0].FinishReason)
+	require.Nil(t, resp.Choices[0].Message.Refusal)
+	require.Nil(t, resp.Choices[0].Message.RefusalCategory)
+}
+
 // streamedContent collects the non-empty delta.content values from an
 // OpenAI SSE stream, in order.
 func streamedContent(t *testing.T, body []byte) []string {
@@ -2234,4 +2351,84 @@ data: {"type":"error","error":{"type":"api_error","message":"Upstream error"}}
 		require.Equal(t, "api_error", anthropicErr.Type)
 		require.Empty(t, body)
 	})
+}
+
+func TestAnthropicStreamParser_SSELineEndings(t *testing.T) {
+	events := []string{
+		"event: message_start\n" +
+			`data: {"type":"message_start","message":{"id":"msg_crlf","type":"message","role":"assistant","content":[],"usage":{"input_tokens":10,"output_tokens":0}}}`,
+		"event: content_block_start\n" +
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		"event: content_block_delta\n" +
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}`,
+		"event: content_block_stop\n" +
+			`data: {"type":"content_block_stop","index":0}`,
+		"event: message_delta\n" +
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":16}}`,
+		"event: message_stop\n" +
+			`data: {"type":"message_stop"}`,
+	}
+	lf := func(e string) string { return e + "\n\n" }
+	crlf := func(e string) string { return strings.ReplaceAll(e, "\n", "\r\n") + "\r\n\r\n" }
+
+	var lfStream, crlfStream, mixedStream strings.Builder
+	for i, e := range events {
+		lfStream.WriteString(lf(e))
+		crlfStream.WriteString(crlf(e))
+		if i%2 == 0 {
+			mixedStream.WriteString(lf(e))
+		} else {
+			mixedStream.WriteString(crlf(e))
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		stream string
+	}{
+		{name: "LF", stream: lfStream.String()},
+		{name: "CRLF", stream: crlfStream.String()},
+		{name: "mixed LF and CRLF", stream: mixedStream.String()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Deliver the whole stream before end of stream: every event must be
+			// translated as it arrives, not deferred to the final call.
+			t.Run("single chunk", func(t *testing.T) {
+				parser := newAnthropicStreamParser("test-model")
+				_, body, _, _, err := parser.Process(strings.NewReader(tc.stream), false, nil)
+				require.NoError(t, err)
+				require.Contains(t, string(body), `"content":"Hello"`)
+
+				_, _, tokenUsage, _, err := parser.Process(strings.NewReader(""), true, nil)
+				require.NoError(t, err)
+				assertLineEndingTestTokens(t, tokenUsage)
+			})
+
+			// Deliver one byte at a time so event separators are split across reads.
+			t.Run("byte by byte", func(t *testing.T) {
+				parser := newAnthropicStreamParser("test-model")
+				var body []byte
+				for i := 0; i < len(tc.stream); i++ {
+					_, out, _, _, err := parser.Process(strings.NewReader(tc.stream[i:i+1]), false, nil)
+					require.NoError(t, err)
+					body = append(body, out...)
+				}
+				require.Contains(t, string(body), `"content":"Hello"`)
+
+				_, _, tokenUsage, _, err := parser.Process(strings.NewReader(""), true, nil)
+				require.NoError(t, err)
+				assertLineEndingTestTokens(t, tokenUsage)
+			})
+		})
+	}
+}
+
+func assertLineEndingTestTokens(t *testing.T, tokenUsage metrics.TokenUsage) {
+	t.Helper()
+	inputTokens, inputSet := tokenUsage.InputTokens()
+	require.True(t, inputSet)
+	require.Equal(t, uint32(10), inputTokens)
+	outputTokens, outputSet := tokenUsage.OutputTokens()
+	require.True(t, outputSet)
+	require.Equal(t, uint32(16), outputTokens)
 }

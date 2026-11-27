@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
@@ -20,11 +21,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -97,6 +101,12 @@ type Options struct {
 	ExtProcImagePullSecrets string
 	// ExtProcMaxRecvMsgSize is the maximum message size in bytes that the gRPC server can receive for extProc.
 	ExtProcMaxRecvMsgSize int
+	// FilterConfigBundleMaxSlots is the number of part Secrets the filter config bundle may be split into, and the
+	// number of optional part slots the webhook projects into every gateway pod.
+	// A change rolls the gateway pods, since a pod's slots are fixed at creation. A lowered value takes effect
+	// only once the filter config fits in it: until then the config is not written and the pods keep their
+	// previous config.
+	FilterConfigBundleMaxSlots int
 	// MCPSessionEncryptionSeed is the seed used to derive the encryption key for MCP session encryption.
 	MCPSessionEncryptionSeed string
 	// MCPSessionEncryptionIterations is the number of iterations to use for PBKDF2 key derivation for MCP session encryption.
@@ -105,12 +115,23 @@ type Options struct {
 	MCPFallbackSessionEncryptionSeed string
 	// MCPFallbackSessionEncryptionIterations is the number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.
 	MCPFallbackSessionEncryptionIterations int
+	// FileIDEncryptionSeed is the seed used to derive the encryption key for Files/Batch API ids.
+	FileIDEncryptionSeed string
+	// FileIDEncryptionIterations is the number of PBKDF2 iterations for Files/Batch API id encryption.
+	FileIDEncryptionIterations int
+	// FileIDFallbackEncryptionSeed is the optional fallback seed used for Files/Batch API id key rotation.
+	FileIDFallbackEncryptionSeed string
+	// FileIDFallbackEncryptionIterations is the number of PBKDF2 iterations for the fallback seed.
+	FileIDFallbackEncryptionIterations int
 	// EndpointPrefixes is the comma-separated key-value pairs for endpoint prefixes.
 	EndpointPrefixes string
 	// RateLimitRunner is the xDS runner that serves rate limit configs to the rate limit service.
 	RateLimitRunner *runner.Runner
 	// EnvoyGatewayNamespace is the namespace where Envoy Gateway is deployed.
 	EnvoyGatewayNamespace string
+	// CredentialPreRotationWindow is how long before expiry the BackendSecurityPolicy controller rotates
+	// short-lived credentials (AWS OIDC, Azure, GCP).
+	CredentialPreRotationWindow time.Duration
 }
 
 // StartControllers starts the controllers for the AI Gateway.
@@ -138,7 +159,8 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	extProcBuilder := newExtProcBuilder(options, isKubernetes133OrLater(versionInfo, logger), logger)
 	gatewayC := NewGatewayController(c, kubernetes.NewForConfigOrDie(config),
 		logger.WithName("gateway"), options.EnvoyGatewayNamespace,
-		false, uuid.NewString, options, isKubernetes133OrLater(versionInfo, logger))
+		false, uuid.NewString, options, isKubernetes133OrLater(versionInfo, logger),
+		mgr.GetEventRecorder("envoy-ai-gateway-controller"))
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1.Gateway{}).
 		WatchesRawSource(source.Channel(
 			gatewayEventChan,
@@ -155,6 +177,13 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.AIGatewayRoute{}).
 		Owns(&gwapiv1.HTTPRoute{}).
 		Owns(&egv1a1.HTTPRouteFilter{}).
+		// The shared backendPriority HTTPRouteFilters are not owned by any AIGatewayRoute, so Owns does not
+		// cover them. Recreate or restore one when it is deleted or edited while AIGatewayRoutes still use its
+		// priority.
+		Watches(&egv1a1.HTTPRouteFilter{},
+			handler.EnqueueRequestsFromMapFunc(routeC.backendPriorityFilterToAIGatewayRoutes),
+			builder.WithPredicates(backendPriorityFilterChangedPredicate()),
+		).
 		WatchesRawSource(source.Channel(
 			aiGatewayRouteEventChan,
 			&handler.EnqueueRequestForObject{},
@@ -178,7 +207,7 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 	backendSecurityPolicyEventChan := make(chan event.GenericEvent, 100)
 	inferencePoolEventChan := make(chan event.GenericEvent, 100)
 	backendSecurityPolicyC := NewBackendSecurityPolicyController(c, kubernetes.NewForConfigOrDie(config), logger.
-		WithName("backend-security-policy"), aiServiceBackendEventChan, inferencePoolEventChan)
+		WithName("backend-security-policy"), aiServiceBackendEventChan, inferencePoolEventChan, options.CredentialPreRotationWindow)
 	if err = TypedControllerBuilderForCRD(mgr, &aigv1b1.BackendSecurityPolicy{}).
 		WatchesRawSource(source.Channel(
 			backendSecurityPolicyEventChan,
@@ -248,18 +277,25 @@ func StartControllers(ctx context.Context, mgr manager.Manager, config *rest.Con
 		return fmt.Errorf("failed to create controller for GatewayConfig: %w", err)
 	}
 
+	var quotaPolicyEventChan chan event.GenericEvent
 	// QuotaPolicy controller for backend quota rate limiting.
 	if options.RateLimitRunner != nil {
+		quotaPolicyEventChan = make(chan event.GenericEvent, 100)
 		quotaPolicyC := NewQuotaPolicyController(c, kube, logger.WithName("quota-policy"), options.RateLimitRunner, aiGatewayRouteEventChan)
 		if err = TypedControllerBuilderForCRD(mgr, &aigv1a1.QuotaPolicy{}).
 			Watches(&aigv1b1.AIServiceBackend{}, handler.EnqueueRequestsFromMapFunc(quotaPolicyC.BackendToQuotaPolicy)).
+			WatchesRawSource(source.Channel(
+				quotaPolicyEventChan,
+				&handler.EnqueueRequestForObject{},
+			)).
 			Complete(quotaPolicyC); err != nil {
 			return fmt.Errorf("failed to create controller for QuotaPolicy: %w", err)
 		}
 	}
 
-	// ReferenceGrant controller for cross-namespace access validation
-	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan)
+	// ReferenceGrant changes can authorize or revoke AIGatewayRoute,
+	// BackendSecurityPolicy, and QuotaPolicy references.
+	referenceGrantC := NewReferenceGrantController(c, logger.WithName("reference-grant"), aiGatewayRouteEventChan, backendSecurityPolicyEventChan, quotaPolicyEventChan)
 	if err = TypedControllerBuilderForCRD(mgr, &gwapiv1b1.ReferenceGrant{}).
 		Complete(referenceGrantC); err != nil {
 		return fmt.Errorf("failed to create controller for ReferenceGrant: %w", err)
@@ -312,6 +348,9 @@ const (
 	// k8sClientIndexAIServiceBackendToTargetingQuotaPolicy is the index name that maps from an AIServiceBackend
 	// to the QuotaPolicy whose targetRefs contains the AIServiceBackend.
 	k8sClientIndexAIServiceBackendToTargetingQuotaPolicy = "AIServiceBackendToTargetingQuotaPolicy"
+	// k8sClientIndexQuotaPolicyTargetNamespace maps a target namespace to
+	// QuotaPolicies that contain a targetRef resolved to that namespace.
+	k8sClientIndexQuotaPolicyTargetNamespace = "QuotaPolicyTargetNamespace"
 	// k8sClientIndexGatewayToGatewayConfig maps from a GatewayConfig name to Gateways referencing it.
 	k8sClientIndexGatewayToGatewayConfig = "GatewayToGatewayConfig"
 
@@ -330,6 +369,10 @@ const (
 	// k8sClientIndexMCPRouteToOwnedHTTPRoute is the index name that maps from an MCPRoute to the
 	// HTTPRoutes it owns, enabling efficient lookup of child HTTPRoutes for orphan cleanup.
 	k8sClientIndexMCPRouteToOwnedHTTPRoute = "MCPRouteToOwnedHTTPRoute"
+	// k8sClientIndexAIGatewayRouteToBackendPriority is the index name that maps from a backendRef priority
+	// value to the AIGatewayRoutes whose rules have a backendRef with that priority. It is used to decide
+	// whether a shared backendPriority HTTPRouteFilter is still in use in a namespace.
+	k8sClientIndexAIGatewayRouteToBackendPriority = "AIGatewayRouteToBackendPriority"
 )
 
 // ApplyIndexing applies indexing to the given indexer. This is exported for testing purposes.
@@ -343,6 +386,11 @@ func ApplyIndexing(ctx context.Context, indexer func(ctx context.Context, obj cl
 		k8sClientIndexAIGatewayRouteToAttachedGateway, aiGatewayRouteToAttachedGatewayIndexFunc)
 	if err != nil {
 		return fmt.Errorf("failed to create index from Gateway to AIGatewayRoute: %w", err)
+	}
+	err = indexer(ctx, &aigv1b1.AIGatewayRoute{},
+		k8sClientIndexAIGatewayRouteToBackendPriority, aiGatewayRouteToBackendPriorityIndexFunc)
+	if err != nil {
+		return fmt.Errorf("failed to create index from backend priority to AIGatewayRoute: %w", err)
 	}
 	err = indexer(ctx, &aigv1b1.BackendSecurityPolicy{},
 		k8sClientIndexSecretToReferencingBackendSecurityPolicy, backendSecurityPolicyIndexFunc)
@@ -359,6 +407,11 @@ func ApplyIndexing(ctx context.Context, indexer func(ctx context.Context, obj cl
 		k8sClientIndexAIServiceBackendToTargetingQuotaPolicy, quotaPolicyTargetRefsIndexFunc)
 	if err != nil {
 		return fmt.Errorf("failed to index field for QuotaPolicy targetRefs: %w", err)
+	}
+	err = indexer(ctx, &aigv1a1.QuotaPolicy{},
+		k8sClientIndexQuotaPolicyTargetNamespace, quotaPolicyTargetNamespaceIndexFunc)
+	if err != nil {
+		return fmt.Errorf("failed to index QuotaPolicy target namespaces: %w", err)
 	}
 
 	err = indexer(ctx, &gwapiv1.Gateway{},
@@ -462,6 +515,12 @@ func namespacedNameIndexKey(name, namespace string) string {
 	return fmt.Sprintf("%s.%s", name, namespace)
 }
 
+// NamespacedNameKey returns the "namespace/name" key used for namespaced
+// resource identities.
+func NamespacedNameKey(namespace, name string) string {
+	return fmt.Sprintf("%s/%s", namespace, name)
+}
+
 func aiGatewayRouteIndexFunc(o client.Object) []string {
 	aiGatewayRoute := o.(*aigv1b1.AIGatewayRoute)
 	var ret []string
@@ -474,6 +533,23 @@ func aiGatewayRouteIndexFunc(o client.Object) []string {
 		}
 	}
 	return ret
+}
+
+// aiGatewayRouteToBackendPriorityIndexFunc returns the distinct non-zero priorities of the AIGatewayRoute's
+// backendRefs, i.e. those that get a backendPriority HTTPRouteFilter. InferencePool backendRefs are skipped
+// since their priority is ignored.
+func aiGatewayRouteToBackendPriorityIndexFunc(o client.Object) []string {
+	aiGatewayRoute := o.(*aigv1b1.AIGatewayRoute)
+	priorities := sets.New[string]()
+	for _, rule := range aiGatewayRoute.Spec.Rules {
+		for i := range rule.BackendRefs {
+			br := &rule.BackendRefs[i]
+			if p := ptr.Deref(br.Priority, 0); p != 0 && !br.IsInferencePool() {
+				priorities.Insert(strconv.FormatUint(uint64(p), 10))
+			}
+		}
+	}
+	return sets.List(priorities)
 }
 
 func backendSecurityPolicyIndexFunc(o client.Object) []string {
@@ -545,9 +621,24 @@ func quotaPolicyTargetRefsIndexFunc(o client.Object) []string {
 	quotaPolicy := o.(*aigv1a1.QuotaPolicy)
 	var ret []string
 	for _, targetRef := range quotaPolicy.Spec.TargetRefs {
-		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), quotaPolicy.Namespace))
+		ret = append(ret, namespacedNameIndexKey(string(targetRef.Name), TargetNamespace(targetRef, quotaPolicy.Namespace)))
 	}
 	return ret
+}
+
+func quotaPolicyTargetNamespaceIndexFunc(o client.Object) []string {
+	quotaPolicy := o.(*aigv1a1.QuotaPolicy)
+	namespaces := make([]string, 0, len(quotaPolicy.Spec.TargetRefs))
+	seen := make(map[string]struct{}, len(quotaPolicy.Spec.TargetRefs))
+	for _, targetRef := range quotaPolicy.Spec.TargetRefs {
+		namespace := TargetNamespace(targetRef, quotaPolicy.Namespace)
+		if _, ok := seen[namespace]; ok {
+			continue
+		}
+		seen[namespace] = struct{}{}
+		namespaces = append(namespaces, namespace)
+	}
+	return namespaces
 }
 
 func getReferenceGrantIndexKey(namespace, kind string) string {
@@ -564,12 +655,13 @@ func referenceGrantToTargetKindIndexFunc(o client.Object) []string {
 	return keys
 }
 
-// newConditions creates a new condition with the given type and message.
+// newConditions creates a new condition with the given type and message, observed at the given
+// generation of the object.
 //
 // Currently, we only set one condition at a time either "Accepted" or "NotAccepted".
 // In the future, if we can have multiple conditions like multiple errors, we can make changes here.
-func newConditions(conditionType, message string) []metav1.Condition {
-	condition := metav1.Condition{Message: message, LastTransitionTime: metav1.Now()}
+func newConditions(generation int64, conditionType, message string) []metav1.Condition {
+	condition := metav1.Condition{Message: message, LastTransitionTime: metav1.Now(), ObservedGeneration: generation}
 	// Note: we use the fixed reason for now since the message is enough to describe the error and
 	// reason doesn't fit the entire message.
 	switch conditionType {
@@ -595,24 +687,27 @@ const aiGatewayControllerFinalizer = "aigateway.envoyproxy.io/finalizer"
 // onDeletionFn can be nil, in which case it will not be called. The function can return an error but should not
 // be a recoverable error. For example, onDeletionFn only propagates the deletion of the object to other resources.
 // See the call sites of this function for examples.
+//
+// The returned error is non-nil only when removing the finalizer fails. Callers must return it from Reconcile so that
+// the removal is retried: the object stays Terminating until it is reconciled again.
 func handleFinalizer[objType client.Object](
-	ctx context.Context, client client.Client,
+	ctx context.Context, c client.Client,
 	logger logr.Logger,
 	o objType,
 	onDeletionFn func(ctx context.Context, o objType) error,
-) (onDelete bool) {
+) (onDelete bool, err error) {
 	if o.GetDeletionTimestamp().IsZero() {
 		if !ctrlutil.ContainsFinalizer(o, aiGatewayControllerFinalizer) {
+			base := o.DeepCopyObject().(objType)
 			ctrlutil.AddFinalizer(o, aiGatewayControllerFinalizer)
-			if err := client.Update(ctx, o); err != nil {
-				// This shouldn't happen in normal operation, but if it does, we log the error.
-				logger.Error(err, "Failed to add finalizer to object",
-					"namespace", o.GetNamespace(), "name", o.GetName())
+			if err := c.Patch(ctx, o, client.MergeFrom(base)); err != nil {
+				return false, fmt.Errorf("failed to add finalizer to %s/%s: %w", o.GetNamespace(), o.GetName(), err)
 			}
 		}
-		return false
+		return false, nil
 	}
 	if ctrlutil.ContainsFinalizer(o, aiGatewayControllerFinalizer) {
+		base := o.DeepCopyObject().(objType)
 		ctrlutil.RemoveFinalizer(o, aiGatewayControllerFinalizer)
 		if onDeletionFn != nil {
 			if err := onDeletionFn(ctx, o); err != nil {
@@ -621,13 +716,11 @@ func handleFinalizer[objType client.Object](
 					"namespace", o.GetNamespace(), "name", o.GetName())
 			}
 		}
-		if err := client.Update(ctx, o); err != nil {
-			// This shouldn't happen in normal operation, but if it does, we log the error.
-			logger.Error(err, "Failed to remove finalizer from object",
-				"namespace", o.GetNamespace(), "name", o.GetName())
+		if err := c.Patch(ctx, o, client.MergeFrom(base)); err != nil {
+			return true, fmt.Errorf("failed to remove finalizer from %s/%s: %w", o.GetNamespace(), o.GetName(), err)
 		}
 	}
-	return true
+	return true, nil
 }
 
 // isKubernetes133OrLater returns true if the Kubernetes version is 1.33 or later.

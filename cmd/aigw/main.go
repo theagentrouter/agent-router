@@ -7,10 +7,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -40,6 +42,16 @@ type (
 		Healthcheck cmdHealthcheck `cmd:"" help:"Docker HEALTHCHECK command."`
 		// DownloadEnvoy downloads the Envoy binary used by Envoy Gateway.
 		DownloadEnvoy cmdDownloadEnvoy `cmd:"" help:"Download Envoy binary for the Envoy Gateway default version."`
+		// Claude runs Claude Code through Agent Router.
+		Claude cmdAgent `cmd:"" help:"Run Claude Code through Agent Router, starting it in the background if needed."`
+		// Codex runs Codex through Agent Router.
+		Codex cmdAgent `cmd:"" help:"Run Codex through Agent Router, starting it in the background if needed."`
+		// Status shows the Agent Router started for the coding agents.
+		Status cmdStatus `cmd:"" help:"Show the Agent Router started by \"aigw claude\" or \"aigw codex\"."`
+		// Stop stops the Agent Router started for the coding agents.
+		Stop cmdStop `cmd:"" help:"Stop the Agent Router started by \"aigw claude\" or \"aigw codex\"."`
+
+		dirs *xdg.Directories `kong:"-"` // Internal field: XDG directories, set by BeforeApply
 	}
 	// cmdRun corresponds to `aigw run` command.
 	cmdRun struct {
@@ -51,6 +63,7 @@ type (
 		RunID     string `name:"run-id" env:"AIGW_RUN_ID" help:"Run identifier for this invocation. Defaults to timestamp-based ID or $AIGW_RUN_ID. Use '0' for Docker/Kubernetes."`
 
 		MCPSessionEncryptionIterations int `name:"mcp-session-encryption-iterations" help:"Number of iterations for MCP session encryption key derivation." default:"100000"`
+		FileIDEncryptionIterations     int `name:"file-id-encryption-iterations" help:"Number of iterations for Files/Batch API id encryption key derivation." default:"100000"`
 
 		mcpConfig *autoconfig.MCPServers `kong:"-"` // Internal field: normalized MCP JSON data
 		dirs      *xdg.Directories       `kong:"-"` // Internal field: XDG directories, set by BeforeApply
@@ -89,12 +102,13 @@ func (c *cmd) BeforeApply(_ *kong.Context) error {
 	c.RuntimeDir = expandPath(c.RuntimeDir)
 
 	// Populate Run.dirs with expanded XDG directories for use in Run.BeforeApply
-	c.Run.dirs = &xdg.Directories{
+	c.dirs = &xdg.Directories{
 		ConfigHome: c.ConfigHome,
 		DataHome:   c.DataHome,
 		StateHome:  c.StateHome,
 		RuntimeDir: c.RuntimeDir,
 	}
+	c.Run.dirs = c.dirs
 	// Populate DownloadEnvoy dataHome with expanded data directory.
 	c.DownloadEnvoy.dataHome = c.DataHome
 
@@ -126,8 +140,10 @@ func (c *cmdRun) Validate() error {
 	if c.McpConfig != "" && c.McpJSON != "" {
 		return fmt.Errorf("mcp-config and mcp-json are mutually exclusive")
 	}
-	if c.Path == "" && os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("AZURE_OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" && c.McpConfig == "" && c.McpJSON == "" {
-		return fmt.Errorf("you must supply at least OPENAI_API_KEY, AZURE_OPENAI_API_KEY, ANTHROPIC_API_KEY, or a config file path")
+	// Without any configuration, "aigw run" asks for it interactively, which needs a terminal.
+	if c.Path == "" && os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("AZURE_OPENAI_API_KEY") == "" && os.Getenv("ANTHROPIC_API_KEY") == "" && c.McpConfig == "" && c.McpJSON == "" &&
+		!isTerminal(os.Stdin) {
+		return errNoConfig
 	}
 
 	c.McpConfig = expandPath(c.McpConfig)
@@ -212,6 +228,31 @@ func doMain(ctx context.Context, stdout, stderr io.Writer, args []string, exitFn
 		err = df(ctx, &c.DownloadEnvoy, stdout, stderr)
 		if err != nil {
 			log.Fatalf("Download Envoy failed: %v", err)
+		}
+	case "claude", "claude <args>", "codex", "codex <args>":
+		// The full command ("codex <args>") names the agent, whatever node Selected() returns.
+		a, cmdArgs := &claudeAgent, &c.Claude
+		if strings.HasPrefix(parsed.Command(), codexAgent.name) {
+			a, cmdArgs = &codexAgent, &c.Codex
+		}
+		err = runAgent(ctx, a, cmdArgs, c.dirs, stderr)
+		var exitErr errAgentExit
+		switch {
+		case errors.As(err, &exitErr):
+			exitFn(exitErr.code)
+		case errors.Is(err, errSetupAborted):
+			exitFn(130)
+		case err != nil:
+			_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
+			exitFn(1)
+		}
+	case "status":
+		if err = agentsStatus(c.dirs, stdout); err != nil {
+			log.Fatalf("Status failed: %v", err)
+		}
+	case "stop":
+		if err = stopAgents(c.dirs, stdout); err != nil {
+			log.Fatalf("Stop failed: %v", err)
 		}
 	default:
 		panic("unreachable")

@@ -27,10 +27,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	"sigs.k8s.io/yaml"
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
@@ -54,7 +56,7 @@ const (
 // options to both), so the workload template hash matches webhook injection.
 func NewGatewayController(
 	client client.Client, kube kubernetes.Interface, logger logr.Logger, envoyGatewayNamespace string,
-	standAlone bool, uuidFn func() string, options *Options, extProcAsSideCar bool,
+	standAlone bool, uuidFn func() string, options *Options, extProcAsSideCar bool, eventRecorder events.EventRecorder,
 ) *GatewayController {
 	uf := uuidFn
 	if uf == nil {
@@ -69,6 +71,7 @@ func NewGatewayController(
 		uuidFn:                  uf,
 		extProcBuilder:          newExtProcBuilder(options, extProcAsSideCar, logger),
 		referenceGrantValidator: newReferenceGrantValidator(client),
+		eventRecorder:           eventRecorder,
 	}
 }
 
@@ -87,6 +90,9 @@ type GatewayController struct {
 	// referenceGrantValidator authorizes cross-namespace AIServiceBackend/InferencePool
 	// references (and their BackendSecurityPolicy credentials) via Gateway API ReferenceGrant.
 	referenceGrantValidator *referenceGrantValidator
+	// eventRecorder records Events on the Gateway. It is nil in standalone mode, where there is no
+	// API server to record them to.
+	eventRecorder events.EventRecorder
 }
 
 // Reconcile implements the reconcile.Reconciler for gwapiv1.Gateway.
@@ -157,6 +163,7 @@ func (c *GatewayController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	hasEffectiveRoutes, err = c.reconcileFilterConfigSecret(ctx, gw.Name, gw.Namespace, namespace, aiRoutes.Items, mcpRoutes.Items, uid, defaultLLMCosts, declaredMetadataNamespaces)
 	if err != nil {
+		c.recordFilterConfigWriteError(gw, err)
 		return ctrl.Result{}, err
 	}
 
@@ -168,6 +175,19 @@ func (c *GatewayController) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	return result, nil
+}
+
+// recordFilterConfigWriteError records a Warning Event on the Gateway when the filter config write
+// was refused because it needs more bundle parts than the configured slots. The extproc keeps serving
+// its previous config in that case, so route and backend changes stop reaching the data plane, and
+// without the Event the reconciler error log would be the only place that says so.
+func (c *GatewayController) recordFilterConfigWriteError(gw *gwapiv1.Gateway, err error) {
+	var tooLarge *filterConfigBundleTooLargeError
+	if c.eventRecorder == nil || !errors.As(err, &tooLarge) {
+		return
+	}
+	c.eventRecorder.Eventf(gw, nil, corev1.EventTypeWarning, filterConfigBundleTooLargeEventReason,
+		"WriteFilterConfig", "%s; the extproc keeps its previous config until then", tooLarge.Error())
 }
 
 // schemaToFilterAPI converts an aigv1b1.VersionedAPISchema to filterapi.VersionedAPISchema.
@@ -431,7 +451,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 			continue
 		}
 		hasEffectiveRoute = true
-		routeName := fmt.Sprintf("%s/%s", aiGatewayRoute.Namespace, aiGatewayRoute.Name)
+		routeName := NamespacedNameKey(aiGatewayRoute.Namespace, aiGatewayRoute.Name)
 		hostnames := aiGatewayRoute.Spec.Hostnames
 		spec := aiGatewayRoute.Spec
 		routeBackendNamesSet := map[string]struct{}{}
@@ -486,6 +506,9 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 
 				var bsp *aigv1b1.BackendSecurityPolicy
 				backendNamespace := backendRef.GetNamespace(aiGatewayRoute.Namespace)
+				if !backendRef.IsInferencePool() {
+					b.AIServiceBackendName = NamespacedNameKey(backendNamespace, backendRef.Name)
+				}
 
 				if backendRef.IsCrossNamespace(aiGatewayRoute.Namespace) {
 					var rgErr error
@@ -589,7 +612,7 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 			}
 			// Inject QuotaPolicy cost expressions as LLMRequestCost entries so ext_proc
 			// computes and stores them in metadata for the HitsAddend to read.
-			c.injectQuotaPolicyCostExpressions(ctx, aiGatewayRoute, ec, injectedQuotaCosts, routeName)
+			c.injectQuotaPolicyCostExpressions(ctx, ec, injectedQuotaCosts, routeName)
 
 			for _, fc := range dedup {
 				ec.LLMRequestCosts = append(ec.LLMRequestCosts, fc)
@@ -612,7 +635,11 @@ func (c *GatewayController) reconcileFilterConfigSecret(
 	// Configuration for MCP processor.
 	var effectiveMCPRoute bool
 	ec.MCPConfig, effectiveMCPRoute = mcpConfig(mcpRoutes)
+	if ec.MCPConfig != nil {
+		ec.MCPConfig.SessionEncryption = c.mcpSessionEncryption()
+	}
 	hasEffectiveRoute = hasEffectiveRoute || effectiveMCPRoute
+	ec.FileIDEncryption = c.fileIDEncryption()
 
 	c.warnUndeclaredMetadataNamespaces(ec, declaredMetadataNamespaces, gatewayName, gatewayNamespace)
 
@@ -642,7 +669,7 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 		}
 		hasEffectiveRoute = true
 		mcpRoute := filterapi.MCPRoute{
-			Name:     fmt.Sprintf("%s/%s", route.Namespace, route.Name),
+			Name:     NamespacedNameKey(route.Namespace, route.Name),
 			Backends: []filterapi.MCPBackend{},
 		}
 		for _, b := range route.Spec.BackendRefs {
@@ -680,6 +707,12 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			mcpRoute.Backends = append(
 				mcpRoute.Backends, mcpBackend)
 		}
+		// Add the OAuth protected resource metadata for the route. This is independent of the
+		// authorization rules below: the MCP proxy serves the metadata document, and advertises
+		// it in WWW-Authenticate challenges, whenever OAuth is configured at all.
+		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.OAuth != nil {
+			mcpRoute.ProtectedResourceMetadata = mcpRouteOAuth(route.Spec.SecurityPolicy.OAuth)
+		}
 
 		// hasVerifiedJWT is true only when Envoy has been configured (via SecurityPolicy.OAuth)
 		// to cryptographically verify the bearer JWT before the request reaches the MCP proxy.
@@ -693,10 +726,6 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 			authorization := route.Spec.SecurityPolicy.Authorization
 			mcpRoute.Authorization = &filterapi.MCPRouteAuthorization{
 				VerifiedJWT: hasVerifiedJWT,
-			}
-
-			if route.Spec.SecurityPolicy.OAuth != nil {
-				mcpRoute.Authorization.ResourceMetadataURL = buildResourceMetadataURL(&route.Spec.SecurityPolicy.OAuth.ProtectedResourceMetadata)
 			}
 
 			defaultAction := ptr.Deref(authorization.DefaultAction, egv1a1.AuthorizationActionDeny)
@@ -836,6 +865,8 @@ func defaultOverrideHeaderName(t aigv1b1.BackendSecurityPolicyType) string {
 		return "x-aigw-azure-access-token"
 	case aigv1b1.BackendSecurityPolicyTypeGCPCredentials:
 		return "x-aigw-gcp-access-token"
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		return "x-aigw-openai-access-token"
 	case aigv1b1.BackendSecurityPolicyTypeAWSCredentials:
 		return internalapi.AWSCredentialOverrideHeaderPrefix
 	default:
@@ -999,6 +1030,18 @@ func (c *GatewayController) bspToFilterAPIBackendAuth(ctx context.Context, backe
 			}
 			hasStaticCred = true
 		}
+	case aigv1b1.BackendSecurityPolicyTypeOpenAICredentials:
+		secretName := rotators.GetBSPSecretName(backendSecurityPolicy.Name)
+		openAIAccessToken, getErr := c.getSecretData(ctx, namespace, secretName, rotators.OpenAIAccessTokenKey)
+		if getErr != nil {
+			return nil, getErr
+		}
+		auth = &filterapi.BackendAuth{OpenAIAuth: &filterapi.OpenAIAuth{
+			AccessToken:  openAIAccessToken,
+			Organization: spec.OpenAICredentials.Organization,
+			Project:      spec.OpenAICredentials.Project,
+		}}
+		hasStaticCred = true
 	default:
 		return nil, fmt.Errorf("invalid backend security type %s for policy %s", spec.Type, backendSecurityPolicy.Name)
 	}
@@ -1052,26 +1095,52 @@ func (c *GatewayController) getBSPSecretRefData(ctx context.Context, bsp *aigv1b
 // dynamic metadata for the rate limit filter's HitsAddend to read.
 func (c *GatewayController) injectQuotaPolicyCostExpressions(
 	ctx context.Context,
-	route *aigv1b1.AIGatewayRoute,
 	ec *filterapi.Config,
 	injectedQuotaCosts map[string]struct{},
 	routeName string,
 ) {
-	var quotaPolicies aigv1a1.QuotaPolicyList
-	if err := c.client.List(ctx, &quotaPolicies, client.InNamespace(route.Namespace)); err != nil {
-		c.logger.Error(err, "failed to list QuotaPolicies for cost expression injection")
-		return
-	}
-
 	// Collect backend names and model name overrides on this route.
 	routeBackends := make(map[string]bool)
 	routeModels := make(map[string]bool)
-	for _, rule := range route.Spec.Rules {
-		for _, br := range rule.BackendRefs {
-			routeBackends[br.Name] = true
-			if br.ModelNameOverride != "" {
-				routeModels[br.ModelNameOverride] = true
+	for i := range ec.Backends {
+		backend := &ec.Backends[i]
+		if backend.AIServiceBackendName != "" {
+			routeBackends[backend.AIServiceBackendName] = true
+		}
+		if backend.ModelNameOverride != "" {
+			routeModels[backend.ModelNameOverride] = true
+		}
+	}
+
+	// Look up only policies targeting backends on this route. The index key is
+	// backend-name.namespace, while ec.Backends uses namespace/backend-name.
+	seenPolicies := make(map[string]struct{})
+	var quotaPolicies aigv1a1.QuotaPolicyList
+	for backendKey := range routeBackends {
+		backendNamespace, backendName, ok := strings.Cut(backendKey, "/")
+		if !ok || backendNamespace == "" || backendName == "" {
+			continue
+		}
+		indexKey := namespacedNameIndexKey(backendName, backendNamespace)
+
+		var matches aigv1a1.QuotaPolicyList
+		err := c.client.List(ctx, &matches, client.MatchingFields{
+			k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: indexKey,
+		})
+		if err != nil {
+			c.logger.Error(err, "failed to list QuotaPolicies for cost expression injection",
+				"backend", backendKey)
+			return
+		}
+
+		for i := range matches.Items {
+			policy := &matches.Items[i]
+			policyKey := NamespacedNameKey(policy.Namespace, policy.Name)
+			if _, exists := seenPolicies[policyKey]; exists {
+				continue
 			}
+			seenPolicies[policyKey] = struct{}{}
+			quotaPolicies.Items = append(quotaPolicies.Items, *policy)
 		}
 	}
 
@@ -1079,10 +1148,16 @@ func (c *GatewayController) injectQuotaPolicyCostExpressions(
 		qp := &quotaPolicies.Items[i]
 		// Check if this policy targets any backend on this route.
 		targetsRoute := false
+		authorizedTargets := make([]gwapiv1a2.NamespacedPolicyTargetReference, 0, len(qp.Spec.TargetRefs))
 		for _, ref := range qp.Spec.TargetRefs {
-			if routeBackends[string(ref.Name)] {
+			targetNamespace := TargetNamespace(ref, qp.Namespace)
+			if err := c.referenceGrantValidator.validateQuotaPolicyAIServiceBackendReference(
+				ctx, qp.Namespace, targetNamespace, string(ref.Name)); err != nil {
+				continue
+			}
+			authorizedTargets = append(authorizedTargets, ref)
+			if routeBackends[targetNamespace+"/"+string(ref.Name)] {
 				targetsRoute = true
-				break
 			}
 		}
 		if !targetsRoute {
@@ -1109,8 +1184,8 @@ func (c *GatewayController) injectQuotaPolicyCostExpressions(
 			// One LLMRequestCost per target backend with the Backend and Model filters.
 			// ext_proc only evaluates the entry matching the serving backend and model,
 			// storing the result under the shared metadata key.
-			for _, ref := range qp.Spec.TargetRefs {
-				backendKey := route.Namespace + "/" + string(ref.Name)
+			for _, ref := range authorizedTargets {
+				backendKey := NamespacedNameKey(TargetNamespace(ref, qp.Namespace), string(ref.Name))
 				dedupeKey := QuotaCostMetadataKey + "\x00" + *pmq.ModelName + "\x00" + backendKey
 				if _, exists := injectedQuotaCosts[dedupeKey]; exists {
 					continue
@@ -1216,19 +1291,17 @@ func (c *GatewayController) checkPodHasSideCar(pod *corev1.Pod, needMCP bool, de
 		for i := range podSpec.InitContainers {
 			if podSpec.InitContainers[i].Name == extProcContainerName && podSpec.InitContainers[i].Image == desiredImage {
 				hasSideCar = true
-				hasMCPAddr := false
+				mcpAddr := ""
 				for j := range podSpec.InitContainers[i].Args {
 					if j > 0 && podSpec.InitContainers[i].Args[j-1] == "-logLevel" && podSpec.InitContainers[i].Args[j] != c.logLevel {
 						hasSideCar = false
 						break
 					}
 					if j > 0 && podSpec.InitContainers[i].Args[j-1] == "-mcpAddr" {
-						hasMCPAddr = true
+						mcpAddr = podSpec.InitContainers[i].Args[j]
 					}
 				}
-				if needMCP && !hasMCPAddr {
-					c.logger.Info("MCPRoutes exist but sidecar is missing -mcpAddr argument, triggering rollout",
-						"pod", pod.Name, "namespace", pod.Namespace)
+				if needMCP && !c.checkMCPAddr(pod, mcpAddr) {
 					hasSideCar = false
 				}
 				break
@@ -1238,19 +1311,17 @@ func (c *GatewayController) checkPodHasSideCar(pod *corev1.Pod, needMCP bool, de
 		for i := range podSpec.Containers {
 			if podSpec.Containers[i].Name == extProcContainerName && podSpec.Containers[i].Image == desiredImage {
 				hasSideCar = true
-				hasMCPAddr := false
+				mcpAddr := ""
 				for j := range podSpec.Containers[i].Args {
 					if j > 0 && podSpec.Containers[i].Args[j-1] == "-logLevel" && podSpec.Containers[i].Args[j] != c.logLevel {
 						hasSideCar = false
 						break
 					}
 					if j > 0 && podSpec.Containers[i].Args[j-1] == "-mcpAddr" {
-						hasMCPAddr = true
+						mcpAddr = podSpec.Containers[i].Args[j]
 					}
 				}
-				if needMCP && !hasMCPAddr {
-					c.logger.Info("MCPRoutes exist but sidecar is missing -mcpAddr argument, triggering rollout",
-						"pod", pod.Name, "namespace", pod.Namespace)
+				if needMCP && !c.checkMCPAddr(pod, mcpAddr) {
 					hasSideCar = false
 				}
 				break
@@ -1259,6 +1330,78 @@ func (c *GatewayController) checkPodHasSideCar(pod *corev1.Pod, needMCP bool, de
 	}
 
 	return hasSideCar
+}
+
+// checkPodHasBundleSlots returns whether the pod projects at least as many filter config bundle
+// part slots as writeFilterConfigBundle may fill. A pod projecting fewer cannot load the parts past
+// its last slot. A pod without a bundle volume reports true; checkPodHasSideCar covers it.
+//
+// The webhook fixes a pod's slots at admission, and the config hash on the workload template only
+// records the slot count the reconciler last wrote there, so a pod can project fewer slots than
+// configured while its template hash is current:
+//
+//   - The slot count is lowered and raised back. With 16 slots and a 12-part config, lowering to 8
+//     makes writeFilterConfigBundle refuse the write, so Reconcile returns before annotating and the
+//     template keeps the hash for 16. Pods created meanwhile project max(8, 12) = 12 slots, because
+//     the index still lists 12 parts. Raising back to 16 makes the desired hash match the template
+//     again, so no hash rollout replaces those pods, and they cannot load a config that grows past
+//     12 parts.
+//   - The controller runs several replicas and rolls out a raised slot count. Every ready replica
+//     serves the webhook, not only the leader, so after the new leader writes the hash for 16 to the
+//     template, an old replica can still admit the resulting pods with 8 slots. Those pods carry the
+//     current hash, so no hash rollout replaces them.
+func (c *GatewayController) checkPodHasBundleSlots(pod *corev1.Pod) (hasBundleSlots bool) {
+	slots, maxSlots := projectedBundlePartSlots(pod), c.filterConfigBundleMaxSlots()
+	if slots >= 0 && slots < maxSlots {
+		c.logger.Info("pod projects fewer filter config bundle slots than configured, triggering rollout",
+			"pod", pod.Name, "namespace", pod.Namespace, "slots", slots, "maxSlots", maxSlots)
+		return false
+	}
+	return true
+}
+
+// projectedBundlePartSlots returns the number of filter config bundle part slots projected into the
+// pod, or -1 when the pod has no bundle volume. The volume is matched by the name the webhook gives
+// it, since the pod may carry other projected volumes with the same item keys.
+func projectedBundlePartSlots(pod *corev1.Pod) int {
+	name := filterConfigBundleVolumeName(pod.Labels[egOwningGatewayNameLabel], pod.Labels[egOwningGatewayNamespaceLabel])
+	for i := range pod.Spec.Volumes {
+		volume := &pod.Spec.Volumes[i]
+		if volume.Name != name || volume.Projected == nil {
+			continue
+		}
+		parts := 0
+		for _, source := range volume.Projected.Sources {
+			if source.Secret == nil {
+				continue
+			}
+			for _, item := range source.Secret.Items {
+				if item.Key == FilterConfigBundlePartKey {
+					parts++
+				}
+			}
+		}
+		return parts
+	}
+	return -1
+}
+
+// checkMCPAddr reports whether the extproc sidecar's -mcpAddr is the desired MCP proxy address.
+// Besides a missing argument, this also rolls pods whose MCP proxy still listens on every interface
+// (created before the proxy was bound to loopback), which would otherwise stay reachable from other
+// pods until something else restarted them.
+func (c *GatewayController) checkMCPAddr(pod *corev1.Pod, mcpAddr string) bool {
+	switch mcpAddr {
+	case internalapi.MCPProxyAddr:
+		return true
+	case "":
+		c.logger.Info("MCPRoutes exist but sidecar is missing -mcpAddr argument, triggering rollout",
+			"pod", pod.Name, "namespace", pod.Namespace)
+	default:
+		c.logger.Info("sidecar -mcpAddr is not the desired MCP proxy address, triggering rollout",
+			"pod", pod.Name, "namespace", pod.Namespace, "mcpAddr", mcpAddr, "desired", internalapi.MCPProxyAddr)
+	}
+	return false
 }
 
 // isRolloutInProgress checks whether any Deployment or DaemonSet is currently rolling out.
@@ -1313,15 +1456,20 @@ func (c *GatewayController) annotateGatewayPods(ctx context.Context,
 
 	seenWithSidecar := false
 	seenWithoutSidecar := false
+	seenWithoutBundleSlots := false
 	for i := range pods {
-		if !pods[i].GetDeletionTimestamp().IsZero() {
+		pod := &pods[i]
+		if !pod.GetDeletionTimestamp().IsZero() {
 			continue
 		}
-		hasSideCar := c.checkPodHasSideCar(&pods[i], needMCP, desiredImage)
+		hasSideCar := c.checkPodHasSideCar(pod, needMCP, desiredImage)
 		if hasSideCar {
 			seenWithSidecar = true
 		} else {
 			seenWithoutSidecar = true
+		}
+		if !c.checkPodHasBundleSlots(pod) {
+			seenWithoutBundleSlots = true
 		}
 		if seenWithSidecar && seenWithoutSidecar {
 			break
@@ -1356,16 +1504,21 @@ func (c *GatewayController) annotateGatewayPods(ctx context.Context,
 	//    we need to roll out the deployment to trigger the mutation webhook to remove the sidecar container.
 	// 3. If pods are inconsistent even when rollout isn't in progress, force rollout to self-heal.
 	needsStateRollout := hasEffectiveRoute != hasSideCar || forceRollout
+	// The template hash cannot tell whether existing pods project enough bundle slots, so roll the
+	// workloads when one does not even if the hash is current. See checkPodHasBundleSlots for how
+	// that happens.
+	needsBundleSlotsRollout := hasEffectiveRoute && seenWithoutBundleSlots
+	needsUUIDRollout := needsStateRollout || needsBundleSlotsRollout
 	for i := range deployments {
 		dep := &deployments[i]
 		// Hash changes are written to the pod template so Kubernetes owns the rollout.
 		needsHashRollout := hasEffectiveRoute && desiredHash != "" && dep.Spec.Template.Annotations[extProcConfigHashAnnotationKey] != desiredHash
-		if !needsStateRollout && !needsHashRollout {
+		if !needsUUIDRollout && !needsHashRollout {
 			continue
 		}
 		c.logger.Info("rolling out deployment", "namespace", dep.Namespace, "name", dep.Name, "desiredHash", desiredHash)
 		_, err := c.kube.AppsV1().Deployments(dep.Namespace).Patch(ctx, dep.Name, types.MergePatchType,
-			workloadTemplateAnnotationPatch(uuid, desiredHash, needsStateRollout, needsHashRollout),
+			workloadTemplateAnnotationPatch(uuid, desiredHash, needsUUIDRollout, needsHashRollout),
 			metav1.PatchOptions{})
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to patch deployment %s: %w", dep.Name, err)
@@ -1376,16 +1529,24 @@ func (c *GatewayController) annotateGatewayPods(ctx context.Context,
 		daemonSet := &daemonSets[i]
 		// Hash changes are written to the pod template so Kubernetes owns the rollout.
 		needsHashRollout := hasEffectiveRoute && desiredHash != "" && daemonSet.Spec.Template.Annotations[extProcConfigHashAnnotationKey] != desiredHash
-		if !needsStateRollout && !needsHashRollout {
+		if !needsUUIDRollout && !needsHashRollout {
 			continue
 		}
 		c.logger.Info("rolling out daemonSet", "namespace", daemonSet.Namespace, "name", daemonSet.Name, "desiredHash", desiredHash)
 		_, err := c.kube.AppsV1().DaemonSets(daemonSet.Namespace).Patch(ctx, daemonSet.Name, types.MergePatchType,
-			workloadTemplateAnnotationPatch(uuid, desiredHash, needsStateRollout, needsHashRollout),
+			workloadTemplateAnnotationPatch(uuid, desiredHash, needsUUIDRollout, needsHashRollout),
 			metav1.PatchOptions{})
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to patch daemonset %s: %w", daemonSet.Name, err)
 		}
+	}
+	// The replacement pods can again project too few slots when an old controller replica still
+	// serves the webhook. This controller does not watch pods or workloads, so requeue to check them
+	// again; isRolloutInProgress keeps requeueing until the rollout finishes.
+	if needsBundleSlotsRollout && len(deployments)+len(daemonSets) > 0 {
+		const requeueAfter = 5 * time.Second
+		c.logger.Info("rolled out workloads for missing bundle slots - requeueing", "requeueAfter", requeueAfter.String())
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 	return ctrl.Result{}, nil
 }

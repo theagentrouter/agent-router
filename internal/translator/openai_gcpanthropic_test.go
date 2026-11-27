@@ -404,6 +404,26 @@ func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_RequestBody(t *testing.T
 		require.Equal(t, "adaptive", thinkingBlock.Map()["type"].String())
 		require.Equal(t, "summarized", thinkingBlock.Map()["display"].String())
 	})
+	t.Run("Request with Thinking between_tools", func(t *testing.T) {
+		thinkingReq := &openai.ChatCompletionRequest{
+			Model:     claudeTestModel,
+			Messages:  []openai.ChatCompletionMessageParamUnion{},
+			MaxTokens: ptr.To(int64(100)),
+			Thinking: &openai.ThinkingUnion{
+				OfBetweenTools: &openai.ThinkingBetweenTools{
+					Type: "between_tools",
+				},
+			},
+		}
+		translator := NewChatCompletionOpenAIToGCPAnthropicTranslator("", "")
+		_, body, err := translator.RequestBody(nil, thinkingReq, false)
+		require.NoError(t, err)
+		require.NotNil(t, body)
+
+		thinkingBlock := gjson.GetBytes(body, "thinking")
+		require.True(t, thinkingBlock.Exists(), "The 'thinking' field should exist in the request body")
+		require.JSONEq(t, `{"type":"between_tools"}`, thinkingBlock.Raw)
+	})
 }
 
 func TestOpenAIToGCPAnthropicTranslatorV1ChatCompletion_ResponseBody(t *testing.T) {

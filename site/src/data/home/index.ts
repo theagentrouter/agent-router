@@ -2,6 +2,10 @@
  * Homepage content — edit copy here, not in the components.
  * Components live in src/components/home/.
  */
+import vars from '@site/docs/_vars.json';
+
+/** Selects the Envoy pods of the gateway deployed by the basic example. */
+const basicGatewaySelector = 'gateway.envoyproxy.io/owning-gateway-name=envoy-ai-gateway-basic';
 
 export type Cta = { label: string; to: string };
 
@@ -115,6 +119,10 @@ export type QuickstartTab = {
   id: string;
   label: string;
   cta: Cta;
+  /** Heading beside the terminal for this tab. */
+  title: string;
+  /** Paragraph beside the terminal, describing this tab's path. */
+  body: string;
   /** Small muted line under the CTA, e.g. who provides a hosted option. */
   note?: string;
   terminal: TerminalLine[];
@@ -122,46 +130,93 @@ export type QuickstartTab = {
 
 export const quickstart = {
   label: 'Get started',
-  title: 'From laptop to production',
-  body:
-    'One command on your laptop. The same configuration ships to a dedicated gateway or a Kubernetes cluster — only the packaging changes. Or skip the install and use a hosted service.',
   tabs: [
     {
       id: 'local',
+      title: 'Running in 60 seconds',
       label: 'On your laptop',
-      cta: { label: 'Read the guide', to: '/docs/cli/aigwrun' },
+      cta: { label: 'Read the guide', to: '/docs/next/cli/aigwagents' },
+      body:
+        'One command runs Agent Router on your laptop — no Docker, no Kubernetes. Run Claude Code or Codex through it, or pick your providers and point any OpenAI- or Anthropic-compatible client at it. The same configuration later ships to a dedicated gateway or a Kubernetes cluster.',
       terminal: [
-        { kind: 'comment', text: '# 1 — start the router locally' },
-        { kind: 'command', text: 'OPENAI_API_KEY=sk-... aigw run' },
+        { kind: 'comment', text: '# 1 — install the router' },
+        { kind: 'command', text: 'curl -sSL https://theagentrouter.ai/install.sh | sh' },
+        { kind: 'command', text: 'export PATH="$HOME/.local/bin:$PATH"' },
         { kind: 'blank' },
-        { kind: 'comment', text: '# 2 — the only change your agent needs' },
-        { kind: 'command', text: 'export OPENAI_BASE_URL=http://localhost:1975/v1' },
+        { kind: 'comment', text: '# 2 — run your coding agent through it, then pick its provider' },
+        { kind: 'command', text: 'aigw claude   # or: aigw codex' },
         { kind: 'blank' },
-        { kind: 'comment', text: '# 3 — add MCP tools (same mcpServers file as Cursor / Claude Desktop)' },
-        { kind: 'command', text: 'aigw run --mcp-config mcp-servers.json' },
+        { kind: 'comment', text: '# or run it on its own' },
+        { kind: 'command', text: 'aigw run' },
+        { kind: 'comment', text: '# and send a request from another terminal' },
+        { kind: 'command', text: 'curl http://localhost:1975/v1/chat/completions -H "Content-Type: application/json" \\' },
+        { kind: 'command', text: `  -d '{"model": "gpt-5-mini", "messages": [{"role": "user", "content": "Hello!"}]}'` },
       ],
     },
     {
       id: 'kubernetes',
+      title: 'Production on Kubernetes',
       label: 'On Kubernetes',
       cta: { label: 'Read the guide', to: '/docs/getting-started/' },
+      body:
+        'For production, Agent Router runs on Envoy Gateway in your Kubernetes cluster, with the same configuration you tested on your laptop. Install it with Helm, deploy a gateway, and send your first request.',
       terminal: [
-        { kind: 'comment', text: '# 1 — install the gateway' },
-        { kind: 'command', text: 'helm install aigw oci://docker.io/envoyproxy/ai-gateway-helm \\' },
-        { kind: 'command', text: '  --namespace envoy-ai-gateway-system --create-namespace' },
+        { kind: 'comment', text: '# 1 — install Envoy Gateway and Agent Router' },
+        { kind: 'command', text: `helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm --version v${vars.egVersion} \\` },
+        { kind: 'command', text: '  -n envoy-gateway-system --create-namespace \\' },
+        {
+          kind: 'command',
+          text: `  -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/manifests/envoy-gateway-values.yaml`,
+        },
+        { kind: 'command', text: `helm upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm --version v${vars.aigwVersion} \\` },
+        { kind: 'command', text: '  -n envoy-ai-gateway-system --create-namespace' },
+        { kind: 'command', text: `helm upgrade -i aieg oci://docker.io/envoyproxy/ai-gateway-helm --version v${vars.aigwVersion} \\` },
+        { kind: 'command', text: '  -n envoy-ai-gateway-system --create-namespace' },
+        { kind: 'comment', text: '# wait until the pods in envoy-ai-gateway-system are ready' },
         { kind: 'blank' },
-        { kind: 'comment', text: '# 2 — declare a route' },
-        { kind: 'command', text: 'kubectl apply -f aigatewayroute.yaml' },
+        { kind: 'comment', text: '# 2 — deploy a gateway with a mock model' },
+        {
+          kind: 'command',
+          text: `kubectl apply -f https://raw.githubusercontent.com/theagentrouter/agent-router/${vars.aigwGitRef}/examples/basic/basic.yaml`,
+        },
+        { kind: 'comment', text: '# wait until the gateway pods in envoy-gateway-system are ready' },
         { kind: 'blank' },
         { kind: 'comment', text: '# 3 — send a request' },
-        { kind: 'command', text: 'curl $GATEWAY/v1/chat/completions \\' },
-        { kind: 'command', text: `  -d '{"model": "claude-sonnet-5", "messages": [...]}'` },
+        { kind: 'command', text: 'kubectl port-forward -n envoy-gateway-system $(kubectl get svc -n envoy-gateway-system -o name \\' },
+        { kind: 'command', text: `  -l ${basicGatewaySelector}) 8080:80 &` },
+        { kind: 'command', text: 'curl -sS --retry 60 --retry-all-errors --retry-delay 2 http://localhost:8080/v1/chat/completions \\' },
+        { kind: 'command', text: '  -H "Content-Type: application/json" \\' },
+        {
+          kind: 'command',
+          text: `  -d '{"model": "some-cool-self-hosted-model", "messages": [{"role": "user", "content": "Hello!"}]}'`,
+        },
+      ],
+    },
+    {
+      id: 'python',
+      title: 'Call models from Python',
+      label: 'From Python',
+      cta: { label: 'Read the guide', to: '/docs/python-sdk' },
+      body:
+        'Building an agent in Python? Install the SDK and call OpenAI, Anthropic, Gemini, Bedrock and more with LiteLLM\'s API. On macOS (Apple silicon) and recent Linux, the first call starts Agent Router on your laptop for you. Elsewhere, or for your team, point the same code at a shared gateway with two environment variables.',
+      terminal: [
+        { kind: 'comment', text: '# 1 — install the Python SDK (it includes the router)' },
+        { kind: 'command', text: 'pip install theagentrouter' },
+        { kind: 'command', text: 'export ANTHROPIC_API_KEY=...' },
+        { kind: 'blank' },
+        { kind: 'comment', text: '# 2 — call a model; the first call starts the router' },
+        { kind: 'command', text: `python -c "import theagentrouter as ar; print(ar.completion(` },
+        { kind: 'command', text: `  model='anthropic/claude-sonnet-5-5',` },
+        { kind: 'command', text: `  messages=[{'role': 'user', 'content': 'Hello!'}]).choices[0].message.content)"` },
       ],
     },
     {
       id: 'hosted',
+      title: 'Nothing to install',
       label: 'Hosted',
       cta: { label: 'Sign in with Google or GitHub', to: 'https://router.tetrate.ai/sign-in' },
+      body:
+        'Skip the install and use Agent Router as a service. Create an API key, then point your agent\'s OpenAI-compatible client at the hosted endpoint.',
       note: 'Hosted service provided by Tetrate. Nothing to install.',
       terminal: [
         { kind: 'comment', text: '# 1 — sign in at router.tetrate.ai and create an API key' },
@@ -172,8 +227,11 @@ export const quickstart = {
         { kind: 'blank' },
         { kind: 'comment', text: '# 3 — send a request' },
         { kind: 'command', text: 'curl $OPENAI_BASE_URL/chat/completions \\' },
-        { kind: 'command', text: '  -H "Authorization: Bearer $OPENAI_API_KEY" \\' },
-        { kind: 'command', text: `  -d '{"model": "claude-sonnet-5", "messages": [...]}'` },
+        { kind: 'command', text: '  -H "Authorization: Bearer $OPENAI_API_KEY" -H "Content-Type: application/json" \\' },
+        {
+          kind: 'command',
+          text: `  -d '{"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "Hello!"}]}'`,
+        },
       ],
     },
   ] satisfies QuickstartTab[],

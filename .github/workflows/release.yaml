@@ -10,8 +10,34 @@ jobs:
     uses: ./.github/workflows/docker_build_job.yaml
     secrets: inherit
 
+  # Run the Gateway API Inference Extension conformance tests against the tagged commit so that every
+  # release ships with a conformance report whose implementation version matches the release tag.
+  inference_extension_conformance:
+    name: Inference Extension Conformance Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+        with:
+          cache: false
+          go-version-file: go.mod
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - run: make test-e2e-inference-extension GO_TEST_E2E_ARGS="-count=1 -timeout 30m -run TestGatewayAPIInferenceExtension"
+        env:
+          # Run against the latest stable Envoy Gateway release, keep in sync with build_and_test.yaml.
+          EG_VERSION: v1.10.0
+      - name: Upload conformance test report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: inference-extension-conformance-test-report
+          path: tests/e2e-inference-extension/inference-extension-conformance-test-report.yaml
+          if-no-files-found: error
+
   release:
-    needs: [docker_push]
+    needs: [docker_push, inference_extension_conformance]
     name: Release
     runs-on: ubuntu-latest
     permissions:
@@ -44,13 +70,28 @@ jobs:
           # which in turn is used by EG's standalone mode used by aigw, so we skip it
           make build.aigw GOOS_LIST="darwin" GOARCH_LIST="arm64"
 
+      - name: Generate checksums for CLI release binaries
+        # Bare file names (no ./out/ prefix), so install.sh and "sha256sum -c" match on the asset name.
+        run: cd ./out && sha256sum aigw-* | tee checksums.txt
+
+      - name: Download conformance test report
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: inference-extension-conformance-test-report
+          path: ./out/conformance
+
+      - name: Rename conformance test report
+        run: mv ./out/conformance/inference-extension-conformance-test-report.yaml ./out/inference-extension-conformance-test-report-${TAG}.yaml
+
       - name: Create a release candidate
         if: ${{ contains(github.ref, '-rc') }}
         run: |
           gh release create $TAG --prerelease --title $TAG --notes "Release candidate" \
             ./out/ai-gateway-crds-helm-${TAG}.tgz \
             ./out/ai-gateway-helm-${TAG}.tgz \
-            ./out/aigw-*
+            ./out/aigw-* \
+            ./out/checksums.txt \
+            ./out/inference-extension-conformance-test-report-${TAG}.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -60,6 +101,8 @@ jobs:
           gh release create $TAG --draft --title $TAG --notes "To be written by the release manager" \
             ./out/ai-gateway-crds-helm-${TAG}.tgz \
             ./out/ai-gateway-helm-${TAG}.tgz \
-            ./out/aigw-*
+            ./out/aigw-* \
+            ./out/checksums.txt \
+            ./out/inference-extension-conformance-test-report-${TAG}.yaml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

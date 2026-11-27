@@ -13,12 +13,15 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
 	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
@@ -26,8 +29,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
@@ -42,10 +47,18 @@ const (
 	routeNotFoundResponseHTTPFilterName = "ai-eg-route-not-found-response"
 	aigatewayUUIDAnnotationKey          = "aigateway.envoyproxy.io/uuid"
 	egAnnotationPrefix                  = "gateway.envoyproxy.io/"
-	// We use this annotation to ensure that Envoy Gateway reconciles the HTTPRoute when the backend refs change.
-	// This will result in metadata being added to the underling Envoy route
-	// @see https://gateway.envoyproxy.io/contributions/design/metadata/
-	httpRouteBackendRefPriorityAnnotationKey           = egAnnotationPrefix + "backend-ref-priority"
+	// backendPriorityHTTPFilterNamePrefix is the name prefix of the HTTPRouteFilters that carry
+	// spec.backendPriority. One such filter exists per distinct priority value in a namespace, shared by
+	// every AIGatewayRoute in that namespace, and named "<prefix><priority>".
+	backendPriorityHTTPFilterNamePrefix = "ai-eg-backend-priority-"
+	// backendPriorityHTTPFilterLabelKey is set on the shared backendPriority HTTPRouteFilters. Its value
+	// is the priority.
+	backendPriorityHTTPFilterLabelKey = "aigateway.envoyproxy.io/backend-priority"
+	// legacyHTTPRouteBackendRefPriorityAnnotationKey is the annotation that older versions stamped on the
+	// generated HTTPRoute to force Envoy Gateway to re-translate on a priority-only change, while the
+	// extension server applied the priority. Priority is now part of the HTTPRoute spec via backendPriority
+	// HTTPRouteFilters, so the annotation is removed from existing HTTPRoutes on reconcile.
+	legacyHTTPRouteBackendRefPriorityAnnotationKey     = egAnnotationPrefix + "backend-ref-priority"
 	httpRouteAnnotationForAIGatewayGeneratedIndication = egAnnotationPrefix + internalapi.AIGatewayGeneratedHTTPRouteAnnotation
 	// httpRouteQuotaPolicyHashAnnotationKey carries a hash of the QuotaPolicies attached to the
 	// AIServiceBackends referenced by this route. QuotaPolicy is an AI Gateway CRD that Envoy Gateway
@@ -128,6 +141,208 @@ func getRouteNotFoundFilterName(baseName string) string {
 	return fmt.Sprintf("%s-%s", routeNotFoundResponseHTTPFilterName, baseName)
 }
 
+// getBackendPriorityFilterName returns the name of the shared HTTPRouteFilter that sets the given
+// backendPriority.
+func getBackendPriorityFilterName(priority int32) string {
+	return backendPriorityHTTPFilterNamePrefix + strconv.Itoa(int(priority))
+}
+
+// backendPriorityFilterRef returns the backendRef filter that references the shared backendPriority
+// HTTPRouteFilter for the given priority.
+func backendPriorityFilterRef(priority int32) gwapiv1.HTTPRouteFilter {
+	return gwapiv1.HTTPRouteFilter{
+		Type: gwapiv1.HTTPRouteFilterExtensionRef,
+		ExtensionRef: &gwapiv1.LocalObjectReference{
+			Group: gwapiv1.Group(egv1a1.GroupVersion.Group),
+			Kind:  gwapiv1.Kind(egv1a1.KindHTTPRouteFilter),
+			Name:  gwapiv1.ObjectName(getBackendPriorityFilterName(priority)),
+		},
+	}
+}
+
+// generateBackendPriorityHTTPRouteFilter returns the shared HTTPRouteFilter that sets the given
+// backendPriority in the given namespace.
+//
+// The filter is not owned by any AIGatewayRoute since it is shared by every AIGatewayRoute in the namespace
+// that uses the same priority; it is tagged with the managed-by label instead, so that it can be told apart
+// from a user-provided HTTPRouteFilter that happens to have the same name.
+func generateBackendPriorityHTTPRouteFilter(namespace string, priority int32) *egv1a1.HTTPRouteFilter {
+	return &egv1a1.HTTPRouteFilter{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      getBackendPriorityFilterName(priority),
+			Namespace: namespace,
+			Labels: map[string]string{
+				managedByLabel:                    managedByValue,
+				backendPriorityHTTPFilterLabelKey: strconv.Itoa(int(priority)),
+			},
+		},
+		Spec: egv1a1.HTTPRouteFilterSpec{BackendPriority: ptr.To(priority)},
+	}
+}
+
+func backendPriorityFromFilterName(name string) (int32, bool) {
+	v, ok := strings.CutPrefix(name, backendPriorityHTTPFilterNamePrefix)
+	if !ok {
+		return 0, false
+	}
+	p, err := strconv.ParseInt(v, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return int32(p), true
+}
+
+// referencedBackendPriorities returns the backendPriority values referenced by the backendRef filters of
+// the given HTTPRoute, in ascending order.
+func referencedBackendPriorities(httpRoute *gwapiv1.HTTPRoute) []int32 {
+	priorities := sets.New[int32]()
+	for i := range httpRoute.Spec.Rules {
+		for j := range httpRoute.Spec.Rules[i].BackendRefs {
+			for _, f := range httpRoute.Spec.Rules[i].BackendRefs[j].Filters {
+				if f.ExtensionRef == nil || string(f.ExtensionRef.Kind) != egv1a1.KindHTTPRouteFilter {
+					continue
+				}
+				if p, ok := backendPriorityFromFilterName(string(f.ExtensionRef.Name)); ok {
+					priorities.Insert(p)
+				}
+			}
+		}
+	}
+	return sets.List(priorities)
+}
+
+// ensureBackendPriorityHTTPRouteFilters creates the shared backendPriority HTTPRouteFilters referenced by
+// the given HTTPRoute if they do not exist yet, and restores a managed one whose spec was edited out of band.
+// This must run before the HTTPRoute is written so that Envoy Gateway never sees a reference to a missing
+// filter, which would invalidate the backendRef.
+func (c *AIGatewayRouteController) ensureBackendPriorityHTTPRouteFilters(ctx context.Context, httpRoute *gwapiv1.HTTPRoute) error {
+	for _, priority := range referencedBackendPriorities(httpRoute) {
+		base := generateBackendPriorityHTTPRouteFilter(httpRoute.Namespace, priority)
+		var f egv1a1.HTTPRouteFilter
+		err := c.client.Get(ctx, client.ObjectKey{Name: base.Name, Namespace: base.Namespace}, &f)
+		switch {
+		case err == nil:
+			if !isManagedBackendPriorityFilter(&f) {
+				return fmt.Errorf("HTTPRouteFilter %s/%s exists but is not managed by the AI Gateway controller",
+					base.Namespace, base.Name)
+			}
+			if !equality.Semantic.DeepEqual(f.Spec, base.Spec) ||
+				f.Labels[backendPriorityHTTPFilterLabelKey] != base.Labels[backendPriorityHTTPFilterLabelKey] {
+				// Every AIGatewayRoute using this priority shares the filter, so an edit changes their failover order.
+				f.Spec = base.Spec
+				f.Labels[backendPriorityHTTPFilterLabelKey] = base.Labels[backendPriorityHTTPFilterLabelKey]
+				if err = c.client.Update(ctx, &f); err != nil {
+					return fmt.Errorf("failed to restore HTTPRouteFilter %s: %w", base.Name, err)
+				}
+				c.logger.Info("Restored HTTPRouteFilter edited out of band", "name", base.Name, "namespace", base.Namespace)
+			}
+		case apierrors.IsNotFound(err):
+			if err = c.client.Create(ctx, base); err != nil && !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("failed to create HTTPRouteFilter %s: %w", base.Name, err)
+			}
+			c.logger.Info("Created HTTPRouteFilter", "name", base.Name, "namespace", base.Namespace)
+		default:
+			return fmt.Errorf("failed to get HTTPRouteFilter %s: %w", base.Name, err)
+		}
+	}
+	return nil
+}
+
+// backendPriorityFilterChangedPredicate passes deletions and updates of the shared backendPriority
+// HTTPRouteFilters, which need the AIGatewayRoutes using them to recreate or restore them.
+func backendPriorityFilterChangedPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(event.CreateEvent) bool { return false },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			// Also pass an update that dropped the managed labels, so that the reconcile reports the filter.
+			return isManagedBackendPriorityFilter(e.ObjectOld) || isManagedBackendPriorityFilter(e.ObjectNew)
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return isManagedBackendPriorityFilter(e.Object) },
+	}
+}
+
+// isManagedBackendPriorityFilter reports whether obj is a shared backendPriority HTTPRouteFilter created by
+// the controller, as opposed to a user-provided one that happens to share the name.
+func isManagedBackendPriorityFilter(obj client.Object) bool {
+	labels := obj.GetLabels()
+	_, ok := labels[backendPriorityHTTPFilterLabelKey]
+	return ok && labels[managedByLabel] == managedByValue
+}
+
+// backendPriorityFilterToAIGatewayRoutes maps a deleted or edited shared backendPriority HTTPRouteFilter to
+// the AIGatewayRoutes in its namespace that use its priority, so that they recreate or restore it.
+func (c *AIGatewayRouteController) backendPriorityFilterToAIGatewayRoutes(ctx context.Context, obj client.Object) []reconcile.Request {
+	priority, ok := backendPriorityFromFilterName(obj.GetName())
+	if !ok {
+		return nil
+	}
+	routes, err := c.aiGatewayRoutesUsingBackendPriority(ctx, obj.GetNamespace(), strconv.Itoa(int(priority)))
+	if err != nil {
+		c.logger.Error(err, "failed to list AIGatewayRoutes using backend priority",
+			"namespace", obj.GetNamespace(), "name", obj.GetName())
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(routes))
+	for i := range routes {
+		reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&routes[i])})
+	}
+	return reqs
+}
+
+// aiGatewayRoutesUsingBackendPriority returns the AIGatewayRoutes in the namespace, other than those being
+// deleted, that have a backendRef with the given priority.
+//
+// This reads the AIGatewayRoutes rather than the generated HTTPRoutes on purpose. An AIGatewayRoute is in
+// the informer cache before it is reconciled, so by the time its reconcile has checked that a filter exists
+// (or created it), any later lookup here sees it. The HTTPRoute that reconcile writes, in contrast, may not
+// have reached the cache yet, and relying on it could delete a filter that has just started being used.
+func (c *AIGatewayRouteController) aiGatewayRoutesUsingBackendPriority(ctx context.Context, namespace, priority string) ([]aigv1b1.AIGatewayRoute, error) {
+	var list aigv1b1.AIGatewayRouteList
+	if err := c.client.List(ctx, &list, client.InNamespace(namespace),
+		client.MatchingFields{k8sClientIndexAIGatewayRouteToBackendPriority: priority}); err != nil {
+		return nil, err
+	}
+	routes := list.Items[:0]
+	for i := range list.Items {
+		if list.Items[i].DeletionTimestamp.IsZero() {
+			routes = append(routes, list.Items[i])
+		}
+	}
+	return routes, nil
+}
+
+// deleteUnusedBackendPriorityHTTPRouteFilters deletes the shared backendPriority HTTPRouteFilters in the
+// namespace whose priority no AIGatewayRoute uses any more.
+func (c *AIGatewayRouteController) deleteUnusedBackendPriorityHTTPRouteFilters(ctx context.Context, namespace string) error {
+	var filters egv1a1.HTTPRouteFilterList
+	if err := c.client.List(ctx, &filters, client.InNamespace(namespace),
+		client.MatchingLabels{managedByLabel: managedByValue}, client.HasLabels{backendPriorityHTTPFilterLabelKey}); err != nil {
+		return fmt.Errorf("failed to list backendPriority HTTPRouteFilters: %w", err)
+	}
+	for i := range filters.Items {
+		f := &filters.Items[i]
+		priority, ok := backendPriorityFromFilterName(f.Name)
+		if !ok {
+			continue
+		}
+		routes, err := c.aiGatewayRoutesUsingBackendPriority(ctx, namespace, strconv.Itoa(int(priority)))
+		if err != nil {
+			return fmt.Errorf("failed to list AIGatewayRoutes using HTTPRouteFilter %s: %w", f.Name, err)
+		}
+		if len(routes) > 0 {
+			continue
+		}
+		if err = c.client.Delete(ctx, f); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("failed to delete HTTPRouteFilter %s: %w", f.Name, err)
+		}
+		if err == nil {
+			c.logger.Info("Deleted unused HTTPRouteFilter", "name", f.Name, "namespace", namespace)
+		}
+	}
+	return nil
+}
+
 // generateHTTPRouteFilters returns two HTTPRouteFilter with the given AIGatewayRoute.
 func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.HTTPRouteFilter {
 	ns := aiGatewayRoute.Namespace
@@ -173,7 +388,20 @@ func generateHTTPRouteFilters(aiGatewayRoute *aigv1b1.AIGatewayRoute) []*egv1a1.
 // syncAIGatewayRoute is the main logic for reconciling the AIGatewayRoute resource.
 // This is decoupled from the Reconcile method to centralize the error handling and status updates.
 func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) error {
-	if handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.syncGateways) { // Propagate the AIGatewayRoute deletion all the way up to relevant Gateways.
+	// Delete the shared backendPriority HTTPRouteFilters that no other AIGatewayRoute uses before the finalizer
+	// is removed. They have no owner, and once this AIGatewayRoute is gone nothing guarantees another reconcile
+	// in the namespace, so a failure is returned here to keep the finalizer and retry.
+	if !aiGatewayRoute.DeletionTimestamp.IsZero() && ctrlutil.ContainsFinalizer(aiGatewayRoute, aiGatewayControllerFinalizer) {
+		if err := c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace); err != nil {
+			return err
+		}
+	}
+	// Propagate the AIGatewayRoute deletion all the way up to relevant Gateways.
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, aiGatewayRoute, c.syncGateways)
+	if err != nil {
+		return err
+	}
+	if onDelete {
 		return nil
 	}
 
@@ -181,7 +409,7 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 	filters := generateHTTPRouteFilters(aiGatewayRoute)
 	for _, base := range filters {
 		var f egv1a1.HTTPRouteFilter
-		if err := c.client.Get(ctx, client.ObjectKey{Name: base.Name, Namespace: base.Namespace}, &f); err != nil {
+		if err = c.client.Get(ctx, client.ObjectKey{Name: base.Name, Namespace: base.Namespace}, &f); err != nil {
 			if apierrors.IsNotFound(err) {
 				if err = ctrlutil.SetControllerReference(aiGatewayRoute, base, c.client.Scheme()); err != nil {
 					panic(fmt.Errorf("BUG: failed to set controller reference for HTTPRouteFilter: %w", err))
@@ -200,7 +428,7 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 	// Check if the HTTPRoute exists.
 	c.logger.Info("syncing AIGatewayRoute", "namespace", aiGatewayRoute.Namespace, "name", aiGatewayRoute.Name)
 	var httpRoute gwapiv1.HTTPRoute
-	err := c.client.Get(ctx, client.ObjectKey{Name: aiGatewayRoute.Name, Namespace: aiGatewayRoute.Namespace}, &httpRoute)
+	err = c.client.Get(ctx, client.ObjectKey{Name: aiGatewayRoute.Name, Namespace: aiGatewayRoute.Namespace}, &httpRoute)
 	existingRoute := err == nil
 	if apierrors.IsNotFound(err) {
 		// This means that this AIGatewayRoute is a new one.
@@ -237,6 +465,10 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 	// is still returned at the end so the caller marks the AIGatewayRoute NotAccepted as before.
 	newHTTPRouteErr := c.newHTTPRoute(ctx, &httpRoute, aiGatewayRoute)
 
+	if err = c.ensureBackendPriorityHTTPRouteFilters(ctx, &httpRoute); err != nil {
+		return err
+	}
+
 	if existingRoute {
 		c.logger.Info("updating HTTPRoute", "namespace", httpRoute.Namespace, "name", httpRoute.Name)
 		if err = c.client.Update(ctx, &httpRoute); err != nil {
@@ -247,6 +479,12 @@ func (c *AIGatewayRouteController) syncAIGatewayRoute(ctx context.Context, aiGat
 		if err = c.client.Create(ctx, &httpRoute); err != nil {
 			return fmt.Errorf("failed to create HTTPRoute: %w", err)
 		}
+	}
+
+	// Delete the shared backendPriority HTTPRouteFilters that no AIGatewayRoute in the namespace uses any more.
+	// This runs after the HTTPRoute is written so that it never references a deleted filter.
+	if err = c.deleteUnusedBackendPriorityHTTPRouteFilters(ctx, aiGatewayRoute.Namespace); err != nil {
+		return err
 	}
 
 	if err = c.syncGateways(ctx, aiGatewayRoute); err != nil {
@@ -282,7 +520,7 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 		for j := range rule.BackendRefs {
 			br := &rule.BackendRefs[j]
 			backendNamespace := br.GetNamespace(aiGatewayRoute.Namespace)
-			dstName := fmt.Sprintf("%s.%s", br.Name, backendNamespace)
+			dstName := namespacedNameIndexKey(br.Name, backendNamespace)
 
 			if br.IsInferencePool() {
 				// Handle InferencePool backend reference, honoring the (optionally cross-namespace)
@@ -335,12 +573,24 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 					backendObjRef.Namespace = &ns
 				}
 
-				backendRefs = append(backendRefs,
-					gwapiv1.HTTPBackendRef{BackendRef: gwapiv1.BackendRef{
-						BackendObjectReference: backendObjRef,
-						Weight:                 br.Weight,
-					}},
-				)
+				httpBackendRef := gwapiv1.HTTPBackendRef{BackendRef: gwapiv1.BackendRef{
+					BackendObjectReference: backendObjRef,
+					Weight:                 br.Weight,
+				}}
+				// Set the priority through Envoy Gateway's backendPriority HTTPRouteFilter, so that Envoy
+				// Gateway sets the locality priority of this backendRef's endpoints during its own
+				// translation (and keeps the rule out of MergeBackends). A priority change changes the
+				// referenced filter, so it also changes the HTTPRoute and triggers a re-translation.
+				//
+				// Priority 0 is Envoy Gateway's default, so it gets no filter. That leaves the priority derived
+				// from the referenced Backend's spec.fallback in effect, which only a non-zero priority
+				// overrides. It also keeps rules without priorities eligible for MergeBackends, which Envoy
+				// Gateway disables for any rule with a backendPriority filter.
+				if p := ptr.Deref(br.Priority, 0); p != 0 {
+					// #nosec G115 -- bounded by the CRD maximum of 128.
+					httpBackendRef.Filters = []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(int32(p))}
+				}
+				backendRefs = append(backendRefs, httpBackendRef)
 			}
 		}
 		var matches []gwapiv1.HTTPRouteMatch
@@ -392,10 +642,13 @@ func (c *AIGatewayRouteController) newHTTPRoute(ctx context.Context, dst *gwapiv
 		dst.Annotations[k] = v
 	}
 
-	// HACK: We need to set an annotation so that Envoy Gateway reconciles the HTTPRoute when the backend refs change.
-	dst.Annotations[httpRouteBackendRefPriorityAnnotationKey] = buildPriorityAnnotation(aiGatewayRoute.Spec.Rules)
+	// Drop the annotation stamped by older versions. See legacyHTTPRouteBackendRefPriorityAnnotationKey.
+	//
+	// TODO: remove this, along with legacyHTTPRouteBackendRefPriorityAnnotationKey, one release after the
+	// backendPriority HTTPRouteFilter migration ships, together with applyLegacyBackendRefPriority in the
+	// extension server, e.g. keep it in v1.4 (which introduces the migration) and remove it in v1.5.
+	delete(dst.Annotations, legacyHTTPRouteBackendRefPriorityAnnotationKey)
 	dst.Annotations[httpRouteAnnotationForAIGatewayGeneratedIndication] = "true"
-
 	// HACK: Stamp a hash of the QuotaPolicies affecting this route's backends so that a QuotaPolicy
 	// change (which Envoy Gateway does not watch) actually mutates the HTTPRoute, forcing Envoy Gateway
 	// to re-translate and re-run PostTranslateModify. See httpRouteQuotaPolicyHashAnnotationKey.
@@ -488,6 +741,9 @@ func (c *AIGatewayRouteController) validateAndGetBackend(
 
 // updateAIGatewayRouteStatus updates the status of the AIGatewayRoute.
 func (c *AIGatewayRouteController) updateAIGatewayRouteStatus(ctx context.Context, route *aigv1b1.AIGatewayRoute, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := route.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -496,7 +752,7 @@ func (c *AIGatewayRouteController) updateAIGatewayRouteStatus(ctx context.Contex
 			return err
 		}
 
-		route.Status.Conditions = newConditions(conditionType, message)
+		route.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, route)
 	})
 	if err != nil {
@@ -504,87 +760,116 @@ func (c *AIGatewayRouteController) updateAIGatewayRouteStatus(ctx context.Contex
 	}
 }
 
-// computeQuotaPolicyHash returns a stable, short hash of all QuotaPolicies attached to the
-// AIServiceBackends referenced by the given AIGatewayRoute. The hash covers each applicable
-// QuotaPolicy's namespace/name and full spec, so both value-only changes (e.g. a limit bump) and
-// structural changes (e.g. adding a model or bucket rule) produce a new hash. It returns an empty
-// string when no QuotaPolicy applies to the route. See httpRouteQuotaPolicyHashAnnotationKey.
-func (c *AIGatewayRouteController) computeQuotaPolicyHash(ctx context.Context, aiGatewayRoute *aigv1b1.AIGatewayRoute) (string, error) {
-	// Deduplicate policies across rules/backends by namespace/name.
-	seen := make(map[string]*aigv1a1.QuotaPolicy)
-	for i := range aiGatewayRoute.Spec.Rules {
-		rule := &aiGatewayRoute.Spec.Rules[i]
-		for j := range rule.BackendRefs {
-			br := &rule.BackendRefs[j]
-			// QuotaPolicy can only target AIServiceBackends, not InferencePools.
-			if br.IsInferencePool() {
+// computeQuotaPolicyHash returns a stable hash of the effective QuotaPolicies
+// that target AIServiceBackends referenced by this route. The hash is added to
+// the generated HTTPRoute so QuotaPolicy changes force Envoy Gateway to
+// reconcile the route.
+func (c *AIGatewayRouteController) computeQuotaPolicyHash(ctx context.Context, route *aigv1b1.AIGatewayRoute) (string, error) {
+	policies, err := c.fetchEffectiveQuotaPoliciesForRoute(ctx, route)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch effective QuotaPolicies for route %s/%s: %w", route.Namespace, route.Name, err)
+	}
+	hash, err := hashQuotaPolicies(policies)
+	if err != nil {
+		return "", fmt.Errorf("failed to compute QuotaPolicy hash for route %s/%s: %w", route.Namespace, route.Name, err)
+	}
+	return hash, nil
+}
+
+// fetchEffectiveQuotaPoliciesForRoute returns the non-deleting QuotaPolicies
+// targeting the AIServiceBackends referenced by route. Each policy contains
+// only the target references that are valid for the policy's namespace.
+func (c *AIGatewayRouteController) fetchEffectiveQuotaPoliciesForRoute(
+	ctx context.Context,
+	route *aigv1b1.AIGatewayRoute,
+) ([]*aigv1a1.QuotaPolicy, error) {
+	seenPolicies := make(map[string]*aigv1a1.QuotaPolicy)
+	processedPolicies := make(map[string]struct{})
+	seenBackendKeys := make(map[string]bool)
+	grantCache := make(map[string]bool)
+	for i := range route.Spec.Rules {
+		for j := range route.Spec.Rules[i].BackendRefs {
+			ref := &route.Spec.Rules[i].BackendRefs[j]
+			if ref.IsInferencePool() {
 				continue
 			}
-			backendNamespace := br.GetNamespace(aiGatewayRoute.Namespace)
-			// The QuotaPolicy targetRefs index key is "<targetRef.Name>.<quotaPolicy.Namespace>", and a
-			// QuotaPolicy (LocalPolicyTargetReference) can only target a backend in its own namespace, so
-			// the backend's namespace is also the QuotaPolicy's namespace.
-			key := namespacedNameIndexKey(br.Name, backendNamespace)
+			backendNamespace := ref.GetNamespace(route.Namespace)
+			key := namespacedNameIndexKey(ref.Name, backendNamespace)
+			if seenBackendKeys[key] {
+				continue
+			}
+			seenBackendKeys[key] = true
+
 			var policies aigv1a1.QuotaPolicyList
 			if err := c.client.List(ctx, &policies,
 				client.MatchingFields{k8sClientIndexAIServiceBackendToTargetingQuotaPolicy: key}); err != nil {
-				return "", fmt.Errorf("failed to list QuotaPolicies for backend %s: %w", key, err)
+				return nil, fmt.Errorf("failed to list QuotaPolicies for backend %s: %w", key, err)
 			}
 			for k := range policies.Items {
-				p := &policies.Items[k]
-				// Skip QuotaPolicies that are being deleted. During a deletion the finalizer callback
-				// notifies routes while the terminating policy may still be listable from the cache; if we
-				// counted it, the recomputed hash would be unchanged, the HTTPRoute update would be a no-op,
-				// and Envoy Gateway would not re-translate. Treating a terminating policy as already-absent
-				// makes the hash change deterministically, regardless of whether the cache has dropped it yet.
-				if !p.DeletionTimestamp.IsZero() {
+				policy := &policies.Items[k]
+				if !policy.DeletionTimestamp.IsZero() {
 					continue
 				}
-				seen[p.Namespace+"/"+p.Name] = p
+				policyKey := NamespacedNameKey(policy.Namespace, policy.Name)
+				if _, processed := processedPolicies[policyKey]; processed {
+					continue
+				}
+				processedPolicies[policyKey] = struct{}{}
+				effective := policy.DeepCopy()
+				effective.Spec.TargetRefs = make([]gwapiv1a2.NamespacedPolicyTargetReference, 0, len(policy.Spec.TargetRefs))
+				for _, target := range policy.Spec.TargetRefs {
+					targetNamespace := TargetNamespace(target, policy.Namespace)
+					grantKey := policy.Namespace + "\x00" + targetNamespace + "\x00" + string(target.Name)
+					allowed, ok := grantCache[grantKey]
+					if !ok {
+						allowed = c.referenceGrantValidator.validateQuotaPolicyAIServiceBackendReference(
+							ctx, policy.Namespace, targetNamespace, string(target.Name)) == nil
+						grantCache[grantKey] = allowed
+					}
+					if !allowed {
+						continue
+					}
+					effective.Spec.TargetRefs = append(effective.Spec.TargetRefs, target)
+				}
+				if len(effective.Spec.TargetRefs) > 0 {
+					seenPolicies[policyKey] = effective
+				}
 			}
 		}
 	}
-	if len(seen) == 0 {
+	policies := make([]*aigv1a1.QuotaPolicy, 0, len(seenPolicies))
+	for _, policy := range seenPolicies {
+		policies = append(policies, policy)
+	}
+	return policies, nil
+}
+
+// hashQuotaPolicies returns a stable 16-character SHA-256 hash of policies.
+// The input policies are not modified.
+func hashQuotaPolicies(policies []*aigv1a1.QuotaPolicy) (string, error) {
+	if len(policies) == 0 {
 		return "", nil
 	}
-
-	keys := make([]string, 0, len(seen))
-	for k := range seen {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	// hashedPolicy is a stable, minimal projection of a QuotaPolicy used only for hashing.
+	ordered := append([]*aigv1a1.QuotaPolicy(nil), policies...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Namespace != ordered[j].Namespace {
+			return ordered[i].Namespace < ordered[j].Namespace
+		}
+		return ordered[i].Name < ordered[j].Name
+	})
 	type hashedPolicy struct {
 		Namespace string                  `json:"namespace"`
 		Name      string                  `json:"name"`
 		Spec      aigv1a1.QuotaPolicySpec `json:"spec"`
 	}
-	hashed := make([]hashedPolicy, 0, len(keys))
-	for _, k := range keys {
-		p := seen[k]
-		hashed = append(hashed, hashedPolicy{Namespace: p.Namespace, Name: p.Name, Spec: p.Spec})
+	hashed := make([]hashedPolicy, 0, len(ordered))
+	for _, policy := range ordered {
+		hashed = append(hashed, hashedPolicy{Namespace: policy.Namespace, Name: policy.Name, Spec: policy.Spec})
 	}
-	marshaled, err := stdjson.Marshal(hashed)
+	data, err := stdjson.Marshal(hashed)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal QuotaPolicies for hashing: %w", err)
 	}
-	sum := sha256.Sum256(marshaled)
+	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:8]), nil
-}
-
-// Build an annotation that contains the priority of each backend ref. This is used to ensure Envoy Gateway reconciles the
-// HTTP route when the priorities change.
-func buildPriorityAnnotation(rules []aigv1b1.AIGatewayRouteRule) string {
-	priorities := make([]string, 0, len(rules))
-	for i, rule := range rules {
-		for _, br := range rule.BackendRefs {
-			var priority uint32
-			if br.Priority != nil {
-				priority = *br.Priority
-			}
-			priorities = append(priorities, fmt.Sprintf("%d:%s:%d", i, br.Name, priority))
-		}
-	}
-	return strings.Join(priorities, ",")
 }

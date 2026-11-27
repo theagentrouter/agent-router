@@ -22,6 +22,8 @@ import (
 
 func Test_doMain(t *testing.T) {
 	internaltesting.ClearTestEnv(t)
+	// Don't pick up a config.yaml saved in the real config home.
+	t.Setenv("AIGW_CONFIG_HOME", t.TempDir())
 	tests := []struct {
 		name         string
 		args         []string
@@ -62,6 +64,19 @@ Commands:
 
   download-envoy [flags]
     Download Envoy binary for the Envoy Gateway default version.
+
+  claude [<args> ...] [flags]
+    Run Claude Code through Agent Router, starting it in the background if
+    needed.
+
+  codex [<args> ...] [flags]
+    Run Codex through Agent Router, starting it in the background if needed.
+
+  status [flags]
+    Show the Agent Router started by "aigw claude" or "aigw codex".
+
+  stop [flags]
+    Stop the Agent Router started by "aigw claude" or "aigw codex".
 
 Run "aigw <command> --help" for more information on a command.
 `,
@@ -147,6 +162,9 @@ Flags:
       --mcp-session-encryption-iterations=100000
                               Number of iterations for MCP session encryption
                               key derivation.
+      --file-id-encryption-iterations=100000
+                              Number of iterations for Files/Batch API id
+                              encryption key derivation.
 `,
 			expPanicCode: ptr.To(0),
 		},
@@ -406,7 +424,7 @@ func TestCmdRun_Validate(t *testing.T) {
 			name:          "no config and no env vars",
 			path:          "",
 			envVars:       map[string]string{},
-			expectedError: "you must supply at least OPENAI_API_KEY, AZURE_OPENAI_API_KEY, ANTHROPIC_API_KEY, or a config file path",
+			expectedError: errNoConfig.Error(),
 		},
 		{
 			name:    "config path provided",

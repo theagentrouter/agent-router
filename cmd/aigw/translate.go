@@ -146,7 +146,7 @@ func collectObjects(yamlInput string, out io.Writer, logger *slog.Logger) (
 			return
 		}
 		// Deduplicate objects, skipping if already seen.
-		key := fmt.Sprintf("%s/%s", obj.GetKind(), obj.GetName())
+		key := fmt.Sprintf("%s/%s/%s", obj.GetKind(), obj.GetNamespace(), obj.GetName())
 		if _, ok := exists[key]; !ok {
 			exists[key] = struct{}{}
 		} else {
@@ -244,7 +244,7 @@ func translateCustomResourceObjects(
 	// This mirrors the production code at controller/controller.go:128
 	const eventChanBuffer = 100
 	bspC := controller.NewBackendSecurityPolicyController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),
-		make(chan event.GenericEvent, eventChanBuffer), make(chan event.GenericEvent, eventChanBuffer))
+		make(chan event.GenericEvent, eventChanBuffer), make(chan event.GenericEvent, eventChanBuffer), controller.DefaultPreRotationWindow)
 	aisbC := controller.NewAIServiceBackendController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),
 		make(chan event.GenericEvent, eventChanBuffer))
 	airC := controller.NewAIGatewayRouteController(fakeClient, fakeClientSet, logr.FromSlogHandler(logger.Handler()),
@@ -259,7 +259,7 @@ func translateCustomResourceObjects(
 		}, &controller.Options{
 			ExtProcImage:    "docker.io/envoyproxy/ai-gateway-extproc:latest",
 			ExtProcLogLevel: "debug",
-		}, false,
+		}, false, nil,
 	)
 	// Pre-create Gateways (without reconciling) before reconciling resources so that
 	// syncGateways can resolve the parent Gateway via the fake client.

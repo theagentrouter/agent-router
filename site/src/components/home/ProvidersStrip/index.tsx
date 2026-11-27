@@ -1,5 +1,6 @@
 import React from 'react';
-import { providers } from '@site/src/data/home/providers';
+import Link from '@docusaurus/Link';
+import { providers, providersLink } from '@site/src/data/home/providers';
 import styles from './styles.module.css';
 
 export default function ProvidersStrip(): React.ReactElement {
@@ -21,6 +22,9 @@ export default function ProvidersStrip(): React.ReactElement {
             />
           ))}
         </div>
+        <p className={styles.ctaLine}>
+          <Link to={providersLink.to}>{providersLink.label}</Link>
+        </p>
       </div>
     </section>
   );

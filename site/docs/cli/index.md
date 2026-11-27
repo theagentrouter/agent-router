@@ -1,7 +1,7 @@
 ---
 id: cli
 title: "Agent Router CLI"
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Agent Router CLI (aigw)

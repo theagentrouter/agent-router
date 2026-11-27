@@ -30,8 +30,16 @@ import (
 )
 
 const (
+	// mcpProxyBackendDummyIP is the placeholder address of the generated MCP proxy Backend.
+	//
+	// A Backend can only point at a real address, so there is no way to say "forward to a port
+	// in my own pod". It names an address from the RFC 5737 TEST-NET-1 documentation range
+	// instead, which routes nowhere. Envoy Gateway turns it into a cluster and the extension
+	// server rewrites that cluster to reach the in-process proxy on localhost. A cluster that
+	// escapes the rewrite would hang until the request timed out; see
+	// clusterTargetsMCPProxyBackend in internal/extensionserver.
+	mcpProxyBackendDummyIP = "192.0.2.42"
 	defaultMCPPath         = "/mcp"
-	mcpProxyBackendDummyIP = "192.0.2.42" // RFC 5737 TEST-NET-2, used as a dummy IP.
 )
 
 // MCPRouteController implements [reconcile.TypedReconciler].
@@ -88,14 +96,18 @@ func (c *MCPRouteController) Reconcile(ctx context.Context, req reconcile.Reques
 func (c *MCPRouteController) syncMCPRoute(ctx context.Context, mcpRoute *aigv1b1.MCPRoute) error {
 	// On deletion, propagate to the referenced Gateways and clean up the shared Backend if this
 	// is the last MCPRoute in the namespace.
-	if handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted) {
+	onDelete, err := handleFinalizer(ctx, c.client, c.logger, mcpRoute, c.onMCPRouteDeleted)
+	if err != nil {
+		return err
+	}
+	if onDelete {
 		return nil
 	}
 
 	// Validate prefixMode=Never (whether set per-backend or inherited from the route-level
 	// default): each effectively-Never backend must declare toolSelector.include, and tool
 	// names must be unique across all effectively-Never backends on the route.
-	if err := validatePerBackendPrefixMode(mcpRoute); err != nil {
+	if err = validatePerBackendPrefixMode(mcpRoute); err != nil {
 		return err
 	}
 
@@ -266,15 +278,11 @@ func (c *MCPRouteController) deleteOrphanedPerBackendResources(ctx context.Conte
 			return fmt.Errorf("failed to delete orphaned HTTPRouteFilter %s: %w", filterName, err)
 		}
 
-		// Credential secrets are only created for backends with secretRef-based API keys, but we
-		// unconditionally attempt the delete to avoid an extra GET call.
+		// Credential secrets are only created for backends with secretRef-based API keys. Only
+		// delete the Secret if it is controlled by this MCPRoute.
 		credSecretName := internalapi.MCPPerBackendCredentialSecretPrefix + strings.TrimPrefix(name, internalapi.MCPPerBackendRefHTTPRoutePrefix)
-		if err := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, credSecretName, metav1.DeleteOptions{}); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return fmt.Errorf("failed to delete orphaned credential secret %s: %w", credSecretName, err)
-			}
-		} else {
-			c.logger.Info("Deleted orphaned credential secret", "namespace", mcpRoute.Namespace, "name", credSecretName)
+		if err := c.deleteOwnedCredentialSecret(ctx, mcpRoute, credSecretName); err != nil {
+			return fmt.Errorf("failed to delete orphaned credential secret %s: %w", credSecretName, err)
 		}
 	}
 	return nil
@@ -333,13 +341,16 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 
 	// Add OAuth metadata endpoints if authentication is configured.
 	if mcpRoute.Spec.SecurityPolicy != nil && mcpRoute.Spec.SecurityPolicy.OAuth != nil {
-		// OAuth 2.0 Protected Resource Metadata (RFC 9728) - serve in both root and suffix paths because different clients
-		// may expect either.
-		// TODO: only one MCPRoute targeting the same listener can be configured with OAuth due to the fixed well-known path.
-		httpRouteFilterName := oauthProtectedResourceMetadataName(mcpRoute.Name)
-
+		// OAuth 2.0 Protected Resource Metadata (RFC 9728).
+		//
+		// Served by the MCP proxy rather than by a static direct response. When
+		// protectedResourceMetadata.resource is omitted, the identifier is derived from the
+		// request, which a direct response body cannot do. A pinned resource is served the
+		// same way. The well-known path includes this route's serving path, so MCPRoutes on
+		// one listener can each configure OAuth as long as those paths differ.
+		//
 		// Suffix path: /.well-known/oauth-protected-resource{pathPrefix} (if pathPrefix exists).
-		protectedResourceSuffixPath := fmt.Sprintf("/.well-known/oauth-protected-resource%s", strings.TrimSuffix(servingPath, "/"))
+		protectedResourceSuffixPath := fmt.Sprintf("%s%s", internalapi.OAuthProtectedResourceMetadataPath, strings.TrimSuffix(servingPath, "/"))
 		protectedResourceSuffixRule := gwapiv1.HTTPRouteRule{
 			Name: ptr.To(gwapiv1.SectionName("oauth-protected-resource-metadata")),
 			Matches: []gwapiv1.HTTPRouteMatch{
@@ -351,13 +362,31 @@ func (c *MCPRouteController) newMainHTTPRoute(dst *gwapiv1.HTTPRoute, mcpRoute *
 					Headers: mcpRoute.Spec.Headers,
 				},
 			},
+			BackendRefs: []gwapiv1.HTTPBackendRef{
+				{
+					BackendRef: gwapiv1.BackendRef{
+						BackendObjectReference: gwapiv1.BackendObjectReference{
+							Group:     ptr.To(gwapiv1.Group("gateway.envoyproxy.io")),
+							Kind:      ptr.To(gwapiv1.Kind("Backend")),
+							Name:      gwapiv1.ObjectName(backendName),
+							Namespace: ptr.To(gwapiv1.Namespace(mcpRoute.Namespace)),
+							Port:      ptr.To(gwapiv1.PortNumber(internalapi.MCPProxyPort)),
+						},
+					},
+				},
+			},
+			// The MCP proxy resolves which MCPRoute's OAuth configuration to serve from this
+			// header, exactly as it does for MCP traffic on the main rule.
 			Filters: []gwapiv1.HTTPRouteFilter{
 				{
-					Type: gwapiv1.HTTPRouteFilterExtensionRef,
-					ExtensionRef: &gwapiv1.LocalObjectReference{
-						Group: gwapiv1.Group("gateway.envoyproxy.io"),
-						Kind:  gwapiv1.Kind("HTTPRouteFilter"),
-						Name:  gwapiv1.ObjectName(httpRouteFilterName),
+					Type: gwapiv1.HTTPRouteFilterRequestHeaderModifier,
+					RequestHeaderModifier: &gwapiv1.HTTPHeaderFilter{
+						Set: []gwapiv1.HTTPHeader{
+							{
+								Name:  internalapi.MCPRouteHeader,
+								Value: mcpRouteHeaderValue(mcpRoute),
+							},
+						},
 					},
 				},
 			},
@@ -507,6 +536,9 @@ func (c *MCPRouteController) syncGateway(ctx context.Context, namespace, name st
 
 // updateMCPRouteStatus updates the status of the MCPRoute.
 func (c *MCPRouteController) updateMCPRouteStatus(ctx context.Context, route *aigv1b1.MCPRoute, conditionType string, message string) {
+	// The retry re-reads the object, so record the generation that this reconcile processed
+	// before it, not one edited in the meantime.
+	observedGeneration := route.Generation
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := c.client.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, route); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -515,7 +547,7 @@ func (c *MCPRouteController) updateMCPRouteStatus(ctx context.Context, route *ai
 			return err
 		}
 
-		route.Status.Conditions = newConditions(conditionType, message)
+		route.Status.Conditions = newConditions(observedGeneration, conditionType, message)
 		return c.client.Status().Update(ctx, route)
 	})
 	if err != nil {
@@ -843,9 +875,11 @@ func (c *MCPRouteController) ensureMCPBackendRefHTTPFilter(ctx context.Context, 
 		}
 		// Delete only on credential-injection transitions to avoid per-reconcile Delete calls.
 		if previousCredentialSecretName != "" && previousCredentialSecretName != credentialSecretName {
-			deleteErr := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, previousCredentialSecretName, metav1.DeleteOptions{})
-			if deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
-				return fmt.Errorf("failed to delete stale credential secret %s: %w", previousCredentialSecretName, deleteErr)
+			// The name comes from the existing filter's spec, which is user-editable. Only delete the
+			// Secret if it is controlled by this MCPRoute, so that the controller cannot be used to delete
+			// arbitrary Secrets in the namespace.
+			if err = c.deleteOwnedCredentialSecret(ctx, mcpRoute, previousCredentialSecretName); err != nil {
+				return fmt.Errorf("failed to delete stale credential secret %s: %w", previousCredentialSecretName, err)
 			}
 		}
 
@@ -855,6 +889,35 @@ func (c *MCPRouteController) ensureMCPBackendRefHTTPFilter(ctx context.Context, 
 		if err = c.client.Update(ctx, &existingFilter); err != nil {
 			return fmt.Errorf("failed to update HTTPRouteFilter: %w", err)
 		}
+	}
+	return nil
+}
+
+// deleteOwnedCredentialSecret deletes the named Secret in the MCPRoute's namespace only if it is
+// controlled by the given MCPRoute. Secrets that do not exist or that are not controlled by the
+// MCPRoute are left untouched. The delete uses a UID precondition so that a Secret that is replaced
+// between the read and the delete is never removed.
+func (c *MCPRouteController) deleteOwnedCredentialSecret(ctx context.Context, mcpRoute *aigv1b1.MCPRoute, name string) error {
+	secret, err := c.kube.CoreV1().Secrets(mcpRoute.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !metav1.IsControlledBy(secret, mcpRoute) {
+		c.logger.Info("Skipping deletion of credential secret not controlled by the MCPRoute",
+			"namespace", mcpRoute.Namespace, "name", name, "mcpRoute", mcpRoute.Name)
+		return nil
+	}
+	err = c.kube.CoreV1().Secrets(mcpRoute.Namespace).Delete(ctx, name, metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &secret.UID},
+	})
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+		return err
+	}
+	if err == nil {
+		c.logger.Info("Deleted credential secret", "namespace", mcpRoute.Namespace, "name", name)
 	}
 	return nil
 }

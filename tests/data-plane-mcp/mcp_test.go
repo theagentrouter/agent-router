@@ -10,8 +10,11 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,13 +25,16 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/sets"
 
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
+	"github.com/envoyproxy/ai-gateway/internal/version"
 	"github.com/envoyproxy/ai-gateway/tests/internal/testmcp"
 )
 
@@ -124,6 +130,64 @@ func TestMCP_differentPath(t *testing.T) {
 	t.Run("list", func(t *testing.T) {
 		testListToolsRequireOnlyDumb(t, env)
 	})
+}
+
+// TestMCPBeforeTheFirstConfigLoad starts the external processor on a config bundle whose part does not match the index
+// checksum, as when a pod mounts the bundle while it is being rewritten. The config watcher tolerates that on the
+// initial load and retries on every tick, so MCP requests can arrive before the MCP proxy has any config.
+func TestMCPBeforeTheFirstConfigLoad(t *testing.T) {
+	bundlePath := filepath.Join(t.TempDir(), "extproc-config-bundle")
+	writeBundle := func(content, checksumOf []byte) {
+		part := filterapi.ConfigBundlePart{Name: "config", Path: filterapi.ConfigBundlePartPath(0), SizeBytes: len(content)}
+		partPath := filepath.Join(bundlePath, filepath.FromSlash(part.Path))
+		require.NoError(t, os.MkdirAll(filepath.Dir(partPath), 0o700))
+		require.NoError(t, os.WriteFile(partPath, content, 0o600))
+		indexRaw, err := filterapi.MarshalConfigBundleIndex(&filterapi.ConfigBundleIndex{
+			Checksum: filterapi.ConfigBundleChecksum(checksumOf),
+			Parts:    []filterapi.ConfigBundlePart{part},
+		})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(bundlePath, filterapi.ConfigBundleIndexFileName), indexRaw, 0o600))
+	}
+	writeBundle([]byte("version: "+version.Parse()+"\n"), []byte("something else"))
+
+	// The last -configBundlePath wins, so the external processor reads this bundle instead of the harness's own.
+	env := requireNewMCPEnv(t, false, 120*time.Second, defaultMCPPath, "-configBundlePath", bundlePath)
+	// initialize returns errors rather than failing, as it also runs as the condition of require.EventuallyWithT.
+	initialize := func() (int, string, error) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, env.baseURL, strings.NewReader(
+			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`))
+		if err != nil {
+			return 0, "", err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, "", err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == http.StatusOK {
+			return resp.StatusCode, "", nil // A session can answer with an event stream that stays open: the status is enough.
+		}
+		body, err := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body), err
+	}
+
+	// Until a config is loaded, the MCP proxy answers with a 503 instead of dropping the connection.
+	status, body, err := initialize()
+	require.NoError(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, status, "body: %s", body)
+	require.Contains(t, body, "MCP proxy config is not loaded yet")
+
+	// Once the bundle holds the environment's config, the next watcher tick loads it and sessions can be created.
+	config := []byte(env.env.ExtProcConfig())
+	writeBundle(config, config)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		status, body, err := initialize()
+		assert.NoError(c, err)
+		assert.Equal(c, http.StatusOK, status, "body: %s", body)
+	}, 30*time.Second, 200*time.Millisecond)
 }
 
 func TestMCPAccessLogMetadata(t *testing.T) {
@@ -947,34 +1011,42 @@ func testElicit(t *testing.T, m *mcpEnv) {
 func testNotificationCancelled(t *testing.T, m *mcpEnv) {
 	s := m.newSession(t)
 
-	ctx, cancel := context.WithCancel(t.Context()) //nolint: govet
-	doneCh := make(chan any)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	doneCh := make(chan struct{})
 	go func() {
 		_, _ = s.session.CallTool(ctx, &mcp.CallToolParams{
 			Name:      defaultMCPBackendResourcePrefix + testmcp.ToolDelay.Tool.Name,
-			Arguments: testmcp.ToolDelayArgs{Duration: "1s"},
+			Arguments: testmcp.ToolDelayArgs{Duration: "3s"},
 		})
-		doneCh <- struct{}{}
+		close(doneCh)
 	}()
 
+	// Wait until the tools/call is in flight, then cancel it. A few hundred
+	// microseconds is not enough on a slow runner: the client aborts locally,
+	// the gateway never records a span, and the assertion below fails.
+	const inFlightWait = 500 * time.Millisecond
 	select {
-	case <-time.After(time.Microsecond * 500):
+	case <-time.After(inFlightWait):
 		cancel()
-		// Wait for the goroutine to complete so its span doesn't leak to the next test.
-		<-doneCh
-		// Consume the CallTool span from the cancelled operation.
-		// This span will have an exception event due to cancellation.
-		requireToolSpan(t, m.collector.TakeSpan(), "default-mcp-backend", testmcp.ToolDelay.Tool.Name, false, "context canceled")
-		// we cannot do the test in TearDownSuite,
-		// we need to wait a while for notifications/cancelled,
-		// metric won't be updated if the test exits too early.
-		requireMetricGreaterThan(t, m, "mcp_method_count_total", map[string]string{
-			"mcp_method_name": "notifications/cancelled",
-		}, 0)
 	case <-doneCh:
-		cancel()
 		t.Fatal("CallTool returned before the delay")
 	}
+
+	// Wait for the goroutine to complete so its span doesn't leak to the next test.
+	select {
+	case <-doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for cancelled CallTool to return")
+	}
+	// Consume the CallTool span from the cancelled operation.
+	// This span will have an exception event due to cancellation.
+	requireToolSpan(t, m.collector.TakeSpan(), "default-mcp-backend", testmcp.ToolDelay.Tool.Name, false, "context canceled")
+	// The notifications/cancelled metric is updated asynchronously after the
+	// client reports the cancellation. Exit only after it has been recorded.
+	requireMetricGreaterThan(t, m, "mcp_method_count_total", map[string]string{
+		"mcp_method_name": "notifications/cancelled",
+	}, 0)
 }
 
 func testComplete(t *testing.T, m *mcpEnv) {

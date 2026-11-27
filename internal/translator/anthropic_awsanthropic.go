@@ -18,6 +18,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	anthropicschema "github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
@@ -41,12 +42,19 @@ type anthropicToAWSAnthropicTranslator struct {
 	anthropicBetas   []string
 	betaFilterMode   string
 	betaFilterValues []string
+	// betaFilterSet reports whether the backend configured a headerValueFilters entry for
+	// anthropic-beta. When false, awsBedrockSupportedAnthropicBetas is applied instead.
+	betaFilterSet bool
 }
 
 // awsBedrockSupportedAnthropicBetas is the allowlist of anthropic-beta flags that AWS Bedrock
 // accepts in the anthropic_beta request field. Bedrock rejects the entire request with a 400
 // "invalid beta flag" error if any unrecognized flag is present, so unsupported flags (e.g.
 // ones only the Anthropic API knows) must be stripped rather than forwarded.
+//
+// Deprecated: this is only a fallback for backends that do not configure a headerValueFilters entry
+// for anthropic-beta, and will be removed in a future release. Configure a Denylist or Allowlist
+// filter on the AIServiceBackend instead; once one is configured, this set is not applied.
 //
 // Every entry was confirmed accepted (HTTP 200) by live probes against Bedrock. Notably,
 // prompt-caching-2024-07-31, extended-cache-ttl-2025-04-11, files-api-2025-04-14,
@@ -79,16 +87,18 @@ var awsBedrockSupportedAnthropicBetas = map[string]struct{}{
 // anthropicAPIToBedrockBetaAliases maps anthropic-beta flag names that only the Anthropic API
 // accepts onto the equivalent Bedrock flag name. The same feature is often exposed under
 // different flag names depending on the backend, and clients speaking the Anthropic API
-// dialect (e.g. Claude Code) send the Anthropic API name, which would otherwise be stripped
-// by the allowlist above, silently disabling the gated feature.
+// dialect (e.g. Claude Code) send the Anthropic API name, which Bedrock would reject.
 //
 // advanced-tool-use-2025-11-20 is the Anthropic API umbrella flag for Tool Search,
 // Programmatic Tool Calling and Tool Use Examples. Bedrock supports only Tool Search,
 // exposed under the older-dated tool-search-tool-2025-10-19; the tool type strings
 // (tool_search_tool_regex_20251119 / tool_search_tool_bm25_20251119) are identical on both.
-// The umbrella flag's non-Bedrock-supported siblings are dropped by the allowlist as usual.
+// The umbrella flag's non-Bedrock-supported siblings are forwarded unchanged and must be dropped by
+// the backend's headerValueFilters (or, when none is configured, by the deprecated
+// awsBedrockSupportedAnthropicBetas fallback).
 //
-// Aliases are applied before the allowlist check in SetRequestHeaders.
+// Aliases are applied in SetRequestHeaders, before the headerValueFilters run in RequestBody, so
+// filters have to name the Bedrock-side value.
 var anthropicAPIToBedrockBetaAliases = map[string]string{
 	"advanced-tool-use-2025-11-20": "tool-search-tool-2025-10-19",
 }
@@ -98,21 +108,18 @@ func (a *anthropicToAWSAnthropicTranslator) SetRequestHeaders(headers map[string
 	var anthropicBetas []string
 	seen := map[string]struct{}{}
 	for _, beta := range parseCommaSeparatedHeader(headers, anthropicBetaHeaderName) {
-		// Translate Anthropic-API-only flag names to their Bedrock equivalents
-		// before the allowlist check.
+		// Translate Anthropic-API-only flag names to their Bedrock equivalents.
 		if alias, ok := anthropicAPIToBedrockBetaAliases[beta]; ok {
 			beta = alias
 		}
-		if _, ok := awsBedrockSupportedAnthropicBetas[beta]; ok {
-			// An alias can collide with an explicitly sent flag (e.g. both
-			// advanced-tool-use-2025-11-20 and tool-search-tool-2025-10-19);
-			// forward each Bedrock flag only once.
-			if _, dup := seen[beta]; dup {
-				continue
-			}
-			seen[beta] = struct{}{}
-			anthropicBetas = append(anthropicBetas, beta)
+		// An alias can collide with an explicitly sent flag (e.g. both
+		// advanced-tool-use-2025-11-20 and tool-search-tool-2025-10-19);
+		// forward each Bedrock flag only once.
+		if _, dup := seen[beta]; dup {
+			continue
 		}
+		seen[beta] = struct{}{}
+		anthropicBetas = append(anthropicBetas, beta)
 	}
 	a.anthropicBetas = anthropicBetas
 }
@@ -122,15 +129,52 @@ func (a *anthropicToAWSAnthropicTranslator) SetRequestHeaders(headers map[string
 // to be mirrored into the body's anthropic_beta field by RequestBody below. Filters on any other
 // header are applied by Envoy's header mutation instead.
 //
-// This filter runs on top of the awsBedrockSupportedAnthropicBetas allowlist applied in
-// SetRequestHeaders: that allowlist is the static, code-level set of flags Bedrock is known to
-// accept, while this is the operator's per-backend policy over what remains.
+// Bedrock rejects the entire request with a 400 "invalid beta flag" error if any unrecognized flag
+// is present, so flags Bedrock does not support must be dropped by this filter. It sees the values
+// after anthropicAPIToBedrockBetaAliases has been applied. Once set, it replaces the deprecated
+// awsBedrockSupportedAnthropicBetas fallback rather than running on top of it.
 func (a *anthropicToAWSAnthropicTranslator) SetHeaderValueFilter(name, mode string, values []string) {
 	if !strings.EqualFold(name, anthropicBetaHeaderName) {
 		return
 	}
 	a.betaFilterMode = mode
 	a.betaFilterValues = values
+	a.betaFilterSet = true
+}
+
+// ResponseError implements [AnthropicMessagesTranslator.ResponseError].
+//
+// Bedrock rejects a Messages request with its own JSON error body ({"message": ...}), which the embedded passthrough
+// translator would hand to the client as is. A JSON body that already is an Anthropic error envelope passes
+// through; any other JSON body is wrapped in one, using Bedrock's message when it has one and the raw body
+// otherwise. Non-JSON bodies are handled by the embedded translator.
+func (a *anthropicToAWSAnthropicTranslator) ResponseError(respHeaders map[string]string, body io.Reader) (
+	newHeaders []internalapi.Header, mutatedBody []byte, err error,
+) {
+	if !strings.Contains(respHeaders[contentTypeHeaderName], jsonContentType) {
+		return a.anthropicToAnthropicTranslator.ResponseError(respHeaders, body)
+	}
+	return bedrockJSONErrorToAnthropic(respHeaders[statusHeaderName], body)
+}
+
+// bedrockJSONErrorToAnthropic wraps a Bedrock JSON error body in an Anthropic error envelope. A body that already is
+// one passes through untouched.
+func bedrockJSONErrorToAnthropic(statusCode string, body io.Reader) (newHeaders []internalapi.Header, mutatedBody []byte, err error) {
+	buf, err := io.ReadAll(body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read error body: %w", err)
+	}
+	var anthropicError anthropicschema.ErrorResponse
+	if json.Unmarshal(buf, &anthropicError) == nil && anthropicError.Type == "error" &&
+		(anthropicError.Error.Type != "" || anthropicError.Error.Message != "") {
+		return nil, nil, nil
+	}
+	message := string(buf)
+	var bedrockError awsbedrock.BedrockException
+	if json.Unmarshal(buf, &bedrockError) == nil && bedrockError.Message != "" {
+		message = bedrockError.Message
+	}
+	return anthropicErrorResponse(statusCode, message)
 }
 
 // ResponseHeaders implements [AnthropicMessagesTranslator.ResponseHeaders].
@@ -167,7 +211,19 @@ func (a *anthropicToAWSAnthropicTranslator) RequestBody(rawBody []byte, body *an
 	newBody, _ = sjson.DeleteBytesOptions(newBody, "model", sjsonOptionsInPlace)
 	newBody, _ = sjson.DeleteBytesOptions(newBody, "stream", sjsonOptionsInPlace)
 
-	betas, betasChanged := filterHeaderValues(a.anthropicBetas, a.betaFilterMode, a.betaFilterValues)
+	var betas []string
+	var betasChanged bool
+	if a.betaFilterSet {
+		betas, betasChanged = filterHeaderValues(a.anthropicBetas, a.betaFilterMode, a.betaFilterValues)
+	} else {
+		// Deprecated fallback: only the body is filtered here, matching the behavior before
+		// headerValueFilters existed.
+		for _, beta := range a.anthropicBetas {
+			if _, ok := awsBedrockSupportedAnthropicBetas[beta]; ok {
+				betas = append(betas, beta)
+			}
+		}
+	}
 	if len(betas) > 0 {
 		newBody, err = sjson.SetBytesOptions(newBody, "anthropic_beta", betas, sjsonOptionsInPlace)
 		if err != nil {

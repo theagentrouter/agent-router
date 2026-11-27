@@ -90,16 +90,42 @@ func NewMCPProxy(l *slog.Logger, mcpMetrics metrics.MCPMetrics, tracer tracingap
 				requestHeaders: r.Header,
 				originalPath:   originalPathForRequest(r),
 			}
-			switch r.Method {
-			case http.MethodGet:
-				proxy.serveGET(w, r)
-			case http.MethodPost:
-				proxy.servePOST(w, r)
-			case http.MethodDelete:
-				proxy.serverDELETE(w, r)
+			var serve http.HandlerFunc
+			switch {
+			// The OAuth Protected Resource Metadata document is served from here rather than
+			// as a static direct response so that the resource identifier it advertises can be
+			// derived from the scheme, authority and path the client actually used.
+			case isProtectedResourceMetadataRequest(externalPath(r)):
+				serve = proxy.serveOAuthProtectedResourceMetadata
+			case r.Method == http.MethodGet:
+				// Modern Streamable HTTP removed the GET session stream. Reject
+				// before the legacy handler so a 2026-07-28 client does not get
+				// a confusing "missing session ID" 400.
+				if isModernProtocolVersion(r.Header.Get(mcpProtocolVersionHeader)) {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				serve = proxy.serveGET
+			case r.Method == http.MethodPost:
+				serve = proxy.servePOST
+			case r.Method == http.MethodDelete:
+				// Modern Streamable HTTP removed DELETE session teardown.
+				if isModernProtocolVersion(r.Header.Get(mcpProtocolVersionHeader)) {
+					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+				serve = proxy.serverDELETE
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
 			}
+			// The config bundle watcher tolerates an incomplete bundle on the initial load and retries on the next tick,
+			// so requests can arrive before any config is loaded, when there are no routes to serve them.
+			if !cfg.configLoaded.Load() {
+				http.Error(w, "MCP proxy config is not loaded yet", http.StatusServiceUnavailable)
+				return
+			}
+			serve(w, r)
 		})
 	return cfg, mux, nil
 }
@@ -272,7 +298,7 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 		return nil, errors.New("failed to create MCP session to any backend")
 	}
 
-	encrypted, err := m.sessionCrypto.Encrypt(string(clientToGatewaySessionIDFromEntries(subject, finalEntries, routeName)))
+	encrypted, err := m.currentSessionCrypto().Encrypt(string(clientToGatewaySessionIDFromEntries(subject, finalEntries, routeName)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt session ID: %w", err)
 	}
@@ -302,13 +328,28 @@ func (m *mcpRequestContext) newSession(ctx context.Context, p *mcp.InitializePar
 // resume another user's session and act with its already-initialized backend session(s).
 var errSessionSubjectMismatch = errors.New("session ID was issued for a different authenticated subject")
 
+// errSessionRouteMismatch is returned by sessionFromID when the route embedded in the decrypted
+// session ID does not match the MCPRoute the current request was routed through. Sessions are
+// bound to the route they were created on: the resumed session carries that route's backends,
+// tool selectors and authorization config, and those must only be applied to requests that went
+// through that route's Envoy-side security (e.g. JWT verification). Otherwise a session created
+// on an OAuth-protected route could be resumed through a route without OAuth, where the bearer
+// token and the subject header are not verified, and the protected route's authorization rules
+// would be evaluated against unverified, caller-supplied claims.
+var errSessionRouteMismatch = errors.New("session ID was issued for a different route")
+
 // sessionFromID returns the session with the given ID, or error if not found or invalid.
+//
+// currentRoute is the MCPRoute the current request was routed through (the
+// internalapi.MCPRouteHeader set by the Gateway) and MUST match the route embedded in the session
+// ID, so that a session can only be resumed through the route it was created on.
 //
 // currentSubject is the authenticated subject of the current request (see extractSubject) and
 // MUST be compared against the subject embedded in the session ID to prevent session hijacking:
 // resuming a session must only be allowed for the same authenticated caller that created it.
-func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, lastEvent secureClientToGatewayEventID, currentSubject string) (*session, error) {
-	decrypted, err := m.sessionCrypto.Decrypt(string(id))
+func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, lastEvent secureClientToGatewayEventID, currentRoute filterapi.MCPRouteName, currentSubject string) (*session, error) {
+	sessionCrypto := m.currentSessionCrypto()
+	decrypted, err := sessionCrypto.Decrypt(string(id))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt session ID: %w", err)
 	}
@@ -317,11 +358,14 @@ func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, las
 	if err != nil {
 		return nil, err
 	}
+	if route != currentRoute {
+		return nil, errSessionRouteMismatch
+	}
 	if subject != currentSubject {
 		return nil, errSessionSubjectMismatch
 	}
 	if len(lastEvent) != 0 {
-		decryptedEventID, err := m.sessionCrypto.Decrypt(string(lastEvent))
+		decryptedEventID, err := sessionCrypto.Decrypt(string(lastEvent))
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt last event ID: %w", err)
 		}
@@ -389,6 +433,8 @@ type backendReportedVersions struct {
 // minimum is a best-effort "honest floor" rather than a correctness guarantee;
 // mismatches across a breaking boundary are surfaced via the warnings below.
 func mergedProtocolVersion(l *slog.Logger, clientVersion string, backends []backendReportedVersions) string {
+	// floor is the oldest version this gateway will advertise. Keep it aligned
+	// with legacyProtocolVersions in era.go.
 	const floor = protocolVersion20250618
 
 	// Compute the minimum, across backends, of each backend's best (highest)

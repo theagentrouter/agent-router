@@ -127,6 +127,7 @@ type (
 		headerMutator            *headermutator.HeaderMutator
 		bodyMutator              *bodymutator.BodyMutator
 		backendName              string
+		aiServiceBackendName     string
 		routeName                string
 		handler                  filterapi.BackendAuthHandler
 		// unsupportedBackendErr is set by SetBackend and answered as a 422 in ProcessRequestHeaders.
@@ -192,9 +193,29 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespons
 
 // formatUserFacingErrorJSON formats a user-facing error as a JSON response body.
 // Returns JSON in format: {"type":"error","error":{"type":"<errorType>","code":"<statusCode>","message":"<message>"}}
+// The values are JSON-encoded, so messages that quote user input (e.g. a malformed parameter) stay valid JSON.
 func formatUserFacingErrorJSON(errorType string, statusCode int, message string) []byte {
-	return fmt.Appendf(nil, `{"type":"error","error":{"type":"%s","code":"%d","message":"%s"}}`,
-		errorType, statusCode, message)
+	// Marshalling a struct of plain strings cannot fail.
+	body, _ := json.Marshal(userFacingError{
+		Type: "error",
+		Error: userFacingErrorDetail{
+			Type:    errorType,
+			Code:    strconv.Itoa(statusCode),
+			Message: message,
+		},
+	})
+	return body
+}
+
+type userFacingError struct {
+	Type  string                `json:"type"`
+	Error userFacingErrorDetail `json:"error"`
+}
+
+type userFacingErrorDetail struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 // respondLocally answers the request from the gateway itself instead of dispatching it upstream.
@@ -295,7 +316,7 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		Header:       &corev3.HeaderValue{Key: internalapi.ModelNameHeaderKeyDefault, RawValue: []byte(originalModel)},
 	})
 	originalPath := r.requestHeaders[":path"]
-	// These original-path headers are owned by extproc, so set them unconditionally.
+	// This original-path header is owned by extproc, so set it unconditionally.
 	// A client-supplied or pre-existing value must not shadow the gateway's own value,
 	// as downstream logic (e.g. processor lookup on retry) keys off it.
 	r.requestHeaders[originalPathHeader] = originalPath
@@ -303,11 +324,6 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 		// Overwrite unconditionally so a client-supplied or pre-existing value is replaced, not appended.
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		Header:       &corev3.HeaderValue{Key: originalPathHeader, RawValue: []byte(originalPath)},
-	})
-	r.requestHeaders[internalapi.EnvoyOriginalPathHeader] = originalPath
-	additionalHeaders = append(additionalHeaders, &corev3.HeaderValueOption{
-		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		Header:       &corev3.HeaderValue{Key: internalapi.EnvoyOriginalPathHeader, RawValue: []byte(originalPath)},
 	})
 	r.originalModel = originalModel
 	r.originalRequestBody = body
@@ -687,7 +703,8 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRespo
 	// even if the downstream client disconnects right after the terminal chunk, before EndOfStream
 	// is observed by the extproc. The EndOfStream write below remains as the final refresh.
 	if (body.EndOfStream || !tokenUsage.IsZero()) && (len(u.parent.config.GlobalRequestCosts) > 0 || len(u.parent.config.RequestCosts) > 0) {
-		metadata, err := buildDynamicMetadata(u.parent.config.GlobalRequestCosts, u.parent.config.RequestCosts, &u.costs, u.requestHeaders, u.backendName, u.routeName, responseModel)
+		identity := resolveAIServiceBackendName(u.aiServiceBackendName, u.backendName)
+		metadata, err := buildDynamicMetadataWithBackendIdentity(u.parent.config.GlobalRequestCosts, u.parent.config.RequestCosts, &u.costs, u.requestHeaders, u.backendName, identity, u.routeName, responseModel)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build dynamic metadata: %w", err)
 		}
@@ -750,6 +767,9 @@ func (u *upstreamProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) SetBackend(c
 	}
 	u.modelNameOverride = backend.Backend.ModelNameOverride
 	u.backendName = backend.Backend.Name
+	u.aiServiceBackendName = resolveAIServiceBackendName(
+		backend.Backend.AIServiceBackendName, u.backendName,
+	)
 	u.routeName = routeName
 	u.handler = backend.Handler
 	u.headerMutator = headermutator.NewHeaderMutator(backend.Backend.HeaderMutation, rp.requestHeaders)
@@ -984,12 +1004,30 @@ func evalRuntimeRequestCost(rc *filterapi.RuntimeRequestCost, costs *metrics.Tok
 // Two-tier precedence: for each metadataKey, check route-scoped requestCosts first (matching RouteName == routeName).
 // If found, use it. Otherwise, fall back to globalRequestCosts. If neither exists, the key is not emitted.
 func buildDynamicMetadata(globalRequestCosts []filterapi.RuntimeGlobalRequestCost, requestCosts []filterapi.RuntimeRequestCost, costs *metrics.TokenUsage, requestHeaders map[string]string, backendName, routeName, responseModel string) (*structpb.Struct, error) {
+	identity := resolveAIServiceBackendName("", backendName)
+	return buildDynamicMetadataWithBackendIdentity(globalRequestCosts, requestCosts, costs, requestHeaders, backendName, identity, routeName, responseModel)
+}
+
+// resolveAIServiceBackendName returns the explicitly resolved AIServiceBackend
+// identity when available, otherwise derives it from the runtime backend name.
+// The final fallback preserves the original backend name for non-AI backends.
+func resolveAIServiceBackendName(explicitName, backendName string) string {
+	if explicitName != "" {
+		return explicitName
+	}
+	if derivedName := internalapi.AIServiceBackendName(backendName); derivedName != "" {
+		return derivedName
+	}
+	return backendName
+}
+
+func buildDynamicMetadataWithBackendIdentity(globalRequestCosts []filterapi.RuntimeGlobalRequestCost, requestCosts []filterapi.RuntimeRequestCost, costs *metrics.TokenUsage, requestHeaders map[string]string, backendName, aiServiceBackendName, routeName, responseModel string) (*structpb.Struct, error) {
 	metadata := make(map[string]*structpb.Value, len(requestCosts)+len(globalRequestCosts)+3)
 
 	// Track which metadata keys have been populated by route-scoped costs.
 	populatedKeys := make(map[string]struct{})
 
-	shortBackend := internalapi.AIServiceBackendName(backendName)
+	shortBackend := aiServiceBackendName
 
 	actualModel := requestHeaders[internalapi.ModelNameHeaderKeyDefault]
 

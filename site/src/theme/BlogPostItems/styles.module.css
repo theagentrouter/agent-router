@@ -34,6 +34,26 @@
 .featured .imageContainer {
   flex: 0 0 52%;
   aspect-ratio: auto;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  /* the text column is often taller than a 1200x630 image at this width;
+     instead of cropping the card (cover), show it whole and fill the rest
+     with a blurred, darkened copy so the panel reads as one surface */
+  background: var(--og-image) center / cover no-repeat, var(--ar-ink-900, #12100e);
+}
+.featured .imageContainer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  backdrop-filter: blur(28px) brightness(0.7);
+  -webkit-backdrop-filter: blur(28px) brightness(0.7);
+}
+.featured .image {
+  position: relative;
+  height: auto;
+  object-fit: contain;
 }
 .featured .body {
   justify-content: center;
@@ -139,6 +159,7 @@
 @media (max-width: 996px) {
   .grid { grid-template-columns: 1fr; }
   .featured { flex-direction: column; }
-  .featured .imageContainer { flex: none; aspect-ratio: 1200 / 630; }
+  .featured .imageContainer { flex: none; aspect-ratio: 1200 / 630; display: block; }
+  .featured .image { height: 100%; }
   .featured .title { font-size: var(--ar-text-lg); }
 }

@@ -132,14 +132,25 @@ func (a *anthropicToAWSBedrockTranslator) RequestBody(_ []byte, body *anthropics
 		if bedrockReq.AdditionalModelRequestFields == nil {
 			bedrockReq.AdditionalModelRequestFields = make(map[string]interface{})
 		}
-		if body.Thinking.Enabled != nil {
+		switch {
+		case body.Thinking.Enabled != nil:
 			bedrockReq.AdditionalModelRequestFields["thinking"] = map[string]any{
 				"type":          "enabled",
 				"budget_tokens": body.Thinking.Enabled.BudgetTokens,
 			}
-		} else if body.Thinking.Disabled != nil {
+		case body.Thinking.Disabled != nil:
 			bedrockReq.AdditionalModelRequestFields["thinking"] = map[string]any{
 				"type": "disabled",
+			}
+		case body.Thinking.Adaptive != nil:
+			thinkingMap := map[string]any{"type": "adaptive"}
+			if body.Thinking.Adaptive.Display != "" {
+				thinkingMap["display"] = body.Thinking.Adaptive.Display
+			}
+			bedrockReq.AdditionalModelRequestFields["thinking"] = thinkingMap
+		case body.Thinking.BetweenTools != nil:
+			bedrockReq.AdditionalModelRequestFields["thinking"] = map[string]any{
+				"type": "between_tools",
 			}
 		}
 	}
@@ -539,6 +550,10 @@ func (a *anthropicToAWSBedrockTranslator) ResponseBody(_ map[string]string, body
 	if bedrockResp.Output != nil {
 		anthropicResp.Content = make([]anthropicschema.MessagesContentBlock, 0)
 		for _, block := range bedrockResp.Output.Message.Content {
+			// Content elements are pointers, so a null element decodes to nil.
+			if block == nil {
+				continue
+			}
 			switch {
 			case block.Text != nil:
 				anthropicResp.Content = append(anthropicResp.Content, anthropicschema.MessagesContentBlock{
@@ -845,11 +860,17 @@ func (a *anthropicToAWSBedrockTranslator) ResponseError(respHeaders map[string]s
 		}
 		errorMessage = string(buf)
 	}
+	return anthropicErrorResponse(statusCode, errorMessage)
+}
+
+// anthropicErrorResponse builds an Anthropic error envelope for an upstream error, with the error type derived
+// from the HTTP status, and the headers for the new body.
+func anthropicErrorResponse(statusCode, message string) (newHeaders []internalapi.Header, mutatedBody []byte, err error) {
 	anthropicError := anthropicschema.ErrorResponse{
 		Type: "error",
 		Error: anthropicschema.ErrorResponseMessage{
-			Type:    a.httpStatusToAnthropicErrorType(statusCode),
-			Message: errorMessage,
+			Type:    httpStatusToAnthropicErrorType(statusCode),
+			Message: message,
 		},
 	}
 	mutatedBody, err = json.Marshal(anthropicError)
@@ -863,7 +884,8 @@ func (a *anthropicToAWSBedrockTranslator) ResponseError(respHeaders map[string]s
 	return
 }
 
-func (a *anthropicToAWSBedrockTranslator) httpStatusToAnthropicErrorType(statusCode string) string {
+// httpStatusToAnthropicErrorType maps an upstream HTTP status code to the Anthropic error type.
+func httpStatusToAnthropicErrorType(statusCode string) string {
 	switch statusCode {
 	case "400":
 		return "invalid_request_error"
@@ -873,12 +895,16 @@ func (a *anthropicToAWSBedrockTranslator) httpStatusToAnthropicErrorType(statusC
 		return "permission_error"
 	case "404":
 		return "not_found_error"
+	case "413":
+		return "request_too_large"
 	case "429":
 		return "rate_limit_error"
 	case "500":
 		return "internal_server_error"
 	case "503":
 		return "service_unavailable_error"
+	case "529":
+		return "overloaded_error"
 	default:
 		return "internal_server_error"
 	}

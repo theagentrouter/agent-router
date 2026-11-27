@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -65,14 +66,21 @@ type flags struct {
 	webhookPort int
 	// extProcMaxRecvMsgSize is the maximum message size in bytes that the gRPC server can receive.
 	extProcMaxRecvMsgSize int
+	// filterConfigBundleMaxSlots is the number of filter config bundle part slots.
+	filterConfigBundleMaxSlots int
 	// maxRecvMsgSize is the maximum message size in bytes that the gRPC extension server can receive.
 	maxRecvMsgSize                         int
 	mcpSessionEncryptionSeed               string
 	mcpFallbackSessionEncryptionSeed       string
 	mcpSessionEncryptionIterations         int
 	mcpFallbackSessionEncryptionIterations int
+	fileIDEncryptionSeed                   string
+	fileIDEncryptionIterations             int
+	fileIDFallbackEncryptionSeed           string
+	fileIDFallbackEncryptionIterations     int
 	watchNamespaces                        []string
 	cacheSyncTimeout                       time.Duration
+	credentialPreRotationWindow            time.Duration
 	quotaRateLimitServiceAddr              string
 	quotaRateLimitTimeout                  int64
 	quotaRateLimitFailureModeDeny          bool
@@ -126,6 +134,21 @@ func parseWatchNamespaces(s string) []string {
 	}
 	return namespaces
 }
+
+const (
+	// mcpSessionEncryptionSeedEnvVar is the environment variable to read the MCP session encryption seed
+	// from when the mcpSessionEncryptionSeed flag is not set.
+	mcpSessionEncryptionSeedEnvVar = "MCP_SESSION_ENCRYPTION_SEED"
+	// mcpFallbackSessionEncryptionSeedEnvVar is the environment variable to read the MCP fallback session
+	// encryption seed from when the mcpFallbackSessionEncryptionSeed flag is not set.
+	mcpFallbackSessionEncryptionSeedEnvVar = "MCP_FALLBACK_SESSION_ENCRYPTION_SEED"
+	// fileIDEncryptionSeedEnvVar is the environment variable to read the Files/Batch API id encryption
+	// seed from when the fileIDEncryptionSeed flag is not set.
+	fileIDEncryptionSeedEnvVar = "FILE_ID_ENCRYPTION_SEED"
+	// fileIDFallbackEncryptionSeedEnvVar is the environment variable to read the Files/Batch API id
+	// fallback encryption seed from when the fileIDFallbackEncryptionSeed flag is not set.
+	fileIDFallbackEncryptionSeedEnvVar = "FILE_ID_FALLBACK_ENCRYPTION_SEED"
+)
 
 // parseAndValidateFlags parses the command-line arguments provided in args,
 // validates them, and returns the parsed configuration.
@@ -252,6 +275,13 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		512*1024*1024,
 		"Maximum message size in bytes that the gRPC server can receive for extProc. Default is 512MB.",
 	)
+	filterConfigBundleMaxSlots := fs.Int(
+		"filterConfigBundleMaxSlots",
+		controller.DefaultFilterConfigBundleMaxSlots,
+		fmt.Sprintf("Maximum number of Secrets (~700KiB each) the extProc filter config is split into; "+
+			"a larger config is not written. Changing it rolls the gateway pods. Must be between 1 and %d.",
+			controller.MaxFilterConfigBundleMaxSlots),
+	)
 	maxRecvMsgSize := fs.Int(
 		"maxRecvMsgSize",
 		4*1024*1024,
@@ -267,14 +297,31 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		2*time.Minute, // This is the controller-runtime default
 		"Maximum time to wait for k8s caches to sync",
 	)
+	credentialPreRotationWindow := fs.Duration(
+		"credentialPreRotationWindow",
+		controller.DefaultPreRotationWindow,
+		"How long before expiry to rotate short-lived BackendSecurityPolicy credentials.",
+	)
 	mcpSessionEncryptionSeed := fs.String("mcpSessionEncryptionSeed", "default-insecure-seed",
-		"Seed used to derive the MCP session encryption key. This should be changed and set to a secure value.")
+		"Seed used to derive the MCP session encryption key. This should be changed and set to a secure value. "+
+			"Prefer the "+mcpSessionEncryptionSeedEnvVar+" environment variable to keep it out of the process command line.")
 	mcpSessionEncryptionIterations := fs.Int("mcpSessionEncryptionIterations", 100_000,
 		"Number of iterations to use for PBKDF2 key derivation for MCP session encryption.")
 	mcpFallbackSessionEncryptionSeed := fs.String("mcpFallbackSessionEncryptionSeed", "",
-		"Optional fallback seed used for MCP session key rotation")
+		"Optional fallback seed used for MCP session key rotation. "+
+			"Prefer the "+mcpFallbackSessionEncryptionSeedEnvVar+" environment variable to keep it out of the process command line.")
 	mcpFallbackSessionEncryptionIterations := fs.Int("mcpFallbackSessionEncryptionIterations", 100_000,
 		"Number of iterations used in the fallback PBKDF2 key derivation for MCP session encryption.")
+	fileIDEncryptionSeed := fs.String("fileIDEncryptionSeed", "default-insecure-seed",
+		"Seed used to derive the Files/Batch API id encryption key. This should be changed and set to a secure value. "+
+			"Prefer the "+fileIDEncryptionSeedEnvVar+" environment variable to keep it out of the process command line.")
+	fileIDEncryptionIterations := fs.Int("fileIDEncryptionIterations", 100_000,
+		"Number of iterations to use for PBKDF2 key derivation for Files/Batch API id encryption.")
+	fileIDFallbackEncryptionSeed := fs.String("fileIDFallbackEncryptionSeed", "",
+		"Optional fallback seed used for Files/Batch API id key rotation. "+
+			"Prefer the "+fileIDFallbackEncryptionSeedEnvVar+" environment variable to keep it out of the process command line.")
+	fileIDFallbackEncryptionIterations := fs.Int("fileIDFallbackEncryptionIterations", 100_000,
+		"Number of iterations used in the fallback PBKDF2 key derivation for Files/Batch API id encryption.")
 	quotaRateLimitServiceAddr := fs.String("quotaRateLimitServiceAddr", "envoy-ai-gateway-ratelimit.envoy-gateway-system",
 		"Host (or host:port) for the AI Gateway quota rate limit service. If no port is specified, 8081 is used.")
 	quotaRateLimitTimeout := fs.Int64("quotaRateLimitTimeout", 5,
@@ -285,6 +332,23 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 	if err := fs.Parse(args); err != nil {
 		err = fmt.Errorf("failed to parse flags: %w", err)
 		return nil, err
+	}
+
+	// The MCP session and file id encryption seeds can be provided through environment variables so that they are
+	// not exposed in the process command line. Explicitly set flags take precedence.
+	setFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	if v := os.Getenv(mcpSessionEncryptionSeedEnvVar); v != "" && !setFlags["mcpSessionEncryptionSeed"] {
+		*mcpSessionEncryptionSeed = v
+	}
+	if v := os.Getenv(mcpFallbackSessionEncryptionSeedEnvVar); v != "" && !setFlags["mcpFallbackSessionEncryptionSeed"] {
+		*mcpFallbackSessionEncryptionSeed = v
+	}
+	if v := os.Getenv(fileIDEncryptionSeedEnvVar); v != "" && !setFlags["fileIDEncryptionSeed"] {
+		*fileIDEncryptionSeed = v
+	}
+	if v := os.Getenv(fileIDFallbackEncryptionSeedEnvVar); v != "" && !setFlags["fileIDFallbackEncryptionSeed"] {
+		*fileIDFallbackEncryptionSeed = v
 	}
 
 	var slogLevel slog.Level
@@ -350,6 +414,11 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		}
 	}
 
+	if *filterConfigBundleMaxSlots < 1 || *filterConfigBundleMaxSlots > controller.MaxFilterConfigBundleMaxSlots {
+		return nil, fmt.Errorf("filterConfigBundleMaxSlots must be between 1 and %d, got %d",
+			controller.MaxFilterConfigBundleMaxSlots, *filterConfigBundleMaxSlots)
+	}
+
 	// Validate extProc extra env vars if provided.
 	if *extProcExtraEnvVars != "" {
 		_, err := controller.ParseExtraEnvVars(*extProcExtraEnvVars)
@@ -371,6 +440,19 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 	}
 	if *mcpFallbackSessionEncryptionSeed != "" && *mcpFallbackSessionEncryptionIterations <= 0 {
 		return nil, fmt.Errorf("mcp fallback session encryption iterations must be positive: %d", *mcpFallbackSessionEncryptionIterations)
+	}
+	if *fileIDEncryptionSeed == "" {
+		return nil, errors.New("file id encryption seed must not be empty")
+	}
+	if *fileIDEncryptionIterations <= 0 {
+		return nil, fmt.Errorf("file id encryption iterations must be positive: %d", *fileIDEncryptionIterations)
+	}
+	if *fileIDFallbackEncryptionSeed != "" && *fileIDFallbackEncryptionIterations <= 0 {
+		return nil, fmt.Errorf("file id fallback encryption iterations must be positive: %d", *fileIDFallbackEncryptionIterations)
+	}
+
+	if *credentialPreRotationWindow <= 0 {
+		return nil, fmt.Errorf("credential pre-rotation window must be positive: %s", *credentialPreRotationWindow)
 	}
 
 	return &flags{
@@ -398,13 +480,19 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		extProcImagePullSecrets:                *extProcImagePullSecrets,
 		webhookPort:                            *webhookPort,
 		extProcMaxRecvMsgSize:                  *extProcMaxRecvMsgSize,
+		filterConfigBundleMaxSlots:             *filterConfigBundleMaxSlots,
 		maxRecvMsgSize:                         *maxRecvMsgSize,
 		watchNamespaces:                        parseWatchNamespaces(*watchNamespaces),
 		cacheSyncTimeout:                       *cacheSyncTimeout,
+		credentialPreRotationWindow:            *credentialPreRotationWindow,
 		mcpSessionEncryptionSeed:               *mcpSessionEncryptionSeed,
 		mcpFallbackSessionEncryptionSeed:       *mcpFallbackSessionEncryptionSeed,
 		mcpSessionEncryptionIterations:         *mcpSessionEncryptionIterations,
 		mcpFallbackSessionEncryptionIterations: *mcpFallbackSessionEncryptionIterations,
+		fileIDEncryptionSeed:                   *fileIDEncryptionSeed,
+		fileIDEncryptionIterations:             *fileIDEncryptionIterations,
+		fileIDFallbackEncryptionSeed:           *fileIDFallbackEncryptionSeed,
+		fileIDFallbackEncryptionIterations:     *fileIDFallbackEncryptionIterations,
 		quotaRateLimitServiceAddr:              *quotaRateLimitServiceAddr,
 		quotaRateLimitTimeout:                  *quotaRateLimitTimeout,
 		quotaRateLimitFailureModeDeny:          *quotaRateLimitFailureModeDeny,
@@ -523,11 +611,17 @@ func main() {
 		ExtProcExtraEnvVars:                    parsedFlags.extProcExtraEnvVars,
 		ExtProcImagePullSecrets:                parsedFlags.extProcImagePullSecrets,
 		ExtProcMaxRecvMsgSize:                  parsedFlags.extProcMaxRecvMsgSize,
+		FilterConfigBundleMaxSlots:             parsedFlags.filterConfigBundleMaxSlots,
 		MCPSessionEncryptionSeed:               parsedFlags.mcpSessionEncryptionSeed,
 		MCPSessionEncryptionIterations:         parsedFlags.mcpSessionEncryptionIterations,
 		MCPFallbackSessionEncryptionSeed:       parsedFlags.mcpFallbackSessionEncryptionSeed,
 		MCPFallbackSessionEncryptionIterations: parsedFlags.mcpFallbackSessionEncryptionIterations,
+		FileIDEncryptionSeed:                   parsedFlags.fileIDEncryptionSeed,
+		FileIDEncryptionIterations:             parsedFlags.fileIDEncryptionIterations,
+		FileIDFallbackEncryptionSeed:           parsedFlags.fileIDFallbackEncryptionSeed,
+		FileIDFallbackEncryptionIterations:     parsedFlags.fileIDFallbackEncryptionIterations,
 		RateLimitRunner:                        rlRunner,
+		CredentialPreRotationWindow:            parsedFlags.credentialPreRotationWindow,
 	}); err != nil {
 		setupLog.Error(err, "failed to start controller")
 	}
@@ -542,26 +636,31 @@ const mutatingWebhookConfigurationName = "envoy-ai-gateway-gateway-pod-mutator"
 // This allows users to only need to manage the secret and not take care of mutating webhook configuration.
 func maybePatchAdmissionWebhook(ctx context.Context, cli client.Client, bundlePath string) error {
 	webhookConfigName := fmt.Sprintf("%s.%s", mutatingWebhookConfigurationName, os.Getenv("POD_NAMESPACE"))
-	webhookCfg := &admissionregistrationv1.MutatingWebhookConfiguration{}
-	if err := cli.Get(ctx, client.ObjectKey{Name: webhookConfigName}, webhookCfg); err != nil {
-		return fmt.Errorf("failed to get mutating webhook configuration: %w", err)
-	}
+	// Every controller replica runs this before leader election, so they may race to update the same object.
+	// On conflict, re-read it: if another replica has already written the same bundle, there is nothing to do.
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		webhookCfg := &admissionregistrationv1.MutatingWebhookConfiguration{}
+		if err := cli.Get(ctx, client.ObjectKey{Name: webhookConfigName}, webhookCfg); err != nil {
+			return fmt.Errorf("failed to get mutating webhook configuration: %w", err)
+		}
 
-	if len(webhookCfg.Webhooks) != 1 {
-		return fmt.Errorf("expected 1 webhook in %s, got %d", webhookConfigName, len(webhookCfg.Webhooks))
-	}
+		if len(webhookCfg.Webhooks) != 1 {
+			return fmt.Errorf("expected 1 webhook in %s, got %d", webhookConfigName, len(webhookCfg.Webhooks))
+		}
 
-	bundle, err := os.ReadFile(bundlePath)
-	if err != nil {
-		return fmt.Errorf("failed to read CA bundle: %w", err)
-	}
-	if !bytes.Equal(webhookCfg.Webhooks[0].ClientConfig.CABundle, bundle) {
+		bundle, err := os.ReadFile(bundlePath)
+		if err != nil {
+			return fmt.Errorf("failed to read CA bundle: %w", err)
+		}
+		if bytes.Equal(webhookCfg.Webhooks[0].ClientConfig.CABundle, bundle) {
+			return nil
+		}
 		webhookCfg.Webhooks[0].ClientConfig.CABundle = bundle
 		if err := cli.Update(ctx, webhookCfg); err != nil {
 			return fmt.Errorf("failed to update mutating webhook configuration: %w", err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // setupCache sets up the cache options based on the provided flags.
