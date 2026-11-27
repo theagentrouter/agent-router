@@ -52,7 +52,11 @@ func (o *openAIToAzureOpenAITranslatorV1Embedding) RequestBody(original []byte, 
 	if onRetry && len(newBody) == 0 {
 		newBody = original
 	}
-	newHeaders = []internalapi.Header{{pathHeaderName, fmt.Sprintf(pathTemplate, modelName, o.apiVersion)}}
+	deployment, err := modelPathSegment(modelName)
+	if err != nil {
+		return nil, nil, err
+	}
+	newHeaders = []internalapi.Header{{pathHeaderName, fmt.Sprintf(pathTemplate, deployment, o.apiVersion)}}
 
 	if len(newBody) > 0 {
 		newHeaders = append(newHeaders, internalapi.Header{contentLengthHeaderName, strconv.Itoa(len(newBody))})

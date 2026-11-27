@@ -45,22 +45,21 @@ func Test_Examples_BackendQuotaCrossNamespace(t *testing.T) {
 	t.Cleanup(func() {
 		_ = e2elib.KubectlDeleteManifest(context.Background(), redisManifest)
 	})
+	t.Cleanup(func() {
+		_ = e2elib.KubectlDeleteManifest(context.Background(), rateLimitManifest)
+	})
+	t.Cleanup(func() {
+		_ = e2elib.KubectlDeleteManifest(context.Background(), baseManifest)
+	})
+	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), baseManifest))
 	e2elib.RequireWaitForPodReady(t, "redis-system", "app=redis")
 
 	// Shared AI Gateway rate limit service (also used by same-namespace QuotaPolicy e2e).
 	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), rateLimitManifest))
-	t.Cleanup(func() {
-		_ = e2elib.KubectlDeleteManifest(context.Background(), rateLimitManifest)
-	})
 	// Restart so RLS reconnects after Redis is ready (same pattern as token ratelimit e2e).
 	require.NoError(t, e2elib.KubectlRestartDeployment(t.Context(), e2elib.EnvoyGatewayNamespace, "envoy-ai-gateway-ratelimit"))
 	require.NoError(t, e2elib.Kubectl(t.Context(), "rollout", "status",
 		"deployment/envoy-ai-gateway-ratelimit", "-n", e2elib.EnvoyGatewayNamespace, "--timeout=2m").Run())
-
-	require.NoError(t, e2elib.KubectlApplyManifest(t.Context(), baseManifest))
-	t.Cleanup(func() {
-		_ = e2elib.KubectlDeleteManifest(context.Background(), baseManifest)
-	})
 
 	e2elib.RequireWaitForGatewayPodReady(t, gatewaySelector)
 	e2elib.RequireWaitForPodReady(t, backendNamespace, "app=cross-ns-quota-testupstream")

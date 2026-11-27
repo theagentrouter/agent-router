@@ -96,15 +96,14 @@ func NewMCPProxy(l *slog.Logger, mcpMetrics metrics.MCPMetrics, tracer tracingap
 				requestHeaders: r.Header,
 				originalPath:   originalPathForRequest(r),
 			}
+			var serve http.HandlerFunc
+			switch {
 			// The OAuth Protected Resource Metadata document is served from here rather than
 			// as a static direct response so that the resource identifier it advertises can be
 			// derived from the scheme, authority and path the client actually used.
-			if isProtectedResourceMetadataRequest(externalPath(r)) {
-				proxy.serveOAuthProtectedResourceMetadata(w, r)
-				return
-			}
-			switch r.Method {
-			case http.MethodGet:
+			case isProtectedResourceMetadataRequest(externalPath(r)):
+				serve = proxy.serveOAuthProtectedResourceMetadata
+			case r.Method == http.MethodGet:
 				// Modern Streamable HTTP removed the GET session stream. Reject
 				// before the legacy handler so a 2026-07-28 client does not get
 				// a confusing "missing session ID" 400.
@@ -112,19 +111,27 @@ func NewMCPProxy(l *slog.Logger, mcpMetrics metrics.MCPMetrics, tracer tracingap
 					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 					return
 				}
-				proxy.serveGET(w, r)
-			case http.MethodPost:
-				proxy.servePOST(w, r)
-			case http.MethodDelete:
+				serve = proxy.serveGET
+			case r.Method == http.MethodPost:
+				serve = proxy.servePOST
+			case r.Method == http.MethodDelete:
 				// Modern Streamable HTTP removed DELETE session teardown.
 				if isModernProtocolVersion(r.Header.Get(mcpProtocolVersionHeader)) {
 					http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 					return
 				}
-				proxy.serverDELETE(w, r)
+				serve = proxy.serverDELETE
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
 			}
+			// The config bundle watcher tolerates an incomplete bundle on the initial load and retries on the next tick,
+			// so requests can arrive before any config is loaded, when there are no routes to serve them.
+			if !cfg.configLoaded.Load() {
+				http.Error(w, "MCP proxy config is not loaded yet", http.StatusServiceUnavailable)
+				return
+			}
+			serve(w, r)
 		})
 	return cfg, mux, nil
 }

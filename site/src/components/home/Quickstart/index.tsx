@@ -7,10 +7,22 @@ import styles from './styles.module.css';
 function TerminalLine({ kind, text }: { kind: string; text?: string }): React.ReactElement {
   if (kind === 'blank') return <span>{'\n'}</span>;
   if (kind === 'comment') return <span className={styles.comment}>{text + '\n'}</span>;
-  const raw = text ?? '';
+  // a trailing " # ..." is an inline comment, coloured like comment lines
+  const full = text ?? '';
+  const hash = full.search(/\s+# /);
+  const raw = hash < 0 ? full : full.slice(0, hash);
+  const comment = hash < 0 ? null : <span className={styles.comment}>{full.slice(hash)}</span>;
   const trimmed = raw.trimStart();
   const indent = raw.slice(0, raw.length - trimmed.length);
-  if (indent.length > 0) return <span>{raw + '\n'}</span>;
+  if (indent.length > 0) {
+    return (
+      <span>
+        {raw}
+        {comment}
+        {'\n'}
+      </span>
+    );
+  }
   // env assignments before the command word (VAR=... cmd) get their own colour
   const words = trimmed.split(' ');
   const cmdIdx = words.findIndex((w) => !w.includes('='));
@@ -34,6 +46,7 @@ function TerminalLine({ kind, text }: { kind: string; text?: string }): React.Re
         }
         return chunk;
       })}
+      {comment}
       {'\n'}
     </span>
   );
@@ -50,8 +63,8 @@ export default function Quickstart(): React.ReactElement {
         <div className={styles.panel}>
           <div>
             <span className={styles.label}>{quickstart.label}</span>
-            <h2 className={styles.title}>{quickstart.title}</h2>
-            <p className={styles.body}>{quickstart.body}</p>
+            <h2 className={styles.title}>{active.title}</h2>
+            <p className={styles.body}>{active.body}</p>
             <Link className="button button--primary" to={active.cta.to}>
               {active.cta.label}
             </Link>

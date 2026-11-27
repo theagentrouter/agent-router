@@ -920,12 +920,26 @@ func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 	ctrlr := NewMCPRouteController(c, kubeClient, logr.Discard(), eventCh.Ch)
 
 	mcpRoute := &aigv1b1.MCPRoute{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default", UID: "test-route-uid"},
 	}
 	err := c.Create(t.Context(), mcpRoute)
 	require.NoError(t, err)
 
 	filterName := mcpBackendRefFilterName(mcpRoute, "some-name")
+
+	// ownedSecret returns a Secret controlled by the given MCPRoute.
+	ownedSecret := func(name string, owner *aigv1b1.MCPRoute) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "default",
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: aigv1b1.SchemeGroupVersion.String(), Kind: "MCPRoute",
+					Name: owner.Name, UID: owner.UID, Controller: ptr.To(true),
+				}},
+			},
+			Data: map[string][]byte{egv1a1.InjectedCredentialKey: []byte("managed")},
+		}
+	}
 
 	t.Run("without credential injection", func(t *testing.T) {
 		err = ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, "", nil, true)
@@ -983,10 +997,7 @@ func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 
 	t.Run("deletes stale secret when transitioning away from credential injection", func(t *testing.T) {
 		staleRefName := "stale-managed-ref"
-		_, createErr := kubeClient.CoreV1().Secrets("default").Create(t.Context(), &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: staleRefName, Namespace: "default"},
-			Data:       map[string][]byte{egv1a1.InjectedCredentialKey: []byte("stale")},
-		}, metav1.CreateOptions{})
+		_, createErr := kubeClient.CoreV1().Secrets("default").Create(t.Context(), ownedSecret(staleRefName, mcpRoute), metav1.CreateOptions{})
 		require.NoError(t, createErr)
 
 		authorizationHeader := "Authorization"
@@ -1003,10 +1014,7 @@ func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 	t.Run("deletes old secret when rotating credential injection secret", func(t *testing.T) {
 		oldRefName := "old-managed-ref"
 		newRefName := "new-managed-ref"
-		_, createErr := kubeClient.CoreV1().Secrets("default").Create(t.Context(), &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: oldRefName, Namespace: "default"},
-			Data:       map[string][]byte{egv1a1.InjectedCredentialKey: []byte("old")},
-		}, metav1.CreateOptions{})
+		_, createErr := kubeClient.CoreV1().Secrets("default").Create(t.Context(), ownedSecret(oldRefName, mcpRoute), metav1.CreateOptions{})
 		require.NoError(t, createErr)
 
 		customHeader := "X-Custom-Key"
@@ -1019,6 +1027,112 @@ func TestMCPRouteController_ensureMCPBackendRefHTTPFilter(t *testing.T) {
 		_, getErr := kubeClient.CoreV1().Secrets("default").Get(t.Context(), oldRefName, metav1.GetOptions{})
 		require.True(t, apierrors.IsNotFound(getErr), "expected old credential secret to be deleted")
 	})
+
+	// The secret name in the existing filter is user-editable, so the controller must
+	// never delete a Secret it does not control.
+	t.Run("does not delete secrets not controlled by the MCPRoute", func(t *testing.T) {
+		otherRoute := &aigv1b1.MCPRoute{ObjectMeta: metav1.ObjectMeta{Name: "other-route", Namespace: "default", UID: "other-route-uid"}}
+		for _, tc := range []struct {
+			name   string
+			secret *corev1.Secret
+		}{
+			{
+				name: "unowned secret",
+				secret: &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: "victim-unowned", Namespace: "default"},
+					Data:       map[string][]byte{"tls.key": []byte("do-not-delete")},
+				},
+			},
+			{name: "secret controlled by another MCPRoute", secret: ownedSecret("victim-other-route", otherRoute)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, createErr := kubeClient.CoreV1().Secrets("default").Create(t.Context(), tc.secret, metav1.CreateOptions{})
+				require.NoError(t, createErr)
+
+				for _, desired := range []string{"", "managed-ref-desired"} {
+					// Simulate a user editing the controller-owned filter to point at the victim Secret.
+					var httpFilter egv1a1.HTTPRouteFilter
+					require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: filterName}, &httpFilter))
+					httpFilter.Spec.CredentialInjection = &egv1a1.HTTPCredentialInjectionFilter{
+						Credential: egv1a1.InjectedCredential{
+							ValueRef: gwapiv1.SecretObjectReference{Name: gwapiv1.ObjectName(tc.secret.Name)},
+						},
+					}
+					require.NoError(t, c.Update(t.Context(), &httpFilter))
+
+					header := "Authorization"
+					require.NoError(t, ctrlr.ensureMCPBackendRefHTTPFilter(t.Context(), filterName, mcpRoute, desired, &header, true))
+
+					_, getErr := kubeClient.CoreV1().Secrets("default").Get(t.Context(), tc.secret.Name, metav1.GetOptions{})
+					require.NoError(t, getErr, "secret not controlled by the MCPRoute must not be deleted")
+
+					// The filter is still reconciled back to the desired state.
+					require.NoError(t, c.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: filterName}, &httpFilter))
+					if desired == "" {
+						require.Nil(t, httpFilter.Spec.CredentialInjection)
+					} else {
+						require.Equal(t, gwapiv1.ObjectName(desired), httpFilter.Spec.CredentialInjection.Credential.ValueRef.Name)
+					}
+				}
+			})
+		}
+	})
+}
+
+func TestMCPRouteController_deleteOwnedCredentialSecret(t *testing.T) {
+	mcpRoute := &aigv1b1.MCPRoute{ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "default", UID: "route-uid"}}
+	ownerRef := func(uid types.UID) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{
+			APIVersion: aigv1b1.SchemeGroupVersion.String(), Kind: "MCPRoute",
+			Name: "route", UID: uid, Controller: ptr.To(true),
+		}}
+	}
+	tests := []struct {
+		name        string
+		secret      *corev1.Secret
+		wantDeleted bool
+	}{
+		{name: "missing secret", secret: nil},
+		{
+			name:        "controlled by the MCPRoute",
+			secret:      &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "default", OwnerReferences: ownerRef("route-uid")}},
+			wantDeleted: true,
+		},
+		{
+			name:   "no owner",
+			secret: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "default"}},
+		},
+		{
+			name:   "same name different UID",
+			secret: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "default", OwnerReferences: ownerRef("stale-uid")}},
+		},
+		{
+			name: "non-controller owner reference",
+			secret: &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "default", OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: aigv1b1.SchemeGroupVersion.String(), Kind: "MCPRoute", Name: "route", UID: "route-uid",
+			}}}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			kubeClient := fakekube.NewClientset()
+			if tc.secret != nil {
+				_, err := kubeClient.CoreV1().Secrets("default").Create(t.Context(), tc.secret, metav1.CreateOptions{})
+				require.NoError(t, err)
+			}
+			ctrlr := NewMCPRouteController(requireNewFakeClientWithIndexesForMCP(t), kubeClient, logr.Discard(),
+				internaltesting.NewControllerEventChan[*gwapiv1.Gateway]().Ch)
+			require.NoError(t, ctrlr.deleteOwnedCredentialSecret(t.Context(), mcpRoute, "s"))
+
+			_, err := kubeClient.CoreV1().Secrets("default").Get(t.Context(), "s", metav1.GetOptions{})
+			switch {
+			case tc.secret == nil, tc.wantDeleted:
+				require.True(t, apierrors.IsNotFound(err), "expected secret to be absent, got: %v", err)
+			default:
+				require.NoError(t, err, "expected secret to be preserved")
+			}
+		})
+	}
 }
 
 func TestMCPRouteController_credentialHelpers(t *testing.T) {

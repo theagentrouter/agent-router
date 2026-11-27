@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
 	"testing"
 	"time"
 
@@ -19,14 +20,17 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/envoyproxy/ai-gateway/internal/endpointspec"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	internaltesting "github.com/envoyproxy/ai-gateway/internal/testing"
+	"github.com/envoyproxy/ai-gateway/internal/tracing/tracingapi"
 )
 
 func requireNewServerWithMockProcessor(t *testing.T) (*Server, *mockProcessor) {
@@ -35,9 +39,9 @@ func requireNewServerWithMockProcessor(t *testing.T) (*Server, *mockProcessor) {
 	})), false)
 	require.NoError(t, err)
 	require.NotNil(t, s)
-	s.config = &filterapi.RuntimeConfig{}
+	s.config.Store(&filterapi.RuntimeConfig{})
 
-	m := newMockProcessor(s.config, s.logger)
+	m := newMockProcessor(s.config.Load(), s.logger)
 	s.Register("/", func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
 		return m, nil
 	})
@@ -50,7 +54,7 @@ func TestServer_LoadConfig(t *testing.T) {
 	s := &Server{}
 	err := s.LoadConfig(t.Context(), config)
 	require.NoError(t, err)
-	require.NotNil(t, s.config)
+	require.NotNil(t, s.config.Load())
 }
 
 func TestServer_Check(t *testing.T) {
@@ -60,6 +64,164 @@ func TestServer_Check(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, res.Status)
+}
+
+func TestServer_Check_BeforeFirstConfigLoad(t *testing.T) {
+	s, err := NewServer(slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	require.NoError(t, err)
+
+	// The config bundle watcher tolerates an incomplete bundle on the initial load and retries on the next tick, so the
+	// server can be up before it has any config. Until then it must not report SERVING: the readiness probe relies on it.
+	res, err := s.Check(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, grpc_health_v1.HealthCheckResponse_NOT_SERVING, res.Status)
+
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{}))
+	res, err = s.Check(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, res.Status)
+}
+
+func TestServer_List_BeforeFirstConfigLoad(t *testing.T) {
+	s, err := NewServer(slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	require.NoError(t, err)
+
+	res, err := s.List(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, grpc_health_v1.HealthCheckResponse_NOT_SERVING, res.Statuses["extproc"].Status)
+
+	require.NoError(t, s.LoadConfig(t.Context(), &filterapi.Config{}))
+	res, err = s.List(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, grpc_health_v1.HealthCheckResponse_SERVING, res.Statuses["extproc"].Status)
+}
+
+func TestServer_Check_ConfigLoadedConcurrently(t *testing.T) {
+	// The config bundle watcher loads the config on its own goroutine while the readiness probe calls Check.
+	s, err := NewServer(slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	require.NoError(t, err)
+	res, err := s.Check(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, grpc_health_v1.HealthCheckResponse_NOT_SERVING, res.Status)
+
+	loaded := make(chan error, 1)
+	go func() { loaded <- s.LoadConfig(context.Background(), &filterapi.Config{}) }()
+	require.Eventually(t, func() bool {
+		res, err := s.Check(t.Context(), nil)
+		return err == nil && res.Status == grpc_health_v1.HealthCheckResponse_SERVING
+	}, 5*time.Second, time.Millisecond)
+	require.NoError(t, <-loaded)
+}
+
+func TestServer_Process_UnsupportedPathBeforeFirstConfigLoad(t *testing.T) {
+	// Processors are registered at startup, so a path without one is reported as unsupported even before the first
+	// config load, rather than as a 503 that a retry cannot fix.
+	s, err := NewServer(slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	require.NoError(t, err)
+	headers := &extprocv3.ProcessingRequest{Request: &extprocv3.ProcessingRequest_RequestHeaders{
+		RequestHeaders: &extprocv3.HttpHeaders{Headers: &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
+			{Key: ":path", Value: "/unknown"},
+			{Key: "x-request-id", Value: "original-req-id"},
+		}}},
+	}}
+	stream := &scriptedProcessingStream{ctx: t.Context(), reqs: []*extprocv3.ProcessingRequest{headers}}
+	err = s.Process(stream)
+	require.Equal(t, codes.NotFound, status.Code(err), "error: %v", err)
+	require.Len(t, stream.sent, 1)
+	require.Equal(t, typev3.StatusCode_NotFound, stream.sent[0].GetImmediateResponse().GetStatus().GetCode())
+}
+
+// scriptedProcessingStream replays the given requests in order, then returns io.EOF, and records what the server sends.
+type scriptedProcessingStream struct {
+	grpc.ServerStream
+	ctx  context.Context
+	reqs []*extprocv3.ProcessingRequest
+	sent []*extprocv3.ProcessingResponse
+}
+
+func (s *scriptedProcessingStream) Context() context.Context { return s.ctx }
+
+func (s *scriptedProcessingStream) Send(r *extprocv3.ProcessingResponse) error {
+	s.sent = append(s.sent, r)
+	return nil
+}
+
+func (s *scriptedProcessingStream) Recv() (*extprocv3.ProcessingRequest, error) {
+	if len(s.reqs) == 0 {
+		return nil, io.EOF
+	}
+	r := s.reqs[0]
+	s.reqs = s.reqs[1:]
+	return r, nil
+}
+
+func TestServer_Process_BeforeFirstConfigLoad(t *testing.T) {
+	// The config bundle watcher tolerates an incomplete bundle on the initial load and retries on the next tick, so
+	// streams can arrive before any config is loaded. They must be answered with a 503, not crash the process.
+	routerHeaders := &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
+		{Key: ":path", Value: "/v1/chat/completions"},
+		{Key: ":method", Value: "POST"},
+		{Key: "content-type", Value: "application/json"},
+		{Key: "x-request-id", Value: "original-req-id"},
+	}}
+	body := &extprocv3.ProcessingRequest{Request: &extprocv3.ProcessingRequest_RequestBody{RequestBody: &extprocv3.HttpBody{
+		Body:        []byte(`{"model":"some-model","messages":[{"role":"user","content":"Hi."}]}`),
+		EndOfStream: true,
+	}}}
+	expResponse := createUserFacingErrorResponse(http.StatusServiceUnavailable, "ServiceUnavailable",
+		"the filter config is not loaded yet, retry the request")
+	expResponse.GetImmediateResponse().GrpcStatus.Status = uint32(codes.Unavailable)
+
+	// The upstream filter's stream carries the original path in a header and the backend in the attributes.
+	upstreamHeaders := &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
+		{Key: originalPathHeader, Value: "/v1/chat/completions"},
+		{Key: internalReqIDHeader, Value: "original-req-id-1"},
+		{Key: "x-request-id", Value: "original-req-id"},
+	}}
+	upstreamAttributes := map[string]*structpb.Struct{"envoy.filters.http.ext_proc": {Fields: map[string]*structpb.Value{
+		internalapi.XDSUpstreamHostMetadataBackendNamePath: structpb.NewStringValue("some-backend"),
+	}}}
+	// The Files API is registered by prefix (see RegisterPrefix).
+	prefixRouterHeaders := &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
+		{Key: ":path", Value: "/v1/files"},
+		{Key: ":method", Value: "GET"},
+		{Key: "x-request-id", Value: "original-req-id"},
+	}}
+	prefixUpstreamHeaders := &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
+		{Key: originalPathHeader, Value: "/v1/files"},
+		{Key: internalReqIDHeader, Value: "original-req-id-1"},
+		{Key: "x-request-id", Value: "original-req-id"},
+	}}
+
+	for _, tc := range []struct {
+		name       string
+		logLevel   slog.Level
+		headers    *corev3.HeaderMap
+		attributes map[string]*structpb.Struct
+	}{
+		{name: "info logging", logLevel: slog.LevelInfo, headers: routerHeaders},
+		{name: "debug logging", logLevel: slog.LevelDebug, headers: routerHeaders},
+		{name: "upstream filter", logLevel: slog.LevelInfo, headers: upstreamHeaders, attributes: upstreamAttributes},
+		{name: "prefix processor", logLevel: slog.LevelInfo, headers: prefixRouterHeaders},
+		{name: "prefix processor upstream filter", logLevel: slog.LevelInfo, headers: prefixUpstreamHeaders, attributes: upstreamAttributes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := NewServer(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: tc.logLevel})), false)
+			require.NoError(t, err)
+			s.Register("/v1/chat/completions", NewFactory(&mockMetricsFactory{}, tracingapi.NoopChatCompletionTracer{},
+				endpointspec.ChatCompletionsEndpointSpec{}))
+			s.RegisterPrefix("/v1/files", NewFilesProcessorFactory(newTestCodec()))
+
+			headers := &extprocv3.ProcessingRequest{
+				Request:    &extprocv3.ProcessingRequest_RequestHeaders{RequestHeaders: &extprocv3.HttpHeaders{Headers: tc.headers}},
+				Attributes: tc.attributes,
+			}
+			stream := &scriptedProcessingStream{ctx: t.Context(), reqs: []*extprocv3.ProcessingRequest{headers, body}}
+			err = s.Process(stream)
+			require.Equal(t, codes.Unavailable, status.Code(err), "error: %v", err)
+			require.Equal(t, []*extprocv3.ProcessingResponse{expResponse}, stream.sent)
+		})
+	}
 }
 
 func TestServer_Watch(t *testing.T) {
@@ -313,7 +475,7 @@ func TestServer_Process(t *testing.T) {
 
 func TestServer_setBackend(t *testing.T) {
 	s, _ := requireNewServerWithMockProcessor(t)
-	s.config.Backends = map[string]*filterapi.RuntimeBackend{"openai": {Backend: &filterapi.Backend{Name: "openai"}}}
+	s.config.Load().Backends = map[string]*filterapi.RuntimeBackend{"openai": {Backend: &filterapi.Backend{Name: "openai"}}}
 	mockProc := &mockProcessor{}
 
 	for _, isEndpointPicker := range []bool{true, false} {
@@ -471,7 +633,7 @@ func TestServer_ProcessorSelection(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
-	s.config = &filterapi.RuntimeConfig{}
+	s.config.Store(&filterapi.RuntimeConfig{})
 	s.Register("/one", func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
 		// Returning nil guarantees that the test will fail if this processor is selected.
 		return nil, nil
@@ -751,8 +913,8 @@ func TestServer_processMsg_RedactsCredentialMutation(t *testing.T) {
 	}))
 	s, err := NewServer(logger, false) // enableRedaction=false, debug on
 	require.NoError(t, err)
-	s.config = &filterapi.RuntimeConfig{}
-	m := newMockProcessor(s.config, s.logger).(*mockProcessor)
+	s.config.Store(&filterapi.RuntimeConfig{})
+	m := newMockProcessor(s.config.Load(), s.logger).(*mockProcessor)
 	s.Register("/", func(*filterapi.RuntimeConfig, map[string]string, *slog.Logger, bool, bool) (Processor, error) {
 		return m, nil
 	})
@@ -1125,7 +1287,7 @@ func TestServer_ProcessorForPath_QueryParameterStripping(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s)
 
-	s.config = &filterapi.RuntimeConfig{}
+	s.config.Store(&filterapi.RuntimeConfig{})
 
 	// Register processors for different base paths.
 	mockProc := &mockProcessor{}
@@ -1251,7 +1413,7 @@ func TestServer_ProcessorForPath_QueryParameterStripping(t *testing.T) {
 func TestServer_ProcessorForPath_Prefix(t *testing.T) {
 	s, err := NewServer(slog.Default(), false)
 	require.NoError(t, err)
-	s.config = &filterapi.RuntimeConfig{}
+	s.config.Store(&filterapi.RuntimeConfig{})
 
 	exactProc, filesProc, nestedProc := &mockProcessor{}, &mockProcessor{}, &mockProcessor{}
 	factory := func(p Processor) ProcessorFactory {
