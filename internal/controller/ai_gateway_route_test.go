@@ -21,7 +21,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -313,8 +315,14 @@ func Test_newHTTPRoute(t *testing.T) {
 					},
 					BackendRefs: []gwapiv1.HTTPBackendRef{
 						{BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "some-backend2", Namespace: refNs}, Weight: ptr.To[int32](100)}},
-						{BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: refNs}, Weight: ptr.To[int32](100)}},
-						{BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "some-backend3", Namespace: refNs}, Weight: ptr.To[int32](100)}},
+						{
+							BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "some-backend1", Namespace: refNs}, Weight: ptr.To[int32](100)},
+							Filters:    []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(1)},
+						},
+						{
+							BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "some-backend3", Namespace: refNs}, Weight: ptr.To[int32](100)},
+							Filters:    []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(2)},
+						},
 					},
 					Timeouts: &gwapiv1.HTTPRouteTimeouts{Request: &defaultTimeout},
 					Filters:  rewriteFilters,
@@ -396,20 +404,6 @@ func TestAIGatewayRouteController_updateAIGatewayRouteStatus(t *testing.T) {
 		require.Equal(t, conditionType, current.Status.Conditions[0].Type)
 		require.Equal(t, int64(1), current.Status.Conditions[0].ObservedGeneration)
 	}
-}
-
-func Test_buildPriorityAnnotation(t *testing.T) {
-	rules := []aigv1b1.AIGatewayRouteRule{
-		{
-			BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
-				{Name: "orange", Weight: ptr.To[int32](100), Priority: ptr.To[uint32](0)},
-				{Name: "apple", Weight: ptr.To[int32](100), Priority: ptr.To[uint32](1)},
-				{Name: "pineapple", Weight: ptr.To[int32](100), Priority: ptr.To[uint32](2)},
-			},
-		},
-	}
-	annotation := buildPriorityAnnotation(rules)
-	require.Equal(t, "0:orange:0,0:apple:1,0:pineapple:2", annotation)
 }
 
 func TestAIGatewayRouteController_backend(t *testing.T) {
@@ -1557,4 +1551,371 @@ func Test_newHTTPRoute_QuotaPolicyHashAnnotation(t *testing.T) {
 	require.NoError(t, c.newHTTPRoute(t.Context(), httpRoute, aiGatewayRoute))
 	_, ok = httpRoute.Annotations[httpRouteQuotaPolicyHashAnnotationKey]
 	require.False(t, ok, "annotation should be removed when the QuotaPolicy is deleted")
+}
+
+func newBackendPriorityTestController(t *testing.T) (*AIGatewayRouteController, client.Client) {
+	fakeClient := requireNewFakeClientWithIndexes(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	return NewAIGatewayRouteController(fakeClient, fake2.NewClientset(), logr.Discard(), eventCh.Ch, "/"), fakeClient
+}
+
+func createAIServiceBackends(t *testing.T, c client.Client, ns string, names ...string) {
+	for _, name := range names {
+		require.NoError(t, c.Create(t.Context(), &aigv1b1.AIServiceBackend{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: aigv1b1.AIServiceBackendSpec{BackendRef: gwapiv1.BackendObjectReference{
+				Name:  gwapiv1.ObjectName(name + "-backend"),
+				Group: ptr.To(gwapiv1.Group(egv1a1.GroupVersion.Group)),
+				Kind:  ptr.To(gwapiv1.Kind(egv1a1.KindBackend)),
+			}},
+		}))
+	}
+}
+
+func requireFilterNotFound(t *testing.T, c client.Client, ns string, priority int32) {
+	t.Helper()
+	var f egv1a1.HTTPRouteFilter
+	err := c.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(priority), Namespace: ns}, &f)
+	require.True(t, apierrors.IsNotFound(err), "expected HTTPRouteFilter for priority %d to be deleted, got %v", priority, err)
+}
+
+func TestAIGatewayRouteController_syncAIGatewayRoute_backendPriority(t *testing.T) {
+	const ns = "ns1"
+	s, fakeClient := newBackendPriorityTestController(t)
+	createAIServiceBackends(t, fakeClient, ns, "primary", "secondary", "tertiary")
+
+	newRoute := func(name string, priorities ...uint32) *aigv1b1.AIGatewayRoute {
+		var refs []aigv1b1.AIGatewayRouteRuleBackendRef
+		for i, p := range priorities {
+			refs = append(refs, aigv1b1.AIGatewayRouteRuleBackendRef{
+				Name:     []string{"primary", "secondary", "tertiary"}[i],
+				Priority: ptr.To(p),
+			})
+		}
+		return &aigv1b1.AIGatewayRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec:       aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{BackendRefs: refs}}},
+		}
+	}
+	getHTTPRoute := func(name string) *gwapiv1.HTTPRoute {
+		var hr gwapiv1.HTTPRoute
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: name, Namespace: ns}, &hr))
+		return &hr
+	}
+	getFilter := func(priority int32) *egv1a1.HTTPRouteFilter {
+		var f egv1a1.HTTPRouteFilter
+		require.NoError(t, fakeClient.Get(t.Context(),
+			client.ObjectKey{Name: getBackendPriorityFilterName(priority), Namespace: ns}, &f))
+		return &f
+	}
+
+	// An HTTPRoute generated by a previous version, carrying the legacy annotation.
+	route := newRoute("route1", 0, 1)
+	require.NoError(t, fakeClient.Create(t.Context(), route))
+	require.NoError(t, fakeClient.Create(t.Context(), &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "route1", Namespace: ns,
+			Annotations: map[string]string{legacyHTTPRouteBackendRefPriorityAnnotationKey: "0:primary:0,0:secondary:1"},
+		},
+	}))
+
+	require.NoError(t, s.syncAIGatewayRoute(t.Context(), route))
+	hr := getHTTPRoute("route1")
+	require.NotContains(t, hr.Annotations, legacyHTTPRouteBackendRefPriorityAnnotationKey)
+	backendRefs := hr.Spec.Rules[0].BackendRefs
+	require.Len(t, backendRefs, 2)
+	require.Empty(t, backendRefs[0].Filters, "priority 0 is the default and needs no filter")
+	require.Equal(t, []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(1)}, backendRefs[1].Filters)
+	require.Equal(t, []int32{1}, referencedBackendPriorities(hr))
+
+	f := getFilter(1)
+	require.Equal(t, ptr.To[int32](1), f.Spec.BackendPriority)
+	require.Equal(t, "1", f.Labels[backendPriorityHTTPFilterLabelKey])
+	require.Equal(t, managedByValue, f.Labels[managedByLabel])
+	require.Empty(t, f.OwnerReferences, "the filter is shared across AIGatewayRoutes and must not be owned by one")
+
+	// A second route in the same namespace shares the existing filter and gets its own new one.
+	route2 := newRoute("route2", 0, 1, 2)
+	require.NoError(t, fakeClient.Create(t.Context(), route2))
+	require.NoError(t, s.syncAIGatewayRoute(t.Context(), route2))
+	require.Equal(t, []int32{1, 2}, referencedBackendPriorities(getHTTPRoute("route2")))
+	require.Equal(t, ptr.To[int32](2), getFilter(2).Spec.BackendPriority)
+
+	// A priority-only change changes the generated HTTPRoute, so Envoy Gateway re-translates it.
+	before := getHTTPRoute("route1").Spec
+	route.Spec.Rules[0].BackendRefs[1].Priority = ptr.To[uint32](3)
+	require.NoError(t, fakeClient.Update(t.Context(), route))
+	require.NoError(t, s.syncAIGatewayRoute(t.Context(), route))
+	after := getHTTPRoute("route1").Spec
+	require.NotEqual(t, before, after)
+	require.Equal(t, []int32{3}, referencedBackendPriorities(getHTTPRoute("route1")))
+	require.Equal(t, ptr.To[int32](3), getFilter(3).Spec.BackendPriority)
+	// The filter for 1 is no longer referenced by route1 but is still used by route2, so it is kept.
+	getFilter(1)
+
+	// Once route2 stops using 1 and 2 as well, both filters are deleted, while 3 is still used by route1.
+	route2.Spec.Rules[0].BackendRefs = route2.Spec.Rules[0].BackendRefs[:1]
+	require.NoError(t, fakeClient.Update(t.Context(), route2))
+	require.NoError(t, s.syncAIGatewayRoute(t.Context(), route2))
+	require.Empty(t, referencedBackendPriorities(getHTTPRoute("route2")))
+	requireFilterNotFound(t, fakeClient, ns, 1)
+	requireFilterNotFound(t, fakeClient, ns, 2)
+	getFilter(3)
+
+	// Deleting route1, the last user of 3, deletes that filter.
+	require.NoError(t, fakeClient.Delete(t.Context(), route))
+	var deleting aigv1b1.AIGatewayRoute
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(route), &deleting))
+	require.False(t, deleting.DeletionTimestamp.IsZero())
+	require.NoError(t, s.syncAIGatewayRoute(t.Context(), &deleting))
+	requireFilterNotFound(t, fakeClient, ns, 3)
+}
+
+func TestAIGatewayRouteController_ensureBackendPriorityHTTPRouteFilters_conflict(t *testing.T) {
+	s, fakeClient := newBackendPriorityTestController(t)
+	// A user-managed filter that happens to have the same name but does not set the priority.
+	require.NoError(t, fakeClient.Create(t.Context(), &egv1a1.HTTPRouteFilter{
+		ObjectMeta: metav1.ObjectMeta{Name: getBackendPriorityFilterName(1), Namespace: "ns"},
+	}))
+	hr := &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns"},
+		Spec: gwapiv1.HTTPRouteSpec{Rules: []gwapiv1.HTTPRouteRule{{BackendRefs: []gwapiv1.HTTPBackendRef{
+			{Filters: []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(1)}},
+		}}}},
+	}
+	require.ErrorContains(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr), "is not managed by the AI Gateway controller")
+
+	// The same goes for one that sets the expected priority but lacks the managed labels: the controller only
+	// relies on filters it manages, since only those are watched for deletion.
+	matching := generateBackendPriorityHTTPRouteFilter("ns", 2)
+	matching.Labels = nil
+	require.NoError(t, fakeClient.Create(t.Context(), matching))
+	hr.Spec.Rules[0].BackendRefs[0].Filters = []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(2)}
+	require.ErrorContains(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr), "is not managed by the AI Gateway controller")
+}
+
+func TestAIGatewayRouteController_ensureBackendPriorityHTTPRouteFilters_restoresEditedFilter(t *testing.T) {
+	s, fakeClient := newBackendPriorityTestController(t)
+	// A managed filter whose spec and priority label were edited out of band.
+	edited := generateBackendPriorityHTTPRouteFilter("ns", 3)
+	edited.Spec.BackendPriority = ptr.To[int32](4)
+	edited.Labels[backendPriorityHTTPFilterLabelKey] = "4"
+	require.NoError(t, fakeClient.Create(t.Context(), edited))
+	hr := &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns"},
+		Spec: gwapiv1.HTTPRouteSpec{Rules: []gwapiv1.HTTPRouteRule{{BackendRefs: []gwapiv1.HTTPBackendRef{
+			{Filters: []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(3)}},
+		}}}},
+	}
+	require.NoError(t, s.ensureBackendPriorityHTTPRouteFilters(t.Context(), hr))
+
+	var f egv1a1.HTTPRouteFilter
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(3), Namespace: "ns"}, &f))
+	expected := generateBackendPriorityHTTPRouteFilter("ns", 3)
+	require.Equal(t, expected.Spec, f.Spec)
+	require.Equal(t, expected.Labels, f.Labels)
+}
+
+func TestAIGatewayRouteController_deleteUnusedBackendPriorityHTTPRouteFilters(t *testing.T) {
+	const ns = "ns1"
+	s, fakeClient := newBackendPriorityTestController(t)
+	// 1 is still used, 2 is used only by a route being deleted, and 3 was left behind by an earlier run that
+	// failed, e.g. after the HTTPRoute stopped referencing it.
+	for _, p := range []int32{1, 2, 3} {
+		require.NoError(t, fakeClient.Create(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, p)))
+	}
+	// A user-provided filter with the same name but without the managed labels.
+	userFilter := generateBackendPriorityHTTPRouteFilter(ns, 4)
+	userFilter.Labels = nil
+	require.NoError(t, fakeClient.Create(t.Context(), userFilter))
+	// A managed filter in another namespace that no route there uses.
+	require.NoError(t, fakeClient.Create(t.Context(), generateBackendPriorityHTTPRouteFilter("other", 1)))
+
+	newRoute := func(name string, priorities ...uint32) *aigv1b1.AIGatewayRoute {
+		r := &aigv1b1.AIGatewayRoute{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		var refs []aigv1b1.AIGatewayRouteRuleBackendRef
+		for _, p := range priorities {
+			refs = append(refs, aigv1b1.AIGatewayRouteRuleBackendRef{Name: "b", Priority: ptr.To(p)})
+		}
+		r.Spec.Rules = []aigv1b1.AIGatewayRouteRule{{BackendRefs: refs}}
+		require.NoError(t, fakeClient.Create(t.Context(), r))
+		return r
+	}
+	newRoute("user-of-1", 0, 1)
+	// A route being deleted does not keep a filter alive.
+	deleting := newRoute("deleting", 2)
+	deleting.Finalizers = []string{aiGatewayControllerFinalizer}
+	require.NoError(t, fakeClient.Update(t.Context(), deleting))
+	require.NoError(t, fakeClient.Delete(t.Context(), deleting))
+
+	require.NoError(t, s.deleteUnusedBackendPriorityHTTPRouteFilters(t.Context(), ns))
+	var f egv1a1.HTTPRouteFilter
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(1), Namespace: ns}, &f))
+	requireFilterNotFound(t, fakeClient, ns, 2)
+	requireFilterNotFound(t, fakeClient, ns, 3)
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(4), Namespace: ns}, &f))
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(1), Namespace: "other"}, &f))
+
+	// Running it again is a no-op.
+	require.NoError(t, s.deleteUnusedBackendPriorityHTTPRouteFilters(t.Context(), ns))
+	require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKey{Name: getBackendPriorityFilterName(1), Namespace: ns}, &f))
+}
+
+func Test_backendPriorityFromFilterName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		exp   int32
+		expOK bool
+	}{
+		{name: getBackendPriorityFilterName(0), exp: 0, expOK: true},
+		{name: getBackendPriorityFilterName(128), exp: 128, expOK: true},
+		{name: backendPriorityHTTPFilterNamePrefix + "x"},
+		{name: "ai-eg-host-rewrite-foo"},
+	} {
+		p, ok := backendPriorityFromFilterName(tc.name)
+		require.Equal(t, tc.expOK, ok, tc.name)
+		require.Equal(t, tc.exp, p, tc.name)
+	}
+}
+
+func Test_referencedBackendPriorities(t *testing.T) {
+	otherRef := gwapiv1.HTTPRouteFilter{
+		Type: gwapiv1.HTTPRouteFilterExtensionRef,
+		ExtensionRef: &gwapiv1.LocalObjectReference{
+			Group: gwapiv1.Group(egv1a1.GroupVersion.Group), Kind: egv1a1.KindHTTPRouteFilter, Name: "other",
+		},
+	}
+	malformed := backendPriorityFilterRef(0)
+	malformed.ExtensionRef.Name = backendPriorityHTTPFilterNamePrefix + "x"
+	hr := &gwapiv1.HTTPRoute{Spec: gwapiv1.HTTPRouteSpec{Rules: []gwapiv1.HTTPRouteRule{
+		{BackendRefs: []gwapiv1.HTTPBackendRef{
+			{Filters: []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(2)}},
+			{Filters: []gwapiv1.HTTPRouteFilter{otherRef, malformed}},
+		}},
+		{BackendRefs: []gwapiv1.HTTPBackendRef{
+			{Filters: []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(0)}},
+			{Filters: []gwapiv1.HTTPRouteFilter{backendPriorityFilterRef(2)}},
+			{Filters: []gwapiv1.HTTPRouteFilter{{Type: gwapiv1.HTTPRouteFilterRequestHeaderModifier}}},
+		}},
+	}}}
+	require.Equal(t, []int32{0, 2}, referencedBackendPriorities(hr))
+	require.Empty(t, referencedBackendPriorities(&gwapiv1.HTTPRoute{}))
+}
+
+func Test_aiGatewayRouteToBackendPriorityIndexFunc(t *testing.T) {
+	route := &aigv1b1.AIGatewayRoute{Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{
+		{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+			{Name: "a"}, // nil is treated as 0, which gets no filter.
+			{Name: "b", Priority: ptr.To[uint32](2)},
+		}},
+		{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{
+			{Name: "c", Priority: ptr.To[uint32](2)}, // Deduplicated.
+			{Name: "d", Priority: ptr.To[uint32](0)}, // 0 gets no filter.
+			{
+				Name:     "pool",
+				Group:    ptr.To("inference.networking.k8s.io"),
+				Kind:     ptr.To("InferencePool"),
+				Priority: ptr.To[uint32](7), // Ignored for InferencePool.
+			},
+		}},
+	}}}
+	require.Equal(t, []string{"2"}, aiGatewayRouteToBackendPriorityIndexFunc(route))
+}
+
+func TestAIGatewayRouteController_backendPriorityFilterToAIGatewayRoutes(t *testing.T) {
+	const ns = "ns1"
+	s, fakeClient := newBackendPriorityTestController(t)
+	for _, r := range []struct {
+		name, ns string
+		priority uint32
+	}{
+		{name: "uses-1", ns: ns, priority: 1},
+		{name: "uses-2", ns: ns, priority: 2},
+		{name: "other-ns-uses-1", ns: "other", priority: 1},
+	} {
+		require.NoError(t, fakeClient.Create(t.Context(), &aigv1b1.AIGatewayRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: r.name, Namespace: r.ns},
+			Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{
+				BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "b", Priority: ptr.To(r.priority)}},
+			}}},
+		}))
+	}
+
+	reqs := s.backendPriorityFilterToAIGatewayRoutes(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, 1))
+	require.Equal(t, []reconcile.Request{{NamespacedName: client.ObjectKey{Namespace: ns, Name: "uses-1"}}}, reqs)
+	require.Empty(t, s.backendPriorityFilterToAIGatewayRoutes(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, 3)))
+
+	// The priority comes from the name, so an edited label does not redirect the reconcile.
+	edited := generateBackendPriorityHTTPRouteFilter(ns, 1)
+	edited.Labels[backendPriorityHTTPFilterLabelKey] = "2"
+	require.Equal(t, reqs, s.backendPriorityFilterToAIGatewayRoutes(t.Context(), edited))
+	require.Empty(t, s.backendPriorityFilterToAIGatewayRoutes(t.Context(),
+		&egv1a1.HTTPRouteFilter{ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: ns}}))
+}
+
+func Test_backendPriorityFilterChangedPredicate(t *testing.T) {
+	p := backendPriorityFilterChangedPredicate()
+	shared := generateBackendPriorityHTTPRouteFilter("ns", 1)
+	edited := generateBackendPriorityHTTPRouteFilter("ns", 1)
+	edited.Spec.BackendPriority = ptr.To[int32](5)
+	unlabeled := generateBackendPriorityHTTPRouteFilter("ns", 1)
+	unlabeled.Labels = nil
+	userFilter := generateBackendPriorityHTTPRouteFilter("ns", 1)
+	userFilter.Labels = map[string]string{backendPriorityHTTPFilterLabelKey: "1"} // No managed-by label.
+	other := &egv1a1.HTTPRouteFilter{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "ns"}}
+
+	require.True(t, p.Delete(event.DeleteEvent{Object: shared}))
+	require.False(t, p.Delete(event.DeleteEvent{Object: userFilter}))
+	require.False(t, p.Delete(event.DeleteEvent{Object: other}))
+
+	require.True(t, p.Update(event.UpdateEvent{ObjectOld: shared, ObjectNew: edited}))
+	// An update that dropped the managed labels passes, so that the reconcile reports the filter.
+	require.True(t, p.Update(event.UpdateEvent{ObjectOld: shared, ObjectNew: unlabeled}))
+	require.False(t, p.Update(event.UpdateEvent{ObjectOld: other, ObjectNew: other}))
+
+	require.False(t, p.Create(event.CreateEvent{Object: shared}))
+	require.False(t, p.Generic(event.GenericEvent{Object: shared}))
+}
+
+func TestAIGatewayRouteController_syncAIGatewayRoute_deletionKeepsFinalizerOnFilterGCError(t *testing.T) {
+	const ns = "ns1"
+	var failDelete bool
+	base := requireNewFakeClientWithIndexes(t)
+	fakeClient := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*egv1a1.HTTPRouteFilter); ok && failDelete {
+				return fmt.Errorf("delete failed")
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	})
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	s := NewAIGatewayRouteController(fakeClient, fake2.NewClientset(), logr.Discard(), eventCh.Ch, "/")
+
+	route := &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: ns, Finalizers: []string{aiGatewayControllerFinalizer}},
+		Spec: aigv1b1.AIGatewayRouteSpec{Rules: []aigv1b1.AIGatewayRouteRule{{
+			BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "b", Priority: ptr.To[uint32](1)}},
+		}}},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), route))
+	require.NoError(t, fakeClient.Create(t.Context(), generateBackendPriorityHTTPRouteFilter(ns, 1)))
+	require.NoError(t, fakeClient.Delete(t.Context(), route))
+	getDeleting := func() *aigv1b1.AIGatewayRoute {
+		var r aigv1b1.AIGatewayRoute
+		require.NoError(t, fakeClient.Get(t.Context(), client.ObjectKeyFromObject(route), &r))
+		return &r
+	}
+
+	// The filter deletion fails, so the error is returned and the finalizer is kept for a retry.
+	failDelete = true
+	require.ErrorContains(t, s.syncAIGatewayRoute(t.Context(), getDeleting()), "delete failed")
+	require.Contains(t, getDeleting().Finalizers, aiGatewayControllerFinalizer)
+
+	// The retry deletes the filter and removes the finalizer.
+	failDelete = false
+	require.NoError(t, s.syncAIGatewayRoute(t.Context(), getDeleting()))
+	requireFilterNotFound(t, fakeClient, ns, 1)
+	var r aigv1b1.AIGatewayRoute
+	require.True(t, apierrors.IsNotFound(fakeClient.Get(t.Context(), client.ObjectKeyFromObject(route), &r)))
 }
