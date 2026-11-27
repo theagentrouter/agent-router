@@ -32,6 +32,15 @@ and can also front self-hosted models (Ollama, vLLM) and MCP servers. See
 [aigw run](../cli/run.md) for provider auto-configuration, MCP gateway mode, and
 custom configuration files.
 
+## Call models from Python
+
+Building an agent in Python? The [Python SDK](../python-sdk.md) runs Agent
+Router for you: `pip install theagentrouter`, then call OpenAI, Anthropic,
+Gemini, Bedrock and other providers' models with LiteLLM's API. On macOS (Apple
+silicon) and recent Linux, the first call starts a local router; elsewhere, and
+later in production, the same code points at a shared Agent Router with two
+environment variables.
+
 ## Deploy on Kubernetes
 
 For production, Agent Router runs as a control plane on Envoy Gateway in your
