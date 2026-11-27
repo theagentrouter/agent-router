@@ -153,15 +153,7 @@ func TestRunCmdContext_writeEnvoyResourcesAndRunExtProc_crossNamespaceSecret(t *
 			stderr:                   io.Discard,
 			tmpdir:                   t.TempDir(),
 		}
-		// Reconcile errors panic in aigw, so the missing grant stops it instead of the backend being
-		// silently left out.
-		var recovered any
-		func() {
-			defer func() { recovered = recover() }()
-			_, _, _, _ = runCtx.writeEnvoyResourcesAndRunExtProc(t.Context(), crossNamespaceSecretConfig)
-		}()
-		err, ok := recovered.(error)
-		require.True(t, ok, "expected a panic with an error, got %v", recovered)
+		_, _, _, err := runCtx.writeEnvoyResourcesAndRunExtProc(t.Context(), crossNamespaceSecretConfig)
 		require.ErrorContains(t, err, "is not permitted")
 	})
 }

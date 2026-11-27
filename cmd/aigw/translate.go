@@ -266,31 +266,47 @@ func translateCustomResourceObjects(
 	// Otherwise the reconcile would fail with "gateway not found" because the
 	// Gateway is not yet present in the cache at this point.
 	for _, gw := range gws {
-		mustCreate(ctx, fakeClient, gw, logger)
+		if err = tryCreate(ctx, fakeClient, gw, logger); err != nil {
+			return
+		}
 	}
 	// Create and reconcile the custom resources to store the translated objects.
 	// Note that the order of creation is important as some objects depend on others.
 	for _, btp := range backendTLSPolicies {
-		mustCreate(ctx, fakeClient, btp, logger)
+		if err = tryCreate(ctx, fakeClient, btp, logger); err != nil {
+			return
+		}
 	}
 	// ReferenceGrants go in the controller-runtime client, which is where the controllers look them up.
 	for _, rg := range referenceGrants {
-		mustCreate(ctx, fakeClient, rg, logger)
+		if err = tryCreate(ctx, fakeClient, rg, logger); err != nil {
+			return
+		}
 	}
 	for _, bsp := range backendSecurityPolicies {
-		mustCreateAndReconcile(ctx, fakeClient, bsp, bspC, logger)
+		if err = tryCreateAndReconcile(ctx, fakeClient, bsp, bspC, logger); err != nil {
+			return
+		}
 	}
 	for _, backend := range aigwBackends {
-		mustCreateAndReconcile(ctx, fakeClient, backend, aisbC, logger)
+		if err = tryCreateAndReconcile(ctx, fakeClient, backend, aisbC, logger); err != nil {
+			return
+		}
 	}
 	for _, route := range aigwRoutes {
-		mustCreateAndReconcile(ctx, fakeClient, route, airC, logger)
+		if err = tryCreateAndReconcile(ctx, fakeClient, route, airC, logger); err != nil {
+			return
+		}
 	}
 	for _, mcpRoute := range mcpRoutes {
-		mustCreateAndReconcile(ctx, fakeClient, mcpRoute, mcpC, logger)
+		if err = tryCreateAndReconcile(ctx, fakeClient, mcpRoute, mcpC, logger); err != nil {
+			return
+		}
 	}
 	for _, gw := range gws {
-		mustReconcile(ctx, gw, gwC, logger)
+		if err = tryReconcile(ctx, gw, gwC, logger); err != nil {
+			return
+		}
 	}
 
 	// Now you can retrieve the translated objects from the fake client.
@@ -349,42 +365,46 @@ func mustExtractAndAppend[T any](obj *unstructured.Unstructured, slice *[]T) {
 	*slice = append(*slice, item)
 }
 
-// mustCreateAndReconcile creates the object in the fake client.
-func mustCreate(ctx context.Context, fakeClient client.Client, obj client.Object, logger *slog.Logger) {
+// tryCreate creates the object in the fake client, returning any error instead of panicking.
+func tryCreate(ctx context.Context, fakeClient client.Client, obj client.Object, logger *slog.Logger) error {
 	logger.Info("Fake creating", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
 	err := fakeClient.Create(ctx, obj)
 	if err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			logger.Info("Skipping already existing object", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
-			return
+			return nil
 		}
-		panic(err)
+		return fmt.Errorf("creating %s %q: %w", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
 	}
+	return nil
 }
 
-// mustCreateAndReconcile creates the object in the fake client and reconciles it.
-func mustCreateAndReconcile(
+// tryCreateAndReconcile creates the object in the fake client and reconciles it, returning any error.
+func tryCreateAndReconcile(
 	ctx context.Context,
 	fakeClient client.Client, obj client.Object,
 	c reconcile.TypedReconciler[reconcile.Request],
 	logger *slog.Logger,
-) {
-	mustCreate(ctx, fakeClient, obj, logger)
-	mustReconcile(ctx, obj, c, logger)
+) error {
+	if err := tryCreate(ctx, fakeClient, obj, logger); err != nil {
+		return err
+	}
+	return tryReconcile(ctx, obj, c, logger)
 }
 
-// mustReconcile reconciles the object using the provided reconciler.
-func mustReconcile(
+// tryReconcile reconciles the object using the provided reconciler, returning any error.
+func tryReconcile(
 	ctx context.Context,
 	obj client.Object,
 	c reconcile.TypedReconciler[reconcile.Request],
 	logger *slog.Logger,
-) {
+) error {
 	logger.Info("Fake reconciling", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
 	_, err := c.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}})
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("reconciling %s %q: %w", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), err)
 	}
+	return nil
 }
 
 func mustSetGroupVersionKind(typedMeta *metav1.TypeMeta, obj client.Object) {
