@@ -1999,28 +1999,56 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishRe
 }
 
 func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingRoleOnce(t *testing.T) {
-	translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
-	for _, tt := range []struct {
+	type streamEvent struct {
 		event       string
 		wantChoices string
-	}{
-		{
-			event:       `{"responseId":"local-two-deltas","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello"}]}}]}`,
-			wantChoices: `[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]`,
-		},
-		{
-			event:       `{"responseId":"local-two-deltas","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" from Gemini!"}]},"finishReason":"STOP"}]}`,
-			wantChoices: `[{"index":0,"delta":{"content":" from Gemini!"},"finish_reason":"stop"}]`,
-		},
-	} {
-		_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader("data: "+tt.event+"\n\n"), false, nil)
-		require.NoError(t, err)
-		var chunk struct {
-			Choices json.RawMessage `json:"choices"`
-		}
-		require.NoError(t, json.Unmarshal(bytes.TrimPrefix(body, []byte("data: ")), &chunk))
-		assert.JSONEq(t, tt.wantChoices, string(chunk.Choices))
 	}
+	checkStream := func(t *testing.T, events []streamEvent) {
+		t.Helper()
+		translator := &openAIToGCPVertexAITranslatorV1ChatCompletion{stream: true}
+		for _, tt := range events {
+			_, body, _, _, err := translator.ResponseBody(nil, strings.NewReader("data: "+tt.event+"\n\n"), false, nil)
+			require.NoError(t, err)
+			var chunk struct {
+				Choices json.RawMessage `json:"choices"`
+			}
+			require.NoError(t, json.Unmarshal(bytes.TrimPrefix(body, []byte("data: ")), &chunk))
+			assert.JSONEq(t, tt.wantChoices, string(chunk.Choices))
+		}
+	}
+
+	t.Run("single choice", func(t *testing.T) {
+		checkStream(t, []streamEvent{
+			{
+				event:       `{"responseId":"local-two-deltas","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hello"}]}}]}`,
+				wantChoices: `[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]`,
+			},
+			{
+				event:       `{"responseId":"local-two-deltas","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" from Gemini!"}]},"finishReason":"STOP"}]}`,
+				wantChoices: `[{"index":0,"delta":{"content":" from Gemini!"},"finish_reason":"stop"}]`,
+			},
+		})
+	})
+	t.Run("interleaved choices", func(t *testing.T) {
+		checkStream(t, []streamEvent{
+			{
+				event:       `{"responseId":"two-interleaved-choices","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Red"}]}}]}`,
+				wantChoices: `[{"index":0,"delta":{"role":"assistant","content":"Red"}}]`,
+			},
+			{
+				event:       `{"responseId":"two-interleaved-choices","candidates":[{"index":1,"content":{"role":"model","parts":[{"text":"Blue"}]}}]}`,
+				wantChoices: `[{"index":1,"delta":{"role":"assistant","content":"Blue"}}]`,
+			},
+			{
+				event:       `{"responseId":"two-interleaved-choices","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" fox."}]},"finishReason":"STOP"}]}`,
+				wantChoices: `[{"index":0,"delta":{"content":" fox."},"finish_reason":"stop"}]`,
+			},
+			{
+				event:       `{"responseId":"two-interleaved-choices","candidates":[{"index":1,"content":{"role":"model","parts":[{"text":" jay."}]},"finishReason":"STOP"}]}`,
+				wantChoices: `[{"index":1,"delta":{"content":" jay."},"finish_reason":"stop"}]`,
+			},
+		})
+	})
 }
 
 func TestOpenAIToGCPVertexAITranslatorV1ChatCompletion_StreamingEndOfStream(t *testing.T) {

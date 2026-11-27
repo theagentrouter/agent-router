@@ -402,14 +402,14 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 		o.roleSent = make(map[int64]bool)
 	}
 
-	for i, candidate := range candidates {
+	for _, candidate := range candidates {
 		if candidate == nil {
 			continue
 		}
 
-		// Create the streaming choice.
+		// A stream event can contain a subset of the candidates.
 		choice := openai.ChatCompletionResponseChunkChoice{
-			Index: int64(i),
+			Index: int64(candidate.Index),
 		}
 
 		toolCalls := []openai.ChatCompletionChunkChoiceDeltaToolCall{}
