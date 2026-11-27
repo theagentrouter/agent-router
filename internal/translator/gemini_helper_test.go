@@ -25,6 +25,51 @@ import (
 )
 
 func TestOpenAIMessagesToGeminiContents(t *testing.T) {
+	const (
+		seattleOutput = "Seattle-Tacoma International Airport"
+		jfkOutput     = "John F. Kennedy International Airport"
+		stationPrompt = "Look up the stations twice in two rounds."
+	)
+	stationCalls := func(firstID, firstCode, secondID, secondCode string) openai.ChatCompletionMessageParamUnion {
+		call := func(id, code string) openai.ChatCompletionMessageToolCallParam {
+			return openai.ChatCompletionMessageToolCallParam{
+				ID:       ptr.To(id),
+				Type:     openai.ChatCompletionMessageToolCallTypeFunction,
+				Function: openai.ChatCompletionMessageToolCallFunctionParam{Name: "lookup_station", Arguments: fmt.Sprintf(`{"code":%q}`, code)},
+			}
+		}
+		return openai.ChatCompletionMessageParamUnion{OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+			Role: openai.ChatMessageRoleAssistant,
+			ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+				call(firstID, firstCode),
+				call(secondID, secondCode),
+			},
+		}}
+	}
+	stationResult := func(id, output string) openai.ChatCompletionMessageParamUnion {
+		return openai.ChatCompletionMessageParamUnion{OfTool: &openai.ChatCompletionToolMessageParam{
+			Role:       openai.ChatMessageRoleTool,
+			ToolCallID: id,
+			Content:    openai.ContentUnion{Value: output},
+		}}
+	}
+	modelCalls := func(firstCode, secondCode string) genai.Content {
+		first := genai.NewPartFromFunctionCall("lookup_station", map[string]any{"code": firstCode})
+		first.ThoughtSignature = dummyThoughtSignature
+		return genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{
+			first, genai.NewPartFromFunctionCall("lookup_station", map[string]any{"code": secondCode}),
+		}}
+	}
+	userResults := func(first, second string) genai.Content {
+		return genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{
+			genai.NewPartFromFunctionResponse("lookup_station", map[string]any{"output": first}),
+			genai.NewPartFromFunctionResponse("lookup_station", map[string]any{"output": second}),
+		}}
+	}
+	seattleThenJFK := stationCalls("call_9", "KSEA", "call_2", "KJFK")
+	seattleResult := stationResult("call_9", seattleOutput)
+	jfkResult := stationResult("call_2", jfkOutput)
+	stationContents := []genai.Content{modelCalls("KSEA", "KJFK"), userResults(seattleOutput, jfkOutput)}
 	tests := []struct {
 		name                      string
 		messages                  []openai.ChatCompletionMessageParamUnion
@@ -118,6 +163,38 @@ func TestOpenAIMessagesToGeminiContents(t *testing.T) {
 					{Text: "This is a developer message"},
 					{Text: "This is a system message"},
 				},
+			},
+		},
+		{
+			name:             "same-name tool results in call order",
+			messages:         []openai.ChatCompletionMessageParamUnion{seattleThenJFK, seattleResult, jfkResult},
+			expectedContents: stationContents,
+		},
+		{
+			name:             "same-name tool results JFK first",
+			messages:         []openai.ChatCompletionMessageParamUnion{seattleThenJFK, jfkResult, seattleResult},
+			expectedContents: stationContents,
+		},
+		{
+			name: "same-name tool results in consecutive assistant turns",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{OfUser: &openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: stationPrompt},
+				}},
+				seattleThenJFK,
+				stationResult("call_2", "round-1/KJFK"),
+				stationResult("call_9", "round-1/KSEA"),
+				stationCalls("call_8", "KJFK", "call_3", "KSEA"),
+				stationResult("call_3", "round-2/KSEA"),
+				stationResult("call_8", "round-2/KJFK"),
+			},
+			expectedContents: []genai.Content{
+				{Role: genai.RoleUser, Parts: []*genai.Part{genai.NewPartFromText(stationPrompt)}},
+				modelCalls("KSEA", "KJFK"),
+				userResults("round-1/KSEA", "round-1/KJFK"),
+				modelCalls("KJFK", "KSEA"),
+				userResults("round-2/KJFK", "round-2/KSEA"),
 			},
 		},
 	}
