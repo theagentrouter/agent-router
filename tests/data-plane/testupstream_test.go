@@ -186,11 +186,30 @@ func TestWithTestUpstream(t *testing.T) {
 			expResponseBody: `{"error":{"type":"OpenAIBackendError","message":"backend timeout","code":"503"},"type":"error"}`,
 		},
 		{
-			name:            "unknown path",
-			path:            "/unknown",
-			requestBody:     `{"prompt": "hello"}`,
-			expStatus:       http.StatusNotFound,
-			expResponseBody: `unsupported path: /unknown`,
+			name:        "unknown path",
+			path:        "/unknown",
+			requestBody: `{"prompt": "hello"}`,
+			expStatus:   http.StatusNotFound,
+			expResponseHeaders: map[string]string{
+				"content-type":   "application/json",
+				"content-length": strconv.Itoa(len(`{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path: /unknown"}}`)),
+			},
+			expResponseBodyFunc: func(t require.TestingT, body []byte) {
+				require.JSONEq(t, `{"type":"error","error":{"type":"NotFound","code":"404","message":"unsupported path: /unknown"}}`, string(body))
+				var got struct {
+					Type  string `json:"type"`
+					Error struct {
+						Type    string `json:"type"`
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(body, &got))
+				require.Equal(t, "error", got.Type)
+				require.Equal(t, "NotFound", got.Error.Type)
+				require.Equal(t, "404", got.Error.Code)
+				require.Equal(t, "unsupported path: /unknown", got.Error.Message)
+			},
 		},
 		{
 			name:        "openai - /v1/chat/completions - malformed JSON request",
