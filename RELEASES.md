@@ -2,8 +2,8 @@
 
 ## Release Cycles
 
-Since Envoy AI Gateway depends on Envoy Gateway and Envoy Proxy, its minor releases follow the Envoy Gateway release cycle, which is roughly every 2-3 months.
-Many users run both on the same gateways, so they can only move to a new Envoy Gateway minor once there's an Envoy AI Gateway release built on it. To keep that gap short:
+Since Envoy AI Gateway depends on Envoy Gateway and Envoy Proxy, its minor releases follow the Envoy Gateway release cycle, which is quarterly.
+Envoy AI Gateway runs on top of an Envoy Gateway installation, and many users serve both their regular traffic and their AI traffic from that same installation. Those users can't upgrade Envoy Gateway to a new minor until an Envoy AI Gateway release supports it, even if their regular traffic needs the upgrade. To keep that wait short:
 
 - When Envoy Gateway cuts a release candidate for a new minor, we bump main to that release candidate and cut an Envoy AI Gateway release candidate from it.
 - When Envoy Gateway releases the new minor, we bump main to it and cut the Envoy AI Gateway minor release within about a week.
