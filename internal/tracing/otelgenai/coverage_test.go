@@ -99,10 +99,11 @@ func TestEndpointCoverage(t *testing.T) {
 		},
 		{
 			// Decisions is a custom operation; the response contributes the resolved
-			// model and token usage.
+			// model and token usage, the input is the evidence, the questions are the
+			// instructions, and the answers are the output.
 			name:     "decisions",
 			actual:   coverageOf(t, NewDecisionsRecorder(cfg)),
-			expected: coverage{responseAttrs: true},
+			expected: coverage{responseAttrs: true, inputMessages: true, systemInstructions: true, outputMessages: true},
 		},
 		{
 			// The conventions define no speech attributes beyond the core set.
