@@ -153,10 +153,11 @@ type EmbedContentUsageMetadata struct {
 }
 
 // BatchEmbedContentsRequest is the request body for the batchEmbedContents endpoint, which embeds multiple
-// independent contents in one call and returns one embedding per request entry. Vertex AI requires
-// outputDimensionality and autoTruncate to be identical across all entries.
+// independent contents in one call and returns one embedding per request entry. All entries must have the
+// same outputDimensionality and autoTruncate.
 //
-// See https://github.com/googleapis/go-genai/blob/v1.78.0/models.go (EmbeddingAPITypeBatchEmbedContents).
+// See https://googleapis.github.io/google-api-python-client/docs/dyn/aiplatform_v1.projects.locations.publishers.models.html#batchEmbedContents
+// and https://github.com/googleapis/go-genai/blob/v1.78.0/models.go (EmbeddingAPITypeBatchEmbedContents).
 type BatchEmbedContentsRequest struct {
 	Requests []EmbedContentRequest `json:"requests"`
 }
