@@ -224,7 +224,7 @@ func startTestEnvironment(t testing.TB, extprocConfig string, okToDumpLogOnFailu
 
 func startTestEnvironmentWithUpstream(t testing.TB, extprocConfig string, okToDumpLogOnFailure, extProcInProcess bool, upstream *testupstreamlib.Server) *dataplaneenv.TestEnvironment {
 	serve := func(t testing.TB, out io.Writer, ports map[string]int) {
-		requireUpstream(t, out, ports, upstream)
+		startTestUpstream(t, out, ports, upstream)
 	}
 	return dataplaneenv.StartTestEnvironment(t,
 		serve, map[string]int{"upstream": 8080},
@@ -232,7 +232,11 @@ func startTestEnvironmentWithUpstream(t testing.TB, extprocConfig string, okToDu
 	)
 }
 
-func requireUpstream(t testing.TB, out io.Writer, ports map[string]int, s *testupstreamlib.Server) {
+func requireUpstream(t testing.TB, out io.Writer, ports map[string]int) {
+	startTestUpstream(t, out, ports, &testupstreamlib.Server{})
+}
+
+func startTestUpstream(t testing.TB, out io.Writer, ports map[string]int, s *testupstreamlib.Server) {
 	s.ID, s.Logger = "extproc_test", log.New(out, "[testupstream] ", 0)
 	l, err := net.Listen("tcp", ":"+strconv.Itoa(ports["upstream"])) // nolint: gosec
 	if err != nil {
