@@ -40,7 +40,7 @@ var (
 	// They cover every credential header set by the backendauth handlers: "authorization" (API key,
 	// Azure, GCP, AWS SigV4), "x-api-key" (Anthropic), "api-key" (Azure API key) and
 	// "x-amz-security-token" (AWS SigV4 session token).
-	sensitiveHeaderKeys = []string{"authorization", "x-api-key", "api-key", "x-amz-security-token"}
+	sensitiveHeaderKeys = []string{"authorization", "x-api-key", "api-key", "x-amz-security-token", "x-tars-api-key"}
 )
 
 // contextKey is a type for context keys to avoid collisions.
