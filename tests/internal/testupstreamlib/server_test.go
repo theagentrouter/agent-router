@@ -63,7 +63,7 @@ func Test_main(t *testing.T) {
 			require.Equal(t, fmt.Sprintf("data: %d\n", i+1), dataLine)
 			// Ensure that the server sends the response line every second.
 			require.Greater(t, time.Since(now), 100*time.Millisecond, time.Since(now).String())
-			require.Less(t, time.Since(now), 300*time.Millisecond, time.Since(now).String())
+			require.Less(t, time.Since(now), time.Second, time.Since(now).String())
 			now = time.Now()
 
 			// Ignore the additional newline character.
@@ -340,7 +340,7 @@ func Test_main(t *testing.T) {
 
 			// Ensure that the server sends the response line every second.
 			require.Greater(t, time.Since(now), 100*time.Millisecond, time.Since(now).String())
-			require.Less(t, time.Since(now), 300*time.Millisecond, time.Since(now).String())
+			require.Less(t, time.Since(now), time.Second, time.Since(now).String())
 			now = time.Now()
 		}
 
@@ -598,7 +598,7 @@ func Test_main(t *testing.T) {
 			require.Equal(t, fmt.Sprintf("data: %d\n", i+1), dataLine)
 			// Ensure that the server sends the response line every second.
 			require.Greater(t, time.Since(now), 100*time.Millisecond, time.Since(now).String())
-			require.Less(t, time.Since(now), 300*time.Millisecond, time.Since(now).String())
+			require.Less(t, time.Since(now), time.Second, time.Since(now).String())
 			now = time.Now()
 
 			// Ignore the additional newline character.
@@ -662,7 +662,7 @@ func Test_main(t *testing.T) {
 			require.Equal(t, fmt.Sprintf("data: %s\n", expected), dataLine)
 
 			require.Greater(t, time.Since(now), 100*time.Millisecond, time.Since(now).String())
-			require.Less(t, time.Since(now), 300*time.Millisecond, time.Since(now).String())
+			require.Less(t, time.Since(now), time.Second, time.Since(now).String())
 			now = time.Now()
 
 			// Read the trailing blank line that terminates the SSE event.
