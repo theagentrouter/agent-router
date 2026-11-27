@@ -57,7 +57,7 @@ func TestServeGET_InvalidSessionID(t *testing.T) {
 
 	proxy.serveGET(rr, req)
 
-	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, http.StatusNotFound, rr.Code)
 	require.Contains(t, rr.Body.String(), "invalid session ID")
 }
 
@@ -93,7 +93,7 @@ func TestServerDELETE_InvalidSessionID(t *testing.T) {
 
 	proxy.serverDELETE(rr, req)
 
-	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, http.StatusNotFound, rr.Code)
 	require.Contains(t, rr.Body.String(), "invalid session ID")
 }
 
@@ -114,7 +114,7 @@ func TestServePOST_InvalidSessionID(t *testing.T) {
 	req.Header.Set(sessionIDHeader, "invalid-session-id")
 	rr := httptest.NewRecorder()
 	proxy.servePOST(rr, req)
-	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, http.StatusNotFound, rr.Code)
 	require.Contains(t, rr.Body.String(), "invalid session ID")
 }
 
@@ -2879,4 +2879,136 @@ func TestMCPProxy_handleCompletionComplete_PromptSelector(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, int32(1), hits.Load())
+}
+
+func TestServeSessionErrors(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			for _, tc := range []struct {
+				name       string
+				setup      func(*testing.T, *mcpRequestContext, *http.Request)
+				wantStatus int
+				wantError  string
+			}{
+				{
+					name: "rotated encryption seed",
+					setup: func(_ *testing.T, proxy *mcpRequestContext, _ *http.Request) {
+						proxy.sessionCrypto = NewPBKDF2AesGcmSessionCrypto("rotated-seed", 100)
+					},
+					wantStatus: http.StatusNotFound,
+					wantError:  "failed to decrypt session ID",
+				},
+				{
+					name: "invalid session contents",
+					setup: func(t *testing.T, proxy *mcpRequestContext, req *http.Request) {
+						req.Header.Set(sessionIDHeader, secureID(t, proxy, "invalid-session"))
+					},
+					wantStatus: http.StatusNotFound,
+					wantError:  "invalid session ID",
+				},
+				{
+					name: "different subject",
+					setup: func(_ *testing.T, _ *mcpRequestContext, req *http.Request) {
+						req.Header.Set(internalapi.MCPSubjectHeader, "other-user")
+					},
+					wantStatus: http.StatusUnauthorized,
+					wantError:  "different authenticated subject",
+				},
+				{
+					name: "different route",
+					setup: func(_ *testing.T, _ *mcpRequestContext, req *http.Request) {
+						req.Header.Set(internalapi.MCPRouteHeader, "test-route-another")
+					},
+					wantStatus: http.StatusBadRequest,
+					wantError:  "different route",
+				},
+				{
+					name: "invalid last event ID",
+					setup: func(t *testing.T, _ *mcpRequestContext, req *http.Request) {
+						if method == http.MethodDelete {
+							t.Skip("DELETE does not use Last-Event-ID")
+						}
+						req.Header.Set(lastEventIDHeader, "invalid-event-id")
+					},
+					wantStatus: http.StatusBadRequest,
+					wantError:  "failed to decrypt last event ID",
+				},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					proxy := newTestMCPProxy()
+					req := httptest.NewRequest(method, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","method":"ping","id":1}`))
+					req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+					req.Header.Set(internalapi.MCPSubjectHeader, "user")
+					req.Header.Set(sessionIDHeader, secureID(t, proxy, "test-route@user@backend1:dGVzdC1zZXNzaW9u"))
+					tc.setup(t, proxy, req)
+					rr := httptest.NewRecorder()
+					switch method {
+					case http.MethodGet:
+						proxy.serveGET(rr, req)
+					case http.MethodPost:
+						proxy.servePOST(rr, req)
+					case http.MethodDelete:
+						proxy.serverDELETE(rr, req)
+					}
+					require.Equal(t, tc.wantStatus, rr.Code, rr.Body.String())
+					require.Contains(t, rr.Body.String(), tc.wantError)
+				})
+			}
+		})
+	}
+}
+
+func TestServePOST_SessionSeedRotation(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(sessionIDHeader) == "" {
+			w.Header().Set(sessionIDHeader, "backend-session")
+			_, _ = w.Write([]byte(validInitializeResponse))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(backend.Close)
+
+	for _, fallback := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fallback=%t", fallback), func(t *testing.T) {
+			proxy := newTestMCPProxy()
+			proxy.backendListenerAddr = backend.URL
+			post := func(body, sessionID string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set(internalapi.MCPRouteHeader, "test-route")
+				req.Header.Set(internalapi.MCPSubjectHeader, "user")
+				if sessionID != "" {
+					req.Header.Set(sessionIDHeader, sessionID)
+				}
+				rr := httptest.NewRecorder()
+				proxy.servePOST(rr, req)
+				return rr
+			}
+			initialize := func() string {
+				rr := post(`{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}`, "")
+				require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+				id := rr.Header().Get(sessionIDHeader)
+				require.NotEmpty(t, id)
+				return id
+			}
+			oldID := initialize()
+			oldCrypto := proxy.sessionCrypto
+			proxy.sessionCrypto = NewPBKDF2AesGcmSessionCrypto("rotated-seed", 100)
+			wantOldStatus := http.StatusNotFound
+			if fallback {
+				proxy.sessionCrypto = &FallbackEnabledSessionCrypto{Primary: proxy.sessionCrypto, Fallback: oldCrypto}
+				wantOldStatus = http.StatusOK
+			}
+			const ping = `{"jsonrpc":"2.0","method":"ping","id":2}`
+			rr := post(ping, oldID)
+			require.Equal(t, wantOldStatus, rr.Code, rr.Body.String())
+
+			// A client can initialize again without the old ID and use the new session.
+			newID := initialize()
+			rr = post(ping, newID)
+			require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+			require.JSONEq(t, `{"jsonrpc":"2.0","id":2,"result":{}}`, rr.Body.String())
+		})
+	}
 }

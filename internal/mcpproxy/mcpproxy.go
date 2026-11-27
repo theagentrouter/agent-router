@@ -357,12 +357,12 @@ func (m *mcpRequestContext) sessionFromID(id secureClientToGatewaySessionID, las
 	sessionCrypto := m.currentSessionCrypto()
 	decrypted, err := sessionCrypto.Decrypt(string(id))
 	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt session ID: %w", err)
+		return nil, fmt.Errorf("%w: failed to decrypt session ID: %w", errSessionNotFound, err)
 	}
 
 	perBackendSessionIDs, route, subject, err := clientToGatewaySessionID(decrypted).backendSessionIDs()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errSessionNotFound, err)
 	}
 	if route != currentRoute {
 		return nil, errSessionRouteMismatch

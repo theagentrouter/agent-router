@@ -1637,13 +1637,15 @@ func extractSubject(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get(internalapi.MCPSubjectHeader))
 }
 
-// sessionErrorStatus maps an error from sessionFromID to the HTTP status code that should be
-// returned to the client. A subject mismatch is an authorization failure (the caller is
-// authenticated but is not the subject the session was created for), so it is reported as 401
-// rather than the generic 400 used for malformed/undecryptable session IDs.
+// sessionErrorStatus maps sessionFromID failures to HTTP status codes. Unrecognized
+// sessions return 404 so clients can initialize a new session as required by MCP:
+// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management
 func sessionErrorStatus(err error) int {
 	if errors.Is(err, errSessionSubjectMismatch) {
 		return http.StatusUnauthorized
+	}
+	if errors.Is(err, errSessionNotFound) {
+		return http.StatusNotFound
 	}
 	return http.StatusBadRequest
 }

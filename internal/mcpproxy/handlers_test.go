@@ -1010,7 +1010,7 @@ func TestServePOST_EarlyReturnErrorMetrics(t *testing.T) {
 				req.Header.Set(sessionIDHeader, "invalid-session-id")
 				return req
 			},
-			wantStatus:  http.StatusBadRequest,
+			wantStatus:  http.StatusNotFound,
 			wantErrType: metrics.MCPErrorInvalidSessionID,
 			// Session validation runs before requestMethod is assigned.
 		},
