@@ -16,7 +16,7 @@
   display: grid;
   grid-template-columns: 0.9fr 1.1fr;
   gap: 64px;
-  align-items: center;
+  align-items: start;
   box-shadow: var(--ar-shadow-lg);
 }
 .panel::before {
