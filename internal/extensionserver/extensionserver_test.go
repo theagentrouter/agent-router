@@ -22,6 +22,7 @@ import (
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	admission_controlv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/admission_control/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	header_mutationv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_mutation/v3"
 	htomv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/header_to_metadata/v3"
@@ -62,6 +63,38 @@ func mustToAny(t *testing.T, msg proto.Message) *anypb.Any {
 		TypeUrl: envoyAPIPrefix + string(msg.ProtoReflect().Descriptor().FullName()),
 		Value:   b,
 	}
+}
+
+func newInferencePoolClusterWithProtocolOptions(t *testing.T, po *httpv3.HttpProtocolOptions) *clusterv3.Cluster {
+	t.Helper()
+	return &clusterv3.Cluster{
+		Name: "test-cluster",
+		TypedExtensionProtocolOptions: map[string]*anypb.Any{
+			httpProtocolOptionsKey: mustToAny(t, po),
+		},
+	}
+}
+
+func requireHTTPProtocolOptions(t *testing.T, cluster *clusterv3.Cluster) *httpv3.HttpProtocolOptions {
+	t.Helper()
+	raw, ok := cluster.TypedExtensionProtocolOptions[httpProtocolOptionsKey]
+	require.True(t, ok)
+	po := &httpv3.HttpProtocolOptions{}
+	require.NoError(t, raw.UnmarshalTo(po))
+	return po
+}
+
+func postClusterModifyForInferencePool(t *testing.T, s *Server, cluster *clusterv3.Cluster, appProtocol string) error {
+	t.Helper()
+	_, err := s.PostClusterModify(context.Background(), &egextension.PostClusterModifyRequest{
+		Cluster: cluster,
+		PostClusterContext: &egextension.PostClusterExtensionContext{
+			BackendExtensionResources: []*egextension.ExtensionResource{
+				createInferencePoolExtensionResourceWithAppProtocol("test-pool", "default", appProtocol),
+			},
+		},
+	})
+	return err
 }
 
 func newFakeClient() client.Client {
@@ -1836,6 +1869,109 @@ func TestPostClusterModify(t *testing.T) {
 		require.IsType(t, &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{}, explicitConfig.ExplicitHttpConfig.ProtocolConfig)
 	})
 
+	t.Run("with InferencePool backend and appProtocol http preserves HTTP/1 settings", func(t *testing.T) {
+		cluster := newInferencePoolClusterWithProtocolOptions(t, &httpv3.HttpProtocolOptions{
+			UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+				ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+					ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+						HttpProtocolOptions: &corev3.Http1ProtocolOptions{
+							EnableTrailers: true,
+							HeaderKeyFormat: &corev3.Http1ProtocolOptions_HeaderKeyFormat{
+								HeaderFormat: &corev3.Http1ProtocolOptions_HeaderKeyFormat_ProperCaseWords_{
+									ProperCaseWords: &corev3.Http1ProtocolOptions_HeaderKeyFormat_ProperCaseWords{},
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+
+		require.NoError(t, postClusterModifyForInferencePool(t, s, cluster, "http"))
+
+		po := requireHTTPProtocolOptions(t, cluster)
+		explicitConfig, ok := po.GetUpstreamProtocolOptions().(*httpv3.HttpProtocolOptions_ExplicitHttpConfig_)
+		require.True(t, ok)
+		http1 := explicitConfig.ExplicitHttpConfig.GetHttpProtocolOptions()
+		require.True(t, http1.GetEnableTrailers())
+		require.NotNil(t, http1.GetHeaderKeyFormat())
+	})
+
+	t.Run("with InferencePool backend and appProtocol kubernetes.io/h2c replaces HTTP/1 settings and keeps common options and other map keys", func(t *testing.T) {
+		cluster := newInferencePoolClusterWithProtocolOptions(t, &httpv3.HttpProtocolOptions{
+			CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{
+				IdleTimeout: durationpb.New(10 * time.Second),
+			},
+			UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+				ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+					ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+						HttpProtocolOptions: &corev3.Http1ProtocolOptions{EnableTrailers: true},
+					},
+				},
+			},
+		})
+		cluster.TypedExtensionProtocolOptions["example.com/other-extension"] = mustToAny(t, &corev3.Http1ProtocolOptions{EnableTrailers: true})
+
+		require.NoError(t, postClusterModifyForInferencePool(t, s, cluster, "kubernetes.io/h2c"))
+
+		po := requireHTTPProtocolOptions(t, cluster)
+		require.Equal(t, durationpb.New(10*time.Second), po.GetCommonHttpProtocolOptions().GetIdleTimeout())
+		require.Contains(t, cluster.TypedExtensionProtocolOptions, "example.com/other-extension")
+		explicitConfig, ok := po.GetUpstreamProtocolOptions().(*httpv3.HttpProtocolOptions_ExplicitHttpConfig_)
+		require.True(t, ok)
+		require.IsType(t, &httpv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{}, explicitConfig.ExplicitHttpConfig.ProtocolConfig)
+		require.Nil(t, explicitConfig.ExplicitHttpConfig.GetHttpProtocolOptions())
+	})
+
+	t.Run("with InferencePool backend and malformed existing HttpProtocolOptions", func(t *testing.T) {
+		cluster := &clusterv3.Cluster{
+			Name: "test-cluster",
+			TypedExtensionProtocolOptions: map[string]*anypb.Any{
+				httpProtocolOptionsKey: {
+					TypeUrl: "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
+					Value:   []byte{0xff},
+				},
+			},
+		}
+		before := proto.Clone(cluster.TypedExtensionProtocolOptions[httpProtocolOptionsKey]).(*anypb.Any)
+
+		err := postClusterModifyForInferencePool(t, s, cluster, "http")
+		require.Error(t, err)
+		require.True(t, proto.Equal(before, cluster.TypedExtensionProtocolOptions[httpProtocolOptionsKey]))
+	})
+
+	t.Run("with InferencePool backend is idempotent across appProtocol flips", func(t *testing.T) {
+		cluster := newInferencePoolClusterWithProtocolOptions(t, &httpv3.HttpProtocolOptions{
+			CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{
+				IdleTimeout: durationpb.New(10 * time.Second),
+			},
+			UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+				ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+					ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{},
+				},
+			},
+		})
+
+		require.NoError(t, postClusterModifyForInferencePool(t, s, cluster, "http"))
+		first := requireHTTPProtocolOptions(t, cluster)
+		require.NoError(t, postClusterModifyForInferencePool(t, s, cluster, "http"))
+		second := requireHTTPProtocolOptions(t, cluster)
+		require.True(t, proto.Equal(first, second))
+
+		require.NoError(t, postClusterModifyForInferencePool(t, s, cluster, "kubernetes.io/h2c"))
+		h2c := requireHTTPProtocolOptions(t, cluster)
+		explicitConfig, ok := h2c.GetUpstreamProtocolOptions().(*httpv3.HttpProtocolOptions_ExplicitHttpConfig_)
+		require.True(t, ok)
+		require.IsType(t, &httpv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{}, explicitConfig.ExplicitHttpConfig.ProtocolConfig)
+
+		require.NoError(t, postClusterModifyForInferencePool(t, s, cluster, "http"))
+		final := requireHTTPProtocolOptions(t, cluster)
+		explicitConfig, ok = final.GetUpstreamProtocolOptions().(*httpv3.HttpProtocolOptions_ExplicitHttpConfig_)
+		require.True(t, ok)
+		require.IsType(t, &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{}, explicitConfig.ExplicitHttpConfig.ProtocolConfig)
+		require.Equal(t, durationpb.New(10*time.Second), final.GetCommonHttpProtocolOptions().GetIdleTimeout())
+	})
+
 	t.Run("with InferencePool backend and no endpointPickerRef", func(t *testing.T) {
 		// Regression test: an InferencePool with endpointPickerRef unset must not panic. Routing
 		// without an endpoint picker isn't supported, so the cluster is only marked for
@@ -1885,6 +2021,177 @@ func TestPostClusterModify(t *testing.T) {
 		require.Empty(t, getInferencePoolsByMetadata(cluster.Metadata))
 		require.True(t, isClusterWithoutEndpointPicker(cluster))
 	})
+}
+
+func TestExistingUpstreamProtocolOptions(t *testing.T) {
+	tests := []struct {
+		name      string
+		existing  *httpv3.HttpProtocolOptions
+		wantHTTP1 *corev3.Http1ProtocolOptions
+		wantHTTP2 *corev3.Http2ProtocolOptions
+	}{
+		{
+			name: "explicit HTTP/1",
+			existing: &httpv3.HttpProtocolOptions{
+				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+					ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+						ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+							HttpProtocolOptions: &corev3.Http1ProtocolOptions{EnableTrailers: true},
+						},
+					},
+				},
+			},
+			wantHTTP1: &corev3.Http1ProtocolOptions{EnableTrailers: true},
+			wantHTTP2: &corev3.Http2ProtocolOptions{},
+		},
+		{
+			name: "explicit HTTP/2",
+			existing: &httpv3.HttpProtocolOptions{
+				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+					ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+						ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{
+							Http2ProtocolOptions: &corev3.Http2ProtocolOptions{MaxConcurrentStreams: wrapperspb.UInt32(100)},
+						},
+					},
+				},
+			},
+			wantHTTP1: &corev3.Http1ProtocolOptions{},
+			wantHTTP2: &corev3.Http2ProtocolOptions{MaxConcurrentStreams: wrapperspb.UInt32(100)},
+		},
+		{
+			name: "use downstream",
+			existing: &httpv3.HttpProtocolOptions{
+				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_UseDownstreamProtocolConfig{
+					UseDownstreamProtocolConfig: &httpv3.HttpProtocolOptions_UseDownstreamHttpConfig{
+						HttpProtocolOptions:  &corev3.Http1ProtocolOptions{EnableTrailers: true},
+						Http2ProtocolOptions: &corev3.Http2ProtocolOptions{MaxConcurrentStreams: wrapperspb.UInt32(100)},
+					},
+				},
+			},
+			wantHTTP1: &corev3.Http1ProtocolOptions{EnableTrailers: true},
+			wantHTTP2: &corev3.Http2ProtocolOptions{MaxConcurrentStreams: wrapperspb.UInt32(100)},
+		},
+		{
+			name: "auto config",
+			existing: &httpv3.HttpProtocolOptions{
+				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_AutoConfig{
+					AutoConfig: &httpv3.HttpProtocolOptions_AutoHttpConfig{
+						Http2ProtocolOptions: &corev3.Http2ProtocolOptions{MaxConcurrentStreams: wrapperspb.UInt32(100)},
+					},
+				},
+			},
+			wantHTTP1: &corev3.Http1ProtocolOptions{},
+			wantHTTP2: &corev3.Http2ProtocolOptions{MaxConcurrentStreams: wrapperspb.UInt32(100)},
+		},
+		{
+			name: "unsupported",
+			existing: &httpv3.HttpProtocolOptions{
+				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+					ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+						ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_Http3ProtocolOptions{
+							Http3ProtocolOptions: &corev3.Http3ProtocolOptions{},
+						},
+					},
+				},
+			},
+			wantHTTP1: &corev3.Http1ProtocolOptions{},
+			wantHTTP2: &corev3.Http2ProtocolOptions{},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			http1, http2 := existingUpstreamProtocolOptions(tc.existing)
+			require.True(t, proto.Equal(tc.wantHTTP1, http1))
+			require.True(t, proto.Equal(tc.wantHTTP2, http2))
+		})
+	}
+}
+
+func TestPostClusterModifyPreservesFiltersThroughTranslate(t *testing.T) {
+	s := newTestServerWithRoute(t, &aigv1b1.AIGatewayRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "myroute", Namespace: "ns"},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			ParentRefs: []gwapiv1.ParentReference{{Name: "eg-gateway"}},
+			Rules: []aigv1b1.AIGatewayRouteRule{
+				{BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{Name: "some-backend"}}},
+			},
+		},
+	})
+
+	tests := []struct {
+		name        string
+		appProtocol string
+		assert      func(t *testing.T, po *httpv3.HttpProtocolOptions)
+	}{
+		{
+			name:        "http",
+			appProtocol: "http",
+			assert: func(t *testing.T, po *httpv3.HttpProtocolOptions) {
+				explicitConfig, ok := po.GetUpstreamProtocolOptions().(*httpv3.HttpProtocolOptions_ExplicitHttpConfig_)
+				require.True(t, ok)
+				require.IsType(t, &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{}, explicitConfig.ExplicitHttpConfig.ProtocolConfig)
+				require.True(t, explicitConfig.ExplicitHttpConfig.GetHttpProtocolOptions().GetEnableTrailers())
+			},
+		},
+		{
+			name:        "h2c",
+			appProtocol: "kubernetes.io/h2c",
+			assert: func(t *testing.T, po *httpv3.HttpProtocolOptions) {
+				explicitConfig, ok := po.GetUpstreamProtocolOptions().(*httpv3.HttpProtocolOptions_ExplicitHttpConfig_)
+				require.True(t, ok)
+				require.IsType(t, &httpv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{}, explicitConfig.ExplicitHttpConfig.ProtocolConfig)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			admissionAny := mustToAny(t, &admission_controlv3.AdmissionControl{})
+			codecAny := mustToAny(t, &upstream_codecv3.UpstreamCodec{})
+			cluster := newInferencePoolClusterWithProtocolOptions(t, &httpv3.HttpProtocolOptions{
+				CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{
+					IdleTimeout: durationpb.New(10 * time.Second),
+				},
+				UpstreamHttpProtocolOptions: &corev3.UpstreamHttpProtocolOptions{AutoSni: true},
+				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+					ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+						ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+							HttpProtocolOptions: &corev3.Http1ProtocolOptions{EnableTrailers: true},
+						},
+					},
+				},
+				HttpFilters: []*httpconnectionmanagerv3.HttpFilter{
+					{Name: "envoy.filters.http.admission_control", ConfigType: &httpconnectionmanagerv3.HttpFilter_TypedConfig{TypedConfig: admissionAny}},
+					{Name: "envoy.extensions.filters.http.upstream_codec.v3.UpstreamCodec", ConfigType: &httpconnectionmanagerv3.HttpFilter_TypedConfig{TypedConfig: codecAny}},
+				},
+			})
+			cluster.Name = "httproute/ns/myroute/rule/0"
+
+			require.NoError(t, postClusterModifyForInferencePool(t, s, cluster, tc.appProtocol))
+			resp, err := s.PostTranslateModify(t.Context(), &egextension.PostTranslateModifyRequest{
+				Clusters: []*clusterv3.Cluster{cluster},
+			})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+
+			po := requireHTTPProtocolOptions(t, cluster)
+			require.Equal(t, durationpb.New(10*time.Second), po.GetCommonHttpProtocolOptions().GetIdleTimeout())
+			require.True(t, po.GetUpstreamHttpProtocolOptions().GetAutoSni())
+			var names []string
+			for _, f := range po.GetHttpFilters() {
+				names = append(names, f.GetName())
+			}
+			require.Equal(t, []string{
+				"envoy.filters.http.admission_control",
+				aiGatewayExtProcName,
+				aiGatewayHeaderMutationName,
+				"envoy.extensions.filters.http.upstream_codec.v3.UpstreamCodec",
+			}, names)
+			require.True(t, proto.Equal(admissionAny, po.GetHttpFilters()[0].GetTypedConfig()))
+			require.True(t, proto.Equal(codecAny, po.GetHttpFilters()[3].GetTypedConfig()))
+			tc.assert(t, po)
+		})
+	}
 }
 
 // TestPostRouteModify tests the PostRouteModify method.
