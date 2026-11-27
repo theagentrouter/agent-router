@@ -190,13 +190,22 @@ func openAIMessageToBedrockMessageRoleAssistant(
 	switch content := openAiMessage.Content.Value.(type) {
 	case nil, string:
 		// With string or omitted content, signed reasoning is carried separately in thinking_blocks.
+		isSignedThinking := func(block *openai.ThinkingBlock) bool {
+			return block.Type == "thinking" && block.Signature != ""
+		}
+		signedCount := 0
+		for i := range openAiMessage.ThinkingBlocks {
+			if isSignedThinking(&openAiMessage.ThinkingBlocks[i]) {
+				signedCount++
+			}
+		}
 		for i := range openAiMessage.ThinkingBlocks {
 			block := &openAiMessage.ThinkingBlocks[i]
-			if block.Type == "thinking" && block.Signature != "" {
+			if isSignedThinking(block) {
 				text := block.Thinking
 				// A streamed message can carry the text separately from its signature.
-				// Only one block can be paired unambiguously with that text.
-				if len(openAiMessage.ThinkingBlocks) == 1 && text == "" && block.Data == "" {
+				// Only a single signed thinking block can claim that text.
+				if signedCount == 1 && text == "" && block.Data == "" {
 					reasoning := gjson.ParseBytes(openAiMessage.ReasoningContent)
 					if reasoning.Type == gjson.String {
 						text = reasoning.Str
