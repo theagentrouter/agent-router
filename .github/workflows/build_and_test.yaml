@@ -31,8 +31,8 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: dorny/paths-filter@b41dfa943b1939b9b646f67753bfe35cf6e4de03
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: dorny/paths-filter@f3360c560367c9daf72b88c0e6164162034c5721
         id: changes
         with:
           filters: |
@@ -43,7 +43,7 @@ jobs:
               - '!netlify.toml'
           predicate-quantifier: every # Make the filters be AND-ed
           token: "" # don't use github api
-      - uses: dorny/paths-filter@b41dfa943b1939b9b646f67753bfe35cf6e4de03
+      - uses: dorny/paths-filter@f3360c560367c9daf72b88c0e6164162034c5721
         id: install_script
         with:
           filters: |
@@ -65,9 +65,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: ${{ needs.changes.outputs.install_script == 'true' }}
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - if: ${{ needs.changes.outputs.install_script == 'true' }}
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -92,8 +92,8 @@ jobs:
           - macos-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -112,7 +112,7 @@ jobs:
       - run: make test-coverage GO_TEST_ARGS='-race'
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest'
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6.0.2
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           fail_ci_if_error: true
           files: ./out/go-test-coverage.out
@@ -132,8 +132,8 @@ jobs:
           - ubuntu-latest
           - macos-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -163,8 +163,8 @@ jobs:
           - ubuntu-latest
           - macos-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -194,8 +194,8 @@ jobs:
           - macos-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -237,8 +237,8 @@ jobs:
           - macos-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -279,8 +279,8 @@ jobs:
           - name: v1.9.4
             envoy_gateway_version: v1.9.4
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -292,7 +292,7 @@ jobs:
             ~/go/pkg/mod
             ~/go/bin
           key: e2e-test-${{ hashFiles('**/go.mod', '**/go.sum', '**/Makefile') }}
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - env:
           EG_VERSION: ${{ matrix.envoy_gateway_version }}
           TEST_AWS_ACCESS_KEY_ID: ${{ secrets.AWS_BEDROCK_USER_AWS_ACCESS_KEY_ID }}
@@ -318,8 +318,8 @@ jobs:
           - v1.33.4
           - v1.32.8
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -331,7 +331,7 @@ jobs:
             ~/go/pkg/mod
             ~/go/bin
           key: e2e-test-${{ hashFiles('**/go.mod', '**/go.sum', '**/Makefile') }}
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - run: make test-e2e-upgrade
         env:
           # We only need to test the upgrade from the latest stable version of EG.
@@ -357,8 +357,8 @@ jobs:
           - name: v1.10.0
             envoy_gateway_version: v1.10.0
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -370,7 +370,7 @@ jobs:
             ~/go/pkg/mod
             ~/go/bin
           key: e2e-test-${{ hashFiles('**/go.mod', '**/go.sum', '**/Makefile') }}
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - run: make test-e2e-inference-extension
         env:
           EG_VERSION: ${{ matrix.envoy_gateway_version }}
@@ -392,8 +392,8 @@ jobs:
     # https://github.com/actions/runner-images/issues/17#issuecomment-1971073406
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -405,7 +405,7 @@ jobs:
             ~/go/pkg/mod
             ~/go/bin
           key: e2e-test-${{ hashFiles('**/go.mod', '**/go.sum', '**/Makefile') }}
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - run: make test-e2e-namespaced
         env:
           # We only need to test with the latest stable version of EG, since these e2e tests
@@ -418,8 +418,8 @@ jobs:
     if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -431,7 +431,7 @@ jobs:
             ~/go/pkg/mod
             ~/go/bin
           key: e2e-aigw-test-${{ hashFiles('**/go.mod', '**/go.sum', '**/Makefile') }}
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Start Ollama server
         run: |
           curl -fsSL https://ollama.com/install.sh | sh && sudo systemctl stop ollama
@@ -460,7 +460,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0
       - name: Install GitVersion
@@ -514,9 +514,9 @@ jobs:
     needs: [docker_push, compute_version]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Login into DockerHub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
@@ -550,10 +550,10 @@ jobs:
       RELEASE_TAG: latest-main
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           fetch-depth: 0 # git describe needs the release tags to compute the version string
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           cache: false
           go-version-file: go.mod
@@ -597,7 +597,7 @@ jobs:
           - macos-latest # arm64 (Apple silicon); no Intel macOS binaries are published.
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
       - name: Install aigw
         env:
           AIGW_INSTALL_DIR: ${{ runner.temp }}/aigw-bin
