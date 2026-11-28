@@ -467,3 +467,39 @@ data: [DONE]`
 	// Model name should still be present.
 	require.Equal(t, openai.ModelGPT5Nano, attrs[openinference.LLMModelName].AsString())
 }
+
+// TestChatCompletionRecorder_WithConfig_ErrorBodyRedaction verifies that a
+// recorder built with a hiding TraceConfig drops the upstream error body from
+// the exception event and the span status, since provider error bodies
+// routinely echo request content.
+func TestChatCompletionRecorder_WithConfig_ErrorBodyRedaction(t *testing.T) {
+	const secret = "SENSITIVE-PROMPT-TEXT"
+
+	tests := []struct {
+		name       string
+		config     *openinference.TraceConfig
+		expectBody bool
+	}{
+		{name: "default config records the body", config: openinference.NewTraceConfig(), expectBody: true},
+		{name: "hide inputs redacts the body", config: &openinference.TraceConfig{HideInputs: true}},
+		{name: "hide outputs redacts the body", config: &openinference.TraceConfig{HideOutputs: true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := NewChatCompletionRecorder(tt.config)
+
+			actualSpan := testotel.RecordWithSpan(t, func(span oteltrace.Span) bool {
+				recorder.RecordResponseOnError(span, 400, []byte(`{"error":"`+secret+`"}`))
+				return false
+			})
+
+			require.Contains(t, actualSpan.Status.Description, "Error code: 400")
+			if tt.expectBody {
+				require.Contains(t, actualSpan.Status.Description, secret)
+			} else {
+				require.Equal(t, "Error code: 400", actualSpan.Status.Description)
+			}
+		})
+	}
+}

@@ -16,13 +16,19 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/tracing/httperr"
 )
 
-// recordResponseError processes error responses and updates span accordingly.
-func RecordResponseError(span trace.Span, statusCode int, body string) {
+// RecordResponseError processes error responses and updates span accordingly.
+//
+// The response body is only included in the error description when content
+// capture is enabled for both inputs and outputs: provider error bodies
+// routinely echo the request, so recording them unconditionally would leak
+// content past the TraceConfig opt-out. The GenAI tracer applies the same
+// rule in internal/tracing/otelgenai.
+func RecordResponseError(span trace.Span, config *TraceConfig, statusCode int, body string) {
 	errorType := httperr.OpenInferenceErrorType(statusCode)
 
 	// Format error message following Go conventions.
 	errorMsg := fmt.Sprintf("Error code: %d", statusCode)
-	if len(body) > 0 {
+	if len(body) > 0 && config != nil && !config.HideInputs && !config.HideOutputs {
 		errorMsg = fmt.Sprintf("Error code: %d - %s", statusCode, body)
 	}
 
