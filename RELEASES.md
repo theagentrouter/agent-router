@@ -3,15 +3,15 @@
 ## Release Cycles
 
 Since Agent Router depends on Envoy Gateway and Envoy Proxy, every time there is a minor Envoy Gateway release, an Agent Router one will follow.
-Envoy AI Gateway runs on top of an Envoy Gateway installation, and many users serve both their regular traffic and their AI traffic from that same installation. Those users can't upgrade Envoy Gateway to a new minor until an Envoy AI Gateway release supports it, even if their regular traffic needs the upgrade. To keep that wait short:
+Agent Router runs on top of an Envoy Gateway installation, and many users serve both their regular traffic and their AI traffic from that same installation. Those users can't upgrade Envoy Gateway to a new minor until an Agent Router release supports it, even if their regular traffic needs the upgrade. To keep that wait short:
 
-- When Envoy Gateway cuts a release candidate for a new minor, we bump main to that release candidate and cut an Envoy AI Gateway release candidate from it.
-- When Envoy Gateway releases the new minor, we bump main to it and cut the Envoy AI Gateway minor release within about a week.
+- When Envoy Gateway cuts a release candidate for a new minor, we bump main to that release candidate and cut an Agent Router release candidate from it.
+- When Envoy Gateway releases the new minor, we bump main to it and cut the Agent Router minor release within about a week.
 
-Each Envoy AI Gateway minor is built on and tested against exactly one Envoy Gateway minor, so the [compatibility matrix](site/docs/compatibility.md) maps them one to one.
+Each Agent Router minor is built on and tested against exactly one Envoy Gateway minor, so the [compatibility matrix](site/docs/compatibility.md) maps them one to one.
 
 Given the rapidly changing nature of the AI ecosystem, we may also cut feature releases between Envoy Gateway releases, as soon as features are available.
-The main branch of Envoy AI Gateway is tested against the Envoy Gateway release it builds on, the previous Envoy Gateway minor, and Envoy Gateway main, allowing us to confidently release the Envoy AI Gateway at any time if needed.
+The main branch of Agent Router is tested against the Envoy Gateway release it builds on, the previous Envoy Gateway minor, and Envoy Gateway main, allowing us to confidently release the Agent Router at any time if needed.
 
 ## Versioning
 
@@ -24,15 +24,15 @@ The main branch will always use the latest version of the Envoy Gateway, hence t
 
 ## Support Policy
 
-This document focuses on compatibility concerns of those using Envoy AI Gateway.
+This document focuses on compatibility concerns of those using Agent Router.
 It is important to note that the support policy is subject to change at any time. The support policy is as follows:
 
 First of all, there are four areas of compatibility that we are concerned with:
 
 - [Using envoyproxy/ai-gateway as a Go package](#public-go-package).
-- [Deploying the Envoy AI Gateway controller through the Kubernetes Custom Resource Definition (CRD)](#Custom-Resource-Definitions).
-- [Upgrading the Envoy AI Gateway controller](#Upgrading-the-Envoy-AI-Gateway-controller).
-- [Envoy Gateway vs Envoy AI Gateway compatibility](#Envoy-Gateway-vs-Envoy-AI-Gateway-compatibility).
+- [Deploying the Agent Router controller through the Kubernetes Custom Resource Definition (CRD)](#Custom-Resource-Definitions).
+- [Upgrading the Agent Router controller](#Upgrading-the-Agent-Router-controller).
+- [Envoy Gateway vs Agent Router compatibility](#Envoy-Gateway-vs-Agent-Router-compatibility).
 
 ### Public Go package
 
@@ -57,16 +57,16 @@ deprecated, and will be removed in a future release per the deprecation policy. 
 `QuotaPolicy` is `v1alpha1`-only and is therefore **not** part of the stable surface; in
 particular, its `serviceQuota` field is accepted but not yet enforced end-to-end.
 
-### Upgrading the Envoy AI Gateway controller
+### Upgrading the Agent Router controller
 
 We guarantee that simply upgrading the controller will not break the existing configuration assuming there's no _un-migrated_ resources including breaking change left in the k8s API server. In other words, after the proper use of the API and migration path described above, the user should be able to upgrade the controller without any issue. However, this does mean that we do NOT guarantee that the existing configuration will work across more than two version of the controller. For example if you are using the version N of the controller, and you want to upgrade to the version N+2, you should first upgrade to the version N+1 while following the migration path if applicable, and then upgrade to the version N+2.
 
-### Envoy Gateway vs Envoy AI Gateway compatibility
+### Envoy Gateway vs Agent Router compatibility
 
-Since Envoy AI Gateway is built on top of Envoy Gateway, the compatibility between the two is important.
+Since Agent Router is built on top of Envoy Gateway, the compatibility between the two is important.
 
-Each Envoy AI Gateway minor release is built on one Envoy Gateway minor release, as listed in the [compatibility matrix](site/docs/compatibility.md).
-Upgrade Envoy Gateway to that version before upgrading Envoy AI Gateway.
+Each Agent Router minor release is built on one Envoy Gateway minor release, as listed in the [compatibility matrix](site/docs/compatibility.md).
+Upgrade Envoy Gateway to that version before upgrading Agent Router.
 
 CI also runs the end-to-end tests against the previous Envoy Gateway minor, to catch breakage while the two are being upgraded one after the other.
 That combination is meant for the upgrade window, not for long-term use.
@@ -97,7 +97,7 @@ Each non-patch release should start with Release Candidate (RC) phase as follows
    make sure all the versions are correct.
    You also need to udpate the version list in `docusaurus.config.ts` and point the `latestVersion` to the version being released.
 
-4. Cut the release candidate tag from the main branch. The tag should be v0.50.0-rc1. Assuming the remote `origin` is the main envoyproxy/ai-gateway repository,
+4. Cut the release candidate tag from the main branch. The tag should be v0.50.0-rc1. Assuming the remote `origin` is the main theagentrouter/agent-router repository,
    the command to cut the tag is:
 
    ```
