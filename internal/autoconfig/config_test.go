@@ -418,6 +418,29 @@ func TestWriteConfig(t *testing.T) {
 	}
 }
 
+func TestWriteConfigScaleway(t *testing.T) {
+	data := &ConfigData{
+		Backends: []Backend{
+			{
+				Name:     "openai",
+				Hostname: "api.scaleway.ai",
+				Port:     443,
+				NeedsTLS: true,
+			},
+		},
+		OpenAI: &OpenAIConfig{
+			BackendName: "openai",
+			SchemaName:  "OpenAI",
+			Version:     "11111111-2222-3333-4444-555555555555/v1",
+		},
+	}
+
+	got, err := WriteConfig(data)
+	require.NoError(t, err)
+	require.Contains(t, got, "prefix: \"11111111-2222-3333-4444-555555555555/v1\"")
+	require.Contains(t, got, "api.scaleway.ai")
+}
+
 func TestParseURL(t *testing.T) {
 	tests := []struct {
 		name          string

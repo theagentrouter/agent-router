@@ -157,6 +157,22 @@ data: [DONE]
 	})
 }
 
+func TestScalewayChatCompletionPath(t *testing.T) {
+	const projectID = "11111111-2222-3333-4444-555555555555"
+
+	translator := NewChatCompletionOpenAIToOpenAITranslator(
+		projectID+"/v1", "",
+	)
+
+	req := &openai.ChatCompletionRequest{Model: "test-model"}
+	headers, _, err := translator.RequestBody(nil, req, false)
+
+	require.NoError(t, err)
+	require.Len(t, headers, 1)
+	require.Equal(t, pathHeaderName, headers[0].Key())
+	require.Equal(t, "/"+projectID+"/v1/chat/completions", headers[0].Value())
+}
+
 func TestOpenAIToOpenAITranslatorV1ChatCompletionRequestBody(t *testing.T) {
 	t.Run("valid body", func(t *testing.T) {
 		for _, stream := range []bool{true, false} {

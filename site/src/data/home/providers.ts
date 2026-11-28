@@ -31,6 +31,7 @@ export const providers: Provider[] = [
   { name: 'OpenAI', logoUrl: '/img/providers/openai.svg', status: 'supported' },
   { name: 'Paxa Labs', logoUrl: '/img/providers/paxa-labs.svg', status: 'supported' },
   { name: 'SambaNova', logoUrl: '/img/providers/sambanova.svg', status: 'supported' },
+  { name: 'Scaleway', logoUrl: '/img/providers/scaleway.svg', status: 'supported' },
   { name: 'Tencent LLM Knowledge Engine', logoUrl: '/img/providers/tencent-lke.svg', status: 'supported' },
   { name: 'Tetrate Agent Router Service', logoUrl: '/img/providers/tars.svg', status: 'supported' },
   { name: 'Together AI', logoUrl: '/img/providers/together-ai.svg', status: 'supported' },
