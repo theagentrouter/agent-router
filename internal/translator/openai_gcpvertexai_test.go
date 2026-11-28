@@ -1259,7 +1259,7 @@ data: {"candidates":[{"content":{"parts":[{"text":"The answer is 42.", "thoughtS
 			wantHeaderMut: nil,
 			wantBodyMut: []byte(`data: {"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"let me think about this."}}],"object":"chat.completion.chunk"}
 
-data: {"choices":[{"index":0,"delta":{"content":"The answer is 42.","role":"assistant","thinking_blocks":[{"type":"thinking","signature":"dGVzdHNpZ25hdHVyZQ=="}]}}],"object":"chat.completion.chunk"}
+data: {"choices":[{"index":0,"delta":{"content":"The answer is 42.","role":"assistant","thinking_blocks":[{"type":"thinking","signature":"dGVzdHNpZ25hdHVyZQ==","provider":"gemini"}]}}],"object":"chat.completion.chunk"}
 
 data: {"choices":[],"object":"chat.completion.chunk","usage":{"prompt_tokens":10,"completion_tokens":23,"total_tokens":33,"completion_tokens_details":{"reasoning_tokens":15},"prompt_tokens_details":{}}}
 

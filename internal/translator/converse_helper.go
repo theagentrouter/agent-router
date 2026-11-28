@@ -192,6 +192,10 @@ func openAIMessageToBedrockMessageRoleAssistant(
 		// With string or omitted content, signed reasoning is carried separately in thinking_blocks.
 		for i := range openAiMessage.ThinkingBlocks {
 			block := &openAiMessage.ThinkingBlocks[i]
+			// Unlabeled history predates provider labels. Keep its existing replay behavior.
+			if block.Provider != "" && block.Provider != "bedrock" {
+				continue
+			}
 			if block.Type == "thinking" && block.Signature != "" {
 				text := block.Thinking
 				// A streamed message can carry the text separately from its signature.

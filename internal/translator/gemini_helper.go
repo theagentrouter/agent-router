@@ -844,7 +844,7 @@ func geminiCandidatesToOpenAIChoices(candidates []*genai.Candidate, responseMode
 			}
 			if signature != "" {
 				message.ThinkingBlocks = append(message.ThinkingBlocks, openai.ThinkingBlock{
-					Type: "thinking", Thinking: thoughtSummary, Signature: signature,
+					Type: "thinking", Provider: "gemini", Thinking: thoughtSummary, Signature: signature,
 				})
 			}
 
@@ -862,7 +862,7 @@ func geminiCandidatesToOpenAIChoices(candidates []*genai.Candidate, responseMode
 
 			if toolCallSignature != "" && len(message.ThinkingBlocks) == 0 {
 				message.ThinkingBlocks = append(message.ThinkingBlocks, openai.ThinkingBlock{
-					Type: "thinking", Signature: toolCallSignature,
+					Type: "thinking", Provider: "gemini", Signature: toolCallSignature,
 				})
 			} else if toolCallSignature != "" && len(message.ThinkingBlocks) > 0 {
 				message.ThinkingBlocks[0].Signature = toolCallSignature
