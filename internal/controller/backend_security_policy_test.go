@@ -566,6 +566,57 @@ func TestNewBackendSecurityPolicyController_ReconcileAzureMissingSecretData(t *t
 	require.Equal(t, time.Duration(0), res.RequeueAfter)
 }
 
+func TestNewBackendSecurityPolicyController_ReconcileAzureMissingAuthMethod(t *testing.T) {
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := fake.NewClientBuilder().WithScheme(Scheme).Build()
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil, DefaultPreRotationWindow)
+	bspName := "my-azure-backend-security-policy"
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: "default"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
+			AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
+				ClientID: "some-client-id",
+				TenantID: "some-tenant-id",
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+	_, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: bspName}})
+	require.Error(t, err)
+	require.Equal(t, "one of secret ref or oidc must be defined, namespace default name my-azure-backend-security-policy", err.Error())
+}
+
+func TestNewBackendSecurityPolicyController_ReconcileAzureManagedIdentity(t *testing.T) {
+	eventCh := internaltesting.NewControllerEventChan[*aigv1b1.AIServiceBackend]()
+	cl := fake.NewClientBuilder().WithScheme(Scheme).WithStatusSubresource(&aigv1b1.BackendSecurityPolicy{}).Build()
+	c := NewBackendSecurityPolicyController(cl, fake2.NewClientset(), ctrl.Log, eventCh.Ch, nil, DefaultPreRotationWindow)
+	bspName := "my-azure-managed-identity-policy"
+
+	bsp := &aigv1b1.BackendSecurityPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: bspName, Namespace: "default"},
+		Spec: aigv1b1.BackendSecurityPolicySpec{
+			Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
+			AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
+				ManagedIdentity: &aigv1b1.AzureManagedIdentity{ClientID: "some-client-id"},
+			},
+		},
+	}
+	require.NoError(t, cl.Create(t.Context(), bsp))
+	res, err := c.Reconcile(t.Context(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: bspName}})
+	require.NoError(t, err)
+	// The data plane obtains tokens with its own managed identity: nothing is rotated by the controller.
+	require.Zero(t, res.RequeueAfter)
+	err = cl.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: rotators.GetBSPSecretName(bspName)}, &corev1.Secret{})
+	require.True(t, apierrors.IsNotFound(err), "no token secret must be generated for a managed identity policy")
+
+	var updated aigv1b1.BackendSecurityPolicy
+	require.NoError(t, cl.Get(t.Context(), types.NamespacedName{Namespace: "default", Name: bspName}, &updated))
+	require.Len(t, updated.Status.Conditions, 1)
+	require.Equal(t, aigv1b1.ConditionTypeAccepted, updated.Status.Conditions[0].Type)
+}
+
 // The BackendSecurityPolicy controller must not read a Secret from a foreign namespace referenced
 // via AzureCredentials.ClientSecretRef.Namespace unless a ReferenceGrant authorizes it.
 func TestNewBackendSecurityPolicyController_RotateCredentialAzureCrossNamespaceBlocked(t *testing.T) {
@@ -1618,7 +1669,7 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 			expectedName: "ai-eg-bsp-aws-oidc-bsp",
 		},
 		{
-			name: "Azure without OIDCExchangeToken",
+			name: "Azure with ClientSecretRef",
 			bsp: &aigv1b1.BackendSecurityPolicy{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "azure-bsp",
@@ -1626,8 +1677,22 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 				Spec: aigv1b1.BackendSecurityPolicySpec{
 					Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
 					AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
-						ClientSecretRef:   nil,
-						OIDCExchangeToken: nil,
+						ClientSecretRef: &gwapiv1.SecretObjectReference{Name: "some-azure-secret"},
+					},
+				},
+			},
+			expectedName: "ai-eg-bsp-azure-bsp",
+		},
+		{
+			name: "Azure with ManagedIdentity",
+			bsp: &aigv1b1.BackendSecurityPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "azure-mi-bsp",
+				},
+				Spec: aigv1b1.BackendSecurityPolicySpec{
+					Type: aigv1b1.BackendSecurityPolicyTypeAzureCredentials,
+					AzureCredentials: &aigv1b1.BackendSecurityPolicyAzureCredentials{
+						ManagedIdentity: &aigv1b1.AzureManagedIdentity{ClientID: "some-client-id"},
 					},
 				},
 			},
@@ -1718,10 +1783,7 @@ func TestGetBSPGeneratedSecretName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resultName := getBSPGeneratedSecretName(tt.bsp)
-			if resultName != "" {
-				require.Equal(t, tt.expectedName, resultName)
-			}
+			require.Equal(t, tt.expectedName, getBSPGeneratedSecretName(tt.bsp))
 		})
 	}
 }
