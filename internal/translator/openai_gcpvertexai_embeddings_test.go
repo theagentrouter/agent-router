@@ -30,6 +30,7 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 		wantPath           string
 		wantBodyContains   []string // Substrings that should be present in the request body
 		wantBodyNotContain []string // Substrings that must NOT be present in the request body
+		wantBodyJSON       string   // If set, the request body must be JSON-equal to this
 	}{
 		{
 			name: "embedding request with string input",
@@ -257,13 +258,62 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			wantBodyNotContain: []string{`"instances"`, `"parameters"`},
 		},
 		{
-			name: "embedContent: multiple string inputs rejected (batch not supported)",
+			name: "batchEmbedContents: multiple string inputs become one request entry each",
 			input: openai.EmbeddingRequest{
 				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 				OfCompletion: &openai.EmbeddingCompletionRequest{
 					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2-preview"},
 					Input: openai.EmbeddingRequestInput{
 						Value: []string{"a", "b", "c"},
+					},
+				},
+			},
+			wantPath: "publishers/google/models/gemini-embedding-2-preview:batchEmbedContents",
+			wantBodyJSON: `{"requests":[
+				{"content":{"parts":[{"text":"a"}]}},
+				{"content":{"parts":[{"text":"b"}]}},
+				{"content":{"parts":[{"text":"c"}]}}
+			]}`,
+		},
+		{
+			name: "batchEmbedContents: request-level config is copied into every entry",
+			input: openai.EmbeddingRequest{
+				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2", Dimensions: &[]int{256}[0], GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{AutoTruncate: &[]bool{true}[0], TaskType: "RETRIEVAL_DOCUMENT", Title: "Doc"}},
+				OfCompletion: &openai.EmbeddingCompletionRequest{
+					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2", Dimensions: &[]int{256}[0], GCPVertexAIEmbeddingVendorFields: &openai.GCPVertexAIEmbeddingVendorFields{AutoTruncate: &[]bool{true}[0], TaskType: "RETRIEVAL_DOCUMENT", Title: "Doc"}},
+					Input: openai.EmbeddingRequestInput{
+						Value: []string{"hello", "world"},
+					},
+				},
+			},
+			wantPath: "publishers/google/models/gemini-embedding-2:batchEmbedContents",
+			wantBodyJSON: `{"requests":[
+				{"content":{"parts":[{"text":"hello"}]},"embedContentConfig":{"taskType":"RETRIEVAL_DOCUMENT","title":"Doc","outputDimensionality":256,"autoTruncate":true}},
+				{"content":{"parts":[{"text":"world"}]},"embedContentConfig":{"taskType":"RETRIEVAL_DOCUMENT","title":"Doc","outputDimensionality":256,"autoTruncate":true}}
+			]}`,
+		},
+		{
+			name: "embedContent: single-element string array uses embedContent, not batch",
+			input: openai.EmbeddingRequest{
+				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2"},
+				OfCompletion: &openai.EmbeddingCompletionRequest{
+					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2"},
+					Input: openai.EmbeddingRequestInput{
+						Value: []string{"only"},
+					},
+				},
+			},
+			wantPath:     "publishers/google/models/gemini-embedding-2:embedContent",
+			wantBodyJSON: `{"content":{"parts":[{"text":"only"}]}}`,
+		},
+		{
+			name: "embedContent: empty string array is rejected",
+			input: openai.EmbeddingRequest{
+				EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2"},
+				OfCompletion: &openai.EmbeddingCompletionRequest{
+					EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2"},
+					Input: openai.EmbeddingRequestInput{
+						Value: []string{},
 					},
 				},
 			},
@@ -616,6 +666,9 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_RequestBody(t *testing.T) {
 			}
 			for _, substr := range tc.wantBodyNotContain {
 				require.NotContains(t, bodyStr, substr, "body should not contain %q", substr)
+			}
+			if tc.wantBodyJSON != "" {
+				require.JSONEq(t, tc.wantBodyJSON, bodyStr)
 			}
 		})
 	}
@@ -1163,6 +1216,128 @@ func TestOpenAIToGCPVertexAITranslatorV1Embedding_EmbedContentResponseBody(t *te
 			}
 		})
 	}
+}
+
+func TestOpenAIToGCPVertexAITranslatorV1Embedding_BatchEmbedContentsResponseBody(t *testing.T) {
+	tests := []struct {
+		name            string
+		gcpResponse     string
+		wantError       bool
+		wantTokenUsage  metrics.TokenUsage
+		wantEmbeddings  [][]float64
+		wantPromptToken int
+	}{
+		{
+			name: "multiple embeddings in request order with batch usageMetadata",
+			gcpResponse: `{
+				"embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}, {"values": [0.5, 0.6]}],
+				"usageMetadata": {"promptTokenCount": 6, "totalTokenCount": 6, "trafficType": "ON_DEMAND"}
+			}`,
+			wantTokenUsage:  tokenUsageFrom(6, -1, -1, -1, 6, -1),
+			wantEmbeddings:  [][]float64{{0.1, 0.2}, {0.3, 0.4}, {0.5, 0.6}},
+			wantPromptToken: 6,
+		},
+		{
+			name:            "no embeddings and no usageMetadata",
+			gcpResponse:     `{}`,
+			wantTokenUsage:  tokenUsageFrom(0, -1, -1, -1, 0, -1),
+			wantEmbeddings:  [][]float64{},
+			wantPromptToken: 0,
+		},
+		{
+			name:            "null embedding entry becomes an empty vector",
+			gcpResponse:     `{"embeddings": [{"values": [0.1]}, null]}`,
+			wantTokenUsage:  tokenUsageFrom(0, -1, -1, -1, 0, -1),
+			wantEmbeddings:  [][]float64{{0.1}, {}},
+			wantPromptToken: 0,
+		},
+		{
+			name:        "invalid JSON",
+			gcpResponse: `{"embeddings": invalid}`,
+			wantError:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			translator := NewEmbeddingOpenAIToGCPVertexAITranslator("gemini-embedding-2", "").(*openAIToGCPVertexAITranslatorV1Embedding)
+			translator.requestModel = "gemini-embedding-2"
+			translator.useBatchEmbedContents = true
+
+			headerMut, bodyMut, tokenUsage, responseModel, err := translator.ResponseBody(nil, strings.NewReader(tc.gcpResponse), true, nil)
+			if tc.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, headerMut, 1)
+			require.Equal(t, contentLengthHeaderName, headerMut[0].Key())
+			require.Equal(t, "gemini-embedding-2", responseModel)
+			if diff := cmp.Diff(tc.wantTokenUsage, tokenUsage, cmp.AllowUnexported(metrics.TokenUsage{})); diff != "" {
+				t.Errorf("TokenUsage mismatch (-want +got):\n%s", diff)
+			}
+
+			var actual openai.EmbeddingResponse
+			require.NoError(t, json.Unmarshal(bodyMut, &actual))
+			require.Equal(t, "list", actual.Object)
+			require.Equal(t, "gemini-embedding-2", actual.Model)
+			require.Equal(t, tc.wantPromptToken, actual.Usage.PromptTokens)
+			require.Equal(t, tc.wantPromptToken, actual.Usage.TotalTokens)
+			require.Len(t, actual.Data, len(tc.wantEmbeddings))
+			for i, want := range tc.wantEmbeddings {
+				require.Equal(t, "embedding", actual.Data[i].Object)
+				require.Equal(t, i, actual.Data[i].Index)
+				require.False(t, actual.Data[i].Truncated)
+				got := actual.Data[i].Embedding.Value.([]float64)
+				require.Len(t, got, len(want))
+				for j := range want {
+					require.InDelta(t, want[j], got[j], 1e-6)
+				}
+			}
+		})
+	}
+}
+
+// TestResponseModel_GCPVertexAIEmbeddings_BatchEmbedContents tests the end-to-end flow for multiple string
+// inputs: RequestBody selects batchEmbedContents, then ResponseBody parses the embeddings array, and a
+// following single-input request on the same translator switches back to embedContent parsing.
+func TestResponseModel_GCPVertexAIEmbeddings_BatchEmbedContents(t *testing.T) {
+	translator := NewEmbeddingOpenAIToGCPVertexAITranslator("gemini-embedding-2", "")
+
+	req := &openai.EmbeddingRequest{
+		EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2"},
+		OfCompletion: &openai.EmbeddingCompletionRequest{
+			EmbeddingBaseRequest: openai.EmbeddingBaseRequest{Model: "gemini-embedding-2"},
+			Input:                openai.EmbeddingRequestInput{Value: []string{"hello", "world"}},
+		},
+	}
+	headers, _, err := translator.RequestBody(nil, req, false)
+	require.NoError(t, err)
+	require.Equal(t, "publishers/google/models/gemini-embedding-2:batchEmbedContents", headers[0].Value())
+
+	_, respBody, tokenUsage, _, err := translator.ResponseBody(nil, strings.NewReader(`{
+		"embeddings": [{"values": [0.1, 0.2]}, {"values": [0.3, 0.4]}],
+		"usageMetadata": {"promptTokenCount": 2, "totalTokenCount": 2}
+	}`), true, nil)
+	require.NoError(t, err)
+	inputTokens, ok := tokenUsage.InputTokens()
+	require.True(t, ok)
+	require.Equal(t, uint32(2), inputTokens)
+	var actual openai.EmbeddingResponse
+	require.NoError(t, json.Unmarshal(respBody, &actual))
+	require.Len(t, actual.Data, 2)
+	require.Equal(t, 1, actual.Data[1].Index)
+
+	// A single input on the same translator must go back to embedContent and its singular response shape.
+	req.OfCompletion.Input = openai.EmbeddingRequestInput{Value: "hello"}
+	headers, _, err = translator.RequestBody(nil, req, false)
+	require.NoError(t, err)
+	require.Equal(t, "publishers/google/models/gemini-embedding-2:embedContent", headers[0].Value())
+	_, respBody, _, _, err = translator.ResponseBody(nil, strings.NewReader(`{"embedding": {"values": [0.1, 0.2]}}`), true, nil)
+	require.NoError(t, err)
+	actual = openai.EmbeddingResponse{}
+	require.NoError(t, json.Unmarshal(respBody, &actual))
+	require.Len(t, actual.Data, 1)
 }
 
 func TestIsEmbedContentModel(t *testing.T) {
