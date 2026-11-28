@@ -7,8 +7,8 @@ package bodymutator
 
 import (
 	"fmt"
-	"strings"
 
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -35,50 +35,6 @@ func NewBodyMutator(bodyMutations *filterapi.HTTPBodyMutation, originalBody []by
 // upstream filter's body-replacement path entirely.
 func (b *BodyMutator) HasMutations() bool {
 	return b != nil && b.bodyMutations != nil
-}
-
-// isJSONValue checks if a string represents a JSON value (not a plain string)
-func isJSONValue(value string) bool {
-	value = strings.TrimSpace(value)
-
-	// Check for quoted strings (JSON strings)
-	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
-		return true
-	}
-
-	// Check for numbers (integers or floats)
-	if value == "0" || value == "true" || value == "false" || value == "null" {
-		return true
-	}
-
-	// Check for positive/negative numbers
-	if len(value) > 0 {
-		first := value[0]
-		if (first >= '0' && first <= '9') || first == '-' || first == '+' {
-			// Simple number check - contains only digits, dots, +, -, e, E
-			isNumber := true
-			for _, r := range value {
-				if (r < '0' || r > '9') && r != '.' && r != '-' && r != '+' && r != 'e' && r != 'E' {
-					isNumber = false
-					break
-				}
-			}
-			if isNumber {
-				return true
-			}
-		}
-	}
-
-	// Check for objects or arrays
-	if strings.HasPrefix(value, "{") && strings.HasSuffix(value, "}") {
-		return true
-	}
-	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
-		return true
-	}
-
-	// Default to plain string
-	return false
 }
 
 // Mutate mutates the request body based on the body mutations.
@@ -109,7 +65,7 @@ func (b *BodyMutator) Mutate(requestBody []byte) ([]byte, error) {
 			if field.Path != "" {
 				// Check value type to determine appropriate sjson method
 				// TODO handle JSON value check in configuration load time too.
-				if isJSONValue(field.Value) {
+				if gjson.Valid(field.Value) {
 					// Use SetRawBytes for JSON values (quoted strings, numbers, booleans, objects, arrays)
 					mutatedBody, err = sjson.SetRawBytesOptions(mutatedBody, field.Path, []byte(field.Value), &sjson.Options{ReplaceInPlace: true})
 				} else {
