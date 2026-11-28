@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	gcpMethodPredict      = "predict"
-	gcpMethodEmbedContent = "embedContent"
+	gcpMethodPredict            = "predict"
+	gcpMethodEmbedContent       = "embedContent"
+	gcpMethodBatchEmbedContents = "batchEmbedContents"
 )
 
 // NewEmbeddingOpenAIToGCPVertexAITranslator implements [Factory] for OpenAI to GCP VertexAI translation
@@ -38,13 +39,17 @@ func NewEmbeddingOpenAIToGCPVertexAITranslator(requestModel internalapi.RequestM
 // openAIToGCPVertexAITranslatorV1Embedding translates OpenAI Embeddings API to GCP Vertex AI Gemini Embeddings API.
 // It auto-detects the endpoint based on model name:
 //   - Older models (text-embedding-004, gemini-embedding-001): predict endpoint
-//   - Newer models (gemini-embedding-2-*): embedContent endpoint
+//   - Newer models (gemini-embedding-2-*): embedContent endpoint for a single input, batchEmbedContents
+//     endpoint for multiple string inputs
 //
 // https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api
 type openAIToGCPVertexAITranslatorV1Embedding struct {
 	requestModel      internalapi.RequestModel
 	modelNameOverride internalapi.ModelNameOverride
 	useEmbedContent   bool
+	// useBatchEmbedContents is set when the request was sent to batchEmbedContents, whose response
+	// carries an embeddings array instead of embedContent's single embedding.
+	useBatchEmbedContents bool
 }
 
 // createInstancesFromEmbeddingInputItem converts an EmbeddingInputItem to GCP Instance(s).
@@ -210,43 +215,49 @@ func collectPartsFromMessages(messages []openai.ChatCompletionMessageParamUnion,
 	return parts, nil
 }
 
-// openAIEmbeddingToEmbedContentRequest converts an OpenAI EmbeddingRequest to a GCP EmbedContentRequest.
-// Each input text becomes a separate Part in a single Content object.
-// When messages are provided, multimodal content parts are extracted from user messages.
-func openAIEmbeddingToEmbedContentRequest(openAIReq *openai.EmbeddingRequest, requestModel internalapi.RequestModel) (*gcp.EmbedContentRequest, error) {
-	var parts []*genai.Part
+// openAIEmbeddingToEmbedContentRequests converts an OpenAI EmbeddingRequest to one GCP EmbedContentRequest
+// per embedding the client expects back.
+//   - Chat messages: all multimodal parts from user messages go into one Content, producing one embedding.
+//   - String input: each string becomes its own Content, producing one embedding per string. Packing the
+//     strings as parts of a single Content would merge them into one embedding instead.
+func openAIEmbeddingToEmbedContentRequests(openAIReq *openai.EmbeddingRequest, requestModel internalapi.RequestModel) ([]gcp.EmbedContentRequest, error) {
+	config := embedContentConfigFromOpenAI(openAIReq)
 
 	switch {
 	case openAIReq.OfChat != nil:
-		// Multimodal path: convert chat messages to genai parts.
-		var err error
-		parts, err = collectPartsFromMessages(openAIReq.OfChat.Messages, requestModel)
+		parts, err := collectPartsFromMessages(openAIReq.OfChat.Messages, requestModel)
 		if err != nil {
 			return nil, err
 		}
+		return []gcp.EmbedContentRequest{{Content: genai.Content{Parts: parts}, Config: config}}, nil
 	case openAIReq.OfCompletion != nil:
-		// Text-only path: existing collectInputTexts logic.
 		texts, err := collectInputTexts(openAIReq.OfCompletion.Input)
 		if err != nil {
 			return nil, err
 		}
-		if len(texts) > 1 {
-			return nil, fmt.Errorf("%w: model %s does not support batch embeddings; send one input per request", internalapi.ErrInvalidRequestBody, requestModel)
+		if len(texts) == 0 {
+			return nil, fmt.Errorf("%w: embedding input must not be empty", internalapi.ErrInvalidRequestBody)
 		}
-		parts = make([]*genai.Part, len(texts))
+		reqs := make([]gcp.EmbedContentRequest, len(texts))
 		for i, text := range texts {
-			parts[i] = genai.NewPartFromText(text)
+			// Every entry shares the same config: batchEmbedContents rejects entries whose
+			// outputDimensionality or autoTruncate differ from the first entry.
+			reqs[i] = gcp.EmbedContentRequest{
+				Content: genai.Content{Parts: []*genai.Part{genai.NewPartFromText(text)}},
+				Config:  config,
+			}
 		}
+		return reqs, nil
 	default:
 		return nil, fmt.Errorf("%w: embedding request must have either input or messages", internalapi.ErrInvalidRequestBody)
 	}
+}
 
-	req := &gcp.EmbedContentRequest{
-		Content: genai.Content{Parts: parts},
-	}
-
-	// Config fields are sent via "embedContentConfig" (not deprecated top-level fields).
-	// https://github.com/googleapis/go-genai/blob/v1.54.0/models.go#L727
+// embedContentConfigFromOpenAI builds the embedContentConfig from request-level OpenAI fields.
+// It returns nil when no field is set so that embedContentConfig is omitted from the request.
+// Config fields are sent via "embedContentConfig" (not deprecated top-level fields).
+// https://github.com/googleapis/go-genai/blob/v1.54.0/models.go#L727
+func embedContentConfigFromOpenAI(openAIReq *openai.EmbeddingRequest) *gcp.EmbedContentConfig {
 	var config gcp.EmbedContentConfig
 	hasConfig := false
 
@@ -273,11 +284,10 @@ func openAIEmbeddingToEmbedContentRequest(openAIReq *openai.EmbeddingRequest, re
 		}
 	}
 
-	if hasConfig {
-		req.Config = &config
+	if !hasConfig {
+		return nil
 	}
-
-	return req, nil
+	return &config
 }
 
 // RequestBody implements [OpenAIEmbeddingTranslator.RequestBody] for GCP Gemini.
@@ -294,20 +304,28 @@ func (o *openAIToGCPVertexAITranslatorV1Embedding) RequestBody(_ []byte, req *op
 	var path string
 
 	if isEmbedContentModel(o.requestModel) {
-		o.useEmbedContent = true
-		path, err = buildGCPModelPathSuffix(gcpModelPublisherGoogle, o.requestModel, gcpMethodEmbedContent)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		var gcpReq *gcp.EmbedContentRequest
-		gcpReq, err = openAIEmbeddingToEmbedContentRequest(req, o.requestModel)
+		var gcpReqs []gcp.EmbedContentRequest
+		gcpReqs, err = openAIEmbeddingToEmbedContentRequests(req, o.requestModel)
 		if err != nil {
 			return nil, nil, fmt.Errorf("error converting EmbeddingRequest: %w", err)
 		}
-		newBody, err = json.Marshal(gcpReq)
+		if len(gcpReqs) == 1 {
+			o.useEmbedContent, o.useBatchEmbedContents = true, false
+			path, err = buildGCPModelPathSuffix(gcpModelPublisherGoogle, o.requestModel, gcpMethodEmbedContent)
+			if err != nil {
+				return nil, nil, err
+			}
+			newBody, err = json.Marshal(gcpReqs[0])
+		} else {
+			o.useEmbedContent, o.useBatchEmbedContents = false, true
+			path, err = buildGCPModelPathSuffix(gcpModelPublisherGoogle, o.requestModel, gcpMethodBatchEmbedContents)
+			if err != nil {
+				return nil, nil, err
+			}
+			newBody, err = json.Marshal(gcp.BatchEmbedContentsRequest{Requests: gcpReqs})
+		}
 	} else {
-		o.useEmbedContent = false
+		o.useEmbedContent, o.useBatchEmbedContents = false, false
 
 		if req.OfChat != nil {
 			return nil, nil, fmt.Errorf("%w: model %s does not support multimodal embedding via messages", internalapi.ErrInvalidRequestBody, o.requestModel)
@@ -358,9 +376,12 @@ func (o *openAIToGCPVertexAITranslatorV1Embedding) ResponseBody(_ map[string]str
 	var openaiResp openai.EmbeddingResponse
 	var promptTokens int
 
-	if o.useEmbedContent {
+	switch {
+	case o.useBatchEmbedContents:
+		openaiResp, promptTokens, err = o.parseBatchEmbedContentsResponse(respBody)
+	case o.useEmbedContent:
 		openaiResp, promptTokens, err = o.parseEmbedContentResponse(respBody)
-	} else {
+	default:
 		openaiResp, promptTokens, err = o.parsePredictResponse(respBody)
 	}
 	if err != nil {
@@ -461,6 +482,42 @@ func (o *openAIToGCPVertexAITranslatorV1Embedding) parseEmbedContentResponse(res
 		openaiResp.Data = []openai.Embedding{}
 	}
 
+	return openaiResp, promptTokens, nil
+}
+
+// parseBatchEmbedContentsResponse parses a GCP BatchEmbedContentsResponse and converts it to the OpenAI format.
+// Embeddings are returned in request order, so the array position is the OpenAI index. The batch response
+// has no per-embedding truncation flag, so Truncated is left false.
+func (o *openAIToGCPVertexAITranslatorV1Embedding) parseBatchEmbedContentsResponse(respBody []byte) (openai.EmbeddingResponse, int, error) {
+	var gcpResp gcp.BatchEmbedContentsResponse
+	if err := json.Unmarshal(respBody, &gcpResp); err != nil {
+		return openai.EmbeddingResponse{}, 0, fmt.Errorf("failed to unmarshal batchEmbedContents response: %w", err)
+	}
+
+	openaiResp := openai.EmbeddingResponse{
+		Object: "list",
+		Model:  o.requestModel,
+		Data:   make([]openai.Embedding, len(gcpResp.Embeddings)),
+	}
+	for i, emb := range gcpResp.Embeddings {
+		float64Values := []float64{}
+		if emb != nil {
+			float64Values = make([]float64, len(emb.Values))
+			for j, v := range emb.Values {
+				float64Values[j] = float64(v)
+			}
+		}
+		openaiResp.Data[i] = openai.Embedding{
+			Object:    "embedding",
+			Index:     i,
+			Embedding: openai.EmbeddingUnion{Value: float64Values},
+		}
+	}
+
+	var promptTokens int
+	if gcpResp.UsageMetadata != nil {
+		promptTokens = gcpResp.UsageMetadata.PromptTokenCount
+	}
 	return openaiResp, promptTokens, nil
 }
 
