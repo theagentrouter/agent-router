@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/envoyproxy/ai-gateway/internal/testing/testotel"
 )
@@ -203,6 +204,110 @@ func TestRecordProgressNotifications(t *testing.T) {
 	m.RecordProgress(t.Context(), nil)
 	val = testotel.GetCounterValue(t, mr, mpcProgressNotifications, attribute.NewSet())
 	require.Equal(t, float64(2), val)
+}
+
+func TestRecordNotificationStreamLifecycle(t *testing.T) {
+	mr := metric.NewManualReader()
+	meter := metric.NewMeterProvider(metric.WithReader(mr)).Meter("test")
+
+	m := NewMCP(meter, nil).WithBackend("backend1")
+	backendAttrs := attribute.NewSet(attribute.String(mcpAttributeBackend, "backend1"))
+
+	m.RecordNotificationStreamOpenAttempt(t.Context())
+	require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, mcpNotificationStreamOpenAttempts, backendAttrs))
+
+	m.RecordNotificationStreamOpenOutcome(t.Context(), MCPNotificationStreamOutcomeOpened)
+	require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, mcpNotificationStreamOpenOutcomes, attribute.NewSet(
+		attribute.String(mcpAttributeBackend, "backend1"),
+		attribute.String(mcpAttributeStreamOutcome, string(MCPNotificationStreamOutcomeOpened)),
+	)))
+	require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, mcpNotificationStreamActive, backendAttrs))
+
+	m.RecordNotificationStreamEnd(t.Context(), time.Now().Add(-30*time.Second), MCPNotificationStreamEndReasonEOF)
+	require.Equal(t, float64(0), testotel.GetCounterValue(t, mr, mcpNotificationStreamActive, backendAttrs))
+	count, sum := testotel.GetHistogramValues(t, mr, mcpNotificationStreamDuration, attribute.NewSet(
+		attribute.String(mcpAttributeBackend, "backend1"),
+		attribute.String(mcpAttributeStreamEndReason, string(MCPNotificationStreamEndReasonEOF)),
+	))
+	require.Equal(t, uint64(1), count)
+	// The lower bound is exact; the upper bound only tolerates scheduler pauses.
+	require.GreaterOrEqual(t, sum, 30.0)
+	require.Less(t, sum, 40.0)
+
+	// The lifetime histogram is in seconds with buckets that cover short failures and long-lived streams.
+	var data metricdata.ResourceMetrics
+	require.NoError(t, mr.Collect(t.Context(), &data))
+	var found bool
+	for _, sm := range data.ScopeMetrics {
+		for _, md := range sm.Metrics {
+			if md.Name != mcpNotificationStreamDuration {
+				continue
+			}
+			found = true
+			require.Equal(t, "s", md.Unit)
+			dps := md.Data.(metricdata.Histogram[float64]).DataPoints
+			require.Len(t, dps, 1)
+			require.Equal(t, []float64{0.1, 1, 5, 15, 30, 60, 300, 900, 1800, 3600, 7200}, dps[0].Bounds)
+		}
+	}
+	require.True(t, found)
+}
+
+func TestRecordNotificationStreamOpenOutcome(t *testing.T) {
+	mr := metric.NewManualReader()
+	meter := metric.NewMeterProvider(metric.WithReader(mr)).Meter("test")
+
+	m := NewMCP(meter, nil).WithBackend("backend1")
+	backendAttrs := attribute.NewSet(attribute.String(mcpAttributeBackend, "backend1"))
+	// One open stream so that the active gauge exists and can be checked for changes.
+	m.RecordNotificationStreamOpenOutcome(t.Context(), MCPNotificationStreamOutcomeOpened)
+
+	for _, outcome := range []MCPNotificationStreamOutcome{
+		MCPNotificationStreamOutcomeUnsupported,
+		MCPNotificationStreamOutcomeHTTP4xx,
+		MCPNotificationStreamOutcomeHTTP5xx,
+		MCPNotificationStreamOutcomeHTTPOther,
+		MCPNotificationStreamOutcomeTransportError,
+		MCPNotificationStreamOutcomeCancelled,
+	} {
+		m.RecordNotificationStreamOpenOutcome(t.Context(), outcome)
+		require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, mcpNotificationStreamOpenOutcomes, attribute.NewSet(
+			attribute.String(mcpAttributeBackend, "backend1"),
+			attribute.String(mcpAttributeStreamOutcome, string(outcome)),
+		)), "outcome %s", outcome)
+		// Only the opened outcome changes the number of active streams.
+		require.Equal(t, float64(1), testotel.GetCounterValue(t, mr, mcpNotificationStreamActive, backendAttrs), "outcome %s", outcome)
+	}
+}
+
+func TestRecordNotificationStreamEnd(t *testing.T) {
+	mr := metric.NewManualReader()
+	meter := metric.NewMeterProvider(metric.WithReader(mr)).Meter("test")
+
+	m := NewMCP(meter, nil).WithBackend("backend1")
+	backendAttrs := attribute.NewSet(attribute.String(mcpAttributeBackend, "backend1"))
+
+	reasons := []MCPNotificationStreamEndReason{
+		MCPNotificationStreamEndReasonEOF,
+		MCPNotificationStreamEndReasonCancelled,
+		MCPNotificationStreamEndReasonError,
+	}
+	for range reasons {
+		m.RecordNotificationStreamOpenOutcome(t.Context(), MCPNotificationStreamOutcomeOpened)
+	}
+	require.Equal(t, float64(len(reasons)), testotel.GetCounterValue(t, mr, mcpNotificationStreamActive, backendAttrs))
+
+	for i, reason := range reasons {
+		m.RecordNotificationStreamEnd(t.Context(), time.Now().Add(-10*time.Second), reason)
+		count, sum := testotel.GetHistogramValues(t, mr, mcpNotificationStreamDuration, attribute.NewSet(
+			attribute.String(mcpAttributeBackend, "backend1"),
+			attribute.String(mcpAttributeStreamEndReason, string(reason)),
+		))
+		require.Equal(t, uint64(1), count, "reason %s", reason)
+		require.GreaterOrEqual(t, sum, 10.0, "reason %s", reason)
+		require.Less(t, sum, 20.0, "reason %s", reason)
+		require.Equal(t, float64(len(reasons)-i-1), testotel.GetCounterValue(t, mr, mcpNotificationStreamActive, backendAttrs))
+	}
 }
 
 func TestWithBackend(t *testing.T) {
