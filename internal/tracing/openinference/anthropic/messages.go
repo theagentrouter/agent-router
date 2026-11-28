@@ -57,7 +57,7 @@ func (r *MessageRecorder) StartParams(*anthropic.MessagesRequest, []byte) (spanN
 
 // RecordRequest implements the same method as defined in tracingapi.MessageRecorder.
 func (r *MessageRecorder) RecordRequest(span trace.Span, chatReq *anthropic.MessagesRequest, body []byte) {
-	span.SetAttributes(buildRequestAttributes(chatReq, string(body), r.traceConfig)...)
+	span.SetAttributes(buildRequestAttributes(chatReq, openinference.StringView(body), r.traceConfig)...)
 }
 
 // RecordResponseChunks implements the same method as defined in tracingapi.MessageRecorder.

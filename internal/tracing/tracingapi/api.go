@@ -69,6 +69,9 @@ type (
 		//   - headerMutation: The new span will have its context written to these headers unless NoopTracing is used.
 		//   - req: The typed request used to detect streaming and record request attributes.
 		//   - body: contains the original raw request body as a byte slice.
+		//     Recorders may share body's backing array with span attributes
+		//     (for example input.value), so callers must not mutate body while
+		//     those attributes remain reachable.
 		//
 		// Returns nil unless the span is sampled.
 		StartSpanAndInjectHeaders(ctx context.Context, headers map[string]string, carrier propagation.TextMapCarrier, req *ReqT, body []byte) Span[RespT, RespChunkT]

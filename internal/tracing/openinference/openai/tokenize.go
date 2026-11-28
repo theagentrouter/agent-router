@@ -55,7 +55,7 @@ func (r *TokenizeRecorder) StartParams(*tokenize.RequestUnion, []byte) (spanName
 
 // RecordRequest implements the same method as defined in tracingapi.TokenizeRecorder.
 func (r *TokenizeRecorder) RecordRequest(span trace.Span, tokenizeReq *tokenize.RequestUnion, body []byte) {
-	span.SetAttributes(buildTokenizeRequestAttributes(tokenizeReq, string(body), r.traceConfig)...)
+	span.SetAttributes(buildTokenizeRequestAttributes(tokenizeReq, openinference.StringView(body), r.traceConfig)...)
 }
 
 // RecordResponseOnError implements the same method as defined in tracingapi.TokenizeRecorder.

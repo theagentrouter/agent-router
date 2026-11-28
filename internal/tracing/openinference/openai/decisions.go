@@ -55,7 +55,7 @@ func (r *DecisionsRecorder) RecordRequest(span trace.Span, req *openaischema.Dec
 			body, r.traceConfig.HideInputImages, r.traceConfig.Base64ImageMaxLength, decisionsImagePartArrays,
 		)
 		if err == nil {
-			attrs = append(attrs, attribute.String(openinference.InputValue, string(modifiedBody)))
+			attrs = append(attrs, attribute.String(openinference.InputValue, openinference.StringView(modifiedBody)))
 		}
 		attrs = append(attrs, attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON))
 	}

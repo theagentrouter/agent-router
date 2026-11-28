@@ -56,7 +56,7 @@ func (r *ChatCompletionRecorder) StartParams(*openai.ChatCompletionRequest, []by
 
 // RecordRequest implements the same method as defined in tracingapi.ChatCompletionRecorder.
 func (r *ChatCompletionRecorder) RecordRequest(span trace.Span, chatReq *openai.ChatCompletionRequest, body []byte) {
-	span.SetAttributes(buildRequestAttributes(chatReq, string(body), r.traceConfig)...)
+	span.SetAttributes(buildRequestAttributes(chatReq, openinference.StringView(body), r.traceConfig)...)
 }
 
 // RecordResponseChunks implements the same method as defined in tracingapi.ChatCompletionRecorder.

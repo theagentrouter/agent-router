@@ -57,7 +57,7 @@ func (r *ImageGenerationRecorder) StartParams(*openai.ImageGenerationRequest, []
 
 // RecordRequest implements the same method as defined in tracingapi.ImageGenerationRecorder.
 func (r *ImageGenerationRecorder) RecordRequest(span trace.Span, req *openai.ImageGenerationRequest, body []byte) {
-	span.SetAttributes(buildImageGenerationRequestAttributes(req, string(body), r.traceConfig)...)
+	span.SetAttributes(buildImageGenerationRequestAttributes(req, openinference.StringView(body), r.traceConfig)...)
 }
 
 // RecordResponse implements the same method as defined in tracingapi.ImageGenerationRecorder.

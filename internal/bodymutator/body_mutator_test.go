@@ -190,3 +190,19 @@ func TestBodyMutator_Mutate_InvalidJSONValue(t *testing.T) {
 	require.Equal(t, "not valid json but will be treated as string", result["service_tier"])
 	require.Equal(t, "valid", result["valid_field"])
 }
+
+func TestBodyMutator_Mutate_DoesNotMutateInput(t *testing.T) {
+	bodyMutations := &filterapi.HTTPBodyMutation{
+		Set: []filterapi.HTTPBodyField{
+			{Path: "service_tier", Value: "\"scale\""},
+		},
+	}
+	mutator := NewBodyMutator(bodyMutations, nil)
+	requestBody := []byte(`{"model":"gpt-4","service_tier":"default"}`)
+	original := string(requestBody)
+
+	mutatedBody, err := mutator.Mutate(requestBody)
+	require.NoError(t, err)
+	require.NotEqual(t, original, string(mutatedBody))
+	require.Equal(t, original, string(requestBody), "Mutate must not modify the caller's buffer")
+}

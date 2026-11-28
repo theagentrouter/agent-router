@@ -49,7 +49,7 @@ func (r *ResponsesInputTokensRecorder) RecordRequest(span trace.Span, req *opena
 	}
 	if !r.traceConfig.HideInputs {
 		attrs = append(attrs,
-			attribute.String(openinference.InputValue, string(body)),
+			attribute.String(openinference.InputValue, openinference.StringView(body)),
 			attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
 		)
 	}

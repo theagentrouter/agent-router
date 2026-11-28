@@ -231,7 +231,7 @@ func buildEmbeddingsRequestAttributes(embRequest *openai.EmbeddingRequest, body 
 		attrs = append(attrs, attribute.String(openinference.InputValue, openinference.RedactedValue))
 	} else {
 		attrs = append(attrs,
-			attribute.String(openinference.InputValue, string(body)),
+			attribute.String(openinference.InputValue, openinference.StringView(body)),
 			attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
 		)
 	}
@@ -317,7 +317,7 @@ func buildCompletionRequestAttributes(req *openai.CompletionRequest, body []byte
 		attrs = append(attrs, attribute.String(openinference.InputValue, openinference.RedactedValue))
 	} else {
 		attrs = append(attrs,
-			attribute.String(openinference.InputValue, string(body)),
+			attribute.String(openinference.InputValue, openinference.StringView(body)),
 			attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
 		)
 	}
@@ -379,7 +379,7 @@ func buildResponsesRequestAttributes(req *openai.ResponseRequest, body []byte, c
 		// Redact images if hide input images is true OR if base64 image max length is set
 		modifiedBody, err := redactImageFromResponseRequestParameters(body, config.HideInputImages, config.Base64ImageMaxLength, responsesImagePartArrays)
 		if err == nil {
-			attrs = append(attrs, attribute.String(openinference.InputValue, string(modifiedBody)))
+			attrs = append(attrs, attribute.String(openinference.InputValue, openinference.StringView(modifiedBody)))
 		}
 	}
 	attrs = append(attrs, attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON))
