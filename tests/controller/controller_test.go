@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	gwaiev1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -44,6 +45,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// Serve the test managers' metrics on a free loopback port. On the default :8080 the suite fails
+	// when another process, or another run of this suite, listens on that port.
+	metricsserver.DefaultBindAddress = "127.0.0.1:0"
 	goleak.VerifyTestMain(m)
 }
 
