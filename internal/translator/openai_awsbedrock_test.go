@@ -2609,6 +2609,32 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_WithReasoning
 	require.False(t, hasReasoning, "reasoning_content key must be omitted for a signature-only block")
 }
 
+func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_WithReasoningSignatureOnly(t *testing.T) {
+	o := &openAIToAWSBedrockTranslatorV1ChatCompletion{stream: true}
+	var first bytes.Buffer
+	writeEventStreamMessage(t, &first, "messageStart", []byte(`{"role":"assistant"}`))
+	writeEventStreamMessage(t, &first, "contentBlockDelta", []byte(`{"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"sig_only"}}}`))
+
+	_, body, _, _, err := o.ResponseBody(nil, &first, false, nil)
+	require.NoError(t, err)
+	events := parseSSEEventsFromBytes(body)
+	require.Len(t, events, 2)
+	delta := gjson.Get(events[1].data, "choices.0.delta")
+	require.JSONEq(t, `[{"type":"thinking","signature":"sig_only"}]`, delta.Get("thinking_blocks").Raw)
+	require.False(t, delta.Get("reasoning_content").Exists(), "signature-only delta must omit reasoning_content")
+
+	var rest bytes.Buffer
+	writeEventStreamMessage(t, &rest, "contentBlockDelta", []byte(`{"contentBlockIndex":1,"delta":{"text":"Hello!"}}`))
+	writeEventStreamMessage(t, &rest, "messageStop", []byte(`{"stopReason":"end_turn"}`))
+	_, body, _, _, err = o.ResponseBody(nil, &rest, true, nil)
+	require.NoError(t, err)
+	events = parseSSEEventsFromBytes(body)
+	require.Len(t, events, 3)
+	require.Equal(t, "Hello!", gjson.Get(events[0].data, "choices.0.delta.content").String())
+	require.Equal(t, "stop", gjson.Get(events[1].data, "choices.0.finish_reason").String())
+	require.Equal(t, "[DONE]", events[2].data)
+}
+
 func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_WithRedactedContent(t *testing.T) {
 	redactedBytes := []byte("a redacted thought")
 	inputEvents := []awsbedrock.ConverseStreamEvent{
