@@ -15,6 +15,7 @@ import (
 
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/llmcostcel"
 )
 
 const (
@@ -95,6 +96,35 @@ func BuildRateLimitConfigs(
 	policy *aigv1a1.QuotaPolicy,
 	backends []*aigv1b1.AIServiceBackend,
 ) ([]*rlsconfv3.RateLimitConfig, error) {
+	if budget := policy.Spec.AggregateUserBudget; budget != nil {
+		if err := ValidateAggregateUserBudget(policy); err != nil {
+			return nil, err
+		}
+		tiers := make([]string, 0, len(budget.TierLimits))
+		for tier := range budget.TierLimits {
+			tiers = append(tiers, tier)
+		}
+		sort.Strings(tiers)
+		limits := make([]*rlsconfv3.RateLimitDescriptor, 0, len(tiers))
+		for _, tier := range tiers {
+			limits = append(limits, &rlsconfv3.RateLimitDescriptor{
+				Key: AggregateTierDescriptorKey, Value: tier,
+				RateLimit: &rlsconfv3.RateLimitPolicy{
+					RequestsPerUnit: budget.TierLimits[tier], Unit: rlsconfv3.RateLimitUnit_MONTH,
+				},
+				QuotaMode: true,
+			})
+		}
+		return []*rlsconfv3.RateLimitConfig{{
+			Name: QuotaDomain, Domain: QuotaDomain,
+			Descriptors: []*rlsconfv3.RateLimitDescriptor{{
+				Key: AggregateBudgetDescriptorKey, Value: budget.Name,
+				Descriptors: []*rlsconfv3.RateLimitDescriptor{{
+					Key: AggregateUserDescriptorKey, Descriptors: limits,
+				}},
+			}},
+		}}, nil
+	}
 	var backendDescriptors []*rlsconfv3.RateLimitDescriptor
 	for _, backend := range backends {
 		desc, err := buildBackendDescriptor(policy, backend)
@@ -117,6 +147,41 @@ func BuildRateLimitConfigs(
 			Descriptors: backendDescriptors,
 		},
 	}, nil
+}
+
+const (
+	AggregateBudgetDescriptorKey = "aggregate_budget"
+	AggregateUserDescriptorKey   = "aggregate_user"
+	AggregateTierDescriptorKey   = "aggregate_tier"
+)
+
+// ValidateAggregateUserBudget rejects ambiguous or incomplete accounting configuration.
+func ValidateAggregateUserBudget(policy *aigv1a1.QuotaPolicy) error {
+	budget := policy.Spec.AggregateUserBudget
+	if budget == nil {
+		return nil
+	}
+	if budget.Name == "" || budget.JWTProvider == "" || budget.TierClaim == "" || len(budget.TierLimits) == 0 {
+		return fmt.Errorf("aggregate user budget requires a name, JWT provider, tier claim and tier limits")
+	}
+	for tier, limit := range budget.TierLimits {
+		if tier == "" || limit == 0 {
+			return fmt.Errorf("aggregate user budget tier names and limits must be nonzero")
+		}
+	}
+	if policy.Spec.ServiceQuota.Quota.Limit != 0 || len(policy.Spec.PerModelQuotas) == 0 {
+		return fmt.Errorf("aggregate user budget requires per-model pricing and cannot use serviceQuota")
+	}
+	for _, model := range policy.Spec.PerModelQuotas {
+		if model.ModelName == nil || *model.ModelName == "" || model.Quota.CostExpression == nil ||
+			*model.Quota.CostExpression == "" || model.Quota.DefaultBucket.Limit != 0 || len(model.Quota.BucketRules) != 0 {
+			return fmt.Errorf("aggregate user budget models require a cost expression and cannot define separate buckets")
+		}
+		if _, err := llmcostcel.NewProgram(*model.Quota.CostExpression); err != nil {
+			return fmt.Errorf("aggregate user budget model %s has invalid pricing: %w", *model.ModelName, err)
+		}
+	}
+	return nil
 }
 
 func buildBackendDescriptor(
