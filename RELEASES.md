@@ -2,7 +2,7 @@
 
 ## Release Cycles
 
-Since Envoy AI Gateway depends on Envoy Gateway and Envoy Proxy, its minor releases follow the Envoy Gateway release cycle, which is quarterly.
+Since Agent Router depends on Envoy Gateway and Envoy Proxy, every time there is a minor Envoy Gateway release, an Agent Router one will follow.
 Envoy AI Gateway runs on top of an Envoy Gateway installation, and many users serve both their regular traffic and their AI traffic from that same installation. Those users can't upgrade Envoy Gateway to a new minor until an Envoy AI Gateway release supports it, even if their regular traffic needs the upgrade. To keep that wait short:
 
 - When Envoy Gateway cuts a release candidate for a new minor, we bump main to that release candidate and cut an Envoy AI Gateway release candidate from it.
