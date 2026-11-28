@@ -66,7 +66,10 @@ func (t *countTokensToGCPAnthropicTranslator) RequestBody(raw []byte, body *anth
 	// GCP Vertex AI uses the special "count-tokens" model path with rawPredict.
 	// The actual model name stays in the request body.
 	// See: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
-	path := buildGCPModelPathSuffix(gcpModelPublisherAnthropic, gcpCountTokensModel, gcpMethodRawPredict)
+	path, err := buildGCPModelPathSuffix(gcpModelPublisherAnthropic, gcpCountTokensModel, gcpMethodRawPredict)
+	if err != nil {
+		return nil, nil, err
+	}
 	newHeaders = []internalapi.Header{{pathHeaderName, path}, {contentLengthHeaderName, strconv.Itoa(len(newBody))}}
 	return
 }

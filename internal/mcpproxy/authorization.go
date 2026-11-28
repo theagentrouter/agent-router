@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
@@ -129,17 +130,22 @@ type authzContext struct {
 	mcp        map[string]any // same map as activation["request"].(map[string]any)["mcp"]
 }
 
-// newAuthzContext parses the bearer token once. Callers that check many targets against
+// newAuthzContext extracts the verified JWT claims once. Callers that check many targets against
 // the same request should build this once and reuse it via authorizeRequestWith, instead
-// of re-parsing the token for every target.
+// of re-extracting the claims for every target.
 //
 // verifiedJWT must be true only when Envoy has cryptographically verified the bearer JWT
 // before this request reached the MCP proxy (i.e. the route has securityPolicy.oauth
-// configured; see filterapi.MCPRouteAuthorization.VerifiedJWT). When it is false, the token
-// is never parsed and no claims/scopes are exposed: without Envoy-side verification, a
-// caller-supplied JWT (including one with alg=none and forged claims) cannot be trusted, so
-// treating it as authoritative would let an attacker fabricate any claim or scope to satisfy
-// Source.JWT rules or CEL expressions referencing request.auth.jwt.*.
+// configured; see filterapi.MCPRouteAuthorization.VerifiedJWT). When it is false, no claims/scopes
+// are exposed.
+//
+// The claims are read exclusively from internalapi.MCPJWTClaimsHeader, which the gateway renders
+// from the payload Envoy's jwt_authn filter verified and always overwrites (or blanks) so it cannot
+// be supplied by the client. The client-controlled Authorization header is deliberately NOT parsed:
+// the token Envoy verified is not necessarily the one in that header (e.g. Envoy may extract it from
+// elsewhere, or skip a header whose scheme it does not recognize), so trusting a re-parse of it
+// would let a caller holding any valid token present a forged, unsigned token with arbitrary
+// claims/scopes to satisfy Source.JWT rules or CEL expressions referencing request.auth.jwt.*.
 func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest, verifiedJWT bool) *authzContext {
 	scopeSet := sets.New[string]()
 	claims := jwt.MapClaims{}
@@ -148,24 +154,22 @@ func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest, verifiedJ
 		return &authzContext{claims: claims, scopes: scopeSet}
 	}
 
-	token, err := bearerToken(req.Headers.Get("Authorization"))
-	// This is just a sanity check. The actual JWT verification is performed by Envoy before reaching here, and the token
-	// should always be present and valid.
-	if err != nil {
-		m.l.Info("missing or invalid bearer token", slog.String("error", err.Error()))
-	} else {
-		// JWT verification is performed by Envoy before reaching here (verifiedJWT is true). So we
-		// only need to parse the token without verification.
-		if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
-			m.l.Info("failed to parse JWT token", slog.String("error", err.Error()))
-		} else {
-			scopeSet = sets.New(extractScopes(claims)...)
-			// Scopes are handled separately, remove them from the claims map to avoid interference.
-			// "scp" is also removed as it is a common alias for "scope" (e.g. Azure AD, Okta).
-			delete(claims, "scope")
-			delete(claims, "scp")
-		}
+	payload := strings.TrimSpace(req.Headers.Get(internalapi.MCPJWTClaimsHeader))
+	if payload == "" {
+		// Envoy verifies the JWT before reaching here, so this should not happen for requests that
+		// went through the gateway. Fail closed: no claims and no scopes.
+		m.l.Info("missing verified JWT claims")
+		return &authzContext{claims: claims, scopes: scopeSet}
 	}
+	if err := json.Unmarshal([]byte(payload), &claims); err != nil || claims == nil {
+		m.l.Info("failed to parse verified JWT claims", slog.Any("error", err))
+		return &authzContext{claims: jwt.MapClaims{}, scopes: scopeSet}
+	}
+	scopeSet = sets.New(extractScopes(claims)...)
+	// Scopes are handled separately, remove them from the claims map to avoid interference.
+	// "scp" is also removed as it is a common alias for "scope" (e.g. Azure AD, Okta).
+	delete(claims, "scope")
+	delete(claims, "scp")
 	return &authzContext{claims: claims, scopes: scopeSet}
 }
 
@@ -227,6 +231,18 @@ func (m *mcpRequestContext) authorizeRequestWith(authorization *compiledAuthoriz
 			requiredScopes := rule.Source.JWT.Scopes
 			// Keep track of the smallest set of required scopes for challenge when the action is allow and the request is denied.
 			if shouldAllow && !scopesSatisfied(ac.scopes, requiredScopes) {
+				// Only advertise the scopes of a rule that would otherwise match this request:
+				// a rule whose CEL condition does not hold (e.g. one written for another MCP method
+				// or backend) would still deny the request after the client acquired its scopes.
+				// The CEL is evaluated as if the caller already held the rule's required scopes, so
+				// conditions on request.auth.jwt.scopes reflect what acquiring them would change.
+				// The rule cannot apply either way, so a CEL evaluation error here just skips it.
+				if rule.celProgram != nil {
+					withRequired, _ := buildCELActivation(req, ac.claims, ac.scopes.Union(sets.New(requiredScopes...)))
+					if match, err := m.evalRuleCEL(rule, withRequired); err != nil || !match {
+						continue
+					}
+				}
 				if len(requiredScopesForChallenge) == 0 || len(requiredScopes) < len(requiredScopesForChallenge) {
 					requiredScopesForChallenge = requiredScopes
 				}
@@ -330,23 +346,6 @@ func normalizeParams(params mcp.Params) any {
 	}
 
 	return parsed
-}
-
-func bearerToken(header string) (string, error) {
-	if header == "" {
-		return "", errors.New("missing Authorization header")
-	}
-
-	parts := strings.SplitN(header, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-		return "", errors.New("invalid Authorization header")
-	}
-
-	token := strings.TrimSpace(parts[1])
-	if token == "" {
-		return "", errors.New("missing bearer token")
-	}
-	return token, nil
 }
 
 // extractScopes extracts scopes from the "scope" claim (standard) or "scp" claim (common in Microsoft/Okta).
@@ -501,3 +500,85 @@ func buildInsufficientScopeHeader(scopes []string, resourceMetadata string) stri
 
 	return strings.Join(parts, ", ")
 }
+
+// authorizeMethod evaluates the route's authorization policy for an MCP method that is not a
+// tool invocation (e.g. resources/read, prompts/get, resources/list) against a single backend.
+//
+// The route's authorization policy is route-wide: rules without a target match every request,
+// and DefaultAction applies to any request no rule matches. Rules that target specific tools
+// never match these methods (request.mcp.tool is empty), so with DefaultAction Deny they are
+// denied unless a rule without a tool target (for example one keyed on request.mcp.method in
+// CEL) allows them.
+//
+// params are the client-facing method params and are exposed to CEL as request.mcp.params.
+// It returns true when the route has no authorization configured.
+func (m *mcpRequestContext) authorizeMethod(route *mcpProxyConfigRoute, method string, backend filterapi.MCPBackendName, params mcp.Params) (bool, []string) {
+	if route == nil || route.authorization == nil {
+		return true, nil
+	}
+	return m.authorizeRequest(route.authorization, m.newMethodAuthorizationRequest(method, backend, params))
+}
+
+// newMethodAuthorizationRequest builds an authorizationRequest for the current client request.
+func (m *mcpRequestContext) newMethodAuthorizationRequest(method string, backend filterapi.MCPBackendName, params mcp.Params) *authorizationRequest {
+	req := &authorizationRequest{
+		Headers:   m.requestHeaders,
+		MCPMethod: method,
+		Backend:   backend,
+		Params:    params,
+	}
+	if r := m.httpRequest; r != nil {
+		req.Headers = r.Header
+		req.HTTPMethod = r.Method
+		req.Host = r.Host
+		if r.URL != nil {
+			req.HTTPPath = r.URL.Path
+		}
+	}
+	return req
+}
+
+// authorizedBackendFilter returns a predicate reporting whether the route's authorization
+// policy allows method on a given backend. It is used by fan-out methods (resources/list,
+// prompts/list, logging/setLevel, ...) so that backends the caller is not authorized for are
+// never contacted. The JWT parsing and CEL activation are built once and shared across backends.
+func (m *mcpRequestContext) authorizedBackendFilter(route *mcpProxyConfigRoute, method string, params mcp.Params) func(filterapi.MCPBackendName) bool {
+	if route == nil || route.authorization == nil {
+		return func(filterapi.MCPBackendName) bool { return true }
+	}
+	authz := route.authorization
+	if len(authz.Rules) == 0 {
+		allowed := authz.DefaultAction == filterapi.AuthorizationActionAllow
+		return func(filterapi.MCPBackendName) bool { return allowed }
+	}
+	base := m.newMethodAuthorizationRequest(method, "", params)
+	ac := m.newAuthzContext(base, authz.VerifiedJWT)
+	return func(backend filterapi.MCPBackendName) bool {
+		req := *base
+		req.Backend = backend
+		allowed, _ := m.authorizeRequestWith(authz, &req, ac)
+		return allowed
+	}
+}
+
+// setInsufficientScopeChallenge sets the insufficient_scope WWW-Authenticate challenge on a
+// response to a request the route's authorization policy denied because of missing scopes. It does
+// nothing when requiredScopes is empty. Callers write the 403 body in their era's error format.
+// Reference: https://mcp.mintlify.app/specification/2025-11-25/basic/authorization#runtime-insufficient-scope-errors
+func (m *mcpRequestContext) setInsufficientScopeChallenge(w http.ResponseWriter, r *http.Request, route *mcpProxyConfigRoute, requiredScopes []string) {
+	if len(requiredScopes) == 0 {
+		return
+	}
+	// The resource_metadata URL is derived from this request so that it points at
+	// the host the client actually reached, whatever hostname or port that is.
+	var metadataURL string
+	if r != nil && r.URL != nil && route != nil && route.prm != nil {
+		metadataURL = resourceMetadataURL(r, route.prm, externalPath(r))
+	}
+	if challenge := buildInsufficientScopeHeader(requiredScopes, metadataURL); challenge != "" {
+		w.Header().Set("WWW-Authenticate", challenge)
+	}
+}
+
+// errAuthorizationDenied is returned by handlers when the route's authorization policy denies the request.
+var errAuthorizationDenied = errors.New("authorization failed")

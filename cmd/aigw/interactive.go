@@ -8,6 +8,7 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -324,6 +325,9 @@ func requiredInput(ui *terminalUI, label, def string, secret bool, validate func
 func validURL(s string) error {
 	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
 		return fmt.Errorf("enter a URL starting with http:// or https://")
+	}
+	if u, err := url.Parse(s); err != nil || u.Hostname() == "" {
+		return fmt.Errorf("enter a URL with a host, such as https://api.example.com")
 	}
 	return nil
 }

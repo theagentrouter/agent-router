@@ -325,6 +325,7 @@ spec:
                               Priority is the priority of the backend. This sets the priority on the underlying endpoints.
                               See: https://www.envoyproxy.
                             format: int32
+                            maximum: 128
                             minimum: 0
                             type: integer
                           weight:
@@ -848,6 +849,7 @@ spec:
                               Priority is the priority of the backend. This sets the priority on the underlying endpoints.
                               See: https://www.envoyproxy.
                             format: int32
+                            maximum: 128
                             minimum: 0
                             type: integer
                           weight:

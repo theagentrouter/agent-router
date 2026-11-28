@@ -491,6 +491,18 @@ func Test_setEncryptionSeeds(t *testing.T) {
 		seedCtx.setEncryptionSeeds(cfg)
 		require.Equal(t, "env-seed", cfg.FileIDEncryption.Seed)
 	})
+	t.Run("fallback MCP session seed", func(t *testing.T) {
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "")
+		seedCtx := &runCmdContext{mcpSessionEncryptionIterations: 1234, mcpSessionEncryptionSeed: "saved-mcp-seed"}
+		cfg := &filterapi.Config{MCPConfig: &filterapi.MCPConfig{}}
+		seedCtx.setEncryptionSeeds(cfg)
+		require.Equal(t, &filterapi.MCPSessionEncryption{Seed: "saved-mcp-seed", Iterations: 1234}, cfg.MCPConfig.SessionEncryption)
+
+		// The environment takes precedence.
+		t.Setenv(mcpSessionEncryptionSeedEnvVar, "env-mcp-seed")
+		seedCtx.setEncryptionSeeds(cfg)
+		require.Equal(t, "env-mcp-seed", cfg.MCPConfig.SessionEncryption.Seed)
+	})
 	t.Run("no MCP config", func(t *testing.T) {
 		t.Setenv(mcpSessionEncryptionSeedEnvVar, "mcp-seed")
 		cfg := &filterapi.Config{}
@@ -516,6 +528,40 @@ func Test_mustStartExtProc_seedNotOnCommandLine(t *testing.T) {
 	require.NotContains(t, strings.Join(capturedArgs, " "), "file-seed")
 	cfg := requireExtProcConfigBundle(t, findFlagValue(capturedArgs, "--configBundlePath"))
 	require.Equal(t, "file-seed", cfg.FileIDEncryption.Seed)
+}
+
+func Test_mcpSessionSeedForRun(t *testing.T) {
+	t.Run("generated and saved when missing, then reused", func(t *testing.T) {
+		seedPath := filepath.Join(t.TempDir(), "aigw", mcpSessionEncryptionSeedFile)
+		var stderr bytes.Buffer
+		seed := mcpSessionSeedForRun(seedPath, &stderr)
+		require.NotEmpty(t, seed)
+		require.NotEqual(t, "default-insecure-seed", seed)
+		require.Empty(t, stderr.String())
+		raw, err := os.ReadFile(seedPath)
+		require.NoError(t, err)
+		require.Equal(t, seed, strings.TrimSpace(string(raw)))
+		info, err := os.Stat(seedPath)
+		require.NoError(t, err)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+		require.Equal(t, seed, mcpSessionSeedForRun(seedPath, &stderr), "later runs reuse the saved seed")
+		require.Empty(t, stderr.String())
+	})
+
+	t.Run("unwritable location still returns a random seed", func(t *testing.T) {
+		// The parent of the seed path is a regular file, so neither the directory nor the seed can be created.
+		parent := filepath.Join(t.TempDir(), "file")
+		require.NoError(t, os.WriteFile(parent, nil, 0o600))
+		seedPath := filepath.Join(parent, mcpSessionEncryptionSeedFile)
+		var stderr bytes.Buffer
+		seed := mcpSessionSeedForRun(seedPath, &stderr)
+		require.NotEmpty(t, seed)
+		require.NotEqual(t, "default-insecure-seed", seed)
+		require.Contains(t, stderr.String(), "failed to save the MCP session encryption seed")
+		require.Contains(t, stderr.String(), mcpSessionEncryptionSeedEnvVar)
+		require.NoFileExists(t, seedPath)
+	})
 }
 
 func Test_fileIDSeedForRun(t *testing.T) {

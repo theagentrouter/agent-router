@@ -145,6 +145,8 @@ func writeProtocolError(w http.ResponseWriter, pe *protocolError, requestID *jso
 // touching the modern path.
 func (m *mcpRequestContext) servePOST(w http.ResponseWriter, r *http.Request) {
 	startAt := time.Now()
+	// Authorization of non-tool methods reads the HTTP-level attributes from this request.
+	m.httpRequest = r
 
 	limit := m.maxRequestBodySize
 	if limit <= 0 {
@@ -844,11 +846,12 @@ func (m *mcpRequestContext) mergeToolsList(s *session, responses []broadCastResp
 	}
 
 	applyMergedCachingHints(&resp.Cacheable, responses)
+	forcePrivateCachingIfAuthorized(&resp.Cacheable, route)
 	return resp
 }
 
 // mergeResourceList merges the list of resources from all backends and prepare the response message to be sent back to the client.
-func (m *mcpRequestContext) mergeResourceList(_ *session, responses []broadCastResponse[mcp.ListResourcesResult]) mcp.ListResourcesResult {
+func (m *mcpRequestContext) mergeResourceList(s *session, responses []broadCastResponse[mcp.ListResourcesResult]) mcp.ListResourcesResult {
 	// Aggregate the resources from all responses with some logic to match the actual proxy behavior.
 	// TODO: do we need a more sophisticated merging logic here?
 	// TODO: how to handle NextCursor?
@@ -861,11 +864,12 @@ func (m *mcpRequestContext) mergeResourceList(_ *session, responses []broadCastR
 		}
 	}
 	applyMergedCachingHints(&resp.Cacheable, responses)
+	forcePrivateCachingIfAuthorized(&resp.Cacheable, m.routes[s.route])
 	return resp
 }
 
 // mergeResourcesTemplateList merges the list of resource templates from all backends and prepare the response message to be sent back to the client.
-func (m *mcpRequestContext) mergeResourcesTemplateList(_ *session, responses []broadCastResponse[mcp.ListResourceTemplatesResult]) mcp.ListResourceTemplatesResult {
+func (m *mcpRequestContext) mergeResourcesTemplateList(s *session, responses []broadCastResponse[mcp.ListResourceTemplatesResult]) mcp.ListResourceTemplatesResult {
 	resp := mcp.ListResourceTemplatesResult{ResourceTemplates: make([]*mcp.ResourceTemplate, 0)}
 	for _, r := range responses {
 		for _, res := range r.res.ResourceTemplates {
@@ -875,6 +879,7 @@ func (m *mcpRequestContext) mergeResourcesTemplateList(_ *session, responses []b
 		}
 	}
 	applyMergedCachingHints(&resp.Cacheable, responses)
+	forcePrivateCachingIfAuthorized(&resp.Cacheable, m.routes[s.route])
 	return resp
 }
 
@@ -919,5 +924,22 @@ func (m *mcpRequestContext) mergePromptsList(s *session, responses []broadCastRe
 		}
 	}
 	applyMergedCachingHints(&aggregatedResponse.Cacheable, responses)
+	forcePrivateCachingIfAuthorized(&aggregatedResponse.Cacheable, route)
 	return aggregatedResponse
+}
+
+// forcePrivateCachingIfAuthorized marks an aggregated list result as private when the route has an
+// authorization policy. The policy filters which backends and tools a caller sees (it can depend on
+// JWT claims, scopes and headers), so the aggregate is caller-specific even when every backend
+// reported a public cache scope, and a shared cache must not serve it to other callers.
+func forcePrivateCachingIfAuthorized(dst *mcp.Cacheable, route *mcpProxyConfigRoute) {
+	if routeHasAuthorization(route) {
+		dst.CacheScope = "private"
+	}
+}
+
+// routeHasAuthorization reports whether the route has an authorization policy, which makes the
+// results it returns caller-specific.
+func routeHasAuthorization(route *mcpProxyConfigRoute) bool {
+	return route != nil && route.authorization != nil
 }

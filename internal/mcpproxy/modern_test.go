@@ -395,7 +395,7 @@ func TestHandleServerDiscover_BackendSelectorFilters(t *testing.T) {
 	proxy.backendListenerAddr = server.URL
 	proxy.routes["test-route"].backendSelector = jwtBackendSelectorAllowing(t)
 	proxy.requestHeaders = http.Header{
-		"Authorization": []string{"Bearer " + bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
+		jwtClaimsHeaderKey: []string{verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
 	}
 
 	rr := httptest.NewRecorder()
@@ -423,9 +423,9 @@ func TestHandleModernToolsList_BackendSelectorFilters(t *testing.T) {
 	delete(proxy.routes["test-route"].toolSelectors, "backend1")
 	proxy.routes["test-route"].backendSelector = jwtBackendSelectorAllowing(t)
 
-	token := bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})
+	token := verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})
 	r := newModernRequest("tools/list")
-	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(internalapi.MCPJWTClaimsHeader, token)
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "tools/list", nil)
 
@@ -1420,9 +1420,9 @@ func TestResolveModernRouteBackends_PerBackendHeadersOnlyForSelected(t *testing.
 	proxy := newTestMCPProxy()
 	proxy.routes["test-route"].backendSelector = jwtBackendSelectorAllowing(t)
 	proxy.requestHeaders = http.Header{
-		"Authorization": []string{"Bearer " + bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
-		"X-B1":          []string{"secret-b1"},
-		"X-B2":          []string{"secret-b2"},
+		jwtClaimsHeaderKey: []string{verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
+		"X-B1":             []string{"secret-b1"},
+		"X-B2":             []string{"secret-b2"},
 	}
 	b1 := proxy.routes["test-route"].backends["backend1"]
 	b1.ForwardHeaders = []filterapi.MCPHeaderForward{{Name: "X-B1"}}
@@ -1698,7 +1698,7 @@ func TestHandleModernResourcesRead_RePrefixesContentURIs(t *testing.T) {
 func TestRewriteResourcesReadResult_CachingHints(t *testing.T) {
 	t.Run("injects defaults when backend omits hints", func(t *testing.T) {
 		in := []byte(`{"contents":[{"uri":"file:///a","text":"x"}]}`)
-		out, ok := rewriteResourcesReadResult(in, "backend1")
+		out, ok := rewriteResourcesReadResult(in, "backend1", false)
 		require.True(t, ok)
 
 		var m map[string]json.RawMessage
@@ -1714,7 +1714,7 @@ func TestRewriteResourcesReadResult_CachingHints(t *testing.T) {
 
 	t.Run("preserves backend-provided hints", func(t *testing.T) {
 		in := []byte(`{"contents":[{"uri":"file:///a","text":"x"}],"ttlMs":60000,"cacheScope":"public"}`)
-		out, ok := rewriteResourcesReadResult(in, "backend1")
+		out, ok := rewriteResourcesReadResult(in, "backend1", false)
 		require.True(t, ok)
 
 		var m map[string]json.RawMessage
@@ -1727,7 +1727,7 @@ func TestRewriteResourcesReadResult_CachingHints(t *testing.T) {
 		// mcp.ReadResourceResult embeds Cacheable without omitempty, so a backend
 		// that never sets hints still serializes cacheScope as "".
 		in := []byte(`{"contents":[{"uri":"file:///a","text":"x"}],"ttlMs":0,"cacheScope":""}`)
-		out, ok := rewriteResourcesReadResult(in, "backend1")
+		out, ok := rewriteResourcesReadResult(in, "backend1", false)
 		require.True(t, ok)
 
 		var m map[string]json.RawMessage
@@ -1738,7 +1738,7 @@ func TestRewriteResourcesReadResult_CachingHints(t *testing.T) {
 
 	t.Run("skips interim input_required results", func(t *testing.T) {
 		in := []byte(`{"resultType":"input_required","inputRequests":{"q":{"type":"text"}}}`)
-		out, ok := rewriteResourcesReadResult(in, "backend1")
+		out, ok := rewriteResourcesReadResult(in, "backend1", false)
 		require.False(t, ok)
 		require.Nil(t, out)
 	})
@@ -3263,7 +3263,7 @@ func TestHandleModernToolsCall_AuthorizationScopeChallenge(t *testing.T) {
 
 	// Caller only presents the "read" scope, so the "read write" rule is not satisfied.
 	r := newModernRequest("tools/call")
-	r.Header.Set("Authorization", "Bearer "+bearerTokenWithClaims(jwt.MapClaims{"scope": []string{"read"}}))
+	r.Header.Set(internalapi.MCPJWTClaimsHeader, verifiedJWTClaims(jwt.MapClaims{"scope": []string{"read"}}))
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "tools/call", fmt.Appendf(nil, `{"name":%q}`, downstreamResourceName("do-it", "backend2")))
 
@@ -3316,7 +3316,7 @@ func TestHandleModernToolsCall_AuthorizationAllowed(t *testing.T) {
 	})
 
 	r := newModernRequest("tools/call")
-	r.Header.Set("Authorization", "Bearer "+bearerTokenWithClaims(jwt.MapClaims{"scope": []string{"read"}}))
+	r.Header.Set(internalapi.MCPJWTClaimsHeader, verifiedJWTClaims(jwt.MapClaims{"scope": []string{"read"}}))
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "tools/call", fmt.Appendf(nil, `{"name":%q}`, downstreamResourceName("do-it", "backend2")))
 
@@ -3341,7 +3341,7 @@ func TestHandleModernToolsCall_BackendExcludedBySelector(t *testing.T) {
 
 	// Caller is only authorized for backend2, but targets backend1 (on the route).
 	r := newModernRequest("tools/call")
-	r.Header.Set("Authorization", "Bearer "+bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}}))
+	r.Header.Set(internalapi.MCPJWTClaimsHeader, verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}}))
 	rr := httptest.NewRecorder()
 	req := modernReq(t, "tools/call", fmt.Appendf(nil, `{"name":%q}`, downstreamResourceName("do-it", "backend1")))
 

@@ -24,6 +24,13 @@ import (
 
 // Test_Examples_ProviderFallback tests the basic example in the examples/provider_fallback directory.
 func Test_Examples_ProviderFallback(t *testing.T) {
+	// The example puts the backends at priorities 0 and 1, which are set through Envoy Gateway's backendPriority
+	// HTTPRouteFilter that older Envoy Gateway releases lack. There, the backendRefs end up in separate clusters
+	// and do not fail over. See e2elib.EnvoyGatewaySupportsBackendPriority.
+	if !e2elib.EnvoyGatewaySupportsBackendPriority() {
+		t.Skipf("needs Envoy Gateway %s or later for backendRef priorities, have %s",
+			"v1.10.0", e2elib.EnvoyGatewayVersion())
+	}
 	const baseManifest = "../../examples/provider_fallback/base.yaml"
 	const fallbackManifest = "../../examples/provider_fallback/fallback.yaml"
 	const egSelector = "gateway.envoyproxy.io/owning-gateway-name=provider-fallback"

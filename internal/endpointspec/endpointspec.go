@@ -1008,6 +1008,7 @@ func redactAssistantMessage(msg openai.ChatCompletionMessageParamUnion) openai.C
 	// Name identifies the participant; Refusal is model-generated text, redacted like refusal content parts.
 	redactedMsg.Name = redaction.RedactString(msg.OfAssistant.Name)
 	redactedMsg.Refusal = redaction.RedactString(msg.OfAssistant.Refusal)
+	redactedMsg.ReasoningContent = nil
 	// Redact tool call arguments (may contain data derived from user messages).
 	// Function name is kept — it is the tool API name, not user data.
 	if len(msg.OfAssistant.ToolCalls) > 0 {

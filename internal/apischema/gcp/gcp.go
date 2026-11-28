@@ -110,8 +110,8 @@ type PredictResponse struct {
 
 // EmbedContentRequest is the request body for the embedContent endpoint used by newer embedding models
 // (e.g. gemini-embedding-2-*).
-// All input texts are packed as parts in a single Content object and we drop deprecated top-level fields
-// (taskType, outputDimensionality, etc.)
+// It embeds one Content; multiple parts in that Content are merged into a single embedding. We drop deprecated
+// top-level fields (taskType, outputDimensionality, etc.) in favor of embedContentConfig.
 //
 // See https://docs.cloud.google.com/vertex-ai/docs/reference/rest/v1/projects.locations.publishers.models/embedContent
 type EmbedContentRequest struct {
@@ -150,6 +150,23 @@ type EmbedContentEmbedding struct {
 type EmbedContentUsageMetadata struct {
 	PromptTokenCount int `json:"promptTokenCount,omitempty"`
 	TotalTokenCount  int `json:"totalTokenCount,omitempty"`
+}
+
+// BatchEmbedContentsRequest is the request body for the batchEmbedContents endpoint, which embeds multiple
+// independent contents in one call and returns one embedding per request entry. All entries must have the
+// same outputDimensionality and autoTruncate.
+//
+// See https://googleapis.github.io/google-api-python-client/docs/dyn/aiplatform_v1.projects.locations.publishers.models.html#batchEmbedContents
+// and https://github.com/googleapis/go-genai/blob/v1.78.0/models.go (EmbeddingAPITypeBatchEmbedContents).
+type BatchEmbedContentsRequest struct {
+	Requests []EmbedContentRequest `json:"requests"`
+}
+
+// BatchEmbedContentsResponse is the response from the batchEmbedContents endpoint.
+// Embeddings are returned in request order. Token usage is reported once for the whole batch.
+type BatchEmbedContentsResponse struct {
+	Embeddings    []*EmbedContentEmbedding   `json:"embeddings,omitempty"`
+	UsageMetadata *EmbedContentUsageMetadata `json:"usageMetadata,omitempty"`
 }
 
 // CountTokenRequest represents the Vertex AI CountTokens API request.

@@ -8,7 +8,6 @@ package translator
 import (
 	"fmt"
 	"io"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -69,7 +68,10 @@ func (o *openAIToAWSBedrockTranslatorV1Embedding) RequestBody(_ []byte, req *ope
 		return nil, nil, fmt.Errorf("failed to marshal body: %w", err)
 	}
 
-	encodedModel := url.PathEscape(model)
+	encodedModel, err := modelPathSegment(model)
+	if err != nil {
+		return nil, nil, err
+	}
 	newHeaders = []internalapi.Header{
 		{pathHeaderName, fmt.Sprintf("/model/%s/invoke", encodedModel)},
 		{contentLengthHeaderName, strconv.Itoa(len(mutatedBody))},
