@@ -49,6 +49,40 @@ func TestMessagesResponseFromStream(t *testing.T) {
 	require.Equal(t, "hello world", resp.Content[0].Text.Text)
 }
 
+func TestMessagesResponseFromStream_usageAcrossEvents(t *testing.T) {
+	want := Usage{InputTokens: 5, CacheReadInputTokens: 7, CacheCreationInputTokens: 2, OutputTokens: 3}
+	for _, tc := range []struct {
+		name  string
+		start Usage
+		delta Usage
+	}{
+		{
+			name:  "input and cache usage first reported in delta",
+			start: Usage{},
+			delta: want,
+		},
+		{
+			name:  "output-only delta preserves input and cache usage from start",
+			start: Usage{InputTokens: 5, CacheReadInputTokens: 7, CacheCreationInputTokens: 2},
+			delta: Usage{OutputTokens: 3},
+		},
+		{
+			name:  "delta updates only cache creation and output",
+			start: Usage{InputTokens: 5, CacheReadInputTokens: 7, CacheCreationInputTokens: 1},
+			delta: Usage{CacheCreationInputTokens: 2, OutputTokens: 3},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := MessagesResponseFromStream([]*MessagesStreamChunk{
+				{MessageStart: &MessagesStreamChunkMessageStart{Usage: &tc.start}},
+				{MessageDelta: &MessagesStreamChunkMessageDelta{Usage: tc.delta}},
+			})
+
+			require.Equal(t, &want, resp.Usage)
+		})
+	}
+}
+
 // TestMessagesResponseFromStream_doesNotMutateInput pins that folding leaves the
 // chunks untouched. The fold appends deltas into content blocks in place, so
 // aliasing the caller's blocks made a second fold of the same chunks return

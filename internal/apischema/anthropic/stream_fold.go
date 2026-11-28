@@ -49,8 +49,17 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 				usage := delta.Usage
 				response.Usage = &usage
 			} else {
-				// Usage is cumulative for output tokens in message_delta.
-				// Input tokens are usually in message_start.
+				// Counts are cumulative. Omitted input and cache fields decode to zero,
+				// so preserve their earlier values unless the delta reports a positive count.
+				if delta.Usage.InputTokens > 0 {
+					response.Usage.InputTokens = delta.Usage.InputTokens
+				}
+				if delta.Usage.CacheReadInputTokens > 0 {
+					response.Usage.CacheReadInputTokens = delta.Usage.CacheReadInputTokens
+				}
+				if delta.Usage.CacheCreationInputTokens > 0 {
+					response.Usage.CacheCreationInputTokens = delta.Usage.CacheCreationInputTokens
+				}
 				response.Usage.OutputTokens = delta.Usage.OutputTokens
 			}
 			response.StopReason = &delta.Delta.StopReason
