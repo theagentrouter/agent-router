@@ -956,6 +956,9 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 	case filterapi.LLMRequestCostTypeReasoningToken:
 		v, _ := costs.ReasoningTokens()
 		cost = uint64(v)
+	case filterapi.LLMRequestCostTypeInputAudioSeconds:
+		v, _ := costs.InputAudioSeconds()
+		cost = uint64(v)
 	case filterapi.LLMRequestCostTypeCEL:
 		var err error
 
@@ -965,6 +968,7 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 		out, _ := costs.OutputTokens()
 		total, _ := costs.TotalTokens()
 		reasoning, _ := costs.ReasoningTokens()
+		inputAudioSeconds, _ := costs.InputAudioSeconds()
 		cost, err = llmcostcel.EvaluateProgram(
 			celProg,
 			requestHeaders[internalapi.ModelNameHeaderKeyDefault],
@@ -976,6 +980,7 @@ func evalCost(costType filterapi.LLMRequestCostType, celProg cel.Program, costs 
 			out,
 			total,
 			reasoning,
+			inputAudioSeconds,
 		)
 		if err != nil {
 			return 0, fmt.Errorf("failed to evaluate CEL expression: %w", err)

@@ -112,9 +112,9 @@ type LLMRequestCost struct {
 	MetadataKey string `json:"metadataKey"`
 	// Type specifies the type of the request cost. The default is "OutputToken",
 	// and it uses "output token" as the cost. The other types are "InputToken", "TotalToken",
-	// "CachedInputToken", "CacheCreationInputToken", "ReasoningToken", and "CEL".
+	// "CachedInputToken", "CacheCreationInputToken", "ReasoningToken", "InputAudioSeconds", and "CEL".
 	//
-	// +kubebuilder:validation:Enum=OutputToken;InputToken;CachedInputToken;CacheCreationInputToken;TotalToken;ReasoningToken;CEL
+	// +kubebuilder:validation:Enum=OutputToken;InputToken;CachedInputToken;CacheCreationInputToken;TotalToken;ReasoningToken;InputAudioSeconds;CEL
 	Type LLMRequestCostType `json:"type"`
 	// CEL is the CEL expression to calculate the cost of the request.
 	// The CEL expression must return a signed or unsigned integer. If the
@@ -130,6 +130,8 @@ type LLMRequestCost struct {
 	//	* output_tokens: the number of output tokens. Type: unsigned integer.
 	//	* total_tokens: the total number of tokens. Type: unsigned integer.
 	//	* reasoning_tokens: the number of reasoning tokens. Type: unsigned integer.
+	//	* input_audio_seconds: the duration of the input audio in seconds, reported by
+	//	  /v1/audio/transcriptions and /v1/audio/translations. Type: double.
 	//
 	// For example, the following expressions are valid:
 	//
@@ -159,6 +161,9 @@ const (
 	LLMRequestCostTypeTotalToken LLMRequestCostType = "TotalToken"
 	// LLMRequestCostTypeReasoningToken is the cost type of the reasoning token.
 	LLMRequestCostTypeReasoningToken LLMRequestCostType = "ReasoningToken"
+	// LLMRequestCostTypeInputAudioSeconds is the cost type of the input audio duration in seconds,
+	// truncated to whole seconds.
+	LLMRequestCostTypeInputAudioSeconds LLMRequestCostType = "InputAudioSeconds"
 	// LLMRequestCostTypeCEL is for calculating the cost using the CEL expression.
 	LLMRequestCostTypeCEL LLMRequestCostType = "CEL"
 )

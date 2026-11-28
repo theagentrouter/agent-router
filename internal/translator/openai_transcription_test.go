@@ -338,6 +338,33 @@ func TestTranscriptionTranslator_ResponseError(t *testing.T) {
 	require.NotNil(t, bm)
 }
 
+func TestTranscriptionTranslator_ResponseBody_InputAudioSeconds(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		respJSON    string
+		wantSeconds float64
+		wantSet     bool
+	}{
+		{name: "duration usage", respJSON: `{"text": "hi", "usage": {"type": "duration", "seconds": 10.5}}`, wantSeconds: 10.5, wantSet: true},
+		{name: "no duration", respJSON: `{"text": "hi"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := NewTranscriptionOpenAIToOpenAITranslator("v1", "")
+			_, _, _ = tr.RequestBody([]byte("body"), &openai.TranscriptionRequest{Model: "whisper-1"}, false)
+
+			_, _, usage, _, err := tr.ResponseBody(
+				map[string]string{contentTypeHeaderName: jsonContentType},
+				bytes.NewReader([]byte(tc.respJSON)), true, nil,
+			)
+			require.NoError(t, err)
+			seconds, ok := usage.InputAudioSeconds()
+			require.Equal(t, tc.wantSet, ok)
+			require.Equal(t, tc.wantSeconds, seconds)
+			require.Equal(t, !tc.wantSet, usage.IsZero())
+		})
+	}
+}
+
 type mockTranscriptionSpan struct {
 	recordedResponse *openai.TranscriptionResponse
 	recordedChunks   []*openai.TranscriptionStreamEvent

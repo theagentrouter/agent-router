@@ -556,6 +556,7 @@ spec:
                       - CacheCreationInputToken
                       - TotalToken
                       - ReasoningToken
+                      - InputAudioSeconds
                       - CEL
                       type: string
                   required:
@@ -1178,6 +1179,7 @@ spec:
                       - CacheCreationInputToken
                       - TotalToken
                       - ReasoningToken
+                      - InputAudioSeconds
                       - CEL
                       type: string
                   required:
