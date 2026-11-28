@@ -687,6 +687,47 @@ curl "$GATEWAY_URL/v1/files?model=gpt-4o-mini&limit=20"
 
 See the [Files API](./files-api.md) guide for full usage, configuration, and caveats.
 
+### Gemini Interactions
+
+**Endpoints:**
+
+- `POST /gemini/v1beta/interactions` (create)
+- `POST /gemini/v1/interactions` (create)
+
+The `/gemini` prefix is configurable with the `gemini` key of `--endpointPrefixes`.
+
+**Status:** ✅ Supported (GCP Vertex AI schema only, zero data retention only)
+
+**Description:** The Gemini Interactions API is the only API that serves Gemini managed agents such as the Antigravity agent, and it also serves Gemini models. By default the provider stores every interaction; the gateway serves the API for zero data retention only, so the provider never keeps an interaction:
+
+- A request without `store` is sent with `"store": false`.
+- `"store": true`, `"background": true`, and `previous_interaction_id` are rejected with HTTP 400, because each one needs the provider to keep the interaction.
+- The endpoints that act on stored interactions (`GET`, `DELETE`, and `POST .../cancel` on `/interactions/{id}`) are not served.
+
+**Features:**
+
+- ✅ Model interactions (routed by `model`) and agent interactions (routed by `agent` when there is no `model`)
+- ✅ Streaming (`"stream": true`)
+- ✅ Token usage feeds request costs and rate limiting, for streamed and non-streamed responses
+- ✅ Provider errors are returned unchanged, in the Google error format
+- ⚠️ Without stored state, every interaction is a single turn: an agent cannot run in the background, continue an earlier turn, or use custom function calling (which the Antigravity agent supports only through `previous_interaction_id`)
+
+**Supported Providers:**
+
+- GCP Vertex AI (`GCPVertexAI` schema). Vertex AI serves the Interactions API in the `global`, `us`, and `eu` locations, so the backend's `BackendSecurityPolicy` region must be one of them, and the backend must use the Vertex AI host of that location (`aiplatform.googleapis.com` for `global`).
+
+Google GenAI SDK clients always send their key in the `x-goog-api-key` header. To keep it from reaching Vertex AI, remove that header with the backend's `headerMutation`.
+
+**Example:**
+
+```python
+from google import genai
+from google.genai import types
+
+client = genai.Client(api_key="unused", http_options=types.HttpOptions(base_url=f"{GATEWAY_URL}/gemini"))
+interaction = client.interactions.create(agent="antigravity-preview-09-2026", input="Summarize the repository", environment="remote", store=False)
+```
+
 ## Provider-Endpoint Compatibility Table
 
 The following table summarizes which providers support which endpoints:
