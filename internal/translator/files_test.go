@@ -12,11 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
 )
 
 func TestOpenAIFilesTranslators_Identity(t *testing.T) {
-	// Every per-op type is its own concrete identity; assert each one's four methods are no-ops.
+	// Every per-op type is its own concrete identity; assert each one's response methods are no-ops.
 	translators := map[string]FilesTranslator{
 		"upload":   &openAIFileUploadTranslator{},
 		"retrieve": &openAIFileRetrieveTranslator{},
@@ -26,14 +27,6 @@ func TestOpenAIFilesTranslators_Identity(t *testing.T) {
 	}
 
 	for op, tr := range translators {
-		t.Run(op+"/RequestBody is a no-op", func(t *testing.T) {
-			in := &FilesRequest{NativeID: "file-native", Path: "/v1/files/file-native", Method: "GET"}
-			hdrs, body, err := tr.RequestBody([]byte("ignored"), in, false)
-			require.NoError(t, err)
-			require.Nil(t, hdrs)
-			require.Nil(t, body)
-		})
-
 		t.Run(op+"/ResponseHeaders is a no-op", func(t *testing.T) {
 			hdrs, err := tr.ResponseHeaders(map[string]string{"content-type": "application/json"})
 			require.NoError(t, err)
@@ -102,6 +95,35 @@ func TestNewFileTranslators(t *testing.T) {
 				require.Error(t, err)
 				require.Nil(t, tr)
 				require.Contains(t, err.Error(), "unsupported API schema for files")
+			})
+		}
+	}
+}
+
+func TestOpenAIFilesTranslators_RequestPathPrefix(t *testing.T) {
+	type tc struct {
+		newTranslator func(filterapi.VersionedAPISchema) (FilesTranslator, error)
+		req           FilesRequest
+		wantSuffix    string
+	}
+	ops := map[string]tc{
+		"upload":   {NewFileUploadTranslator, FilesRequest{Path: "/v1/files", Method: "POST"}, "/files"},
+		"retrieve": {NewFileRetrieveTranslator, FilesRequest{NativeID: "file-n", Path: "/v1/files/file-n"}, "/files/file-n"},
+		"content":  {NewFileContentTranslator, FilesRequest{NativeID: "file-n", Path: "/v1/files/file-n/content"}, "/files/file-n/content"},
+		"delete":   {NewFileDeleteTranslator, FilesRequest{NativeID: "file-n", Path: "/v1/files/file-n"}, "/files/file-n"},
+		"list":     {NewFileListTranslator, FilesRequest{Path: "/v1/files?after=file-n&limit=2", Query: "?after=file-n&limit=2"}, "/files?after=file-n&limit=2"},
+	}
+	prefixes := map[string]string{"": "", "v1": "/v1", "/v1beta/openai": "/v1beta/openai", "/compatibility/v1/": "/compatibility/v1"}
+	for op, c := range ops {
+		for prefix, wantPrefix := range prefixes {
+			t.Run(op+"/prefix="+prefix, func(t *testing.T) {
+				tr, err := c.newTranslator(filterapi.VersionedAPISchema{Name: filterapi.APISchemaOpenAI, Prefix: prefix})
+				require.NoError(t, err)
+				req := c.req
+				hdrs, body, err := tr.RequestBody([]byte("ignored"), &req, false)
+				require.NoError(t, err)
+				require.Nil(t, body)
+				require.Equal(t, []internalapi.Header{{":path", wantPrefix + c.wantSuffix}}, hdrs)
 			})
 		}
 	}

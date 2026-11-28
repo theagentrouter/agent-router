@@ -41,6 +41,9 @@ The following backends support extension fields:
 - **Supported Tools**:
   - `google_search`: Enable Google Search grounding for Gemini models. Configuration options vary by platform: `exclude_domains` and `blocking_confidence` are Vertex AI only, while `time_range_filter` is Gemini API only. [Google Search Grounding Docs](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search)
 
+- **Batch API fields** (on `POST /v1/batches`): `model`, `output_uri_prefix`, `display_name`, and
+  `labels`. See [Batch API on GCP Vertex AI](./batch-api.md#extension-fields).
+
 ### GCP Anthropic
 
 - **API Schema Name**: `GCPAnthropic`
