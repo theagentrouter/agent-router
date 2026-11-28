@@ -1465,6 +1465,9 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody_SignedThinking
 		"model": "something", "stream": false, "thinking": {"type": "enabled", "budget_tokens": 4096},
 		"messages": [{"role": "user", "content": "Say hello."}, %s, {"role": "user", "content": "Continue."}]
 	}`
+	const streamedTextAssistant = `{"role": "assistant", "content": "Hello!", "reasoning_content": "synthetic reasoning for turn one",
+		"thinking_blocks": [{"type": "thinking", "signature": "sig_local_roundtrip_01"%s}]
+	}`
 	const toolRequest = `{
 		"model": "something", "stream": false, "thinking": {"type": "enabled", "budget_tokens": 4096},
 		"tools": [{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object", "properties": {"timezone": {"type": "string"}}, "required": ["timezone"]}}}],
@@ -1505,6 +1508,24 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody_SignedThinking
 			assistant: `{"role": "assistant", "content": "Hello!", "reasoning_content": "synthetic reasoning for turn one",
 				"thinking_blocks": [{"type": "thinking", "thinking": "synthetic reasoning for turn one", "signature": "sig_local_roundtrip_01"}]
 			}`,
+		},
+		{
+			name:      "streamed text with Gemini provider",
+			request:   textRequest,
+			assistant: fmt.Sprintf(streamedTextAssistant, `, "provider": "gemini"`),
+			want:      `{"role": "assistant", "content": [{"text": "Hello!"}]}`,
+		},
+		{
+			name:      "streamed text with Bedrock provider",
+			request:   textRequest,
+			assistant: fmt.Sprintf(streamedTextAssistant, `, "provider": "bedrock"`),
+			want:      wantText,
+		},
+		{
+			name:      "streamed text with omitted provider",
+			request:   textRequest,
+			assistant: fmt.Sprintf(streamedTextAssistant, ""),
+			want:      wantText,
 		},
 		{
 			name:    "same thinking block in content and thinking_blocks",
@@ -1965,7 +1986,7 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody(t *testing.T)
 							Content:          ptr.To("This is the final answer."),
 							ReasoningContent: &openai.ReasoningContentUnion{Value: "This is the model's thought process."},
 							ThinkingBlocks: []openai.ThinkingBlock{
-								{Type: "thinking", Thinking: "This is the model's thought process."},
+								{Type: "thinking", Provider: "bedrock", Thinking: "This is the model's thought process."},
 							},
 						},
 					},
@@ -2551,9 +2572,11 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_ResponseBody_WithReasoning
 
 	require.Len(t, message.ThinkingBlocks, 2)
 	require.Equal(t, "thinking", message.ThinkingBlocks[0].Type)
+	require.Equal(t, "bedrock", message.ThinkingBlocks[0].Provider)
 	require.Equal(t, "Let me think about this.", message.ThinkingBlocks[0].Thinking)
 	require.Equal(t, "sig_xyz", message.ThinkingBlocks[0].Signature)
 	require.Equal(t, "redacted_thinking", message.ThinkingBlocks[1].Type)
+	require.Equal(t, "bedrock", message.ThinkingBlocks[1].Provider)
 	require.Equal(t, base64.StdEncoding.EncodeToString(redactedBytes), message.ThinkingBlocks[1].Data)
 }
 

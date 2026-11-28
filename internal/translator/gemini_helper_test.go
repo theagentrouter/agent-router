@@ -2972,7 +2972,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 					Message: openai.ChatCompletionResponseChoiceMessage{
 						Role: openai.ChatMessageRoleAssistant,
 						ThinkingBlocks: []openai.ThinkingBlock{
-							{Type: "thinking", Signature: base64.StdEncoding.EncodeToString([]byte("sig-only"))},
+							{Type: "thinking", Provider: "gemini", Signature: base64.StdEncoding.EncodeToString([]byte("sig-only"))},
 						},
 						Content: ptr.To("just an answer"),
 					},
@@ -3031,7 +3031,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 					Message: openai.ChatCompletionResponseChoiceMessage{
 						Role: openai.ChatMessageRoleAssistant,
 						ThinkingBlocks: []openai.ThinkingBlock{
-							{Type: "thinking", Signature: toolSigB64},
+							{Type: "thinking", Provider: "gemini", Signature: toolSigB64},
 						},
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
@@ -3069,7 +3069,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						Role:             openai.ChatMessageRoleAssistant,
 						ReasoningContent: &openai.ReasoningContentUnion{Value: "internal reasoning"},
 						ThinkingBlocks: []openai.ThinkingBlock{
-							{Type: "thinking", Thinking: "internal reasoning", Signature: base64.StdEncoding.EncodeToString([]byte("text-sig"))},
+							{Type: "thinking", Provider: "gemini", Thinking: "internal reasoning", Signature: base64.StdEncoding.EncodeToString([]byte("text-sig"))},
 						},
 						Content: ptr.To("visible answer"),
 					},
@@ -3093,7 +3093,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						Role:             openai.ChatMessageRoleAssistant,
 						ReasoningContent: &openai.ReasoningContentUnion{Value: "planning step"},
 						ThinkingBlocks: []openai.ThinkingBlock{
-							{Type: "thinking", Signature: toolSigB64},
+							{Type: "thinking", Provider: "gemini", Signature: toolSigB64},
 						},
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
 							{
@@ -3132,7 +3132,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						Role:             openai.ChatMessageRoleAssistant,
 						ReasoningContent: &openai.ReasoningContentUnion{Value: "deep reasoning"},
 						ThinkingBlocks: []openai.ThinkingBlock{
-							{Type: "thinking", Thinking: "deep reasoning", Signature: toolSigB64},
+							{Type: "thinking", Provider: "gemini", Thinking: "deep reasoning", Signature: toolSigB64},
 						},
 						Content: ptr.To("visible"),
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
@@ -3169,7 +3169,7 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 					Message: openai.ChatCompletionResponseChoiceMessage{
 						Role: openai.ChatMessageRoleAssistant,
 						ThinkingBlocks: []openai.ThinkingBlock{
-							{Type: "thinking", Signature: toolSigB64},
+							{Type: "thinking", Provider: "gemini", Signature: toolSigB64},
 						},
 						Content: ptr.To("answer"),
 						ToolCalls: []openai.ChatCompletionMessageToolCallParam{

@@ -498,13 +498,13 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) ResponseBody(_ map[string
 				// round-trips even without accompanying text.
 				if rt.Text != "" || rt.Signature != "" {
 					choice.Message.ThinkingBlocks = append(choice.Message.ThinkingBlocks, openai.ThinkingBlock{
-						Type: "thinking", Thinking: rt.Text, Signature: rt.Signature,
+						Type: "thinking", Provider: "bedrock", Thinking: rt.Text, Signature: rt.Signature,
 					})
 				}
 			}
 			if rc := output.ReasoningContent.RedactedContent; rc != nil {
 				choice.Message.ThinkingBlocks = append(choice.Message.ThinkingBlocks, openai.ThinkingBlock{
-					Type: "redacted_thinking", Data: base64.StdEncoding.EncodeToString(rc),
+					Type: "redacted_thinking", Provider: "bedrock", Data: base64.StdEncoding.EncodeToString(rc),
 				})
 			}
 		}
@@ -654,7 +654,7 @@ func (o *openAIToAWSBedrockTranslatorV1ChatCompletion) convertEvent(event *awsbe
 			}
 			if sig := event.Delta.ReasoningContent.Signature; sig != "" {
 				delta.ThinkingBlocks = append(delta.ThinkingBlocks, openai.ThinkingBlock{
-					Type: "thinking", Signature: sig,
+					Type: "thinking", Provider: "bedrock", Signature: sig,
 				})
 			}
 			if rc := event.Delta.ReasoningContent.RedactedContent; rc != nil {

@@ -446,7 +446,7 @@ func (o *openAIToGCPVertexAITranslatorV1ChatCompletion) geminiCandidatesToOpenAI
 			}
 			if signature != "" {
 				delta.ThinkingBlocks = []openai.ThinkingBlock{{
-					Type: "thinking", Thinking: thoughtSummary, Signature: signature,
+					Type: "thinking", Provider: "gemini", Thinking: thoughtSummary, Signature: signature,
 				}}
 			}
 

@@ -1605,6 +1605,8 @@ type ThinkingBlock struct {
 	Thinking  string `json:"thinking,omitempty"`
 	Signature string `json:"signature,omitempty"`
 	Data      string `json:"data,omitempty"` // base64 redacted_thinking
+	// Provider identifies the source of the thinking block when supplied.
+	Provider string `json:"provider,omitempty"`
 }
 
 // CompletionTokensDetails breakdown of tokens used in a completion.
