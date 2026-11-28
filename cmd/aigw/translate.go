@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -45,12 +46,12 @@ func translate(ctx context.Context, paths []string, output, stderr io.Writer) er
 	if err != nil {
 		return err
 	}
-	aigwRoutes, mcpRoutes, aigwBackends, backendSecurityPolicies, backendTLSConfigs, referenceGrants, originalGateways, originalSecrets, _, err := collectObjects(yaml, output, stderrLogger)
+	aigwRoutes, mcpRoutes, aigwBackends, backendSecurityPolicies, backendTLSConfigs, referenceGrants, originalGateways, originalSecrets, _, egBackends, err := collectObjects(yaml, output, stderrLogger)
 	if err != nil {
 		return fmt.Errorf("error translating: %w", err)
 	}
 
-	_, _, httpRoutes, extensionPolicies, httpRouteFilter, backends, secrets, backendTrafficPolicies, securityPolicies, err := translateCustomResourceObjects(ctx, aigwRoutes, mcpRoutes, aigwBackends, backendSecurityPolicies, backendTLSConfigs, referenceGrants, originalGateways, originalSecrets, stderrLogger)
+	_, _, httpRoutes, extensionPolicies, httpRouteFilter, backends, secrets, backendTrafficPolicies, securityPolicies, err := translateCustomResourceObjects(ctx, aigwRoutes, mcpRoutes, aigwBackends, backendSecurityPolicies, backendTLSConfigs, referenceGrants, originalGateways, originalSecrets, egBackends, stderrLogger)
 	if err != nil {
 		return fmt.Errorf("error emitting: %w", err)
 	}
@@ -120,6 +121,7 @@ func collectObjects(yamlInput string, out io.Writer, logger *slog.Logger) (
 	gws []*gwapiv1.Gateway,
 	secrets []*corev1.Secret,
 	envoyProxies []*egv1a1.EnvoyProxy,
+	egBackends []*egv1a1.Backend,
 	err error,
 ) {
 	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader([]byte(yamlInput)), 4096)
@@ -175,6 +177,11 @@ func collectObjects(yamlInput string, out io.Writer, logger *slog.Logger) (
 			// need to reconcile them; just create them as-is.
 			mustExtractAndAppend(obj, &backendTLSConfigs)
 			mustWriteObj(nil, obj, out)
+		case "Backend":
+			// Envoy Gateway Backends are written back as-is, and also kept to load them in the fake
+			// client: the extension server reads them (e.g. their fallback setting).
+			mustExtractAndAppend(obj, &egBackends)
+			mustWriteObj(nil, obj, out)
 		case "ReferenceGrant":
 			// The controllers check cross-namespace references against these, and Envoy Gateway needs
 			// them as well, e.g. for HTTPRoute backendRefs to another namespace.
@@ -204,6 +211,7 @@ func translateCustomResourceObjects(
 	referenceGrants []*gwapiv1b1.ReferenceGrant,
 	gws []*gwapiv1.Gateway,
 	usedDefinedSecrets []*corev1.Secret,
+	userDefinedBackends []*egv1a1.Backend,
 	logger *slog.Logger,
 ) (
 	fakeClient client.Client,
@@ -273,6 +281,13 @@ func translateCustomResourceObjects(
 	for _, btp := range backendTLSPolicies {
 		mustCreate(ctx, fakeClient, btp, logger)
 	}
+	// User-defined Envoy Gateway Backends go in the client so that the extension server can read them.
+	// They are already written to the output as-is, so they are left out of the returned Backends.
+	userDefinedBackendKeys := map[client.ObjectKey]struct{}{}
+	for _, b := range userDefinedBackends {
+		mustCreate(ctx, fakeClient, b, logger)
+		userDefinedBackendKeys[client.ObjectKeyFromObject(b)] = struct{}{}
+	}
 	// ReferenceGrants go in the controller-runtime client, which is where the controllers look them up.
 	for _, rg := range referenceGrants {
 		mustCreate(ctx, fakeClient, rg, logger)
@@ -309,6 +324,10 @@ func translateCustomResourceObjects(
 		err = fmt.Errorf("error listing Backends: %w", err)
 		return
 	}
+	backends.Items = slices.DeleteFunc(backends.Items, func(b egv1a1.Backend) bool {
+		_, ok := userDefinedBackendKeys[client.ObjectKeyFromObject(&b)]
+		return ok
+	})
 	err = fakeClient.List(ctx, &httpRouteFilters)
 	if err != nil {
 		err = fmt.Errorf("error listing HTTPRouteFilters: %w", err)

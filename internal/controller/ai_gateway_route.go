@@ -192,6 +192,21 @@ func backendPriorityFromFilterName(name string) (int32, bool) {
 	return int32(p), true
 }
 
+// HTTPBackendRefPriority returns the backendPriority that the given generated HTTPRoute backendRef sets
+// through its backendPriority HTTPRouteFilter, which Envoy Gateway applies to the backendRef's endpoints,
+// and 0 when it sets none. It is exported for the extension server.
+func HTTPBackendRefPriority(ref *gwapiv1.HTTPBackendRef) uint32 {
+	for _, f := range ref.Filters {
+		if f.ExtensionRef == nil || string(f.ExtensionRef.Kind) != egv1a1.KindHTTPRouteFilter {
+			continue
+		}
+		if p, ok := backendPriorityFromFilterName(string(f.ExtensionRef.Name)); ok && p >= 0 {
+			return uint32(p)
+		}
+	}
+	return 0
+}
+
 // referencedBackendPriorities returns the backendPriority values referenced by the backendRef filters of
 // the given HTTPRoute, in ascending order.
 func referencedBackendPriorities(httpRoute *gwapiv1.HTTPRoute) []int32 {

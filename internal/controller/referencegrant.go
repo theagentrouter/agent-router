@@ -116,6 +116,25 @@ func ValidateQuotaPolicyAIServiceBackendReference(
 		ctx, policyNamespace, backendNamespace, backendName)
 }
 
+// ValidateAIGatewayRouteBackendReference validates an AIGatewayRoute backendRef to an AIServiceBackend
+// or, when isInferencePool, to an InferencePool in another namespace, as the controller does when it
+// generates the HTTPRoute. It is exported for the extension server, which must tell which backendRefs
+// the controller kept in the HTTPRoute.
+func ValidateAIGatewayRouteBackendReference(
+	ctx context.Context,
+	c client.Client,
+	routeNamespace string,
+	backendNamespace string,
+	backendName string,
+	isInferencePool bool,
+) error {
+	v := newReferenceGrantValidator(c)
+	if isInferencePool {
+		return v.validateInferencePoolReference(ctx, routeNamespace, backendNamespace, backendName)
+	}
+	return v.validateAIServiceBackendReference(ctx, routeNamespace, backendNamespace, backendName)
+}
+
 // validateInferencePoolReference validates that an AIGatewayRoute can reference an InferencePool
 // in a different namespace by checking for a valid ReferenceGrant.
 //

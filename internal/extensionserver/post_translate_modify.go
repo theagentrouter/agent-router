@@ -33,10 +33,12 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
+	"github.com/envoyproxy/ai-gateway/internal/controller"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
@@ -392,71 +394,45 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 	// Check if this rule has InferencePool backends.
 	pools := getInferencePoolsByMetadata(cluster.Metadata)
 	if len(pools) == 0 {
-		switch {
-		case cluster.LoadAssignment == nil:
-			// LoadAssignment is nil when the cluster's endpoints are EDS-managed: delivered out of band
-			// (e.g. standalone mode), not inlined at translate time. There is no LbEndpoint here, so we
-			// only set the backend name on cluster-level metadata; the upstream ext_proc filter resolves
-			// the backend via XDSClusterMetadataBackendNamePath.
+		if cluster.LoadAssignment == nil {
+			// LoadAssignment is nil when the cluster's endpoints are EDS-managed: Envoy Gateway turns
+			// static endpoints (Backend `ip` and `unix` endpoints) into an EDS cluster and
+			// delivers the ClusterLoadAssignment as a separate resource. The per-backend endpoint
+			// metadata is stamped on that resource by PostEndpointsModify; here there is no LbEndpoint.
+			// PostEndpointsModify only runs when the Envoy Gateway "Endpoints" xDS translator hook is
+			// registered: always in aigw run (standalone mode), but on Kubernetes only when users enable
+			// it explicitly in their Envoy Gateway Helm values (it is off by default for its cost).
 			//
-			// TODO(aws-signing): no LbEndpoint to stamp here, so an AWS backend on an EDS cluster falls
-			// back to the region-based default signing host and a VPCE host is lost. See ai-gateway#902 / #950.
-			s.log.Info("LoadAssignment is nil, setting cluster-level metadata", "cluster_name", cluster.Name)
-			if len(httpRouteRule.BackendRefs) > 0 {
-				backendRefIndex := 0
-				if clusterName.backendRefIndex != noBackendRefIndex {
-					backendRefIndex = clusterName.backendRefIndex
-				}
+			// Cluster-level metadata applies to every endpoint in the cluster, and the upstream ext_proc
+			// filter falls back to it when an endpoint carries no backend name. It is therefore only safe
+			// when the cluster maps to exactly one backendRef. When it can contain several backends,
+			// stamping one of them would make the ext_proc apply that backend's configuration, including
+			// its credentials, to requests sent to every other backend in the rule. Leave it unset so
+			// such requests fail closed (the upstream ext_proc finds no backend name) unless
+			// PostEndpointsModify stamped the endpoints.
+			//
+			// TODO(aws-signing): without the Endpoints hook there is no LbEndpoint to stamp, so an AWS
+			// backend on an EDS cluster falls back to the region-based default signing host and a VPCE
+			// host is lost. See ai-gateway#902 / #950.
+			var backendRefIndex int
+			var ok bool
+			backendRefIndex, ok, err = s.singleClusterBackendRefIndex(ctx, &aigwRoute, httpRouteRuleIndex, clusterName.backendRefIndex)
+			if err != nil {
+				return err
+			}
+			if ok {
+				s.log.Info("LoadAssignment is nil, setting cluster-level metadata", "cluster_name", cluster.Name)
 				backendRef := httpRouteRule.BackendRefs[backendRefIndex]
 				setClusterMetadataBackendName(cluster, aigwRoute.Namespace, backendRef.Name, aigwRoute.Name, httpRouteRuleIndex, backendRefIndex)
+			} else if len(httpRouteRule.BackendRefs) > 0 {
+				s.log.Info("LoadAssignment is nil and the cluster has several backends; not setting cluster-level metadata. "+
+					"Requests to this rule fail unless the Envoy Gateway \"Endpoints\" xDS translator hook is enabled "+
+					"(always in standalone mode, opt-in in the Envoy Gateway Helm values) or the Backends use fqdn endpoints",
+					"cluster_name", cluster.Name)
 			}
-		case clusterName.backendRefIndex != noBackendRefIndex:
-			backendRef := httpRouteRule.BackendRefs[clusterName.backendRefIndex]
-			for _, endpoints := range cluster.LoadAssignment.Endpoints {
-				s.applyLegacyBackendRefPriority(endpoints, backendRef.Priority, cluster.Name, backendRef.Name)
-				for _, endpoint := range endpoints.LbEndpoints {
-					setEndpointMetadataBackendName(endpoint, aigwRoute.Namespace, backendRef.Name, aigwRoute.Name, httpRouteRuleIndex, clusterName.backendRefIndex)
-					stampUpstreamHostMetadata(endpoint)
-				}
-			}
-		default:
-			// Populate the metadata for each endpoint in the LoadAssignment.
-			var lbEndpointIndex int
-			for i, backendRef := range httpRouteRule.BackendRefs {
-				// The weight of 0 means this backend is disabled and is not included in the LoadAssignment by EG,
-				// so we skip it here.
-				if backendRef.Weight != nil && *backendRef.Weight == 0 {
-					continue
-				}
-				// httpRouteRule.BackendRefs comes from a fresh
-				// s.k8sClient.Get(&aigwRoute); cluster.LoadAssignment is
-				// whatever Envoy Gateway translated for this cluster. The two
-				// can be a revision apart, so the rule can carry more
-				// non-zero-weight BackendRefs than the cluster has endpoint
-				// groups (e.g. an AIGatewayRoute gained a BackendRef whose
-				// AIServiceBackend does not resolve yet, so the generated
-				// HTTPRoute - and the cluster - stay a revision behind).
-				// lbEndpointIndex only increases, so once it is out of range
-				// every remaining backendRef is too; stop rather than index out
-				// of bounds. The rule and backendRef indices are already
-				// guarded the same way earlier in this function. The unmatched
-				// backend(s) get their endpoint metadata stamped on a later
-				// reconcile once the counts agree.
-				if lbEndpointIndex >= len(cluster.LoadAssignment.Endpoints) {
-					s.log.Info("cluster LoadAssignment has fewer endpoint groups than non-zero-weight backendRefs",
-						"cluster_name", cluster.Name, "backend_index", i,
-						"load_assignment_endpoints", len(cluster.LoadAssignment.Endpoints))
-					break
-				}
-				endpoints := cluster.LoadAssignment.Endpoints[lbEndpointIndex]
-				lbEndpointIndex++
-				name := backendRef.Name
-				namespace := aigwRoute.Namespace
-				s.applyLegacyBackendRefPriority(endpoints, backendRef.Priority, cluster.Name, name)
-				for _, endpoint := range endpoints.LbEndpoints {
-					setEndpointMetadataBackendName(endpoint, namespace, name, aigwRoute.Name, httpRouteRuleIndex, i)
-					stampUpstreamHostMetadata(endpoint)
-				}
+		} else {
+			if err = s.stampLoadAssignment(ctx, cluster.Name, cluster.LoadAssignment, &aigwRoute, httpRouteRuleIndex, clusterName.backendRefIndex); err != nil {
+				return err
 			}
 		}
 	} else {
@@ -600,6 +576,424 @@ func (s *Server) maybeModifyCluster(ctx context.Context, cluster *clusterv3.Clus
 		return fmt.Errorf("failed to marshal HttpProtocolOptions to Any: %w", err)
 	}
 	cluster.TypedExtensionProtocolOptions[httpProtocolOptionsKey] = poAny
+	return nil
+}
+
+// singleClusterBackendRefIndex returns the index of the only backendRef whose endpoints a cluster
+// of the given rule holds, and false when it holds the endpoints of several backendRefs, or when
+// that cannot be told.
+//
+// The generated HTTPRoute is what Envoy Gateway translated, so it is used to tell which backendRefs
+// the cluster holds: the controller leaves out backendRefs that fail validation (e.g. a missing
+// AIServiceBackend or ReferenceGrant), which the AIGatewayRoute still lists. When the HTTPRoute is
+// not available, the backendRefs the controller would keep are assumed (see ruleBackendRefs).
+func (s *Server) singleClusterBackendRefIndex(ctx context.Context, aigwRoute *aigv1b1.AIGatewayRoute, ruleIndex, backendRefIndex int) (int, bool, error) {
+	if backendRefIndex != noBackendRefIndex {
+		i, _, ok, err := s.perBackendClusterRefIndex(ctx, aigwRoute, ruleIndex, backendRefIndex)
+		return i, ok, err
+	}
+	refs, err := s.ruleBackendRefs(ctx, aigwRoute, ruleIndex)
+	if err != nil {
+		return 0, false, err
+	}
+	index := -1
+	for _, i := range refs.byHTTPRouteIndex {
+		switch {
+		case i == zeroWeightBackendRef:
+			continue
+		case i < 0 || index != -1:
+			return 0, false, nil
+		}
+		index = i
+	}
+	return index, index != -1, nil
+}
+
+const (
+	// ambiguousBackendRef marks an HTTPRoute backendRef whose AIGatewayRoute backendRef cannot be told.
+	ambiguousBackendRef = -1
+	// zeroWeightBackendRef marks a zero-weight HTTPRoute backendRef, which Envoy Gateway leaves out of
+	// clusters.
+	zeroWeightBackendRef = -2
+)
+
+// ruleBackendRefs maps the endpoints Envoy Gateway translates for a rule back to the rule's
+// AIGatewayRoute backendRefs.
+type ruleBackendRefs struct {
+	// byHTTPRouteIndex holds, for each backendRef of the generated HTTPRoute rule, the index of the
+	// AIGatewayRoute backendRef it was generated from, ambiguousBackendRef or zeroWeightBackendRef.
+	byHTTPRouteIndex []int
+	// byBackend maps each Envoy Gateway Backend to the indices of the non-zero-weight backendRefs that
+	// Envoy Gateway translated for it (ambiguousBackendRef when one cannot be told).
+	byBackend map[client.ObjectKey][]int
+	// backends, weights and priorities hold, for each backendRef of the generated HTTPRoute rule, the
+	// Backend it references (zero when it is not a Backend), and the weight and priority Envoy Gateway
+	// sets on its locality.
+	backends   []client.ObjectKey
+	weights    []int32
+	priorities []uint32
+}
+
+// backendRefKey identifies the object a backendRef points to, as it appears in the HTTPRoute.
+type backendRefKey struct {
+	kind string
+	key  client.ObjectKey
+}
+
+// ruleBackendRefs resolves the backendRefs of the given rule (through their AIServiceBackends) and
+// matches them to those of the generated HTTPRoute.
+//
+// The controller generates the HTTPRoute backendRefs from the AIGatewayRoute ones, in order, but
+// leaves out those that fail validation (a missing AIServiceBackend or ReferenceGrant), so they cannot
+// be matched by position. The same validation is applied here, so that a rejected backendRef sharing
+// a Backend with a kept one does not make the kept one ambiguous. Each HTTPRoute backendRef is matched to the AIGatewayRoute
+// backendRef that resolves to the same object; when several could have produced it (one of two
+// backendRefs to the same Backend was left out), it is marked ambiguous. When the HTTPRoute is not
+// available, the backendRefs whose AIServiceBackend exists are assumed to be the ones translated.
+func (s *Server) ruleBackendRefs(ctx context.Context, aigwRoute *aigv1b1.AIGatewayRoute, ruleIndex int) (*ruleBackendRefs, error) {
+	rule := &aigwRoute.Spec.Rules[ruleIndex]
+	// The object each AIGatewayRoute backendRef resolves to; nil when it cannot be in the HTTPRoute.
+	resolved := make([]*backendRefKey, len(rule.BackendRefs))
+	for i := range rule.BackendRefs {
+		ref := &rule.BackendRefs[i]
+		namespace := ref.GetNamespace(aigwRoute.Namespace)
+		if err := controller.ValidateAIGatewayRouteBackendReference(ctx, s.k8sClient, aigwRoute.Namespace, namespace, ref.Name, ref.IsInferencePool()); err != nil {
+			var notPermitted *controller.ReferenceNotPermittedError
+			if errors.As(err, &notPermitted) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to validate backendRef %s/%s: %w", namespace, ref.Name, err)
+		}
+		if ref.IsInferencePool() {
+			resolved[i] = &backendRefKey{kind: ptr.Deref(ref.Kind, ""), key: client.ObjectKey{Namespace: namespace, Name: ref.Name}}
+			continue
+		}
+		var backend aigv1b1.AIServiceBackend
+		key := client.ObjectKey{Namespace: namespace, Name: ref.Name}
+		if err := s.k8sClient.Get(ctx, key, &backend); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to get AIServiceBackend %s: %w", key, err)
+		}
+		resolved[i] = &backendRefKey{
+			kind: string(ptr.Deref(backend.Spec.BackendRef.Kind, "Service")),
+			key: client.ObjectKey{
+				Namespace: string(ptr.Deref(backend.Spec.BackendRef.Namespace, gwapiv1.Namespace(backend.Namespace))),
+				Name:      string(backend.Spec.BackendRef.Name),
+			},
+		}
+	}
+
+	var emitted []backendRefKey
+	var weights []int32
+	var priorities []uint32
+	var fromHTTPRoute bool
+	var httpRoute gwapiv1.HTTPRoute
+	if err := s.k8sClient.Get(ctx, client.ObjectKeyFromObject(aigwRoute), &httpRoute); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("failed to get HTTPRoute %s/%s: %w", aigwRoute.Namespace, aigwRoute.Name, err)
+		}
+	} else if ruleIndex < len(httpRoute.Spec.Rules) {
+		fromHTTPRoute = true
+		for j := range httpRoute.Spec.Rules[ruleIndex].BackendRefs {
+			ref := &httpRoute.Spec.Rules[ruleIndex].BackendRefs[j]
+			emitted = append(emitted, backendRefKey{
+				kind: string(ptr.Deref(ref.Kind, "Service")),
+				key: client.ObjectKey{
+					Namespace: string(ptr.Deref(ref.Namespace, gwapiv1.Namespace(httpRoute.Namespace))),
+					Name:      string(ref.Name),
+				},
+			})
+			weights = append(weights, ptr.Deref(ref.Weight, 1))
+			priorities = append(priorities, controller.HTTPBackendRefPriority(ref))
+		}
+	}
+	if !fromHTTPRoute {
+		// The backendRefs the controller would keep.
+		for i, r := range resolved {
+			if r != nil {
+				emitted = append(emitted, *r)
+				weights = append(weights, ptr.Deref(rule.BackendRefs[i].Weight, 1))
+				priorities = append(priorities, ptr.Deref(rule.BackendRefs[i].Priority, 0))
+			}
+		}
+	}
+
+	refs := &ruleBackendRefs{
+		byHTTPRouteIndex: matchBackendRefs(resolved, emitted),
+		byBackend:        make(map[client.ObjectKey][]int),
+		backends:         make([]client.ObjectKey, len(emitted)),
+		weights:          weights,
+		priorities:       priorities,
+	}
+	fallback := make(map[client.ObjectKey]bool)
+	for m, i := range refs.byHTTPRouteIndex {
+		if weights[m] == 0 {
+			refs.byHTTPRouteIndex[m] = zeroWeightBackendRef
+			continue
+		}
+		if emitted[m].kind != "Backend" {
+			continue
+		}
+		refs.backends[m] = emitted[m].key
+		refs.byBackend[emitted[m].key] = append(refs.byBackend[emitted[m].key], i)
+		// Without a backendPriority (priority 0 gets no filter), Envoy Gateway derives the priority
+		// from the Backend's fallback setting.
+		if priorities[m] == 0 {
+			isFallback, ok := fallback[emitted[m].key]
+			if !ok {
+				var err error
+				if isFallback, err = s.isFallbackBackend(ctx, emitted[m].key); err != nil {
+					return nil, err
+				}
+				fallback[emitted[m].key] = isFallback
+			}
+			if isFallback {
+				refs.priorities[m] = 1
+			}
+		}
+	}
+	return refs, nil
+}
+
+// isFallbackBackend reports whether the given Envoy Gateway Backend has its fallback setting, which
+// makes Envoy Gateway give its endpoints priority 1 unless a backendPriority overrides it.
+func (s *Server) isFallbackBackend(ctx context.Context, key client.ObjectKey) (bool, error) {
+	var backend egv1a1.Backend
+	if err := s.k8sClient.Get(ctx, key, &backend); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to get Backend %s: %w", key, err)
+	}
+	return ptr.Deref(backend.Spec.Fallback, false), nil
+}
+
+// perBackendClusterRefIndex returns the index of the AIGatewayRoute backendRef of a per-backend
+// cluster ("httproute/<ns>/<name>/rule/<N>/backend/<M>"). M is the index of the backendRef in the
+// generated HTTPRoute, which differs from the AIGatewayRoute one when the controller left backendRefs
+// out of it, so it is mapped through ruleBackendRefs.
+func (s *Server) perBackendClusterRefIndex(ctx context.Context, aigwRoute *aigv1b1.AIGatewayRoute, ruleIndex, httpRouteIndex int) (int, *ruleBackendRefs, bool, error) {
+	refs, err := s.ruleBackendRefs(ctx, aigwRoute, ruleIndex)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	if httpRouteIndex >= len(refs.byHTTPRouteIndex) || refs.byHTTPRouteIndex[httpRouteIndex] < 0 {
+		return 0, nil, false, nil
+	}
+	return refs.byHTTPRouteIndex[httpRouteIndex], refs, true, nil
+}
+
+// matchBackendRefs returns, for each emitted backendRef, the index of the resolved backendRef it
+// was generated from, or ambiguousBackendRef. emitted is an order-preserving subsequence of
+// resolved (nil entries are never emitted): an emitted backendRef was generated from a given
+// resolved one when every way of embedding emitted in resolved agrees on it, i.e. when its leftmost
+// and rightmost embeddings agree. When emitted is not a subsequence of resolved (the HTTPRoute and
+// the AIGatewayRoute are a revision apart), every backendRef is ambiguous.
+func matchBackendRefs(resolved []*backendRefKey, emitted []backendRefKey) []int {
+	matches := func(i, m int) bool { return resolved[i] != nil && *resolved[i] == emitted[m] }
+	result := make([]int, len(emitted))
+	leftmost := make([]int, len(emitted))
+	i := 0
+	for m := range emitted {
+		for i < len(resolved) && !matches(i, m) {
+			i++
+		}
+		if i == len(resolved) {
+			for m := range result {
+				result[m] = ambiguousBackendRef
+			}
+			return result
+		}
+		leftmost[m] = i
+		i++
+	}
+	i = len(resolved) - 1
+	for m := len(emitted) - 1; m >= 0; m-- {
+		for !matches(i, m) {
+			i--
+		}
+		if leftmost[m] == i {
+			result[m] = i
+		} else {
+			result[m] = ambiguousBackendRef
+		}
+		i--
+	}
+	return result
+}
+
+// localityBackend returns the Envoy Gateway Backend a locality was built from. Envoy Gateway
+// (v1.8+) records it in the locality's metadata, on every locality built from the backend,
+// including the per-zone localities of preferLocal and weightedZones.
+func localityBackend(locality *endpointv3.LocalityLbEndpoints) (client.ObjectKey, bool) {
+	eg, ok := locality.GetMetadata().GetFilterMetadata()[envoyGatewayMetadataNamespace]
+	if !ok {
+		return client.ObjectKey{}, false
+	}
+	for _, resource := range eg.GetFields()[envoyGatewayMetadataResourcesKey].GetListValue().GetValues() {
+		fields := resource.GetStructValue().GetFields()
+		if fields["kind"].GetStringValue() != "Backend" {
+			continue
+		}
+		return client.ObjectKey{Namespace: fields["namespace"].GetStringValue(), Name: fields["name"].GetStringValue()}, true
+	}
+	return client.ObjectKey{}, false
+}
+
+// localityHTTPRouteBackendIndex returns the index of the HTTPRoute backendRef a locality was built
+// from. Envoy Gateway names non-zonal localities after it in Locality.Region
+// ("httproute/<ns>/<name>/rule/<N>/backend/<M>"); per-zone localities (preferLocal, weightedZones)
+// only carry a Zone.
+func localityHTTPRouteBackendIndex(locality *endpointv3.LocalityLbEndpoints) (int, bool) {
+	region := locality.GetLocality().GetRegion()
+	pos := strings.LastIndex(region, "/backend/")
+	if pos < 0 {
+		return 0, false
+	}
+	index, err := strconv.Atoi(region[pos+len("/backend/"):])
+	return index, err == nil && index >= 0
+}
+
+// localityBackendRefIndex returns the index of the AIGatewayRoute backendRef the given locality,
+// built from the given Backend, belongs to.
+func (r *ruleBackendRefs) localityBackendRefIndex(locality *endpointv3.LocalityLbEndpoints, backend client.ObjectKey) (int, bool) {
+	if m, ok := localityHTTPRouteBackendIndex(locality); ok && m < len(r.byHTTPRouteIndex) {
+		// Region names the backendRef of the HTTPRoute revision Envoy Gateway translated, which may
+		// not be the one read here (e.g. backendRefs sharing a Backend were reordered or removed while
+		// a translation was in flight). Only trust it when the locality matches that backendRef on
+		// everything Envoy Gateway translates from it: its Backend, weight and priority. Backend
+		// endpoints are the same for every backendRef to the Backend, so when they all match, the
+		// locality is what the backendRef read here would translate to, whichever revision built it.
+		i := r.byHTTPRouteIndex[m]
+		if i >= 0 && slices.Contains(r.byBackend[backend], i) &&
+			int64(locality.GetLoadBalancingWeight().GetValue()) == int64(r.weights[m]) &&
+			locality.GetPriority() == r.priorities[m] {
+			return i, true
+		}
+	}
+	if indices := r.byBackend[backend]; len(indices) == 1 && indices[0] >= 0 {
+		return indices[0], true
+	}
+	if locality.GetLocality().GetRegion() != "" {
+		return 0, false
+	}
+	// Per-zone localities (preferLocal, weightedZones) name no backendRef, and their weight is the
+	// zone's, not the backendRef's, but they carry its priority. Among backendRefs sharing the Backend,
+	// the one with the locality's priority owns it, when it is the only one: e.g. a scale tier failing
+	// over to the default tier of the same upstream. As above, a locality that matches a backendRef on
+	// Backend and priority translates the same whichever revision built it.
+	owner := -1
+	for m, i := range r.byHTTPRouteIndex {
+		if i == zeroWeightBackendRef || r.backends[m] != backend || r.priorities[m] != locality.GetPriority() {
+			continue
+		}
+		if owner != -1 || i < 0 {
+			return 0, false
+		}
+		owner = i
+	}
+	return owner, owner != -1
+}
+
+// stampLoadAssignment stamps the backend name, upstream host and priority of the owning backendRef
+// on the endpoints of each locality of the given ClusterLoadAssignment. It is used both for clusters
+// with an inline LoadAssignment and for EDS ClusterLoadAssignments (PostEndpointsModify, which only
+// runs when the Envoy Gateway "Endpoints" hook is enabled: always in standalone mode, opt-in on
+// Kubernetes).
+//
+// The owning backendRef of each locality is not identified from the locality's position: a backend
+// can span several localities (one per zone with preferLocal or weightedZones), and backendRefs that
+// the controller left out of the HTTPRoute have no locality. Instead, it is identified from the
+// HTTPRoute backendRef that Envoy Gateway names in the locality Region, matched to the AIGatewayRoute
+// backendRef it was generated from (see ruleBackendRefs), or, for per-zone localities, from the
+// Backend that Envoy Gateway records in the locality metadata when a single backendRef was
+// translated for it. A locality whose backendRef cannot be told is left unstamped, so requests to it
+// fail rather than use another backend's configuration.
+func (s *Server) stampLoadAssignment(ctx context.Context, clusterName string, cla *endpointv3.ClusterLoadAssignment, aigwRoute *aigv1b1.AIGatewayRoute, ruleIndex, backendRefIndex int) error {
+	rule := &aigwRoute.Spec.Rules[ruleIndex]
+	stamp := func(endpoints *endpointv3.LocalityLbEndpoints, i int) {
+		backendRef := rule.BackendRefs[i]
+		s.applyLegacyBackendRefPriority(endpoints, backendRef.Priority, clusterName, backendRef.Name)
+		for _, endpoint := range endpoints.LbEndpoints {
+			setEndpointMetadataBackendName(endpoint, aigwRoute.Namespace, backendRef.Name, aigwRoute.Name, ruleIndex, i)
+			stampUpstreamHostMetadata(endpoint)
+		}
+	}
+	if backendRefIndex != noBackendRefIndex {
+		// backendRefIndex is the HTTPRoute backendRef index from the cluster name. The cluster was
+		// translated from an HTTPRoute revision that may not be the one read here (e.g. backendRefs
+		// were reordered while a translation was in flight), so, as for shared clusters, only stamp
+		// localities that match the backendRef on its Backend and priority.
+		i, refs, ok, err := s.perBackendClusterRefIndex(ctx, aigwRoute, ruleIndex, backendRefIndex)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			s.log.Info("cannot tell which backendRef a per-backend cluster belongs to; not setting its backend metadata",
+				"cluster_name", clusterName, "backend_index", backendRefIndex)
+			return nil
+		}
+		for _, endpoints := range cla.Endpoints {
+			backend, hasBackend := localityBackend(endpoints)
+			if (hasBackend && backend != refs.backends[backendRefIndex]) || endpoints.GetPriority() != refs.priorities[backendRefIndex] {
+				s.log.Info("cluster locality does not match the backendRef of its per-backend cluster; not setting its backend metadata",
+					"cluster_name", clusterName, "backend", backend.String(), "priority", endpoints.GetPriority())
+				continue
+			}
+			stamp(endpoints, i)
+		}
+		return nil
+	}
+
+	hasBackendMetadata := slices.ContainsFunc(cla.Endpoints, func(l *endpointv3.LocalityLbEndpoints) bool {
+		_, ok := localityBackend(l)
+		return ok
+	})
+	if hasBackendMetadata {
+		refs, err := s.ruleBackendRefs(ctx, aigwRoute, ruleIndex)
+		if err != nil {
+			return err
+		}
+		for _, endpoints := range cla.Endpoints {
+			backend, _ := localityBackend(endpoints)
+			if i, ok := refs.localityBackendRefIndex(endpoints, backend); ok {
+				stamp(endpoints, i)
+				continue
+			}
+			s.log.Info("cannot tell which backendRef a cluster locality belongs to; not setting its backend metadata",
+				"cluster_name", clusterName, "backend", backend.String(), "matching_backend_refs", len(refs.byBackend[backend]))
+		}
+		return nil
+	}
+
+	// Envoy Gateway before v1.8 records no Backend on localities. Fall back to its one locality
+	// per non-zero-weight backendRef, in order.
+	var lbEndpointIndex int
+	for i, backendRef := range rule.BackendRefs {
+		// The weight of 0 means this backend is disabled and is not included in the LoadAssignment by EG,
+		// so we skip it here.
+		if backendRef.Weight != nil && *backendRef.Weight == 0 {
+			continue
+		}
+		// rule.BackendRefs comes from a fresh s.k8sClient.Get(&aigwRoute); the LoadAssignment is
+		// whatever Envoy Gateway translated for this cluster. The two can be a revision apart, so the
+		// rule can carry more non-zero-weight BackendRefs than the cluster has endpoint groups (e.g. an
+		// AIGatewayRoute gained a BackendRef whose AIServiceBackend does not resolve yet, so the
+		// generated HTTPRoute - and the cluster - stay a revision behind). lbEndpointIndex only
+		// increases, so once it is out of range every remaining backendRef is too; stop rather than
+		// index out of bounds. The unmatched backend(s) get their endpoint metadata stamped on a later
+		// reconcile once the counts agree.
+		if lbEndpointIndex >= len(cla.Endpoints) {
+			s.log.Info("cluster LoadAssignment has fewer endpoint groups than non-zero-weight backendRefs",
+				"cluster_name", clusterName, "backend_index", i,
+				"load_assignment_endpoints", len(cla.Endpoints))
+			break
+		}
+		stamp(cla.Endpoints[lbEndpointIndex], i)
+		lbEndpointIndex++
+	}
 	return nil
 }
 

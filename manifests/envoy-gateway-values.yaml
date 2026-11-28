@@ -48,6 +48,12 @@ config:
             - Translation
             - Cluster
             - Route
+            # Optional: only needed when an AIGatewayRoute rule has several backendRefs whose
+            # Backends use `ip` or `unix` endpoints (AIServiceBackends always reference Envoy
+            # Gateway Backends). Without it, requests to such rules fail. Envoy Gateway calls this
+            # hook for every EDS cluster on every translation, AI-related or not, so it adds a gRPC
+            # call per cluster to each translation on large Gateways.
+            # - Endpoints
       service:
         fqdn:
           # IMPORTANT: Update this to match your AI Gateway controller service
