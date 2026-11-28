@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tidwall/gjson"
 	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/awsbedrock"
@@ -186,15 +187,38 @@ func openAIMessageToBedrockMessageRoleAssistant(
 	contentBlocks := make([]*awsbedrock.ContentBlock, 0)
 
 	var contentParts []openai.ChatCompletionAssistantMessageParamContent
-	if v, ok := openAiMessage.Content.Value.(string); ok && len(v) > 0 {
-		// Case 1: Content is a simple string.
-		contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{Type: openai.ChatCompletionAssistantMessageParamContentTypeText, Text: &v})
-	} else if singleContent, ok := openAiMessage.Content.Value.(openai.ChatCompletionAssistantMessageParamContent); ok {
-		// Case 2: Content is a single object.
-		contentParts = append(contentParts, singleContent)
-	} else if sliceContent, ok := openAiMessage.Content.Value.([]openai.ChatCompletionAssistantMessageParamContent); ok {
-		// Case 3: Content is already a slice of objects.
-		contentParts = sliceContent
+	switch content := openAiMessage.Content.Value.(type) {
+	case nil, string:
+		// With string or omitted content, signed reasoning is carried separately in thinking_blocks.
+		for i := range openAiMessage.ThinkingBlocks {
+			block := &openAiMessage.ThinkingBlocks[i]
+			if block.Type == "thinking" && block.Signature != "" {
+				text := block.Thinking
+				// A streamed message can carry the text separately from its signature.
+				// Only one block can be paired unambiguously with that text.
+				if len(openAiMessage.ThinkingBlocks) == 1 && text == "" && block.Data == "" {
+					reasoning := gjson.ParseBytes(openAiMessage.ReasoningContent)
+					if reasoning.Type == gjson.String {
+						text = reasoning.Str
+					}
+				}
+				contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{
+					Type:      openai.ChatCompletionAssistantMessageParamContentTypeThinking,
+					Text:      &text,
+					Signature: &block.Signature,
+				})
+			}
+		}
+		if text, ok := content.(string); ok && text != "" {
+			contentParts = append(contentParts, openai.ChatCompletionAssistantMessageParamContent{
+				Type: openai.ChatCompletionAssistantMessageParamContentTypeText,
+				Text: &text,
+			})
+		}
+	case openai.ChatCompletionAssistantMessageParamContent:
+		contentParts = append(contentParts, content)
+	case []openai.ChatCompletionAssistantMessageParamContent:
+		contentParts = content
 	}
 
 	for _, content := range contentParts {

@@ -15,9 +15,11 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/stretchr/testify/require"
 	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 )
 
 func TestAuthorizeRequest(t *testing.T) {
@@ -29,9 +31,7 @@ func TestAuthorizeRequest(t *testing.T) {
 		if len(scopes) > 0 {
 			claims["scope"] = scopes
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
-		signed, _ := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
-		return signed
+		return verifiedJWTClaims(claims)
 	}
 
 	makeToken := func(scopes ...string) string {
@@ -130,7 +130,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend: "backend1",
 			tool:    "tool1",
 			args: &mcp.CallToolParams{
@@ -163,7 +163,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeToken("read", "write")}, "X-Tenant-Id": []string{"t-123"}},
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeToken("read", "write")}, "X-Tenant-Id": []string{"t-123"}},
 			backend: "backend1",
 			tool:    "tool1",
 			args: &mcp.CallToolParams{
@@ -194,7 +194,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: false,
@@ -219,7 +219,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeToken("write")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeToken("write")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: false,
@@ -240,7 +240,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeToken("read", "write")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeToken("read", "write")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: true,
@@ -266,7 +266,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend: "backend1",
 			tool:    "tool1",
 			args: &mcp.CallToolParams{
@@ -298,7 +298,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend: "backend1",
 			tool:    "tool1",
 			args: &mcp.CallToolParams{
@@ -329,7 +329,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: false,
@@ -355,7 +355,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			args:          &mcp.CallToolParams{Name: "p1", Arguments: map[string]any{}},
@@ -378,7 +378,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeToken("read", "write")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeToken("read", "write")}},
 			backend:       "backend1",
 			tool:          "other-tool",
 			expectAllowed: false,
@@ -400,7 +400,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeToken("foo", "bar")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeToken("foo", "bar")}},
 			backend:       "backend1",
 			tool:          "other-tool",
 			expectAllowed: false,
@@ -443,7 +443,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer invalid.token.here"}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{"invalid.token.here"}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: false,
@@ -466,7 +466,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeToken("alpha")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeToken("alpha")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: false,
@@ -501,7 +501,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend: "backend1",
 			tool:    "listFiles",
 			args: &mcp.CallToolParams{
@@ -542,7 +542,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend: "backend1",
 			tool:    "listFiles",
 			args: &mcp.CallToolParams{
@@ -589,7 +589,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend: "backend1",
 			tool:    "listFiles",
 			args: &mcp.CallToolParams{
@@ -684,7 +684,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeToken("read")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeToken("read")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: true,
@@ -710,7 +710,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"tenant": "other"}, "read")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{"tenant": "other"}, "read")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: false,
@@ -736,7 +736,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"tenant": "acme"}, "read")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{"tenant": "acme"}, "read")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: true,
@@ -762,7 +762,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"tenant": "globex"}, "read")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{"tenant": "globex"}, "read")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: true,
@@ -786,8 +786,8 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			// Opaque tokens are not JWTs; parsing fails so no scopes are extracted.
-			headers:       http.Header{"Authorization": []string{"Bearer opaque-token"}},
+			// A malformed claims payload fails to parse so no scopes are extracted.
+			headers:       http.Header{jwtClaimsHeaderKey: []string{"opaque-token"}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: false,
@@ -813,7 +813,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"tenant": "acme"}, "read")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{"tenant": "acme"}, "read")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: false,
@@ -841,7 +841,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"tenant": "acme"}, "admin")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{"tenant": "acme"}, "admin")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: true,
@@ -868,7 +868,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{
 				"org": map[string]any{"departments": []any{"engineering", "security"}},
 			})}},
 			backend:       "backend1",
@@ -890,7 +890,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{
 				"org": map[string]any{"departments": []any{"engineering", "security"}},
 			})}},
 			backend:       "backend1",
@@ -920,7 +920,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{
 				"org": map[string]any{"departments": []any{"engineering", "security"}},
 			})}},
 			backend:       "backend1",
@@ -950,7 +950,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers: http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{
+			headers: http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{
 				"org": map[string]any{"departments": "engineering"},
 			})}},
 			backend:       "backend1",
@@ -985,7 +985,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"tenant": "acme", "org": map[string]any{"departments": []any{"engineering", "hr"}}}, "admin")}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{"tenant": "acme", "org": map[string]any{"departments": []any{"engineering", "hr"}}}, "admin")}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: true,
@@ -1006,7 +1006,7 @@ func TestAuthorizeRequest(t *testing.T) {
 					},
 				},
 			},
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"scp": "read"})}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{"scp": "read"})}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: true,
@@ -1029,7 +1029,7 @@ func TestAuthorizeRequest(t *testing.T) {
 				},
 			},
 			unverifiedJWT: true,
-			headers:       http.Header{"Authorization": []string{"Bearer " + makeTokenWithClaims(jwt.MapClaims{"role": "admin"})}},
+			headers:       http.Header{jwtClaimsHeaderKey: []string{makeTokenWithClaims(jwt.MapClaims{"role": "admin"})}},
 			backend:       "backend1",
 			tool:          "tool1",
 			expectAllowed: false,
@@ -1095,4 +1095,87 @@ func TestCompileAuthorizationInvalidRuleCEL(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected compile error for invalid rule CEL expression")
 	}
+}
+
+// TestAuthorizeRequest_IgnoresUnverifiedAuthorizationHeader verifies that JWT claims and scopes are
+// never taken from the Authorization header. Envoy may verify a different token than the one in the Authorization header
+// (e.g. one sent in the access_token query parameter, while a forged "bearer <token>" header with a
+// lowercase scheme is skipped by Envoy). The proxy must take JWT claims and scopes only from the
+// claims header the gateway renders from the verified token, never from the Authorization header.
+func TestAuthorizeRequest_IgnoresUnverifiedAuthorizationHeader(t *testing.T) {
+	forged := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{"sub": "alice", "scope": "read admin", "role": "admin"})
+	forgedToken, err := forged.SignedString(jwt.UnsafeAllowNoneSignatureType)
+	require.NoError(t, err)
+	// The payload of the token Envoy actually verified.
+	verified := verifiedJWTClaims(jwt.MapClaims{"sub": "alice", "scope": "read", "role": "user"})
+
+	auth, err := compileAuthorization(&filterapi.MCPRouteAuthorization{
+		DefaultAction: filterapi.AuthorizationActionDeny,
+		VerifiedJWT:   true,
+		Rules: []filterapi.MCPRouteAuthorizationRule{
+			{
+				Action: filterapi.AuthorizationActionAllow,
+				Source: &filterapi.MCPAuthorizationSource{JWT: filterapi.JWTSource{Scopes: []string{"read"}}},
+				Target: &filterapi.MCPAuthorizationTarget{Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "read_docs"}}},
+			},
+			{
+				Action: filterapi.AuthorizationActionAllow,
+				Source: &filterapi.MCPAuthorizationSource{JWT: filterapi.JWTSource{Scopes: []string{"admin"}}},
+				Target: &filterapi.MCPAuthorizationTarget{Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "delete_all"}}},
+			},
+			{
+				Action: filterapi.AuthorizationActionAllow,
+				Source: &filterapi.MCPAuthorizationSource{JWT: filterapi.JWTSource{Claims: []filterapi.JWTClaim{
+					{Name: "role", ValueType: filterapi.JWTClaimValueTypeString, Values: []string{"admin"}},
+				}}},
+				Target: &filterapi.MCPAuthorizationTarget{Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "claims_admin"}}},
+			},
+			{
+				Action: filterapi.AuthorizationActionAllow,
+				CEL:    ptr.To(`request.auth.jwt.claims.role == "admin"`),
+				Target: &filterapi.MCPAuthorizationTarget{Tools: []filterapi.ToolCall{{Backend: "backend1", Tool: "cel_admin"}}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	proxy := &mcpRequestContext{ProxyConfig: &ProxyConfig{l: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	authorize := func(headers http.Header, tool string) bool {
+		allowed, _ := proxy.authorizeRequest(auth, &authorizationRequest{
+			Headers: headers, HTTPMethod: http.MethodPost, HTTPPath: "/mcp",
+			MCPMethod: "tools/call", Backend: "backend1", Tool: tool,
+		})
+		return allowed
+	}
+
+	for _, scheme := range []string{"Bearer", "bearer", "BEARER"} {
+		t.Run(scheme, func(t *testing.T) {
+			// Verified token (scope=read) + forged Authorization header (scope=read admin).
+			headers := http.Header{}
+			headers.Set("Authorization", scheme+" "+forgedToken)
+			headers.Set(internalapi.MCPJWTClaimsHeader, verified)
+			require.True(t, authorize(headers, "read_docs"))
+			require.False(t, authorize(headers, "delete_all"), "forged scope must not be trusted")
+			require.False(t, authorize(headers, "claims_admin"), "forged claim must not be trusted")
+			require.False(t, authorize(headers, "cel_admin"), "forged CEL claim must not be trusted")
+
+			// Forged Authorization header without the gateway-rendered claims: nothing is trusted.
+			headers.Del(internalapi.MCPJWTClaimsHeader)
+			require.False(t, authorize(headers, "read_docs"))
+			require.False(t, authorize(headers, "delete_all"))
+		})
+	}
+
+	t.Run("empty claims header fails closed", func(t *testing.T) {
+		headers := http.Header{}
+		headers.Set(internalapi.MCPJWTClaimsHeader, "")
+		require.False(t, authorize(headers, "read_docs"))
+	})
+
+	t.Run("JSON null claims header fails closed", func(t *testing.T) {
+		headers := http.Header{}
+		headers.Set(internalapi.MCPJWTClaimsHeader, "null")
+		require.False(t, authorize(headers, "read_docs"))
+		require.False(t, authorize(headers, "cel_admin"))
+	})
 }

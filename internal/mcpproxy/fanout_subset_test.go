@@ -19,6 +19,7 @@ import (
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
 func newFanoutSubsetTestServer() (*httptest.Server, *perBackendCallCount) {
@@ -47,10 +48,15 @@ func mustCompileBackendSelector(t *testing.T, sel *filterapi.MCPRouteAuthorizati
 	return compiled
 }
 
-func bearerTokenWithClaims(claims jwt.MapClaims) string {
-	token := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
-	signed, _ := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
-	return signed
+// jwtClaimsHeaderKey is the canonical form of internalapi.MCPJWTClaimsHeader, for use as a key in
+// http.Header literals.
+var jwtClaimsHeaderKey = http.CanonicalHeaderKey(internalapi.MCPJWTClaimsHeader)
+
+// verifiedJWTClaims returns the value of internalapi.MCPJWTClaimsHeader for the given claims, i.e.
+// the JSON payload that the gateway renders from the JWT verified by Envoy's jwt_authn filter.
+func verifiedJWTClaims(claims jwt.MapClaims) string {
+	b, _ := json.Marshal(claims)
+	return string(b)
 }
 
 func TestNewSession_BackendSelector(t *testing.T) {
@@ -84,8 +90,8 @@ func TestNewSession_BackendSelector(t *testing.T) {
 				},
 			},
 			setHeaders: func(h http.Header) {
-				token := bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})
-				h.Set("Authorization", "Bearer "+token)
+				token := verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})
+				h.Set(internalapi.MCPJWTClaimsHeader, token)
 			},
 			wantCalls:           map[string]int{"backend1": 0, "backend2": 2},
 			wantSessionBackends: []filterapi.MCPBackendName{"backend2"},
@@ -180,7 +186,7 @@ func TestSelectBackends(t *testing.T) {
 	t.Run("JWT selector returns the claimed subset", func(t *testing.T) {
 		proxy := newTestMCPProxy()
 		proxy.requestHeaders = http.Header{
-			"Authorization": []string{"Bearer " + bearerTokenWithClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
+			jwtClaimsHeaderKey: []string{verifiedJWTClaims(jwt.MapClaims{"mcp_backends": []string{"backend2"}})},
 		}
 		proxy.routes["test-route"].backendSelector = jwtSelector
 		got, err := proxy.selectAuthorizedBackends("test-route", proxy.routes["test-route"])

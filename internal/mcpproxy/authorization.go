@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
+	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
@@ -129,17 +130,22 @@ type authzContext struct {
 	mcp        map[string]any // same map as activation["request"].(map[string]any)["mcp"]
 }
 
-// newAuthzContext parses the bearer token once. Callers that check many targets against
+// newAuthzContext extracts the verified JWT claims once. Callers that check many targets against
 // the same request should build this once and reuse it via authorizeRequestWith, instead
-// of re-parsing the token for every target.
+// of re-extracting the claims for every target.
 //
 // verifiedJWT must be true only when Envoy has cryptographically verified the bearer JWT
 // before this request reached the MCP proxy (i.e. the route has securityPolicy.oauth
-// configured; see filterapi.MCPRouteAuthorization.VerifiedJWT). When it is false, the token
-// is never parsed and no claims/scopes are exposed: without Envoy-side verification, a
-// caller-supplied JWT (including one with alg=none and forged claims) cannot be trusted, so
-// treating it as authoritative would let an attacker fabricate any claim or scope to satisfy
-// Source.JWT rules or CEL expressions referencing request.auth.jwt.*.
+// configured; see filterapi.MCPRouteAuthorization.VerifiedJWT). When it is false, no claims/scopes
+// are exposed.
+//
+// The claims are read exclusively from internalapi.MCPJWTClaimsHeader, which the gateway renders
+// from the payload Envoy's jwt_authn filter verified and always overwrites (or blanks) so it cannot
+// be supplied by the client. The client-controlled Authorization header is deliberately NOT parsed:
+// the token Envoy verified is not necessarily the one in that header (e.g. Envoy may extract it from
+// elsewhere, or skip a header whose scheme it does not recognize), so trusting a re-parse of it
+// would let a caller holding any valid token present a forged, unsigned token with arbitrary
+// claims/scopes to satisfy Source.JWT rules or CEL expressions referencing request.auth.jwt.*.
 func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest, verifiedJWT bool) *authzContext {
 	scopeSet := sets.New[string]()
 	claims := jwt.MapClaims{}
@@ -148,24 +154,22 @@ func (m *mcpRequestContext) newAuthzContext(req *authorizationRequest, verifiedJ
 		return &authzContext{claims: claims, scopes: scopeSet}
 	}
 
-	token, err := bearerToken(req.Headers.Get("Authorization"))
-	// This is just a sanity check. The actual JWT verification is performed by Envoy before reaching here, and the token
-	// should always be present and valid.
-	if err != nil {
-		m.l.Info("missing or invalid bearer token", slog.String("error", err.Error()))
-	} else {
-		// JWT verification is performed by Envoy before reaching here (verifiedJWT is true). So we
-		// only need to parse the token without verification.
-		if _, _, err := jwt.NewParser().ParseUnverified(token, claims); err != nil {
-			m.l.Info("failed to parse JWT token", slog.String("error", err.Error()))
-		} else {
-			scopeSet = sets.New(extractScopes(claims)...)
-			// Scopes are handled separately, remove them from the claims map to avoid interference.
-			// "scp" is also removed as it is a common alias for "scope" (e.g. Azure AD, Okta).
-			delete(claims, "scope")
-			delete(claims, "scp")
-		}
+	payload := strings.TrimSpace(req.Headers.Get(internalapi.MCPJWTClaimsHeader))
+	if payload == "" {
+		// Envoy verifies the JWT before reaching here, so this should not happen for requests that
+		// went through the gateway. Fail closed: no claims and no scopes.
+		m.l.Info("missing verified JWT claims")
+		return &authzContext{claims: claims, scopes: scopeSet}
 	}
+	if err := json.Unmarshal([]byte(payload), &claims); err != nil || claims == nil {
+		m.l.Info("failed to parse verified JWT claims", slog.Any("error", err))
+		return &authzContext{claims: jwt.MapClaims{}, scopes: scopeSet}
+	}
+	scopeSet = sets.New(extractScopes(claims)...)
+	// Scopes are handled separately, remove them from the claims map to avoid interference.
+	// "scp" is also removed as it is a common alias for "scope" (e.g. Azure AD, Okta).
+	delete(claims, "scope")
+	delete(claims, "scp")
 	return &authzContext{claims: claims, scopes: scopeSet}
 }
 
@@ -342,23 +346,6 @@ func normalizeParams(params mcp.Params) any {
 	}
 
 	return parsed
-}
-
-func bearerToken(header string) (string, error) {
-	if header == "" {
-		return "", errors.New("missing Authorization header")
-	}
-
-	parts := strings.SplitN(header, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-		return "", errors.New("invalid Authorization header")
-	}
-
-	token := strings.TrimSpace(parts[1])
-	if token == "" {
-		return "", errors.New("missing bearer token")
-	}
-	return token, nil
 }
 
 // extractScopes extracts scopes from the "scope" claim (standard) or "scp" claim (common in Microsoft/Okta).
