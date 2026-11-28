@@ -779,6 +779,8 @@ func (c *AIGatewayRouteController) computeQuotaPolicyHash(ctx context.Context, r
 // fetchEffectiveQuotaPoliciesForRoute returns the non-deleting QuotaPolicies
 // targeting the AIServiceBackends referenced by route. Each policy contains
 // only the target references that are valid for the policy's namespace.
+// InferencePool backendRefs are looked up by namespace/name too, so a QuotaPolicy
+// targeting the same-named AIServiceBackend changes the hash of the pool's route.
 func (c *AIGatewayRouteController) fetchEffectiveQuotaPoliciesForRoute(
 	ctx context.Context,
 	route *aigv1b1.AIGatewayRoute,
@@ -790,9 +792,6 @@ func (c *AIGatewayRouteController) fetchEffectiveQuotaPoliciesForRoute(
 	for i := range route.Spec.Rules {
 		for j := range route.Spec.Rules[i].BackendRefs {
 			ref := &route.Spec.Rules[i].BackendRefs[j]
-			if ref.IsInferencePool() {
-				continue
-			}
 			backendNamespace := ref.GetNamespace(route.Namespace)
 			key := namespacedNameIndexKey(ref.Name, backendNamespace)
 			if seenBackendKeys[key] {

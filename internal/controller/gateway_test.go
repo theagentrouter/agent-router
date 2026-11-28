@@ -119,6 +119,57 @@ func TestInjectQuotaPolicyCostExpressions(t *testing.T) {
 	require.Len(t, config.LLMRequestCosts, 1)
 }
 
+// An InferencePool backend carries the same namespace/name identity as an AIServiceBackend, so a
+// QuotaPolicy targeting the same-named AIServiceBackend gets its cost expression injected into the InferencePool route config.
+func TestGatewayController_reconcileFilterConfigSecret_InferencePoolQuotaPolicy(t *testing.T) {
+	const ns = "tenant-a"
+	fakeClient := requireNewFakeClientWithIndexesForQuotaPolicy(t)
+	kube := fake2.NewClientset()
+	c := newTestGatewayController(fakeClient, kube, ctrl.Log, "envoy-gateway-system",
+		"docker.io/envoyproxy/ai-gateway-extproc:latest", "info", false, nil, true)
+
+	model := "pool-model"
+	expression := "input_tokens + output_tokens"
+	require.NoError(t, fakeClient.Create(t.Context(), &aigv1a1.QuotaPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: ns},
+		Spec: aigv1a1.QuotaPolicySpec{
+			TargetRefs: []gwapiv1a2.NamespacedPolicyTargetReference{{
+				Group: aiServiceBackendGroup, Kind: aiServiceBackendKind, Name: "pool1",
+			}},
+			PerModelQuotas: []aigv1a1.PerModelQuota{{
+				ModelName: &model,
+				Quota:     aigv1a1.QuotaDefinition{CostExpression: &expression},
+			}},
+		},
+	}))
+
+	routes := []aigv1b1.AIGatewayRoute{{
+		ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: ns},
+		Spec: aigv1b1.AIGatewayRouteSpec{
+			Rules: []aigv1b1.AIGatewayRouteRule{{
+				BackendRefs: []aigv1b1.AIGatewayRouteRuleBackendRef{{
+					Name:              "pool1",
+					Group:             ptr.To(inferencePoolGroup),
+					Kind:              ptr.To(inferencePoolKind),
+					ModelNameOverride: model,
+				}},
+			}},
+		},
+	}}
+	const someNamespace = "some-namespace"
+	_, err := c.reconcileFilterConfigSecret(t.Context(), "gw", ns, someNamespace, routes, nil, "uuid", nil, nil)
+	require.NoError(t, err)
+
+	fc := requireFilterConfigFromBundle(t, kube, someNamespace, "gw", ns)
+	require.Len(t, fc.Backends, 1)
+	require.Equal(t, filterapi.APISchemaOpenAI, fc.Backends[0].Schema.Name)
+	require.Equal(t, ns+"/pool1", fc.Backends[0].AIServiceBackendName)
+	require.Len(t, fc.LLMRequestCosts, 1)
+	require.Equal(t, expression, fc.LLMRequestCosts[0].CEL)
+	require.Equal(t, ns+"/pool1", fc.LLMRequestCosts[0].Backend)
+	require.Equal(t, model, fc.LLMRequestCosts[0].Model)
+}
+
 // newTestGatewayController builds a GatewayController for tests, deriving the
 // extproc builder from the given image/logLevel/sidecar via the same
 // newExtProcBuilder NewGatewayController uses. It mirrors the pre-refactor

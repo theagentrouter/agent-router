@@ -1478,7 +1478,7 @@ func Test_computeQuotaPolicyHash(t *testing.T) {
 		require.NotEmpty(t, hash1)
 	})
 
-	t.Run("InferencePool backends are ignored", func(t *testing.T) {
+	t.Run("InferencePool backends pick up the same-named AIServiceBackend policy", func(t *testing.T) {
 		fakeClient := requireNewFakeClientWithIndexes(t)
 		c := newController(fakeClient)
 		route := &aigv1b1.AIGatewayRoute{
@@ -1496,6 +1496,11 @@ func Test_computeQuotaPolicyHash(t *testing.T) {
 		hash, err := c.computeQuotaPolicyHash(t.Context(), route)
 		require.NoError(t, err)
 		require.Empty(t, hash)
+
+		require.NoError(t, fakeClient.Create(t.Context(), newQuotaPolicy("qp", ns, 100, "mypool")))
+		hash, err = c.computeQuotaPolicyHash(t.Context(), route)
+		require.NoError(t, err)
+		require.NotEmpty(t, hash, "a QuotaPolicy on the same-named AIServiceBackend must change the pool route's hash")
 	})
 }
 
