@@ -777,7 +777,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_TextStreaming(t *testing.T) 
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
@@ -866,7 +866,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_CachedTokens(t *testing.T) {
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	msg := accumulateAnthropicMessage(t, out)
@@ -966,7 +966,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ToolCallStreaming(t *testing
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
@@ -1004,7 +1004,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_EndOfStreamClosing(t *testin
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
@@ -1032,7 +1032,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_EmptyInput(t *testing.T) {
 	}
 
 	var out []byte
-	err := state.processBuffer(&out, false)
+	_, err := state.processBuffer(&out, false)
 	require.NoError(t, err)
 	assert.Empty(t, out)
 }
@@ -1048,7 +1048,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_SkipsDoneMarker(t *testing.T
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, false)
+	_, err := state.processBuffer(&out, false)
 	require.NoError(t, err)
 	// No events should be emitted for just [DONE].
 	assert.Empty(t, out)
@@ -1065,7 +1065,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_MalformedChunkSkipped(t *tes
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, false)
+	_, err := state.processBuffer(&out, false)
 	require.NoError(t, err)
 }
 
@@ -1501,7 +1501,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingStreaming(t *testing
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
@@ -1534,7 +1534,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingThenText(t *testing.
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
@@ -1577,7 +1577,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingThenToolCall(t *test
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
@@ -1620,7 +1620,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_TextThenReasoning(t *testing
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
@@ -1660,7 +1660,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_SignatureOnlyChunk(t *testin
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
@@ -1725,7 +1725,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_SignatureDelta(t *testing.T)
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
@@ -1759,7 +1759,7 @@ func TestOpenAIStreamToAnthropicState_ProcessBuffer_ThinkingBlocks(t *testing.T)
 	state.buffer.WriteString(input)
 
 	var out []byte
-	err := state.processBuffer(&out, true)
+	_, err := state.processBuffer(&out, true)
 	require.NoError(t, err)
 
 	events := parseSSEEventsFromBytes(out)
