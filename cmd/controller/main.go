@@ -622,6 +622,7 @@ func main() {
 		FileIDFallbackEncryptionIterations:     parsedFlags.fileIDFallbackEncryptionIterations,
 		RateLimitRunner:                        rlRunner,
 		CredentialPreRotationWindow:            parsedFlags.credentialPreRotationWindow,
+		ExtensionServerInvoked:                 extSrv.PostTranslateModifyInvoked,
 	}); err != nil {
 		setupLog.Error(err, "failed to start controller")
 	}
