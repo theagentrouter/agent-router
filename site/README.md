@@ -33,6 +33,41 @@ npm run check:brand  # rename-safety assertions (see AGENTS.md)
 - `src/css/custom.css` — brand → Infima mapping layer and site chrome
 - `static/img/brand/` — logo cuts, favicons, og cards
 
+## Diagrams
+
+New and edited diagrams have to read in both light and dark mode.
+
+- **Mermaid**: the site recolours flowchart lines for dark mode. If you give a
+  node a `fill`, give it a `color` too (for example
+  `style A fill:#f9f,color:#12100E`), and add `accTitle` and `accDescr` for
+  screen readers.
+- **draw.io**: keep the source in `static/diagrams/` and export a light and a
+  dark PNG with a transparent background (draw.io desktop CLI, tested with
+  32.6.10):
+
+  ```
+  drawio -x -f png -s 2 -b 10 -t --theme light -o static/img/name.drawio.png static/diagrams/name.drawio
+  drawio -x -f png -s 2 -b 10 -t --theme dark -o static/img/name-dark.drawio.png static/diagrams/name.drawio
+  ```
+
+  Docs pages use `static/img/` and show the pair with `ThemedImage`:
+
+  ```mdx
+  import ThemedImage from "@theme/ThemedImage";
+
+  <ThemedImage
+    alt="What the diagram shows"
+    sources={{
+      light: "/img/name.drawio.png",
+      dark: "/img/name-dark.drawio.png",
+    }}
+  />
+  ```
+
+  The repo README keeps its pair in `blog/images/` and switches with
+  `<picture>` and `prefers-color-scheme`. On Linux, install Liberation Sans so
+  Helvetica labels keep their width.
+
 ## Contributing
 
 - DCO sign-off required (`git commit -s`); Conventional Commit subjects

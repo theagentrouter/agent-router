@@ -397,6 +397,7 @@ const config: Config = {
           primaryBorderColor: '#B83700',
           primaryTextColor: '#12100E',
           lineColor: '#4A423C',
+          strokeWidth: 1.5,
           fontFamily: 'Inter, ui-sans-serif, sans-serif',
         },
       },

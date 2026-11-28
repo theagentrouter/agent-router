@@ -133,6 +133,10 @@ graph LR
 ```
 ````
 
+Diagrams must read in light and dark mode; follow the Diagrams section of
+`README.md` (node text colours, `accTitle`/`accDescr`, light and dark
+exports for draw.io images).
+
 ## Documentation Verification
 
 When generating or updating documentation, **always verify accuracy** against the source code and API specifications in the repository:
