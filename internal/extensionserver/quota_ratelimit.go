@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	egv1a1 "github.com/envoyproxy/gateway/api/v1alpha1"
@@ -414,37 +413,49 @@ func (s *Server) routeHasQuotaBackend(
 type clusterRouteInfo struct {
 	namespace string
 	rule      *aigv1b1.AIGatewayRouteRule
+	// perBackend is true for a per-backend cluster. rule then holds only the backendRef of that
+	// cluster, and every endpoint group of the cluster belongs to it.
+	perBackend bool
 }
 
 // resolveClusterRule parses a cluster name and fetches the corresponding AIGatewayRoute rule.
-// Cluster name format: "httproute/{namespace}/{routeName}/rule/{ruleIndex}"
+//
+// Envoy Gateway names the cluster of a rule "httproute/{namespace}/{routeName}/rule/{ruleIndex}".
+// When it creates one cluster per backend instead, for example because a BackendTrafficPolicy with
+// zone-aware weights targets the route, the name is
+// "httproute/{namespace}/{routeName}/rule/{ruleIndex}/backend/{backendRefIndex}". The returned rule
+// then holds only the backendRef that cluster belongs to.
 func (s *Server) resolveClusterRule(ctx context.Context, clusterName string) *clusterRouteInfo {
-	parts := strings.Split(clusterName, "/")
-	if len(parts) != 5 || parts[0] != "httproute" {
-		return nil
-	}
-	namespace := parts[1]
-	routeName := parts[2]
-	ruleIndex, err := strconv.Atoi(parts[4])
-	if err != nil || ruleIndex < 0 {
+	name, err := parseAIGatewayClusterName(clusterName)
+	if err != nil {
 		return nil
 	}
 
 	var aigwRoute aigv1b1.AIGatewayRoute
 	if err := s.k8sClient.Get(ctx, client.ObjectKey{
-		Namespace: namespace,
-		Name:      routeName,
+		Namespace: name.namespace,
+		Name:      name.routeName,
 	}, &aigwRoute); err != nil {
 		return nil
 	}
 
-	if ruleIndex >= len(aigwRoute.Spec.Rules) {
+	if name.ruleIndex >= len(aigwRoute.Spec.Rules) {
 		return nil
+	}
+	rule := &aigwRoute.Spec.Rules[name.ruleIndex]
+
+	if name.backendRefIndex != noBackendRefIndex {
+		if name.backendRefIndex >= len(rule.BackendRefs) {
+			return nil
+		}
+		rule = rule.DeepCopy()
+		rule.BackendRefs = rule.BackendRefs[name.backendRefIndex : name.backendRefIndex+1]
 	}
 
 	return &clusterRouteInfo{
-		namespace: namespace,
-		rule:      &aigwRoute.Spec.Rules[ruleIndex],
+		namespace:  name.namespace,
+		rule:       rule,
+		perBackend: name.backendRefIndex != noBackendRefIndex,
 	}
 }
 
@@ -478,6 +489,9 @@ func (s *Server) clusterHasQuotaBackend(ctx context.Context, clusterName string,
 //
 // Endpoint groups are mapped to BackendRefs positionally, matching maybeModifyCluster: zero-weight
 // BackendRefs are omitted from the LoadAssignment by Envoy Gateway, so they are skipped here too.
+// A per-backend cluster is the exception, also as in maybeModifyCluster: all of its endpoint groups
+// belong to its one BackendRef. Envoy Gateway can split them into several groups, for example one
+// per zone with zone-aware load balancing.
 //
 // The cluster is wrapped only when at least one quota endpoint was actually stamped. A quota backend
 // whose endpoint group is not present (nil LoadAssignment for EDS clusters, or a stale revision with
@@ -495,6 +509,24 @@ func (s *Server) applyHostAllowlistToQuotaCluster(ctx context.Context, cluster *
 	}
 
 	stamped := false
+	if info.perBackend {
+		backendRef := &info.rule.BackendRefs[0]
+		if !backendRefHasQuotaForModel(backendRef, info.namespace, quotaBackendPolicies) {
+			return
+		}
+		namespace := backendRef.GetNamespace(info.namespace)
+		for _, group := range cluster.GetLoadAssignment().GetEndpoints() {
+			for _, endpoint := range group.GetLbEndpoints() {
+				setEndpointMetadataQuotaRouting(endpoint, namespace, backendRef.Name, backendRef.ModelNameOverride)
+				stamped = true
+			}
+		}
+		if stamped {
+			s.wrapQuotaClusterLB(cluster)
+		}
+		return
+	}
+
 	var lbEndpointIndex int
 	for _, backendRef := range info.rule.BackendRefs {
 		if backendRef.Weight != nil && *backendRef.Weight == 0 {
@@ -519,9 +551,15 @@ func (s *Server) applyHostAllowlistToQuotaCluster(ctx context.Context, cluster *
 	}
 
 	if stamped {
-		if err := wrapClusterLBInHostAllowlist(cluster); err != nil {
-			s.log.Error(err, "failed to wrap cluster LB in host_allowlist policy", "cluster", cluster.Name)
-		}
+		s.wrapQuotaClusterLB(cluster)
+	}
+}
+
+// wrapQuotaClusterLB wraps the cluster's load balancing policy with the host_allowlist policy and logs
+// a failure, which leaves the cluster as it was.
+func (s *Server) wrapQuotaClusterLB(cluster *clusterv3.Cluster) {
+	if err := wrapClusterLBInHostAllowlist(cluster); err != nil {
+		s.log.Error(err, "failed to wrap cluster LB in host_allowlist policy", "cluster", cluster.Name)
 	}
 }
 
