@@ -19,6 +19,7 @@ export const providers: Provider[] = [
   { name: 'Azure OpenAI', logoUrl: '/img/providers/azure-openai.svg', status: 'supported' },
   { name: 'BitDeer', logoUrl: '/img/providers/bitdeer.svg', status: 'supported' },
   { name: 'Cohere', logoUrl: '/img/providers/cohere.svg', status: 'supported' },
+  { name: 'Decision Models', logoUrl: '/img/providers/decision-models.svg', status: 'supported' },
   { name: 'DeepInfra', logoUrl: '/img/providers/deepinfra.svg', status: 'supported' },
   { name: 'DeepSeek', logoUrl: '/img/providers/deepseek.svg', status: 'supported' },
   { name: 'Eden AI', logoUrl: '/img/providers/eden-ai.svg', status: 'supported' },
