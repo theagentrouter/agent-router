@@ -23,6 +23,7 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"golang.org/x/net/http/httpguts"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
@@ -188,6 +189,9 @@ func (p *filesProcessor) handleListRequestHeaders() (*extprocv3.ProcessingRespon
 		p.logger.Error("list files request is missing the required model query parameter", slog.String("path", path))
 		return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error", "the 'model' query parameter is required"), nil
 	}
+	if resp := p.rejectInvalidModel(model); resp != nil {
+		return resp, nil
+	}
 	p.routeByModel(headerMutation, model)
 	setHeader(headerMutation, ":path", upstreamPath)
 	p.filesRequestMetadata.Path = upstreamPath
@@ -228,6 +232,20 @@ func (p *filesProcessor) newRequestHeaderMutation() *extprocv3.HeaderMutation {
 	headerMutation := &extprocv3.HeaderMutation{}
 	setHeader(headerMutation, originalPathHeader, p.requestHeaders[":path"])
 	return headerMutation
+}
+
+// rejectInvalidModel returns a 400 response when model cannot be used as the model header
+// value, and nil otherwise. Control characters are not valid in a header value; httpguts
+// applies the same rule as Envoy's codec, so SP and HTAB stay valid and only controls and DEL
+// are refused. The list query parameter is percent-decoded, so it can carry such bytes too.
+func (p *filesProcessor) rejectInvalidModel(model string) *extprocv3.ProcessingResponse {
+	if httpguts.ValidHeaderFieldValue(model) {
+		return nil
+	}
+	p.logger.Error("rejecting files request due to invalid model name characters",
+		slog.String("path", p.requestHeaders[":path"]))
+	return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error",
+		"malformed request: model name contains invalid characters")
 }
 
 // routeByModel records model as the routing model and sets the model header used for route
@@ -278,6 +296,9 @@ func (p *filesProcessor) ProcessRequestBody(_ context.Context, rawBody *extprocv
 	if model == "" {
 		p.logger.Info("rejecting files upload without required model field")
 		return createUserFacingErrorResponse(http.StatusBadRequest, "invalid_request_error", "the 'model' field is required"), nil
+	}
+	if resp := p.rejectInvalidModel(model); resp != nil {
+		return resp, nil
 	}
 
 	// Route by model and strip the routing-only field from the

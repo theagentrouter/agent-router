@@ -213,6 +213,52 @@ func TestProcessRequestHeaders_List_MissingModel(t *testing.T) {
 	require.Equal(t, int32(http.StatusBadRequest), int32(resp.GetImmediateResponse().Status.Code))
 }
 
+func TestProcessRequestHeaders_List_InvalidModel(t *testing.T) {
+	for _, model := range []string{"m%0D", "m%0A", "m%00", "%0Dm%0A", "m%0B", "m%1F", "m%7F"} {
+		p := newProcessorForPath(http.MethodGet, "/v1/files?model="+model, nil)
+		resp, err := p.ProcessRequestHeaders(context.Background(), nil)
+		require.NoError(t, err)
+		immediate := resp.GetImmediateResponse()
+		require.NotNil(t, immediate, "model %q should be rejected", model)
+		require.Equal(t, int32(http.StatusBadRequest), int32(immediate.Status.Code))
+		require.Contains(t, string(immediate.Body), "malformed request: model name contains invalid characters")
+	}
+}
+
+func TestProcessRequestBody_Upload_ModelValidation(t *testing.T) {
+	for _, model := range []string{"gpt-4\r", "gpt-4\n", "gpt-4\x00", "gpt\n-4", "gpt-4\x0b", "gpt-4\x1f", "gpt-4\x7f"} {
+		body, ct := buildTestMultipartBody(t, map[string]string{"model": model}, "f.jsonl", []byte("{}\n"))
+		p := &filesProcessor{
+			op:             filesOpUpload,
+			requestHeaders: map[string]string{":path": "/v1/files", "content-type": ct},
+			logger:         slog.Default(),
+		}
+		resp, err := p.ProcessRequestBody(context.Background(), &extprocv3.HttpBody{Body: body})
+		require.NoError(t, err)
+		immediate := resp.GetImmediateResponse()
+		require.NotNil(t, immediate, "model %q should be rejected", model)
+		require.Equal(t, int32(http.StatusBadRequest), int32(immediate.Status.Code))
+		require.Contains(t, string(immediate.Body), "malformed request: model name contains invalid characters")
+	}
+
+	body, ct := buildTestMultipartBody(t, map[string]string{"model": "gpt-4"}, "f.jsonl", []byte("{}\n"))
+	p := &filesProcessor{
+		op:             filesOpUpload,
+		requestHeaders: map[string]string{":path": "/v1/files", "content-type": ct},
+		logger:         slog.Default(),
+	}
+	resp, err := p.ProcessRequestBody(context.Background(), &extprocv3.HttpBody{Body: body})
+	require.NoError(t, err)
+	require.Nil(t, resp.GetImmediateResponse())
+	var routedModel string
+	for _, h := range resp.GetRequestBody().GetResponse().GetHeaderMutation().GetSetHeaders() {
+		if h.Header.Key == internalapi.ModelNameHeaderKeyDefault {
+			routedModel = string(h.Header.RawValue)
+		}
+	}
+	require.Equal(t, "gpt-4", routedModel)
+}
+
 func TestProcessRequestHeaders_List_WithModel(t *testing.T) {
 	config := runtimeConfigWithBackends(t, [3]string{"ns", "apple", "myroute"})
 	p := newProcessorForPath(http.MethodGet, "/v1/files?model=m2", config)
