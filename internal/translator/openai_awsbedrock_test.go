@@ -1355,6 +1355,33 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_RequestBody(t *testing.T) 
 			},
 		},
 		{
+			name: "test reasoning_effort mapped to output_config.effort for claude",
+			input: openai.ChatCompletionRequest{
+				Model: "eu.anthropic.claude-sonnet-5",
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					{
+						OfUser: &openai.ChatCompletionUserMessageParam{
+							Role:    openai.ChatMessageRoleUser,
+							Content: openai.StringOrUserRoleContentUnion{Value: "Hello"},
+						},
+					},
+				},
+				ReasoningEffort: "high",
+			},
+			output: awsbedrock.ConverseInput{
+				AdditionalModelRequestFields: map[string]interface{}{
+					"output_config": map[string]interface{}{"effort": "high"},
+				},
+				InferenceConfig: &awsbedrock.InferenceConfiguration{},
+				Messages: []*awsbedrock.Message{
+					{
+						Role:    openai.ChatMessageRoleUser,
+						Content: []*awsbedrock.ContentBlock{{Text: ptr.To("Hello")}},
+					},
+				},
+			},
+		},
+		{
 			name: "test reasoning_effort coexists with thinking",
 			input: openai.ChatCompletionRequest{
 				Model: "some-reasoning-model",
