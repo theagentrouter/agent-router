@@ -61,10 +61,12 @@ func TestOTELTracingWithConsoleExporter(t *testing.T) {
 		restoreCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
-		// Re-install AI Gateway with default settings.
-		_, _ = testsinternal.RunGoToolContext(ctx, "helm", "upgrade", "ai-eg", "--force",
-			helmChartPath,
-			"-n", "envoy-ai-gateway-system")
+		// Restore the release values from before the test, including suite-wide settings.
+		output, err := testsinternal.RunGoToolContext(restoreCtx, "helm", "rollback", "ai-eg",
+			"-n", "envoy-ai-gateway-system", "--wait", "--timeout", "90s")
+		if err != nil {
+			t.Errorf("Failed to restore the AI Gateway release: %v\n%s", err, output)
+		}
 
 		// Clean up the test manifest resources including namespace.
 		_ = e2elib.KubectlDeleteManifest(restoreCtx, manifest)
@@ -92,7 +94,7 @@ func TestOTELTracingWithConsoleExporter(t *testing.T) {
 	t.Log("Checking extProc container for OTEL environment variables")
 
 	// Get pod name from envoy-gateway-system namespace (where pods are created).
-	require.Eventually(t, func() bool {
+	require.Eventually(t, func() (matches bool) {
 		const egSelector = "gateway.envoyproxy.io/owning-gateway-name=envoy-ai-gateway-otel-test"
 		getPodsCmd := exec.CommandContext(ctx, "kubectl", "get", "pods", // #nosec G204
 			"-n", e2elib.EnvoyGatewayNamespace,
@@ -149,7 +151,10 @@ func TestOTELTracingWithConsoleExporter(t *testing.T) {
 		t.Logf("Container args in extProc container: %s", containerArgs)
 
 		defer func() {
-			// Deletes the pods to ensure they are recreated with the new configuration for the next iteration.
+			if matches {
+				return
+			}
+			// Recreate a mismatched pod so the next attempt can inspect the new configuration.
 			deletePodsCmd := e2elib.Kubectl(ctx, "delete", "pod", podName,
 				"-n", e2elib.EnvoyGatewayNamespace,
 				"--ignore-not-found=true")
@@ -206,7 +211,7 @@ func TestOTELTracingWithGatewayConfig(t *testing.T) {
 	t.Log("Checking extProc container for GatewayConfig OTEL environment variables")
 
 	// Get pod name from envoy-gateway-system namespace (where pods are created).
-	require.Eventually(t, func() bool {
+	require.Eventually(t, func() (matches bool) {
 		const egSelector = "gateway.envoyproxy.io/owning-gateway-name=production-ai-gateway"
 		getPodsCmd := exec.CommandContext(ctx, "kubectl", "get", "pods", // #nosec G204
 			"-n", e2elib.EnvoyGatewayNamespace,
@@ -263,7 +268,10 @@ func TestOTELTracingWithGatewayConfig(t *testing.T) {
 		t.Logf("Resources in extProc container: %s", resources)
 
 		defer func() {
-			// Deletes the pods to ensure they are recreated with the new configuration for the next iteration.
+			if matches {
+				return
+			}
+			// Recreate a mismatched pod so the next attempt can inspect the new configuration.
 			deletePodsCmd := e2elib.Kubectl(ctx, "delete", "pod", podName,
 				"-n", e2elib.EnvoyGatewayNamespace,
 				"--ignore-not-found=true")
