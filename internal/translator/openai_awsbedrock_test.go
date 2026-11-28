@@ -1606,47 +1606,47 @@ func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_ResponseBody(t *
 		require.Equal(t,
 			`data: {"id":"123","choices":[{"index":0,"delta":{"content":"","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":"To","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":"To"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" calculate the cosine","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" calculate the cosine"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" of 7,","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" of 7,"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" we can use the","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" we can use the"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" \"","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" \""}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":"cosine\" function","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":"cosine\" function"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" that","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" that"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" is","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" is"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" available to","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" available to"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" us.","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" us."}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" Let","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" Let"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":"'s use","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":"'s use"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" this","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" this"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" function to","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" function to"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" get","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" get"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":" the result","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":" the result"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":".","role":"assistant"}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":"."}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"tooluse_QklrEHKjRu6Oc4BQUfy7ZQ","function":{"arguments":"","name":"cosine"},"type":"function"}]}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"tooluse_QklrEHKjRu6Oc4BQUfy7ZQ","function":{"arguments":"","name":"cosine"},"type":"function"}]}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":null,"function":{"arguments":"","name":""},"type":"function"}]}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"function":{"arguments":"","name":""},"type":"function"}]}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":null,"function":{"arguments":"{\"x\": 7}","name":""},"type":"function"}]}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":null,"function":{"arguments":"{\"x\": 7}","name":""},"type":"function"}]}}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
-data: {"id":"123","choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"tool_calls"}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
+data: {"id":"123","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}],"created":1731679200,"model":"claude-sonnet-4","object":"chat.completion.chunk"}
 
 data: {"id":"123","choices":[],"created":1731679200,"model":"claude-sonnet-4","service_tier":"default","object":"chat.completion.chunk","usage":{"prompt_tokens":386,"completion_tokens":75,"total_tokens":461}}
 
@@ -2313,6 +2313,38 @@ func TestOpenAIToAWSBedrockTranslator_convertEvent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOpenAIToAWSBedrockTranslator_StreamingRoleOnlyOnMessageStart(t *testing.T) {
+	translator := &openAIToAWSBedrockTranslatorV1ChatCompletion{stream: true}
+	var eventsWithRole []string
+	var deltaCount int
+	for _, event := range []struct{ eventType, payload string }{
+		{"messageStart", `{"role":"assistant"}`},
+		{"contentBlockDelta", `{"contentBlockIndex":0,"delta":{"reasoningContent":{"text":"synthetic reasoning for turn one"}}}`},
+		{"contentBlockDelta", `{"contentBlockIndex":0,"delta":{"reasoningContent":{"signature":"sig_local_roundtrip_01"}}}`},
+		{"contentBlockStop", `{"contentBlockIndex":0}`},
+		{"contentBlockStart", `{"contentBlockIndex":1,"start":{"toolUse":{"name":"get_time","toolUseId":"call_clock_01"}}}`},
+		{"contentBlockDelta", `{"contentBlockIndex":1,"delta":{"toolUse":{"input":"{\"timezone\":\"UTC\"}"}}}`},
+		{"contentBlockStop", `{"contentBlockIndex":1}`},
+		{"messageStop", `{"stopReason":"tool_use"}`},
+		{"metadata", `{"usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15}}`},
+	} {
+		var frame bytes.Buffer
+		writeEventStreamMessage(t, &frame, event.eventType, []byte(event.payload))
+		_, body, _, _, err := translator.ResponseBody(nil, &frame, false, nil)
+		require.NoError(t, err)
+		delta := gjson.GetBytes(bytes.TrimPrefix(body, []byte("data: ")), "choices.0.delta")
+		if delta.Exists() {
+			deltaCount++
+			if role := delta.Get("role"); role.Exists() {
+				require.Equal(t, "assistant", role.String())
+				eventsWithRole = append(eventsWithRole, event.eventType)
+			}
+		}
+	}
+	require.Equal(t, 6, deltaCount)
+	require.Equal(t, []string{"messageStart"}, eventsWithRole)
 }
 
 func TestOpenAIToAWSBedrockTranslatorV1ChatCompletion_Streaming_WithReasoning(t *testing.T) {
