@@ -921,7 +921,7 @@ func newAnthropicStreamParser(requestModel string) *anthropicStreamParser {
 	}
 }
 
-func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error {
+func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte, span tracingapi.ChatCompletionSpan) error {
 	chunk, err := p.parseAndHandleEvent(eventBlock)
 	if err != nil {
 		var streamErr *anthropicStreamError
@@ -937,6 +937,9 @@ func (p *anthropicStreamParser) writeChunk(eventBlock []byte, buf *[]byte) error
 		err := serializeOpenAIChatCompletionChunk(chunk, buf)
 		if err != nil {
 			return err
+		}
+		if span != nil {
+			span.RecordResponseChunk(chunk)
 		}
 	}
 	return nil
@@ -1026,7 +1029,6 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 	newHeaders []internalapi.Header, newBody []byte, tokenUsage metrics.TokenUsage, responseModel string, err error,
 ) {
 	newBody = make([]byte, 0)
-	_ = span // TODO: add support for streaming chunks in tracing.
 	responseModel = p.requestModel
 	if _, err = p.buffer.ReadFrom(body); err != nil {
 		err = fmt.Errorf("failed to read from stream body: %w", err)
@@ -1039,7 +1041,7 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 			break
 		}
 
-		if err = p.writeChunk(eventBlock, &newBody); err != nil {
+		if err = p.writeChunk(eventBlock, &newBody, span); err != nil {
 			return
 		}
 
@@ -1051,7 +1053,7 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 		finalEventBlock := p.buffer.Bytes()
 		p.buffer.Reset()
 
-		if err = p.writeChunk(finalEventBlock, &newBody); err != nil {
+		if err = p.writeChunk(finalEventBlock, &newBody, span); err != nil {
 			return
 		}
 	}
@@ -1111,6 +1113,9 @@ func (p *anthropicStreamParser) Process(body io.Reader, endOfStream bool, span t
 			err := serializeOpenAIChatCompletionChunk(&finalChunk, &newBody)
 			if err != nil {
 				return nil, nil, metrics.TokenUsage{}, "", fmt.Errorf("failed to marshal final stream chunk: %w", err)
+			}
+			if span != nil {
+				span.RecordResponseChunk(&finalChunk)
 			}
 		}
 		// Add the final [DONE] message to indicate the end of the stream.
