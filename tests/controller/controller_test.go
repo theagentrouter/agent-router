@@ -45,7 +45,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	// Serve the test managers' metrics on a free loopback port. On the default :8080 the suite fails
+	// Serve the test managers' metrics on a free loopback port. On the default :8080 the suite can fail
 	// when another process, or another run of this suite, listens on that port.
 	metricsserver.DefaultBindAddress = "127.0.0.1:0"
 	goleak.VerifyTestMain(m)
