@@ -39,6 +39,14 @@ type GatewayConfigListerExpansion interface{}
 // GatewayConfigNamespaceLister.
 type GatewayConfigNamespaceListerExpansion interface{}
 
+// GuardrailPolicyListerExpansion allows custom methods to be added to
+// GuardrailPolicyLister.
+type GuardrailPolicyListerExpansion interface{}
+
+// GuardrailPolicyNamespaceListerExpansion allows custom methods to be added to
+// GuardrailPolicyNamespaceLister.
+type GuardrailPolicyNamespaceListerExpansion interface{}
+
 // MCPRouteListerExpansion allows custom methods to be added to
 // MCPRouteLister.
 type MCPRouteListerExpansion interface{}
