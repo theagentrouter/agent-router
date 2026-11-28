@@ -120,6 +120,168 @@ func TestOpenAIMessagesToGeminiContents(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "skips empty assistant messages and merges consecutive assistant turns",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "Hello"},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: ""},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: "Part 1"},
+						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+							{
+								ID:   ptr.To("call_1"),
+								Type: openai.ChatCompletionMessageToolCallTypeFunction,
+								Function: openai.ChatCompletionMessageToolCallFunctionParam{
+									Name:      "tool_a",
+									Arguments: `{"k":"v1"}`,
+								},
+							},
+						},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: "Part 2"},
+						ToolCalls: []openai.ChatCompletionMessageToolCallParam{
+							{
+								ID:   ptr.To("call_2"),
+								Type: openai.ChatCompletionMessageToolCallTypeFunction,
+								Function: openai.ChatCompletionMessageToolCallFunctionParam{
+									Name:      "tool_b",
+									Arguments: `{"k":"v2"}`,
+								},
+							},
+						},
+					},
+				},
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "Thanks"},
+					},
+				},
+			},
+			expectedContents: []genai.Content{
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "Hello"}},
+				},
+				{
+					Role: genai.RoleModel,
+					Parts: []*genai.Part{
+						{
+							FunctionCall: &genai.FunctionCall{
+								Name: "tool_a",
+								Args: map[string]any{"k": "v1"},
+							},
+							ThoughtSignature: dummyThoughtSignature,
+						},
+						{Text: "Part 1"},
+						{
+							FunctionCall: &genai.FunctionCall{
+								Name: "tool_b",
+								Args: map[string]any{"k": "v2"},
+							},
+						},
+						{Text: "Part 2"},
+					},
+				},
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "Thanks"}},
+				},
+			},
+		},
+		{
+			name: "empty assistant between user messages merges the surrounding user turns",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "a"},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: ""},
+					},
+				},
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "b"},
+					},
+				},
+			},
+			expectedContents: []genai.Content{
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "a"}, {Text: "b"}},
+				},
+			},
+		},
+		{
+			name: "mid-conversation system message is kept in chronological user turn while leading system stays in SystemInstruction",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{
+					OfSystem: &openai.ChatCompletionSystemMessageParam{
+						Role:    openai.ChatMessageRoleSystem,
+						Content: openai.ContentUnion{Value: "Initial system prompt"},
+					},
+				},
+				{
+					OfUser: &openai.ChatCompletionUserMessageParam{
+						Role:    openai.ChatMessageRoleUser,
+						Content: openai.StringOrUserRoleContentUnion{Value: "Run diagnostics"},
+					},
+				},
+				{
+					OfAssistant: &openai.ChatCompletionAssistantMessageParam{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: openai.StringOrAssistantRoleContentUnion{Value: "Done."},
+					},
+				},
+				{
+					OfSystem: &openai.ChatCompletionSystemMessageParam{
+						Role:    openai.ChatMessageRoleSystem,
+						Content: openai.ContentUnion{Value: "<system-reminder>New skills are available.</system-reminder>"},
+					},
+				},
+			},
+			expectedContents: []genai.Content{
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "Run diagnostics"}},
+				},
+				{
+					Role:  genai.RoleModel,
+					Parts: []*genai.Part{{Text: "Done."}},
+				},
+				{
+					Role:  genai.RoleUser,
+					Parts: []*genai.Part{{Text: "<system-reminder>New skills are available.</system-reminder>"}},
+				},
+			},
+			expectedSystemInstruction: &genai.Content{
+				Parts: []*genai.Part{
+					{Text: "Initial system prompt"},
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -2726,62 +2888,101 @@ func TestGeminiFinishReasonToOpenAI(t *testing.T) {
 			name:      "recitation reason",
 			input:     genai.FinishReasonRecitation,
 			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
-			expected:  openai.ChatCompletionChoicesFinishReasonRecitation,
+			expected:  openai.ChatCompletionChoicesFinishReasonContentFilter,
 		},
 		{
 			name:      "image recitation reason",
 			input:     genai.FinishReasonImageRecitation,
 			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
-			expected:  openai.ChatCompletionChoicesFinishReasonRecitation,
-		},
-		{
-			name:      "malformed function call reason",
-			input:     genai.FinishReasonMalformedFunctionCall,
-			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
-			expected:  openai.ChatCompletionChoicesFinishReasonMalformedFunctionCall,
-		},
-		{
-			name:      "unexpected tool call reason",
-			input:     genai.FinishReasonUnexpectedToolCall,
-			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
-			expected:  openai.ChatCompletionChoicesFinishReasonUnexpectedToolCall,
+			expected:  openai.ChatCompletionChoicesFinishReasonContentFilter,
 		},
 		{
 			name:      "language reason",
 			input:     genai.FinishReasonLanguage,
 			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
-			expected:  openai.ChatCompletionChoicesFinishReasonLanguage,
+			expected:  openai.ChatCompletionChoicesFinishReasonContentFilter,
+		},
+		{
+			name:      "malformed function call reason",
+			input:     genai.FinishReasonMalformedFunctionCall,
+			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
+			expected:  openai.ChatCompletionChoicesFinishReasonStop,
+		},
+		{
+			name:      "unexpected tool call reason",
+			input:     genai.FinishReasonUnexpectedToolCall,
+			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
+			expected:  openai.ChatCompletionChoicesFinishReasonStop,
 		},
 		{
 			name:      "no image reason",
 			input:     genai.FinishReasonNoImage,
 			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
-			expected:  openai.ChatCompletionChoicesFinishReasonNoImage,
+			expected:  openai.ChatCompletionChoicesFinishReasonStop,
 		},
 		{
 			name:      "other reason",
 			input:     genai.FinishReasonOther,
 			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
-			expected:  openai.ChatCompletionChoicesFinishReasonError,
+			expected:  openai.ChatCompletionChoicesFinishReasonStop,
 		},
 		{
 			name:      "image other reason",
 			input:     genai.FinishReasonImageOther,
 			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
-			expected:  openai.ChatCompletionChoicesFinishReasonError,
+			expected:  openai.ChatCompletionChoicesFinishReasonStop,
+		},
+		{
+			name:      "unspecified reason",
+			input:     genai.FinishReasonUnspecified,
+			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
+			expected:  openai.ChatCompletionChoicesFinishReasonStop,
 		},
 		{
 			name:      "unknown reason",
 			input:     genai.FinishReason("unknown_reason"),
 			toolCalls: []openai.ChatCompletionMessageToolCallParam{},
-			expected:  openai.ChatCompletionChoicesFinishReasonError,
+			expected:  openai.ChatCompletionChoicesFinishReasonStop,
 		},
+	}
+
+	// Every value must be one OpenAI clients accept: SDKs validate finish_reason against a closed enum.
+	standard := []openai.ChatCompletionChoicesFinishReason{
+		"",
+		openai.ChatCompletionChoicesFinishReasonStop,
+		openai.ChatCompletionChoicesFinishReasonLength,
+		openai.ChatCompletionChoicesFinishReasonToolCalls,
+		openai.ChatCompletionChoicesFinishReasonContentFilter,
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := geminiFinishReasonToOpenAI(tt.input, tt.toolCalls)
 			require.Equal(t, tt.expected, result)
+			require.Contains(t, standard, result)
+		})
+	}
+}
+
+func TestGeminiNativeFinishReason(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    genai.FinishReason
+		expected string
+	}{
+		{name: "empty reason for streaming", input: "", expected: ""},
+		{name: "stop maps losslessly", input: genai.FinishReasonStop, expected: ""},
+		{name: "max tokens maps losslessly", input: genai.FinishReasonMaxTokens, expected: ""},
+		{name: "safety", input: genai.FinishReasonSafety, expected: "SAFETY"},
+		{name: "recitation", input: genai.FinishReasonRecitation, expected: "RECITATION"},
+		{name: "malformed function call", input: genai.FinishReasonMalformedFunctionCall, expected: "MALFORMED_FUNCTION_CALL"},
+		{name: "other", input: genai.FinishReasonOther, expected: "OTHER"},
+		{name: "unknown reason", input: genai.FinishReason("unknown_reason"), expected: "unknown_reason"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, geminiNativeFinishReason(tt.input))
 		})
 	}
 }
@@ -2950,6 +3151,42 @@ func TestGeminiCandidatesToOpenAIChoices(t *testing.T) {
 						Content: ptr.To("hello"),
 					},
 					FinishReason: openai.ChatCompletionChoicesFinishReasonStop,
+				},
+			},
+		},
+		{
+			name: "malformed function call keeps a standard finish_reason and exposes the native one",
+			candidates: []*genai.Candidate{
+				{
+					Content:      &genai.Content{Parts: []*genai.Part{{Text: ""}}},
+					FinishReason: genai.FinishReasonMalformedFunctionCall,
+				},
+			},
+			responseMode: responseModeNone,
+			want: []openai.ChatCompletionResponseChoice{
+				{
+					Index: 0,
+					Message: openai.ChatCompletionResponseChoiceMessage{
+						Role: openai.ChatMessageRoleAssistant,
+					},
+					FinishReason:       openai.ChatCompletionChoicesFinishReasonStop,
+					NativeFinishReason: "MALFORMED_FUNCTION_CALL",
+				},
+			},
+		},
+		{
+			name: "safety block maps to content_filter and exposes the native reason",
+			candidates: []*genai.Candidate{
+				{
+					FinishReason: genai.FinishReasonSafety,
+				},
+			},
+			responseMode: responseModeNone,
+			want: []openai.ChatCompletionResponseChoice{
+				{
+					Index:              0,
+					FinishReason:       openai.ChatCompletionChoicesFinishReasonContentFilter,
+					NativeFinishReason: "SAFETY",
 				},
 			},
 		},

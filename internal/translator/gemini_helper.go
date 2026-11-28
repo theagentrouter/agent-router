@@ -62,6 +62,27 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 	knownToolCalls := make(map[string]string)
 	var gcpParts []*genai.Part
 
+	appendSystemOrTurnParts := func(inst []*genai.Part) {
+		if len(inst) == 0 {
+			return
+		}
+		// Only hoist leading system/developer messages (before any user, assistant, or
+		// tool turn has started) into top-level SystemInstruction. Mid-conversation
+		// system/developer messages (such as agentic runtime reminders injected after
+		// a tool or assistant turn) belong at their chronological position in the
+		// conversation as user parts: hoisting them into SystemInstruction both mutates
+		// the prompt prefix (invalidating Vertex AI prefix caching on long sessions)
+		// and can leave gcpContents ending on a "model" turn.
+		if len(gcpContents) == 0 && len(gcpParts) == 0 {
+			if systemInstruction == nil {
+				systemInstruction = &genai.Content{}
+			}
+			systemInstruction.Parts = append(systemInstruction.Parts, inst...)
+			return
+		}
+		gcpParts = append(gcpParts, inst...)
+	}
+
 	for _, msgUnion := range messages {
 		switch {
 		case msgUnion.OfDeveloper != nil:
@@ -70,12 +91,7 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 			if err != nil {
 				return nil, nil, fmt.Errorf("invalid developer message: %w", err)
 			}
-			if len(inst) != 0 {
-				if systemInstruction == nil {
-					systemInstruction = &genai.Content{}
-				}
-				systemInstruction.Parts = append(systemInstruction.Parts, inst...)
-			}
+			appendSystemOrTurnParts(inst)
 		case msgUnion.OfSystem != nil:
 			msg := msgUnion.OfSystem
 			devMsg := systemMsgToDeveloperMsg(*msg)
@@ -83,12 +99,7 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 			if err != nil {
 				return nil, nil, fmt.Errorf("invalid system message: %w", err)
 			}
-			if len(inst) != 0 {
-				if systemInstruction == nil {
-					systemInstruction = &genai.Content{}
-				}
-				systemInstruction.Parts = append(systemInstruction.Parts, inst...)
-			}
+			appendSystemOrTurnParts(inst)
 		case msgUnion.OfUser != nil:
 			msg := msgUnion.OfUser
 			parts, err := userMsgToGeminiParts(*msg, requestModel)
@@ -104,18 +115,31 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 			}
 			gcpParts = append(gcpParts, part)
 		case msgUnion.OfAssistant != nil:
-			// Flush any accumulated user/tool parts before assistant.
-			if len(gcpParts) > 0 {
-				gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
-				gcpParts = nil
-			}
 			msg := msgUnion.OfAssistant
 			assistantParts, toolCalls, err := assistantMsgToGeminiParts(msg)
 			if err != nil {
 				return nil, nil, fmt.Errorf("invalid assistant message: %w", err)
 			}
 			maps.Copy(knownToolCalls, toolCalls)
-			gcpContents = append(gcpContents, genai.Content{Role: genai.RoleModel, Parts: assistantParts})
+			// Skip empty assistant turns (e.g. from an interrupted or empty completion
+			// persisted in history). Pending user/tool parts are deliberately left in
+			// gcpParts so they merge with the following user/tool messages instead of
+			// producing two adjacent user turns.
+			if len(assistantParts) == 0 {
+				continue
+			}
+			// Flush any accumulated user/tool parts before the model turn.
+			if len(gcpParts) > 0 {
+				gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
+				gcpParts = nil
+			}
+			// Coalesce consecutive model turns so Gemini's strict user/model turn
+			// alternation is preserved.
+			if n := len(gcpContents); n > 0 && gcpContents[n-1].Role == genai.RoleModel {
+				gcpContents[n-1].Parts = mergeGeminiModelParts(gcpContents[n-1].Parts, assistantParts)
+			} else {
+				gcpContents = append(gcpContents, genai.Content{Role: genai.RoleModel, Parts: assistantParts})
+			}
 		default:
 			return nil, nil, fmt.Errorf("%w: invalid role in message", internalapi.ErrInvalidRequestBody)
 		}
@@ -126,6 +150,30 @@ func openAIMessagesToGeminiContents(messages []openai.ChatCompletionMessageParam
 		gcpContents = append(gcpContents, genai.Content{Role: genai.RoleUser, Parts: gcpParts})
 	}
 	return gcpContents, systemInstruction, nil
+}
+
+// mergeGeminiModelParts combines the parts of two consecutive model turns into a single turn.
+// According to https://ai.google.dev/gemini-api/docs/thought-signatures, when a model turn
+// contains parallel function calls, only the first functionCall part may carry a thought_signature;
+// subsequent functionCall parts in the same turn must not have one.
+func mergeGeminiModelParts(existing, incoming []*genai.Part) []*genai.Part {
+	hasFunctionCall := false
+	for _, p := range existing {
+		if p != nil && p.FunctionCall != nil {
+			hasFunctionCall = true
+			break
+		}
+	}
+	for _, p := range incoming {
+		if p != nil && p.FunctionCall != nil {
+			if hasFunctionCall {
+				p.ThoughtSignature = nil
+			}
+			hasFunctionCall = true
+		}
+		existing = append(existing, p)
+	}
+	return existing
 }
 
 // mapDetailMediaResolution converts OpenAI image detail levels to Gemini media resolution levels.
@@ -620,14 +668,36 @@ func geminiMajorVersion(requestModel internalapi.RequestModel) int {
 // Gemini 3 and later models support this feature for controlling image/video quality.
 // https://ai.google.dev/gemini-api/docs/media-resolution
 func mediaResolutionAvailable(requestModel internalapi.RequestModel) bool {
-	return geminiMajorVersion(requestModel) >= 3
+	return isGemini3OrNewer(requestModel)
 }
 
 // reasoningEffortAvailable checks if the model supports reasoning effort.
 // Gemini 3 and later models support this feature (as thinking_level) for controlling reasoning depth.
 // https://ai.google.dev/gemini-api/docs/thinking#thinking-levels
 func reasoningEffortAvailable(requestModel internalapi.RequestModel) bool {
-	return geminiMajorVersion(requestModel) >= 3
+	return isGemini3OrNewer(requestModel)
+}
+
+// isGemini3OrNewer reports whether requestModel is a Gemini model with major version 3 or higher.
+// Only the numeric component immediately after "gemini-" is considered, so digits in revision
+// or date suffixes (e.g. "gemini-2.5-flash-preview-04-17") do not affect the result. A path
+// prefix such as "publishers/google/models/" is tolerated.
+func isGemini3OrNewer(requestModel internalapi.RequestModel) bool {
+	m := strings.ToLower(requestModel)
+	const prefix = "gemini-"
+	i := strings.LastIndex(m, prefix)
+	if i < 0 {
+		return false
+	}
+	major, digits := 0, 0
+	for _, c := range m[i+len(prefix):] {
+		if c < '0' || c > '9' {
+			break
+		}
+		major = major*10 + int(c-'0')
+		digits++
+	}
+	return digits > 0 && major >= 3
 }
 
 // isGeminiFlashModel checks if the model is a Gemini Flash model.
@@ -899,6 +969,7 @@ func geminiCandidatesToOpenAIChoices(candidates []*genai.Candidate, responseMode
 		}
 
 		choice.FinishReason = geminiFinishReasonToOpenAI(candidate.FinishReason, toolCalls)
+		choice.NativeFinishReason = geminiNativeFinishReason(candidate.FinishReason)
 
 		choices = append(choices, choice)
 	}
@@ -911,7 +982,11 @@ type toolCallSlice interface {
 	[]openai.ChatCompletionMessageToolCallParam | []openai.ChatCompletionChunkChoiceDeltaToolCall
 }
 
-// geminiFinishReasonToOpenAI converts Gemini finish reason to OpenAI finish reason.
+// geminiFinishReasonToOpenAI converts a Gemini finish reason to an OpenAI finish reason.
+//
+// Only values defined by the OpenAI API are returned, because OpenAI SDKs validate finish_reason
+// against a closed enum and reject anything else. Gemini reasons without an exact equivalent are
+// approximated here and preserved verbatim through geminiNativeFinishReason.
 func geminiFinishReasonToOpenAI[T toolCallSlice](reason genai.FinishReason, toolCalls T) openai.ChatCompletionChoicesFinishReason {
 	switch reason {
 	case genai.FinishReasonStop:
@@ -922,24 +997,33 @@ func geminiFinishReasonToOpenAI[T toolCallSlice](reason genai.FinishReason, tool
 	case genai.FinishReasonMaxTokens:
 		return openai.ChatCompletionChoicesFinishReasonLength
 	case genai.FinishReasonSafety, genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
-		genai.FinishReasonSPII, genai.FinishReasonImageSafety, genai.FinishReasonImageProhibitedContent:
+		genai.FinishReasonSPII, genai.FinishReasonImageSafety, genai.FinishReasonImageProhibitedContent,
+		genai.FinishReasonRecitation, genai.FinishReasonImageRecitation, genai.FinishReasonLanguage:
+		// The candidate was blocked by the provider (safety, blocklist, PII, copyright recitation
+		// or unsupported language): no model output was returned, which is what content_filter means.
 		return openai.ChatCompletionChoicesFinishReasonContentFilter
-	case genai.FinishReasonRecitation, genai.FinishReasonImageRecitation:
-		return openai.ChatCompletionChoicesFinishReasonRecitation
-	case genai.FinishReasonMalformedFunctionCall:
-		return openai.ChatCompletionChoicesFinishReasonMalformedFunctionCall
-	case genai.FinishReasonUnexpectedToolCall:
-		return openai.ChatCompletionChoicesFinishReasonUnexpectedToolCall
-	case genai.FinishReasonLanguage:
-		return openai.ChatCompletionChoicesFinishReasonLanguage
-	case genai.FinishReasonNoImage:
-		return openai.ChatCompletionChoicesFinishReasonNoImage
 	case "":
 		// For intermediate chunks in a streaming response, the finish reason is an empty string.
 		// This is normal behavior and should not be treated as an error.
 		return ""
 	default:
-		return openai.ChatCompletionChoicesFinishReasonError
+		// MALFORMED_FUNCTION_CALL, UNEXPECTED_TOOL_CALL, NO_IMAGE, OTHER, IMAGE_OTHER,
+		// FINISH_REASON_UNSPECIFIED and any reason added by Gemini in the future: generation ended
+		// without a usable tool call and without hitting a limit or a filter, so "stop" is the closest
+		// standard value. The exact reason is kept in native_finish_reason for diagnosis.
+		return openai.ChatCompletionChoicesFinishReasonStop
+	}
+}
+
+// geminiNativeFinishReason returns the Gemini finish reason to expose verbatim as native_finish_reason.
+// It is empty when the reason maps losslessly onto an OpenAI finish_reason (STOP, MAX_TOKENS) or when
+// no reason was reported, as in intermediate streaming chunks.
+func geminiNativeFinishReason(reason genai.FinishReason) string {
+	switch reason {
+	case "", genai.FinishReasonStop, genai.FinishReasonMaxTokens:
+		return ""
+	default:
+		return string(reason)
 	}
 }
 
