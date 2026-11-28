@@ -333,12 +333,14 @@ func (r *routerProcessor[ReqT, RespT, RespChunkT, EndpointSpecT]) ProcessRequest
 	headerMutation := &extprocv3.HeaderMutation{
 		SetHeaders: additionalHeaders,
 	}
+	// Pass originalRequestBodyRaw (not rawBody.Body) so span input.value can
+	// alias the same backing array the processor retains for the request lifetime.
 	r.span = r.tracer.StartSpanAndInjectHeaders(
 		ctx,
 		r.requestHeaders,
 		&headerMutationCarrier{m: headerMutation},
 		body,
-		rawBody.Body,
+		r.originalRequestBodyRaw,
 	)
 
 	return &extprocv3.ProcessingResponse{

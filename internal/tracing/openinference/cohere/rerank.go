@@ -100,7 +100,7 @@ func buildRerankRequestAttributes(req *cohereschema.RerankV2Request, body []byte
 		attrs = append(attrs, attribute.String(openinference.InputValue, openinference.RedactedValue))
 	} else {
 		attrs = append(attrs,
-			attribute.String(openinference.InputValue, string(body)),
+			attribute.String(openinference.InputValue, openinference.StringView(body)),
 			attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
 		)
 	}

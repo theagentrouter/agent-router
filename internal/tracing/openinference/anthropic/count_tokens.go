@@ -49,7 +49,7 @@ func (r *CountTokensRecorder) RecordRequest(span trace.Span, req *anthropic.Coun
 	}
 	if !r.traceConfig.HideInputs {
 		attrs = append(attrs,
-			attribute.String(openinference.InputValue, string(body)),
+			attribute.String(openinference.InputValue, openinference.StringView(body)),
 			attribute.String(openinference.InputMimeType, openinference.MimeTypeJSON),
 		)
 	}

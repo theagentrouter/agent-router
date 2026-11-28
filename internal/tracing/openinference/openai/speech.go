@@ -52,7 +52,7 @@ func (r *SpeechRecorder) StartParams(*openai.SpeechRequest, []byte) (spanName st
 
 // RecordRequest implements the same method as defined in tracingapi.SpeechRecorder.
 func (r *SpeechRecorder) RecordRequest(span trace.Span, req *openai.SpeechRequest, body []byte) {
-	span.SetAttributes(buildSpeechRequestAttributes(req, string(body), r.traceConfig)...)
+	span.SetAttributes(buildSpeechRequestAttributes(req, openinference.StringView(body), r.traceConfig)...)
 }
 
 // RecordResponse implements the same method as defined in tracingapi.SpeechRecorder.

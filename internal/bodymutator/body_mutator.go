@@ -6,6 +6,7 @@
 package bodymutator
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -87,7 +88,9 @@ func (b *BodyMutator) Mutate(requestBody []byte) ([]byte, error) {
 		return requestBody, nil
 	}
 
-	mutatedBody := requestBody
+	// Clone before in-place sjson edits so callers that share requestBody with
+	// span attributes (input.value) keep the original prompt intact.
+	mutatedBody := bytes.Clone(requestBody)
 	var err error
 
 	// Apply removals first
