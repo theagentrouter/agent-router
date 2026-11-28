@@ -1542,7 +1542,7 @@ func sendToAllBackendsAndAggregateResponsesImpl[responseType any, paramsType mcp
 		span.RecordListResult(mergedResp)
 		span.AddEvent(request.Method + " aggregation end")
 	}
-	encodedResp, err := json.Marshal(mergedResp)
+	encodedResp, err := json.MarshalDeterministic(mergedResp)
 	if err != nil {
 		return fmt.Errorf("failed to marshal response: %w", err)
 	}

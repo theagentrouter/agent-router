@@ -20,6 +20,9 @@ var (
 	Unmarshal = config.Unmarshal
 	// Marshal is equivalent to encoding/json.Marshal.
 	Marshal = config.Marshal
+	// MarshalDeterministic sorts map keys, including nested maps. RawMessage
+	// values retain their original encoding. Other encoding options match Marshal.
+	MarshalDeterministic = sonicjson.Config{CaseSensitive: true, SortMapKeys: true}.Froze().Marshal
 	// NewEncoder is equivalent to encoding/json.NewEncoder.
 	NewEncoder = config.NewEncoder
 	// NewDecoder is equivalent to encoding/json.NewDecoder.

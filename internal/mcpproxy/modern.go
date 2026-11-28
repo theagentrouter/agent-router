@@ -2622,7 +2622,7 @@ func modernParamsForHeaderMetadata(req *jsonrpc.Request) mcp.Params {
 }
 
 func writeJSONRPCResult(w http.ResponseWriter, id jsonrpc.ID, result any) {
-	encoded, _ := json.Marshal(result)
+	encoded, _ := json.MarshalDeterministic(result)
 	writeRawJSONRPCResult(w, id, encoded)
 }
 
@@ -2635,7 +2635,7 @@ func writeRawJSONRPCResult(w http.ResponseWriter, id jsonrpc.ID, result json.Raw
 		"id":      id.Raw(),
 		"result":  result,
 	}
-	encoded, _ := json.Marshal(resp)
+	encoded, _ := json.MarshalDeterministic(resp)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(encoded)
@@ -2654,7 +2654,7 @@ func ensureResultType(result json.RawMessage) json.RawMessage {
 		return result // Already has resultType (could be "input_required" from MRTR).
 	}
 	check["resultType"] = json.RawMessage(`"complete"`)
-	out, _ := json.Marshal(check)
+	out, _ := json.MarshalDeterministic(check)
 	return out
 }
 
