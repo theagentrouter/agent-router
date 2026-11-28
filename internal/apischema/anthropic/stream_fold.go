@@ -38,9 +38,10 @@ func MessagesResponseFromStream(chunks []*MessagesStreamChunk) *MessagesResponse
 				usage := *response.Usage
 				response.Usage = &usage
 			}
-			// Ensure Content is initialized if nil.
-			if response.Content == nil {
-				response.Content = []MessagesContentBlock{}
+			// Own the slice and mutable blocks before replacing blocks or appending deltas.
+			response.Content = make([]MessagesContentBlock, len(event.MessageStart.Content))
+			for i, block := range event.MessageStart.Content {
+				response.Content[i] = copyContentBlock(block)
 			}
 
 		case event.MessageDelta != nil:
